@@ -1,10 +1,12 @@
 require("dotenv").config();
 const { Telegraf } = require("telegraf");
 
-const token = process.env.BOT_TOKEN;
+const token = process.env.BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN;
 
 if (!token) {
-  throw new Error("BOT_TOKEN is missing. Add it to your .env file.");
+  throw new Error(
+    "Bot token is missing. Set BOT_TOKEN or TELEGRAM_BOT_TOKEN in environment variables."
+  );
 }
 
 const bot = new Telegraf(token);

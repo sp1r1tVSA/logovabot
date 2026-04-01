@@ -10,11 +10,15 @@ npm install
 
 ## 2) Configure environment
 
-Copy `.env.example` to `.env` and add your bot token:
+Create `.env` and add your bot token (both names are supported):
 
 ```env
 BOT_TOKEN=your_telegram_bot_token_here
+# or
+TELEGRAM_BOT_TOKEN=your_telegram_bot_token_here
 ```
+
+For cloud deploy (Railway/Render/etc.), set the same variable in the service Environment Variables.
 
 ## 3) Run bot
 
