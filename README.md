@@ -48,3 +48,20 @@ LEAGUE_SQLITE_PATH=league.db
 - `/league_reminder_now`
 - `/league_reminder_hourly_on [text]`
 - `/league_reminder_hourly_off`
+
+## Challenge session auth (Playwright)
+
+One-time setup:
+
+```bash
+pip install -r requirements.txt
+playwright install chromium
+```
+
+Save authenticated session:
+
+```bash
+python scripts/cp_auth_session.py
+```
+
+Output file: `state/challenge_storage_state.json`

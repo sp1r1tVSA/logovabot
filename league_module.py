@@ -583,15 +583,15 @@ class LeagueFeature:
             return "Долги лиги не загружены."
         lines = [f"📋 Долги лиги (всего матчей-долгов: {total})", ""]
         for row in summary:
-            marker = " ⚠️" if row["debts_count"] > threshold else ""
+            marker = " ⚠️" if row["debts_count"] >= threshold else ""
             lines.append(f"@{row['debtor_username']} — {row['debts_count']}{marker}")
         lines.append("")
-        lines.append(f"Порог для напоминания: > {threshold}")
+        lines.append(f"Порог для напоминания: >= {threshold}")
         return "\n".join(lines)
 
     async def send_league_reminder_message(self, chat_id: int, threshold: int = 2, bot=None, custom_text: Optional[str] = None) -> bool:
         summary = self.db.get_league_debt_summary(chat_id)
-        debtors = [r for r in summary if r["debts_count"] > threshold]
+        debtors = [r for r in summary if r["debts_count"] >= threshold]
         if not debtors:
             return False
         mentions = " ".join([f"@{r['debtor_username']}" for r in debtors])
@@ -599,7 +599,7 @@ class LeagueFeature:
             "🔔 Напоминание по долгам в лиге",
             mentions,
             "",
-            custom_text or "У вас больше 2 долгов. Пожалуйста, сыграйте долги сегодня.",
+            custom_text or f"У вас {threshold} и более долгов. Пожалуйста, сыграйте долги сегодня.",
             "",
             "Текущие долги:",
         ]
@@ -805,8 +805,11 @@ class LeagueFeature:
             await update.message.reply_text("❌ Команда доступна только админам.")
             return
         settings = self.db.get_league_reminder_settings(update.effective_chat.id)
-        sent = await self.send_league_reminder_message(update.effective_chat.id, threshold=settings.get("threshold", 2), bot=context.bot)
-        await update.message.reply_text("✅ Напоминание отправлено." if sent else "Нет игроков с долгами > 2.")
+        threshold = settings.get("threshold", 2)
+        sent = await self.send_league_reminder_message(update.effective_chat.id, threshold=threshold, bot=context.bot)
+        await update.message.reply_text(
+            "✅ Напоминание отправлено." if sent else f"Нет игроков с долгами >= {threshold}."
+        )
 
     async def cmd_league_reminder_hourly_on(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not self._is_admin(update.effective_user.id):
