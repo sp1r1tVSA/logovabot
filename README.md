@@ -9,6 +9,12 @@ pip install -r requirements.txt
 python league_module.py
 ```
 
+Optional OCR dependencies (heavy):
+
+```bash
+pip install -r requirements-ocr.txt
+```
+
 ## Environment
 
 Create `.env` with:
@@ -75,6 +81,9 @@ python scripts/cp_auth_session.py
 Output file: `state/challenge_storage_state.json`
 
 ## OCR drafts from screenshots
+
+Note: OCR packages are intentionally moved to `requirements-ocr.txt` because they significantly increase container size.
+Without these packages, OCR commands will reply that OCR is unavailable.
 
 - Send a screenshot as photo in group chat.
 - Add caption with teams and optional assists, for example:
