@@ -128,6 +128,21 @@ class LeagueRepositorySQLite:
             )
             """
         )
+
+        self.cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS league_team_players (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id INTEGER NOT NULL,
+                team_name_norm TEXT NOT NULL,
+                team_name_raw TEXT NOT NULL,
+                player_name_norm TEXT NOT NULL,
+                player_name_raw TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(chat_id, team_name_norm, player_name_norm)
+            )
+            """
+        )
         self.conn.commit()
 
     def replace_league_debts(self, chat_id: int, entries: List[Dict]):
@@ -293,6 +308,38 @@ class LeagueRepositorySQLite:
             {"team_name_norm": r[0], "team_name_raw": r[1], "telegram_username": r[2]}
             for r in self.cursor.fetchall()
         ]
+
+    def replace_league_team_players(self, chat_id: int, rows: List[Dict]):
+        self.cursor.execute("DELETE FROM league_team_players WHERE chat_id = ?", (chat_id,))
+        for row in rows:
+            self.cursor.execute(
+                """
+                INSERT INTO league_team_players (
+                    chat_id, team_name_norm, team_name_raw, player_name_norm, player_name_raw
+                )
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    chat_id,
+                    row["team_name_norm"],
+                    row["team_name_raw"],
+                    row["player_name_norm"],
+                    row["player_name_raw"],
+                ),
+            )
+        self.conn.commit()
+
+    def get_league_team_players(self, chat_id: int, team_name_norm: str) -> List[Dict]:
+        self.cursor.execute(
+            """
+            SELECT player_name_norm, player_name_raw
+            FROM league_team_players
+            WHERE chat_id = ? AND team_name_norm = ?
+            ORDER BY player_name_raw ASC
+            """,
+            (chat_id, team_name_norm),
+        )
+        return [{"player_name_norm": r[0], "player_name_raw": r[1]} for r in self.cursor.fetchall()]
 
     def set_league_challenge_source(self, chat_id: int, stage_url: str, max_round: int):
         self.cursor.execute(
@@ -480,6 +527,7 @@ class LeagueFeature:
         application.add_handler(CommandHandler("league_map_bulk", self._guard(self.cmd_league_map_bulk)))
         application.add_handler(CommandHandler("league_map_show", self._guard(self.cmd_league_map_show)))
         application.add_handler(CommandHandler("league_map_clear", self._guard(self.cmd_league_map_clear)))
+        application.add_handler(CommandHandler("league_players_seed", self._guard(self.cmd_league_players_seed)))
         application.add_handler(CommandHandler("league_sync_challenge", self._guard(self.cmd_league_sync_challenge)))
         application.add_handler(CommandHandler("league_sync_now", self._guard(self.cmd_league_sync_now)))
         application.add_handler(CommandHandler("league_sync_off", self._guard(self.cmd_league_sync_off)))
@@ -509,6 +557,25 @@ class LeagueFeature:
         normalized = normalized.replace(" - ", "-")
         normalized = normalized.replace("глимпт", "глимт")
         return normalized
+
+    def default_league_players_seed(self) -> Dict[str, List[str]]:
+        return {
+            "АЕК": ["Eliasson", "Filipe Relvas", "Joao Mario", "Jovic", "Koita", "Marin", "Pilios", "Pineda", "Rota", "Vida"],
+            "Аякс": ["Baas", "Berghuis", "Carrizo", "Edvardsen", "Gaaei", "Itakura", "Regeer", "Sutalo", "Weghorst", "Wijndal", "Zinchenko"],
+            "Бенфика": ["Antonio Silva", "Aursnes", "Bah", "Dahl", "Dedic", "Lukebakio", "Otamendi", "Rafa", "Rios", "Sudakov"],
+            "Бока Хуниорс": ["Ander Herrera", "Ascacibar", "Blanco", "Blondel", "Cavani", "Costa", "Figal", "Merentiel", "Palacios", "Paredes", "Zeballos"],
+            "Брага": ["Arrey-mbi", "Gabri Martinez", "Grillitsch", "Joao Moutinho", "Leonardo Lelo", "Niakate", "Ricardo Horta", "Victor Gomez", "Vitor Carvalho", "Zalazar"],
+            "Буде Глимт": ["Berg", "Bjorkan", "Evjen", "Fet", "Gundersen", "Hauge", "Hogh", "Maatta", "Saltnes", "Slovold"],
+            "Копенгаген": ["Achouri", "Aurelio Buta", "Delaney", "Elyounoussi", "Huescas", "Larsson", "Lopez", "Mattsson", "Moukoko", "Zanka"],
+            "ПСВ": ["Boadu", "Dest", "Flamingo", "Man", "Mauro Junior", "Perisic", "Schouten", "Van Bommel", "Veerman", "Yarek"],
+            "Порту": ["Borja Sainz", "Fofana", "Francisco Moura", "Gabri Vega", "Pepe", "Perez", "Samu", "Sanusi", "Varela", "de Jong"],
+            "Расинг": ["Almendra", "Colombo", "Conechny", "Martinez", "Matias Zaracho", "Mura", "Rojas", "Rojo", "Sosa", "Vergara", "Vietto"],
+            "Рейнджерс": ["Aarons", "Antman", "Chukwuani", "Cornelius", "Diamonde", "Raskin", "Skov Olsen", "Souttar", "Sterling", "Tavernier"],
+            "Ривер Плейт": ["Acuna", "Bustos", "Driussi", "Fernandez", "Galarza", "Galoppo", "Meza", "Montiel", "Portillo", "Quintero"],
+            "Селтик": ["Carter-Vickers", "Hatate", "Iheanacho", "Johnston", "Jota", "Maeda", "McGregor", "Nygren", "Oxl.-Chamberlain", "Scales", "Tierney", "Yang Hyun Jun"],
+            "Спортинг": ["Doimande", "Eduardo Quaresma", "Geovany Quenda", "Goncalo Inacio", "Hjulmand", "Morita", "Nuno Santos", "Pedro Goncalves", "St. Juste", "Trincao"],
+            "Фейеноорд": ["Deijl", "Goncalo Borges", "Hadj-Moussa", "Hwang In Beom", "Kotarski", "Lotomba", "Read", "Smal", "Steijn", "Sterling", "Trauner"],
+        }
 
     def parse_league_map_bulk_text(self, raw_text: str) -> List[Dict]:
         mappings = []
@@ -932,6 +999,7 @@ class LeagueFeature:
             assists_raw["any"].extend(fallback_items)
 
         return {
+            "chat_id": chat_id,
             "home_team": home_match["matched"],
             "away_team": away_match["matched"],
             "home_team_raw": home_raw,
@@ -1058,19 +1126,43 @@ class LeagueFeature:
 
         return max(base_score, translit_score, token_score)
 
-    def _resolve_assists_by_goals(self, assists_any: List[str], home_goals: List[str], away_goals: List[str]) -> Dict:
+    def _resolve_assists_by_goals(
+        self,
+        chat_id: int,
+        home_team: str,
+        away_team: str,
+        assists_any: List[str],
+        home_goals: List[str],
+        away_goals: List[str],
+    ) -> Dict:
+        home_team_norm = self.normalize_team_name(home_team)
+        away_team_norm = self.normalize_team_name(away_team)
+        if isinstance(chat_id, int):
+            home_players = self.db.get_league_team_players(chat_id, home_team_norm)
+            away_players = self.db.get_league_team_players(chat_id, away_team_norm)
+        else:
+            home_players = []
+            away_players = []
+        home_pool = [x["player_name_raw"] for x in home_players]
+        away_pool = [x["player_name_raw"] for x in away_players]
+
         home = []
         away = []
         unknown = []
         warnings = []
         for assist in assists_any:
-            best_home = max([self._score_name_match(assist, x) for x in home_goals], default=0.0)
-            best_away = max([self._score_name_match(assist, x) for x in away_goals], default=0.0)
-            if best_home < 0.72 and best_away < 0.72:
+            best_home_goal = max([self._score_name_match(assist, x) for x in home_goals], default=0.0)
+            best_away_goal = max([self._score_name_match(assist, x) for x in away_goals], default=0.0)
+            best_home_player = max([self._score_name_match(assist, x) for x in home_pool], default=0.0)
+            best_away_player = max([self._score_name_match(assist, x) for x in away_pool], default=0.0)
+            best_home = max(best_home_goal, best_home_player)
+            best_away = max(best_away_goal, best_away_player)
+
+            if best_home < 0.65 and best_away < 0.65:
                 unknown.append(assist)
                 warnings.append(f"Ассист '{assist}' не удалось сопоставить с командой автоматически.")
                 continue
-            if abs(best_home - best_away) < 0.08:
+            if abs(best_home - best_away) < 0.06:
                 unknown.append(assist)
                 warnings.append(f"Ассист '{assist}' неоднозначен (оба варианта похожи).")
                 continue
@@ -1295,6 +1387,9 @@ class LeagueFeature:
 
     def _build_ocr_payload(self, caption_info: Dict, score: Optional[Dict], goals_info: Dict) -> Dict:
         resolved = self._resolve_assists_by_goals(
+            caption_info.get("chat_id"),
+            caption_info.get("home_team", ""),
+            caption_info.get("away_team", ""),
             caption_info.get("assists_any", []),
             goals_info.get("home_goals", []),
             goals_info.get("away_goals", []),
@@ -1344,7 +1439,7 @@ class LeagueFeature:
         lines.append("Подтверждает только админ.")
         return "\n".join(lines)
 
-    def _parse_fix_payload(self, raw_text: str) -> Dict:
+    def _parse_fix_payload(self, raw_text: str, chat_id: int) -> Dict:
         text = (raw_text or "").strip()
         text = re.sub(r"^/league_ocr_fix\b[^\n]*", "", text, count=1).strip()
         text = re.sub(r"^исправ[ьт]?\s*\d*\s*", "", text, count=1, flags=re.IGNORECASE).strip()
@@ -1398,7 +1493,14 @@ class LeagueFeature:
 
         home_goals = sections.get("голы_home", [])
         away_goals = sections.get("голы_away", [])
-        resolved = self._resolve_assists_by_goals(assists_any, home_goals, away_goals)
+        resolved = self._resolve_assists_by_goals(
+            chat_id,
+            home_team,
+            away_team,
+            assists_any,
+            home_goals,
+            away_goals,
+        )
         warnings = list(resolved.get("warnings", []))
 
         return {
@@ -1510,7 +1612,7 @@ class LeagueFeature:
             return
 
         try:
-            fixed_payload = self._parse_fix_payload(message.text or "")
+            fixed_payload = self._parse_fix_payload(message.text or "", chat.id)
         except ValueError as e:
             await message.reply_text(f"❌ Ошибка формата: {e}")
             return
@@ -1627,6 +1729,7 @@ class LeagueFeature:
                     "/league_map_bulk [список] - массово задать привязки Команда - @username",
                     "/league_map_show - показать текущие привязки команд",
                     "/league_map_clear - очистить все привязки команд",
+                    "/league_players_seed - загрузить базу футболистов для этой лиги",
                     "/league_sync_challenge [url] [N] - синк долгов из challenge.place до тура N",
                     "/league_sync_now [N] - повторить синк из сохраненного источника",
                     "/league_sync_off - отключить сохраненный источник синка",
@@ -1694,6 +1797,43 @@ class LeagueFeature:
             return
         self.db.clear_league_team_map(update.effective_chat.id)
         await update.message.reply_text("✅ Привязки клубов очищены.")
+
+    async def cmd_league_players_seed(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not self._is_admin(update.effective_user.id):
+            await update.message.reply_text("❌ Команда доступна только админам.")
+            return
+
+        chat_id = update.effective_chat.id
+        team_map = {x["team_name_norm"]: x["team_name_raw"] for x in self.db.get_league_team_map(chat_id)}
+        seed = self.default_league_players_seed()
+
+        rows = []
+        teams_loaded = 0
+        players_loaded = 0
+        for team_raw, players in seed.items():
+            team_norm = self.normalize_team_name(team_raw)
+            mapped_raw = team_map.get(team_norm, team_raw)
+            if not players:
+                continue
+            teams_loaded += 1
+            for player in players:
+                player_raw = (player or "").strip()
+                if not player_raw:
+                    continue
+                rows.append(
+                    {
+                        "team_name_norm": team_norm,
+                        "team_name_raw": mapped_raw,
+                        "player_name_norm": self._normalize_player_name(player_raw),
+                        "player_name_raw": player_raw,
+                    }
+                )
+                players_loaded += 1
+
+        self.db.replace_league_team_players(chat_id, rows)
+        await update.message.reply_text(
+            f"✅ База футболистов загружена для этой лиги. Команд: {teams_loaded}, игроков: {players_loaded}."
+        )
 
     async def cmd_league_sync_challenge(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not self._is_admin(update.effective_user.id):
