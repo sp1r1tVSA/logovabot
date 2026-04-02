@@ -304,7 +304,7 @@ class LeagueFeature:
     def __init__(self, db, moscow_tz, is_admin_callable, application=None):
         self.db = db
         self.moscow_tz = moscow_tz
-        self.league_reminder_times = {"09:00", "15:00", "20:00"}
+        self.league_reminder_times = {"00:00", "04:00", "08:00", "12:00", "16:00", "20:00"}
         self._is_admin = is_admin_callable
         self.application = application
 
@@ -660,7 +660,7 @@ class LeagueFeature:
                     "/league_sync_challenge [url] [N] - синк долгов из challenge.place до тура N",
                     "/league_sync_now [N] - повторить синк из сохраненного источника",
                     "/league_sync_off - отключить сохраненный источник синка",
-                    "/league_reminder_on - включить ежедневные напоминания (09:00, 15:00, 20:00 МСК)",
+                    "/league_reminder_on - включить напоминания каждые 4 часа (00:00, 04:00, 08:00, 12:00, 16:00, 20:00 МСК)",
                     "/league_reminder_off - выключить ежедневные напоминания",
                     "/league_reminder_now - отправить напоминание сразу",
                     "/league_reminder_hourly_on [текст] - включить ежечасные напоминания в :00",
@@ -789,7 +789,9 @@ class LeagueFeature:
             await update.message.reply_text("❌ Команда доступна только админам.")
             return
         self.db.set_league_reminder_enabled(update.effective_chat.id, True)
-        await update.message.reply_text("✅ Авто-напоминания включены: 09:00, 15:00, 20:00 (Europe/Moscow).")
+        await update.message.reply_text(
+            "✅ Авто-напоминания включены: каждые 4 часа (00:00, 04:00, 08:00, 12:00, 16:00, 20:00 Europe/Moscow)."
+        )
 
     async def cmd_league_reminder_off(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not self._is_admin(update.effective_user.id):
