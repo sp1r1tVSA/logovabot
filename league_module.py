@@ -803,10 +803,20 @@ def _parse_admin_ids(raw: str) -> set[str]:
     return {value.strip() for value in str(raw or "").split(",") if value.strip()}
 
 
+def _clean_env_value(raw: str | None) -> str:
+    value = str(raw or "").strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+        value = value[1:-1].strip()
+    value = re.sub(r"\s+", "", value)
+    return value
+
+
 def run_bot():
     load_dotenv()
 
-    token = os.getenv("BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN")
+    token = _clean_env_value(os.getenv("BOT_TOKEN")) or _clean_env_value(
+        os.getenv("TELEGRAM_BOT_TOKEN")
+    )
     if not token:
         raise RuntimeError("Set BOT_TOKEN or TELEGRAM_BOT_TOKEN")
 
