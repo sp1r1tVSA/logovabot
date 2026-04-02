@@ -30,7 +30,8 @@ LEAGUE_SQLITE_PATH=league.db
 
 - `Procfile` is set to run: `worker: python league_module.py`
 - Remove old Node service settings if they force `npm start`.
-- `nixpacks.toml` installs system OCR packages: `tesseract-ocr`, `tesseract-ocr-rus`.
+- `Dockerfile` installs system OCR packages: `tesseract-ocr`, `tesseract-ocr-rus`.
+- In Railway, use Dockerfile builder (or let Railway auto-detect Dockerfile).
 
 ## Behavior
 
