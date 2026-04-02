@@ -328,6 +328,7 @@ class LeagueFeature:
         return guarded
 
     def register_handlers(self, application):
+        application.add_handler(CommandHandler("admin", self._guard(self.cmd_admin)))
         application.add_handler(CommandHandler("league_debts_show", self._guard(self.cmd_league_debts_show)))
         application.add_handler(CommandHandler("league_debts_round", self._guard(self.cmd_league_debts_round)))
         application.add_handler(CommandHandler("league_map_bulk", self._guard(self.cmd_league_map_bulk)))
@@ -642,6 +643,31 @@ class LeagueFeature:
             await update.message.reply_text("❌ Команда доступна только админам.")
             return
         await update.message.reply_text(self.build_league_summary_text(update.effective_chat.id))
+
+    async def cmd_admin(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not self._is_admin(update.effective_user.id):
+            return
+        await update.message.reply_text(
+            "\n".join(
+                [
+                    "Доступные команды:",
+                    "/admin",
+                    "/league_debts_show",
+                    "/league_debts_round [N]",
+                    "/league_map_bulk [список]",
+                    "/league_map_show",
+                    "/league_map_clear",
+                    "/league_sync_challenge [url] [N]",
+                    "/league_sync_now [N]",
+                    "/league_sync_off",
+                    "/league_reminder_on",
+                    "/league_reminder_off",
+                    "/league_reminder_now",
+                    "/league_reminder_hourly_on [текст]",
+                    "/league_reminder_hourly_off",
+                ]
+            )
+        )
 
     async def cmd_league_debts_round(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not self._is_admin(update.effective_user.id):
