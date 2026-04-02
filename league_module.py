@@ -3,6 +3,8 @@ import logging
 import os
 import re
 import sqlite3
+import base64
+import urllib.parse
 import urllib.request
 from difflib import SequenceMatcher
 from datetime import datetime
@@ -501,6 +503,10 @@ class LeagueFeature:
         self._ocr_checked = False
         self._ocr_enabled = False
 
+    def _get_ocr_provider(self) -> str:
+        provider = (os.getenv("OCR_PROVIDER", "tesseract") or "tesseract").strip().lower()
+        return provider
+
     def _is_allowed_chat(self, update: Update) -> bool:
         chat = update.effective_chat
         user = update.effective_user
@@ -860,6 +866,9 @@ class LeagueFeature:
     def _is_ocr_ready(self) -> bool:
         if not OCR_AVAILABLE:
             return False
+        provider = self._get_ocr_provider()
+        if provider == "ocrspace":
+            return bool((os.getenv("OCRSPACE_API_KEY", "") or "").strip())
         if not self._ocr_checked:
             custom_cmd = os.getenv("TESSERACT_CMD", "").strip()
             if custom_cmd:
@@ -871,6 +880,76 @@ class LeagueFeature:
                 self._ocr_enabled = False
             self._ocr_checked = True
         return self._ocr_enabled
+
+    def _ocr_timeout_seconds(self) -> int:
+        raw = (os.getenv("OCR_TIMEOUT_SEC", "20") or "20").strip()
+        try:
+            value = int(raw)
+            return max(5, min(value, 120))
+        except Exception:
+            return 20
+
+    def _ocrspace_extract_lines(self, image_bytes: bytes) -> List[Dict]:
+        api_key = (os.getenv("OCRSPACE_API_KEY", "") or "").strip()
+        if not api_key:
+            raise RuntimeError("OCRSPACE_API_KEY не задан")
+
+        encoded = base64.b64encode(image_bytes).decode("ascii")
+        payload = {
+            "apikey": api_key,
+            "language": "eng,rus",
+            "isOverlayRequired": "true",
+            "OCREngine": "2",
+            "base64Image": f"data:image/jpeg;base64,{encoded}",
+        }
+        body = urllib.parse.urlencode(payload).encode("utf-8")
+        req = urllib.request.Request(
+            "https://api.ocr.space/parse/image",
+            data=body,
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded",
+                "User-Agent": "LeagueBot-OCR/1.0",
+            },
+        )
+
+        timeout_sec = self._ocr_timeout_seconds()
+        with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
+            raw = resp.read().decode("utf-8", errors="ignore")
+        data = json.loads(raw)
+
+        if data.get("IsErroredOnProcessing"):
+            err = "; ".join(data.get("ErrorMessage") or []) or data.get("ErrorDetails") or "OCRSpace error"
+            raise RuntimeError(str(err))
+
+        parsed = data.get("ParsedResults") or []
+        if not parsed:
+            return []
+
+        out = []
+        for pr in parsed:
+            overlay = ((pr.get("TextOverlay") or {}).get("Lines") or [])
+            for line in overlay:
+                words = line.get("Words") or []
+                text = " ".join([str(w.get("WordText") or "").strip() for w in words]).strip()
+                if not text:
+                    continue
+                if words:
+                    x1 = min(int(w.get("Left", 0)) for w in words)
+                    y1 = min(int(w.get("Top", line.get("MinTop", 0))) for w in words)
+                    x2 = max(int(w.get("Left", 0)) + int(w.get("Width", 0)) for w in words)
+                    y2 = max(int(w.get("Top", line.get("MinTop", 0))) + int(w.get("Height", line.get("MaxHeight", 0))) for w in words)
+                else:
+                    x1 = int(line.get("MinLeft", 0))
+                    y1 = int(line.get("MinTop", 0))
+                    x2 = x1 + int(line.get("MaxWidth", 0))
+                    y2 = y1 + int(line.get("MaxHeight", 0))
+                out.append({"text": text, "x1": x1, "y1": y1, "x2": x2, "y2": y2})
+
+        if out:
+            return out
+
+        text_fallback = "\n".join([(pr.get("ParsedText") or "") for pr in parsed]).strip()
+        return [{"text": ln.strip(), "x1": 0, "y1": 0, "x2": 1, "y2": 1} for ln in text_fallback.splitlines() if ln.strip()]
 
     def _build_ocr_keyboard(self, chat_id: int, ocr_id: int) -> InlineKeyboardMarkup:
         return InlineKeyboardMarkup(
@@ -1539,21 +1618,32 @@ class LeagueFeature:
             await message.reply_text("❌ Не удалось прочитать изображение.")
             return
 
-        height, width = image_bgr.shape[:2]
-        score_roi = image_bgr[0 : max(int(height * 0.26), 1), max(int(width * 0.2), 0) : min(int(width * 0.8), width)]
-        events_x1 = max(int(width * 0.48), 0)
-        events_y1 = max(int(height * 0.18), 0)
-        events_roi = image_bgr[events_y1 : min(int(height * 0.92), height), events_x1:width]
+        provider = self._get_ocr_provider()
+        if provider == "ocrspace":
+            try:
+                line_items = self._ocrspace_extract_lines(bytes(image_bytes))
+            except Exception as e:
+                await message.reply_text(f"❌ OCR API временно недоступен: {e}")
+                return
+            score = self._extract_score([str(x.get("text", "")) for x in line_items])
+            goals_info = self._extract_goal_scorers(image_bgr, line_items, offset_x=0, offset_y=0)
+        else:
+            height, width = image_bgr.shape[:2]
+            score_roi = image_bgr[0 : max(int(height * 0.26), 1), max(int(width * 0.2), 0) : min(int(width * 0.8), width)]
+            events_x1 = max(int(width * 0.48), 0)
+            events_y1 = max(int(height * 0.18), 0)
+            events_roi = image_bgr[events_y1 : min(int(height * 0.92), height), events_x1:width]
 
-        score_lines = self._ocr_extract_lines(score_roi if score_roi.size else image_bgr, psm=6)
-        event_lines = self._ocr_extract_lines(events_roi if events_roi.size else image_bgr, psm=6)
+            score_lines = self._ocr_extract_lines(score_roi if score_roi.size else image_bgr, psm=6)
+            event_lines = self._ocr_extract_lines(events_roi if events_roi.size else image_bgr, psm=6)
 
-        score = self._extract_score_from_image(image_bgr)
-        if not score:
-            score = self._extract_score([str(x.get("text", "")) for x in score_lines])
-        if not score:
-            score = self._extract_score([str(x.get("text", "")) for x in event_lines])
-        goals_info = self._extract_goal_scorers(image_bgr, event_lines, offset_x=events_x1, offset_y=events_y1)
+            score = self._extract_score_from_image(image_bgr)
+            if not score:
+                score = self._extract_score([str(x.get("text", "")) for x in score_lines])
+            if not score:
+                score = self._extract_score([str(x.get("text", "")) for x in event_lines])
+            goals_info = self._extract_goal_scorers(image_bgr, event_lines, offset_x=events_x1, offset_y=events_y1)
+
         if not score:
             if not goals_info.get("unknown_goals") and (goals_info.get("home_goals") or goals_info.get("away_goals")):
                 score = {
