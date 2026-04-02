@@ -4,13 +4,24 @@ import os
 import re
 import sqlite3
 import urllib.request
+from difflib import SequenceMatcher
 from datetime import datetime
+from io import BytesIO
 from typing import Dict, List, Optional
 from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.ext import ApplicationBuilder, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
+
+try:
+    import cv2
+    import easyocr
+    import numpy as np
+
+    OCR_AVAILABLE = True
+except Exception:
+    OCR_AVAILABLE = False
 
 
 class LeagueRepositorySQLite:
@@ -93,6 +104,27 @@ class LeagueRepositorySQLite:
                 max_round INTEGER NOT NULL,
                 enabled INTEGER DEFAULT 1,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+
+        self.cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS league_ocr_drafts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id INTEGER NOT NULL,
+                ocr_id INTEGER NOT NULL,
+                source_message_id INTEGER,
+                author_user_id INTEGER,
+                status TEXT NOT NULL DEFAULT 'pending_admin_review',
+                payload_json TEXT NOT NULL,
+                warnings_json TEXT,
+                last_editor_user_id INTEGER,
+                reviewed_by_user_id INTEGER,
+                review_note TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(chat_id, ocr_id)
             )
             """
         )
@@ -294,6 +326,118 @@ class LeagueRepositorySQLite:
         )
         self.conn.commit()
 
+    def get_next_ocr_id(self, chat_id: int) -> int:
+        self.cursor.execute("SELECT COALESCE(MAX(ocr_id), 0) + 1 FROM league_ocr_drafts WHERE chat_id = ?", (chat_id,))
+        row = self.cursor.fetchone()
+        return int(row[0] if row else 1)
+
+    def create_ocr_draft(
+        self,
+        chat_id: int,
+        source_message_id: int,
+        author_user_id: int,
+        payload: Dict,
+        warnings: List[str],
+    ) -> int:
+        ocr_id = self.get_next_ocr_id(chat_id)
+        self.cursor.execute(
+            """
+            INSERT INTO league_ocr_drafts (
+                chat_id, ocr_id, source_message_id, author_user_id, status,
+                payload_json, warnings_json, last_editor_user_id, updated_at
+            )
+            VALUES (?, ?, ?, ?, 'pending_admin_review', ?, ?, ?, CURRENT_TIMESTAMP)
+            """,
+            (
+                chat_id,
+                ocr_id,
+                source_message_id,
+                author_user_id,
+                json.dumps(payload, ensure_ascii=False),
+                json.dumps(warnings, ensure_ascii=False),
+                author_user_id,
+            ),
+        )
+        self.conn.commit()
+        return ocr_id
+
+    def get_ocr_draft(self, chat_id: int, ocr_id: int) -> Optional[Dict]:
+        self.cursor.execute(
+            """
+            SELECT chat_id, ocr_id, source_message_id, author_user_id, status,
+                   payload_json, warnings_json, last_editor_user_id,
+                   reviewed_by_user_id, review_note, created_at, updated_at
+            FROM league_ocr_drafts
+            WHERE chat_id = ? AND ocr_id = ?
+            """,
+            (chat_id, ocr_id),
+        )
+        row = self.cursor.fetchone()
+        if not row:
+            return None
+        return {
+            "chat_id": row[0],
+            "ocr_id": row[1],
+            "source_message_id": row[2],
+            "author_user_id": row[3],
+            "status": row[4],
+            "payload": json.loads(row[5] or "{}"),
+            "warnings": json.loads(row[6] or "[]"),
+            "last_editor_user_id": row[7],
+            "reviewed_by_user_id": row[8],
+            "review_note": row[9],
+            "created_at": row[10],
+            "updated_at": row[11],
+        }
+
+    def update_ocr_draft_payload(self, chat_id: int, ocr_id: int, payload: Dict, warnings: List[str], editor_user_id: int) -> bool:
+        self.cursor.execute(
+            """
+            UPDATE league_ocr_drafts
+            SET payload_json = ?,
+                warnings_json = ?,
+                status = 'pending_admin_review',
+                last_editor_user_id = ?,
+                reviewed_by_user_id = NULL,
+                review_note = NULL,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE chat_id = ? AND ocr_id = ?
+            """,
+            (json.dumps(payload, ensure_ascii=False), json.dumps(warnings, ensure_ascii=False), editor_user_id, chat_id, ocr_id),
+        )
+        self.conn.commit()
+        return self.cursor.rowcount > 0
+
+    def approve_ocr_draft(self, chat_id: int, ocr_id: int, reviewer_user_id: int) -> bool:
+        self.cursor.execute(
+            """
+            UPDATE league_ocr_drafts
+            SET status = 'approved',
+                reviewed_by_user_id = ?,
+                review_note = NULL,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE chat_id = ? AND ocr_id = ? AND status = 'pending_admin_review'
+            """,
+            (reviewer_user_id, chat_id, ocr_id),
+        )
+        self.conn.commit()
+        return self.cursor.rowcount > 0
+
+    def reject_ocr_draft(self, chat_id: int, ocr_id: int, reviewer_user_id: int, note: str) -> bool:
+        self.cursor.execute(
+            """
+            UPDATE league_ocr_drafts
+            SET status = 'rejected',
+                reviewed_by_user_id = ?,
+                review_note = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE chat_id = ? AND ocr_id = ?
+            """,
+            (reviewer_user_id, note, chat_id, ocr_id),
+        )
+        self.conn.commit()
+        return self.cursor.rowcount > 0
+
 
 class LeagueRepositoryPostgres(LeagueRepositorySQLite):
     # Inherit command-side logic; override SQL placeholders where needed in your project.
@@ -307,6 +451,7 @@ class LeagueFeature:
         self.league_reminder_times = {"00:00", "04:00", "08:00", "12:00", "16:00", "20:00"}
         self._is_admin = is_admin_callable
         self.application = application
+        self._ocr_reader = None
 
     def _is_allowed_chat(self, update: Update) -> bool:
         chat = update.effective_chat
@@ -342,6 +487,13 @@ class LeagueFeature:
         application.add_handler(CommandHandler("league_reminder_now", self._guard(self.cmd_league_reminder_now)))
         application.add_handler(CommandHandler("league_reminder_hourly_on", self._guard(self.cmd_league_reminder_hourly_on)))
         application.add_handler(CommandHandler("league_reminder_hourly_off", self._guard(self.cmd_league_reminder_hourly_off)))
+        application.add_handler(CommandHandler("league_ocr_fix", self._guard(self.cmd_league_ocr_fix)))
+        application.add_handler(CommandHandler("league_ocr_show", self._guard(self.cmd_league_ocr_show)))
+        application.add_handler(CommandHandler("league_ocr_approve", self._guard(self.cmd_league_ocr_approve)))
+        application.add_handler(CommandHandler("league_ocr_reject", self._guard(self.cmd_league_ocr_reject)))
+        application.add_handler(MessageHandler(filters.PHOTO, self._guard(self.on_ocr_photo_message)))
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._guard(self.on_ocr_fix_text_message)))
+        application.add_handler(CallbackQueryHandler(self._guard(self.on_ocr_callback), pattern=r"^ocr:"))
 
     def setup_jobs(self, application, logger):
         if not application.job_queue:
@@ -637,6 +789,446 @@ class LeagueFeature:
                         custom_text=cfg.get("hourly_text") or "Напоминание: сыграйте долги в лиге.",
                     )
 
+    def _get_ocr_reader(self):
+        if not OCR_AVAILABLE:
+            return None
+        if self._ocr_reader is None:
+            self._ocr_reader = easyocr.Reader(["ru", "en"], gpu=False)
+        return self._ocr_reader
+
+    def _build_ocr_keyboard(self, chat_id: int, ocr_id: int) -> InlineKeyboardMarkup:
+        return InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton("Показать", callback_data=f"ocr:show:{chat_id}:{ocr_id}"),
+                    InlineKeyboardButton("Исправить", callback_data=f"ocr:fix:{chat_id}:{ocr_id}"),
+                ],
+                [
+                    InlineKeyboardButton("Подтвердить", callback_data=f"ocr:approve:{chat_id}:{ocr_id}"),
+                    InlineKeyboardButton("Отклонить", callback_data=f"ocr:reject:{chat_id}:{ocr_id}"),
+                ],
+            ]
+        )
+
+    def _extract_ocr_id_from_message_text(self, text: str) -> Optional[int]:
+        m = re.search(r"#(\d+)", text or "")
+        if not m:
+            return None
+        try:
+            return int(m.group(1))
+        except Exception:
+            return None
+
+    def _resolve_draft_id(self, update: Update, args: Optional[List[str]] = None) -> Optional[int]:
+        if args:
+            try:
+                return int(args[0])
+            except Exception:
+                return None
+        msg = update.effective_message
+        if msg and msg.reply_to_message:
+            return self._extract_ocr_id_from_message_text(msg.reply_to_message.text or msg.reply_to_message.caption or "")
+        return None
+
+    def _match_team_name(self, chat_id: int, raw_name: str) -> Dict:
+        team_map = self.db.get_league_team_map(chat_id)
+        if not team_map:
+            return {"matched": raw_name.strip(), "confidence": 0.0, "exact": False}
+        norm = self.normalize_team_name(raw_name)
+        exact = next((item for item in team_map if item["team_name_norm"] == norm), None)
+        if exact:
+            return {"matched": exact["team_name_raw"], "confidence": 1.0, "exact": True}
+        best_item = None
+        best_score = 0.0
+        for item in team_map:
+            score = SequenceMatcher(None, norm, item["team_name_norm"]).ratio()
+            if score > best_score:
+                best_item = item
+                best_score = score
+        if best_item and best_score >= 0.72:
+            return {"matched": best_item["team_name_raw"], "confidence": round(best_score, 2), "exact": False}
+        return {"matched": raw_name.strip(), "confidence": round(best_score, 2), "exact": False}
+
+    def _parse_caption_match_and_assists(self, caption: str, chat_id: int) -> Dict:
+        lines = [x.strip() for x in (caption or "").splitlines() if x.strip()]
+        warnings = []
+        home_raw = ""
+        away_raw = ""
+        for line in lines:
+            m = re.match(r"^(.+?)\s*(?:-|—|vs|VS|v\.?s\.?)\s*(.+)$", line)
+            if m:
+                home_raw = m.group(1).strip()
+                away_raw = m.group(2).strip()
+                break
+        if not home_raw or not away_raw:
+            warnings.append("В подписи не найден формат матча 'Команда1 - Команда2'.")
+        home_match = self._match_team_name(chat_id, home_raw or "Хозяева")
+        away_match = self._match_team_name(chat_id, away_raw or "Гости")
+        if home_match["confidence"] < 0.8:
+            warnings.append(f"Команда хозяев неуверенно сопоставлена: {home_raw or 'не указана'} -> {home_match['matched']}")
+        if away_match["confidence"] < 0.8:
+            warnings.append(f"Команда гостей неуверенно сопоставлена: {away_raw or 'не указана'} -> {away_match['matched']}")
+
+        assists_raw: Dict[str, List[str]] = {"home": [], "away": []}
+        current_bucket = None
+        for line in lines:
+            header = re.match(r"^ассисты\s+(.+?)\s*:\s*$", line, flags=re.IGNORECASE)
+            if header:
+                team_label = header.group(1).strip()
+                home_score = SequenceMatcher(None, self.normalize_team_name(team_label), self.normalize_team_name(home_raw)).ratio()
+                away_score = SequenceMatcher(None, self.normalize_team_name(team_label), self.normalize_team_name(away_raw)).ratio()
+                current_bucket = "home" if home_score >= away_score else "away"
+                continue
+            if current_bucket:
+                items = [x.strip() for x in re.split(r"[;,]", line) if x.strip()]
+                assists_raw[current_bucket].extend(items)
+
+        return {
+            "home_team": home_match["matched"],
+            "away_team": away_match["matched"],
+            "home_team_raw": home_raw,
+            "away_team_raw": away_raw,
+            "home_assists": assists_raw["home"],
+            "away_assists": assists_raw["away"],
+            "warnings": warnings,
+        }
+
+    def _classify_goal_color(self, image_bgr, bbox) -> str:
+        try:
+            xs = [int(p[0]) for p in bbox]
+            ys = [int(p[1]) for p in bbox]
+            x1, x2 = max(min(xs), 0), max(max(xs), 0)
+            y1, y2 = max(min(ys), 0), max(max(ys), 0)
+            sx1 = max(x1 - 70, 0)
+            sx2 = max(x1 - 5, sx1 + 1)
+            sy1 = max(y1 - 10, 0)
+            sy2 = min(y2 + 10, image_bgr.shape[0])
+            patch = image_bgr[sy1:sy2, sx1:sx2]
+            if patch.size == 0:
+                return "unknown"
+            hsv = cv2.cvtColor(patch, cv2.COLOR_BGR2HSV)
+            blue_mask = cv2.inRange(hsv, (90, 70, 70), (140, 255, 255))
+            green_mask = cv2.inRange(hsv, (35, 60, 60), (90, 255, 255))
+            blue_count = int(cv2.countNonZero(blue_mask))
+            green_count = int(cv2.countNonZero(green_mask))
+            if blue_count < 20 and green_count < 20:
+                return "unknown"
+            if green_count > blue_count * 1.25:
+                return "home"
+            if blue_count > green_count * 1.25:
+                return "away"
+            return "unknown"
+        except Exception:
+            return "unknown"
+
+    def _extract_score(self, ocr_texts: List[str]) -> Optional[Dict]:
+        for text in ocr_texts:
+            m = re.search(r"(\d{1,2})\s*[-:]\s*(\d{1,2})", text)
+            if m:
+                return {"home": int(m.group(1)), "away": int(m.group(2))}
+        return None
+
+    def _extract_goal_scorers(self, image_bgr, detections: List) -> Dict:
+        home_goals = []
+        away_goals = []
+        unknown_goals = []
+        seen = set()
+        for item in detections:
+            if len(item) < 3:
+                continue
+            bbox, text, conf = item
+            raw = str(text or "").strip()
+            if not raw:
+                continue
+            if not re.search(r"гол|goal", raw, flags=re.IGNORECASE):
+                continue
+            name = re.sub(r"(?i)гол|goal", "", raw)
+            name = re.sub(r"\b\d{1,2}\s*\(?\d*\)?\b", "", name)
+            name = re.sub(r"[^A-Za-zА-Яа-яЁё\-\s]", " ", name)
+            name = re.sub(r"\s+", " ", name).strip()
+            if not name:
+                continue
+            key = name.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            side = self._classify_goal_color(image_bgr, bbox)
+            if side == "home":
+                home_goals.append(name)
+            elif side == "away":
+                away_goals.append(name)
+            else:
+                unknown_goals.append(name)
+        return {"home_goals": home_goals, "away_goals": away_goals, "unknown_goals": unknown_goals}
+
+    def _build_ocr_payload(self, caption_info: Dict, score: Optional[Dict], goals_info: Dict) -> Dict:
+        return {
+            "home_team": caption_info["home_team"],
+            "away_team": caption_info["away_team"],
+            "score_home": (score or {}).get("home"),
+            "score_away": (score or {}).get("away"),
+            "home_goals": goals_info.get("home_goals", []),
+            "away_goals": goals_info.get("away_goals", []),
+            "unknown_goals": goals_info.get("unknown_goals", []),
+            "home_assists": caption_info.get("home_assists", []),
+            "away_assists": caption_info.get("away_assists", []),
+        }
+
+    def _format_ocr_draft_text(self, draft: Dict) -> str:
+        payload = draft.get("payload", {})
+        warnings = draft.get("warnings", [])
+        score_home = payload.get("score_home")
+        score_away = payload.get("score_away")
+        score_text = f"{score_home}:{score_away}" if score_home is not None and score_away is not None else "не распознан"
+        lines = [
+            f"🧾 OCR-черновик #{draft['ocr_id']}",
+            f"Статус: {draft.get('status')}",
+            f"Матч: {payload.get('home_team', '—')} - {payload.get('away_team', '—')}",
+            f"Счет: {score_text}",
+            "",
+            "Голы хозяев:",
+        ]
+        lines.extend([f"- {x}" for x in payload.get("home_goals", [])] or ["- нет"])
+        lines.append("Голы гостей:")
+        lines.extend([f"- {x}" for x in payload.get("away_goals", [])] or ["- нет"])
+        if payload.get("unknown_goals"):
+            lines.append("⚠️ Неразнесенные голы:")
+            lines.extend([f"- {x}" for x in payload.get("unknown_goals", [])])
+            lines.append("Используйте /league_ocr_fix для ручного распределения.")
+        lines.append("")
+        lines.append("Ассисты (из подписи):")
+        lines.append("- Хозяева: " + (", ".join(payload.get("home_assists", [])) or "нет"))
+        lines.append("- Гости: " + (", ".join(payload.get("away_assists", [])) or "нет"))
+        if warnings:
+            lines.append("")
+            lines.append("⚠️ Нужна проверка:")
+            lines.extend([f"- {w}" for w in warnings])
+        lines.append("")
+        lines.append("Игроки могут прислать исправление: исправь [id] или /league_ocr_fix [id]")
+        lines.append("Подтверждение результата делает только админ.")
+        return "\n".join(lines)
+
+    def _parse_fix_payload(self, raw_text: str) -> Dict:
+        text = (raw_text or "").strip()
+        text = re.sub(r"^/league_ocr_fix\b[^\n]*", "", text, count=1).strip()
+        text = re.sub(r"^исправ[ьт]?\s*\d*\s*", "", text, count=1, flags=re.IGNORECASE).strip()
+        lines = [x.strip() for x in text.splitlines()]
+        non_empty = [x for x in lines if x]
+        if not non_empty:
+            raise ValueError("Пустой шаблон исправления.")
+
+        m = re.match(r"^(.+?)\s*(?:-|—|vs|VS|v\.?s\.?)\s*(.+)$", non_empty[0])
+        if not m:
+            raise ValueError("Не найдена строка матча 'Команда1 - Команда2'.")
+        home_team = m.group(1).strip()
+        away_team = m.group(2).strip()
+
+        sections: Dict[str, List[str]] = {}
+        current = None
+        for line in non_empty[1:]:
+            h = re.match(r"^(Голы|Ассисты)\s+(.+?)\s*:\s*$", line, flags=re.IGNORECASE)
+            if h:
+                kind = h.group(1).lower()
+                team = h.group(2).strip()
+                side = "home" if SequenceMatcher(None, self.normalize_team_name(team), self.normalize_team_name(home_team)).ratio() >= SequenceMatcher(None, self.normalize_team_name(team), self.normalize_team_name(away_team)).ratio() else "away"
+                current = f"{kind}_{side}"
+                sections.setdefault(current, [])
+                continue
+            if current is None:
+                continue
+            chunks = [x.strip() for x in re.split(r"[;,]", line) if x.strip()]
+            sections[current].extend(chunks)
+
+        if "голы_home" not in sections or "голы_away" not in sections:
+            raise ValueError("Не найдены секции 'Голы <команда>:' для обеих команд.")
+
+        return {
+            "home_team": home_team,
+            "away_team": away_team,
+            "home_goals": sections.get("голы_home", []),
+            "away_goals": sections.get("голы_away", []),
+            "unknown_goals": [],
+            "home_assists": sections.get("ассисты_home", []),
+            "away_assists": sections.get("ассисты_away", []),
+        }
+
+    async def on_ocr_photo_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        message = update.effective_message
+        chat = update.effective_chat
+        user = update.effective_user
+        if not message or not chat or not user or not message.photo:
+            return
+        if not OCR_AVAILABLE:
+            await message.reply_text("❌ OCR недоступен: установите easyocr, opencv-python-headless и numpy.")
+            return
+
+        caption_info = self._parse_caption_match_and_assists(message.caption or "", chat.id)
+        warnings = list(caption_info.get("warnings", []))
+
+        photo = message.photo[-1]
+        tg_file = await context.bot.get_file(photo.file_id)
+        image_bytes = await tg_file.download_as_bytearray()
+        image_np = np.frombuffer(bytes(image_bytes), dtype=np.uint8)
+        image_bgr = cv2.imdecode(image_np, cv2.IMREAD_COLOR)
+        if image_bgr is None:
+            await message.reply_text("❌ Не удалось прочитать изображение.")
+            return
+
+        reader = self._get_ocr_reader()
+        ocr_texts = reader.readtext(image_bgr, detail=0)
+        detections = reader.readtext(image_bgr, detail=1)
+
+        score = self._extract_score([str(t) for t in ocr_texts])
+        if not score:
+            warnings.append("Счет не распознан автоматически.")
+        goals_info = self._extract_goal_scorers(image_bgr, detections)
+        if goals_info.get("unknown_goals"):
+            warnings.append("Есть нераспределенные голы. Нужна команда /league_ocr_fix.")
+
+        payload = self._build_ocr_payload(caption_info, score, goals_info)
+        ocr_id = self.db.create_ocr_draft(chat.id, message.message_id, user.id, payload, warnings)
+        draft = self.db.get_ocr_draft(chat.id, ocr_id)
+        if not draft:
+            await message.reply_text("❌ Ошибка сохранения OCR-черновика.")
+            return
+
+        await message.reply_text(
+            self._format_ocr_draft_text(draft),
+            reply_markup=self._build_ocr_keyboard(chat.id, ocr_id),
+        )
+
+    async def on_ocr_fix_text_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        message = update.effective_message
+        if not message:
+            return
+        text = (message.text or "").strip()
+        if not re.match(r"^исправ[ьт]?\b", text, flags=re.IGNORECASE):
+            return
+        await self._apply_ocr_fix(update, context, from_text=True)
+
+    async def _apply_ocr_fix(self, update: Update, context: ContextTypes.DEFAULT_TYPE, from_text: bool = False):
+        message = update.effective_message
+        user = update.effective_user
+        chat = update.effective_chat
+        if not message or not user or not chat:
+            return
+        draft_id = self._resolve_draft_id(update, context.args if not from_text else None)
+        if draft_id is None:
+            if from_text:
+                m = re.match(r"^исправ[ьт]?\s*(\d+)?", message.text or "", flags=re.IGNORECASE)
+                draft_id = int(m.group(1)) if m and m.group(1) else self._resolve_draft_id(update, None)
+            if draft_id is None:
+                await message.reply_text("❌ Не указан ID черновика. Используйте: исправь [id] или reply на сообщение черновика.")
+                return
+
+        draft = self.db.get_ocr_draft(chat.id, draft_id)
+        if not draft:
+            await message.reply_text(f"❌ Черновик #{draft_id} не найден.")
+            return
+        if draft.get("status") == "approved":
+            await message.reply_text(f"❌ Черновик #{draft_id} уже подтвержден и недоступен для правок.")
+            return
+
+        try:
+            fixed_payload = self._parse_fix_payload(message.text or "")
+        except ValueError as e:
+            await message.reply_text(f"❌ Ошибка формата: {e}")
+            return
+
+        existing_payload = draft.get("payload", {})
+        fixed_payload["score_home"] = existing_payload.get("score_home")
+        fixed_payload["score_away"] = existing_payload.get("score_away")
+        warnings = []
+        updated = self.db.update_ocr_draft_payload(chat.id, draft_id, fixed_payload, warnings, user.id)
+        if not updated:
+            await message.reply_text("❌ Не удалось сохранить правку.")
+            return
+        updated_draft = self.db.get_ocr_draft(chat.id, draft_id)
+        if not updated_draft:
+            await message.reply_text("❌ Не удалось получить обновленный черновик.")
+            return
+        await message.reply_text(
+            f"✅ Правка для черновика #{draft_id} сохранена. Ожидает подтверждения админа."
+        )
+        await message.reply_text(
+            self._format_ocr_draft_text(updated_draft),
+            reply_markup=self._build_ocr_keyboard(chat.id, draft_id),
+        )
+
+    async def on_ocr_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        user = update.effective_user
+        chat = update.effective_chat
+        if not query or not user or not chat:
+            return
+        data = query.data or ""
+        parts = data.split(":")
+        if len(parts) != 4:
+            await query.answer("Некорректная кнопка", show_alert=True)
+            return
+        _, action, chat_id_raw, draft_id_raw = parts
+        try:
+            chat_id = int(chat_id_raw)
+            draft_id = int(draft_id_raw)
+        except Exception:
+            await query.answer("Некорректный ID", show_alert=True)
+            return
+        if chat.id != chat_id:
+            await query.answer("Эта кнопка из другого чата", show_alert=True)
+            return
+        draft = self.db.get_ocr_draft(chat.id, draft_id)
+        if not draft:
+            await query.answer("Черновик не найден", show_alert=True)
+            return
+
+        if action == "show":
+            if not self._is_admin(user.id):
+                await query.answer("Только админ", show_alert=True)
+                return
+            await query.answer("Показываю")
+            await query.message.reply_text(
+                self._format_ocr_draft_text(draft),
+                reply_markup=self._build_ocr_keyboard(chat.id, draft_id),
+            )
+            return
+
+        if action == "fix":
+            await query.answer("Отправьте исправление")
+            await query.message.reply_text(
+                "Ответьте на это сообщение шаблоном:\n"
+                f"исправь {draft_id}\n"
+                "Команда1 - Команда2\n"
+                "Голы Команда1:\n"
+                "...\n"
+                "Голы Команда2:\n"
+                "...\n"
+                "Ассисты Команда1:\n"
+                "...\n"
+                "Ассисты Команда2:\n"
+                "..."
+            )
+            return
+
+        if not self._is_admin(user.id):
+            await query.answer("Только админ", show_alert=True)
+            return
+
+        if action == "approve":
+            ok = self.db.approve_ocr_draft(chat.id, draft_id, user.id)
+            await query.answer("Подтверждено" if ok else "Не удалось подтвердить", show_alert=not ok)
+            refreshed = self.db.get_ocr_draft(chat.id, draft_id)
+            if refreshed:
+                await query.message.reply_text(self._format_ocr_draft_text(refreshed))
+            return
+
+        if action == "reject":
+            ok = self.db.reject_ocr_draft(chat.id, draft_id, user.id, "Отклонено администратором")
+            await query.answer("Отклонено" if ok else "Не удалось отклонить", show_alert=not ok)
+            refreshed = self.db.get_ocr_draft(chat.id, draft_id)
+            if refreshed:
+                await query.message.reply_text(self._format_ocr_draft_text(refreshed))
+            return
+
     # --- Commands (copy these into your bot class if needed) ---
     async def cmd_league_debts_show(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not self._is_admin(update.effective_user.id):
@@ -665,6 +1257,10 @@ class LeagueFeature:
                     "/league_reminder_now - отправить напоминание сразу",
                     "/league_reminder_hourly_on [текст] - включить ежечасные напоминания в :00",
                     "/league_reminder_hourly_off - выключить ежечасные напоминания",
+                    "/league_ocr_fix [id] - исправить OCR-черновик (доступно игрокам)",
+                    "/league_ocr_show [id] - показать OCR-черновик",
+                    "/league_ocr_approve [id] - подтвердить OCR-черновик",
+                    "/league_ocr_reject [id] [причина] - отклонить OCR-черновик",
                 ]
             )
         )
@@ -783,6 +1379,61 @@ class LeagueFeature:
             return
         self.db.disable_league_challenge_source(update.effective_chat.id)
         await update.message.reply_text("✅ Источник синка Challenge отключен.")
+
+    async def cmd_league_ocr_fix(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        await self._apply_ocr_fix(update, context, from_text=False)
+
+    async def cmd_league_ocr_show(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not self._is_admin(update.effective_user.id):
+            await update.message.reply_text("❌ Команда доступна только админам.")
+            return
+        draft_id = self._resolve_draft_id(update, context.args)
+        if draft_id is None:
+            await update.message.reply_text("Использование: /league_ocr_show [id] или reply на сообщение черновика.")
+            return
+        draft = self.db.get_ocr_draft(update.effective_chat.id, draft_id)
+        if not draft:
+            await update.message.reply_text(f"❌ Черновик #{draft_id} не найден.")
+            return
+        await update.message.reply_text(
+            self._format_ocr_draft_text(draft),
+            reply_markup=self._build_ocr_keyboard(update.effective_chat.id, draft_id),
+        )
+
+    async def cmd_league_ocr_approve(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not self._is_admin(update.effective_user.id):
+            await update.message.reply_text("❌ Команда доступна только админам.")
+            return
+        draft_id = self._resolve_draft_id(update, context.args)
+        if draft_id is None:
+            await update.message.reply_text("Использование: /league_ocr_approve [id] или reply на сообщение черновика.")
+            return
+        ok = self.db.approve_ocr_draft(update.effective_chat.id, draft_id, update.effective_user.id)
+        if not ok:
+            await update.message.reply_text(f"❌ Не удалось подтвердить черновик #{draft_id} (возможно уже подтвержден/отклонен).")
+            return
+        draft = self.db.get_ocr_draft(update.effective_chat.id, draft_id)
+        await update.message.reply_text(f"✅ Черновик #{draft_id} подтвержден админом.")
+        if draft:
+            await update.message.reply_text(self._format_ocr_draft_text(draft))
+
+    async def cmd_league_ocr_reject(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not self._is_admin(update.effective_user.id):
+            await update.message.reply_text("❌ Команда доступна только админам.")
+            return
+        draft_id = self._resolve_draft_id(update, context.args)
+        if draft_id is None:
+            await update.message.reply_text("Использование: /league_ocr_reject [id] [причина] или reply на сообщение черновика.")
+            return
+        reason = " ".join(context.args[1:]).strip() if len(context.args) > 1 else "Отклонено администратором"
+        ok = self.db.reject_ocr_draft(update.effective_chat.id, draft_id, update.effective_user.id, reason)
+        if not ok:
+            await update.message.reply_text(f"❌ Не удалось отклонить черновик #{draft_id}.")
+            return
+        draft = self.db.get_ocr_draft(update.effective_chat.id, draft_id)
+        await update.message.reply_text(f"🛑 Черновик #{draft_id} отклонен. Причина: {reason}")
+        if draft:
+            await update.message.reply_text(self._format_ocr_draft_text(draft))
 
     async def cmd_league_reminder_on(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not self._is_admin(update.effective_user.id):

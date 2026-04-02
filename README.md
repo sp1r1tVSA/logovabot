@@ -48,6 +48,14 @@ LEAGUE_SQLITE_PATH=league.db
 - `/league_reminder_now`
 - `/league_reminder_hourly_on [text]`
 - `/league_reminder_hourly_off`
+- `/league_ocr_fix [id]` (players/admins)
+- `/league_ocr_show [id]` (admins)
+- `/league_ocr_approve [id]` (admins)
+- `/league_ocr_reject [id] [reason]` (admins)
+
+Text command for players:
+
+- `исправь [id]` (or reply to draft)
 
 ## Challenge session auth (Playwright)
 
@@ -65,3 +73,20 @@ python scripts/cp_auth_session.py
 ```
 
 Output file: `state/challenge_storage_state.json`
+
+## OCR drafts from screenshots
+
+- Send a screenshot as photo in group chat.
+- Add caption with teams and optional assists, for example:
+
+```text
+Брюге - Селтик
+Ассисты Брюге:
+De Bruyne; Foden
+Ассисты Селтика:
+Maeda
+```
+
+- Bot creates draft `#N` per chat and status `pending_admin_review`.
+- If goal side color is not detected, event is marked as unknown and should be fixed via `/league_ocr_fix` or `исправь`.
+- Any OCR draft must be confirmed by admin via `/league_ocr_approve`.
