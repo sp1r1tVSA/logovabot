@@ -1193,11 +1193,33 @@ class LeagueFeature:
             if not cleaned:
                 return None
 
+            # Remove clock-like fragments (e.g. 90:00) before score matching.
+            no_clock = re.sub(r"\b\d{1,2}\s*:\s*\d{2}\b", " ", cleaned)
+            no_clock = re.sub(r"\s+", " ", no_clock).strip()
+
             m = re.search(r"\b(\d{1,2})\s*[-:]\s*(\d{1,2})\b", cleaned)
             if m:
                 home, away = int(m.group(1)), int(m.group(2))
                 if 0 <= home <= 20 and 0 <= away <= 20:
                     return {"home": home, "away": away}
+
+            m = re.search(r"\b(\d{1,2})\s*[-:]\s*(\d{1,2})\b", no_clock)
+            if m:
+                home, away = int(m.group(1)), int(m.group(2))
+                if 0 <= home <= 20 and 0 <= away <= 20:
+                    return {"home": home, "away": away}
+
+            # Pattern like "2 0 90:00" or "2 0".
+            m = re.search(r"\b(\d{1,2})\s+(\d{1,2})\b", no_clock)
+            if m:
+                home, away = int(m.group(1)), int(m.group(2))
+                if 0 <= home <= 20 and 0 <= away <= 20:
+                    return {"home": home, "away": away}
+
+            # Compact fallback like "20" for 2:0 (only for one-digit scores).
+            m = re.search(r"\b([0-9])([0-9])\b", no_clock)
+            if m:
+                return {"home": int(m.group(1)), "away": int(m.group(2))}
 
             m = re.search(r"\b(\d{1,2})\s+(\d{1,2})\b", cleaned)
             if m:
@@ -1208,6 +1230,7 @@ class LeagueFeature:
 
         h, w = image_bgr.shape[:2]
         rois = [
+            image_bgr[max(int(h * 0.03), 0) : min(int(h * 0.20), h), max(int(w * 0.38), 0) : min(int(w * 0.62), w)],
             image_bgr[max(int(h * 0.02), 0) : min(int(h * 0.14), h), max(int(w * 0.34), 0) : min(int(w * 0.66), w)],
             image_bgr[max(int(h * 0.00), 0) : min(int(h * 0.18), h), max(int(w * 0.30), 0) : min(int(w * 0.70), w)],
         ]
@@ -1221,14 +1244,15 @@ class LeagueFeature:
             inv = cv2.bitwise_not(binary)
 
             for img in (binary, inv, enlarged):
-                text = pytesseract.image_to_string(
-                    img,
-                    config="--oem 3 --psm 7 -c tessedit_char_whitelist=0123456789-:",
-                    lang="eng",
-                )
-                parsed = parse_score(text)
-                if parsed:
-                    return parsed
+                for psm in (7, 6, 11):
+                    text = pytesseract.image_to_string(
+                        img,
+                        config=f"--oem 3 --psm {psm} -c tessedit_char_whitelist=0123456789-:",
+                        lang="eng",
+                    )
+                    parsed = parse_score(text)
+                    if parsed:
+                        return parsed
         return None
 
     def _extract_goal_scorers(self, image_bgr, line_items: List[Dict], offset_x: int = 0, offset_y: int = 0) -> Dict:
