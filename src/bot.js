@@ -46,6 +46,24 @@ const adminIds = new Set(
 
 const bot = new Telegraf(token);
 
+function isAllowedChat(ctx) {
+  const chatType = String(ctx.chat?.type || "");
+  if (chatType === "group" || chatType === "supergroup") {
+    return true;
+  }
+  if (chatType === "private") {
+    return isAdmin(ctx);
+  }
+  return false;
+}
+
+bot.use(async (ctx, next) => {
+  if (!isAllowedChat(ctx)) {
+    return;
+  }
+  return next();
+});
+
 function isAdmin(ctx) {
   return adminIds.has(String(ctx.from?.id || ""));
 }
@@ -142,31 +160,6 @@ async function runReminderTick() {
     );
   }
 }
-
-bot.start((ctx) => ctx.reply("Hello! I am your Telegram bot."));
-
-bot.help((ctx) => {
-  ctx.reply(
-    [
-      "Команды лиги:",
-      "/league_map_bulk [список]",
-      "/league_map_show",
-      "/league_map_clear",
-      "/league_sync_challenge [url] [N]",
-      "/league_sync_now [N]",
-      "/league_sync_off",
-      "/league_debts_show",
-      "/league_debts_round [N]",
-      "/league_reminder_on",
-      "/league_reminder_off",
-      "/league_reminder_now",
-      "/league_reminder_hourly_on [текст]",
-      "/league_reminder_hourly_off",
-    ].join("\n")
-  );
-});
-
-bot.command("ping", (ctx) => ctx.reply("pong"));
 
 bot.command("league_map_bulk", async (ctx) => {
   if (!isAdmin(ctx)) {
@@ -366,13 +359,6 @@ bot.command("league_reminder_hourly_off", async (ctx) => {
 
   await upsertReminderSettings(query, { hourlyEnabled: false });
   await ctx.reply("Hourly напоминания выключены.");
-});
-
-bot.on("text", (ctx) => {
-  if (String(ctx.message?.text || "").startsWith("/")) {
-    return;
-  }
-  ctx.reply(`You said: ${ctx.message.text}`);
 });
 
 bot.catch((error, ctx) => {
