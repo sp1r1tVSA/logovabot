@@ -895,61 +895,75 @@ class LeagueFeature:
             raise RuntimeError("OCRSPACE_API_KEY не задан")
 
         encoded = base64.b64encode(image_bytes).decode("ascii")
-        payload = {
-            "apikey": api_key,
-            "language": "eng,rus",
-            "isOverlayRequired": "true",
-            "OCREngine": "2",
-            "base64Image": f"data:image/jpeg;base64,{encoded}",
-        }
-        body = urllib.parse.urlencode(payload).encode("utf-8")
-        req = urllib.request.Request(
-            "https://api.ocr.space/parse/image",
-            data=body,
-            headers={
-                "Content-Type": "application/x-www-form-urlencoded",
-                "User-Agent": "LeagueBot-OCR/1.0",
-            },
-        )
-
         timeout_sec = self._ocr_timeout_seconds()
-        with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
-            raw = resp.read().decode("utf-8", errors="ignore")
-        data = json.loads(raw)
 
-        if data.get("IsErroredOnProcessing"):
-            err = "; ".join(data.get("ErrorMessage") or []) or data.get("ErrorDetails") or "OCRSpace error"
-            raise RuntimeError(str(err))
+        def parse_ocrspace_payload(data: Dict) -> List[Dict]:
+            parsed = data.get("ParsedResults") or []
+            if not parsed:
+                return []
 
-        parsed = data.get("ParsedResults") or []
-        if not parsed:
-            return []
+            out = []
+            for pr in parsed:
+                overlay = ((pr.get("TextOverlay") or {}).get("Lines") or [])
+                for line in overlay:
+                    words = line.get("Words") or []
+                    text = " ".join([str(w.get("WordText") or "").strip() for w in words]).strip()
+                    if not text:
+                        continue
+                    if words:
+                        x1 = min(int(w.get("Left", 0)) for w in words)
+                        y1 = min(int(w.get("Top", line.get("MinTop", 0))) for w in words)
+                        x2 = max(int(w.get("Left", 0)) + int(w.get("Width", 0)) for w in words)
+                        y2 = max(int(w.get("Top", line.get("MinTop", 0))) + int(w.get("Height", line.get("MaxHeight", 0))) for w in words)
+                    else:
+                        x1 = int(line.get("MinLeft", 0))
+                        y1 = int(line.get("MinTop", 0))
+                        x2 = x1 + int(line.get("MaxWidth", 0))
+                        y2 = y1 + int(line.get("MaxHeight", 0))
+                    out.append({"text": text, "x1": x1, "y1": y1, "x2": x2, "y2": y2})
 
-        out = []
-        for pr in parsed:
-            overlay = ((pr.get("TextOverlay") or {}).get("Lines") or [])
-            for line in overlay:
-                words = line.get("Words") or []
-                text = " ".join([str(w.get("WordText") or "").strip() for w in words]).strip()
-                if not text:
+            if out:
+                return out
+
+            text_fallback = "\n".join([(pr.get("ParsedText") or "") for pr in parsed]).strip()
+            return [{"text": ln.strip(), "x1": 0, "y1": 0, "x2": 1, "y2": 1} for ln in text_fallback.splitlines() if ln.strip()]
+
+        # OCR.space accepts a single language code, not comma-separated list.
+        for language in ("eng", "rus"):
+            payload = {
+                "apikey": api_key,
+                "language": language,
+                "isOverlayRequired": "true",
+                "OCREngine": "2",
+                "base64Image": f"data:image/jpeg;base64,{encoded}",
+            }
+            body = urllib.parse.urlencode(payload).encode("utf-8")
+            req = urllib.request.Request(
+                "https://api.ocr.space/parse/image",
+                data=body,
+                headers={
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    "User-Agent": "LeagueBot-OCR/1.0",
+                },
+            )
+
+            with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
+                raw = resp.read().decode("utf-8", errors="ignore")
+            data = json.loads(raw)
+
+            if data.get("IsErroredOnProcessing"):
+                err_text = " ".join((data.get("ErrorMessage") or []))
+                # Continue on language-specific error and try next language.
+                if "Value for parameter 'language' is invalid" in err_text:
                     continue
-                if words:
-                    x1 = min(int(w.get("Left", 0)) for w in words)
-                    y1 = min(int(w.get("Top", line.get("MinTop", 0))) for w in words)
-                    x2 = max(int(w.get("Left", 0)) + int(w.get("Width", 0)) for w in words)
-                    y2 = max(int(w.get("Top", line.get("MinTop", 0))) + int(w.get("Height", line.get("MaxHeight", 0))) for w in words)
-                else:
-                    x1 = int(line.get("MinLeft", 0))
-                    y1 = int(line.get("MinTop", 0))
-                    x2 = x1 + int(line.get("MaxWidth", 0))
-                    y2 = y1 + int(line.get("MaxHeight", 0))
-                out.append({"text": text, "x1": x1, "y1": y1, "x2": x2, "y2": y2})
+                err = err_text or data.get("ErrorDetails") or "OCRSpace error"
+                raise RuntimeError(str(err))
 
-        if out:
-            return out
+            lines = parse_ocrspace_payload(data)
+            if lines:
+                return lines
 
-        text_fallback = "\n".join([(pr.get("ParsedText") or "") for pr in parsed]).strip()
-        return [{"text": ln.strip(), "x1": 0, "y1": 0, "x2": 1, "y2": 1} for ln in text_fallback.splitlines() if ln.strip()]
+        return []
 
     def _build_ocr_keyboard(self, chat_id: int, ocr_id: int) -> InlineKeyboardMarkup:
         return InlineKeyboardMarkup(
