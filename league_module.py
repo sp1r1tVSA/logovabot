@@ -864,11 +864,13 @@ class LeagueFeature:
         has_team_map = bool(self.db.get_league_team_map(chat_id))
         home_raw = ""
         away_raw = ""
-        for line in lines:
+        match_line_index = -1
+        for idx, line in enumerate(lines):
             m = re.match(r"^(.+?)\s*(?:-|—|vs|VS|v\.?s\.?)\s*(.+)$", line)
             if m:
                 home_raw = m.group(1).strip()
                 away_raw = m.group(2).strip()
+                match_line_index = idx
                 break
         if not home_raw or not away_raw:
             warnings.append("В подписи не найден формат матча 'Команда1 - Команда2'.")
@@ -879,9 +881,17 @@ class LeagueFeature:
         if has_team_map and away_raw and away_match["confidence"] < 0.8 and self.normalize_team_name(away_raw) != self.normalize_team_name(away_match["matched"]):
             warnings.append(f"Команда гостей неуверенно сопоставлена: {away_raw or 'не указана'} -> {away_match['matched']}")
 
-        assists_raw: Dict[str, List[str]] = {"home": [], "away": []}
+        assists_raw: Dict[str, List[str]] = {"home": [], "away": [], "any": []}
         current_bucket = None
-        for line in lines:
+        start_index = match_line_index + 1 if match_line_index >= 0 else 0
+        for line in lines[start_index:]:
+            generic_header = re.match(r"^ассисты\s*:\s*(.*)$", line, flags=re.IGNORECASE)
+            if generic_header:
+                current_bucket = "any"
+                inline_raw = generic_header.group(1).strip()
+                if inline_raw:
+                    assists_raw["any"].extend([x.strip() for x in re.split(r"[;,]", inline_raw) if x.strip()])
+                continue
             header = re.match(r"^ассисты\s+(.+?)\s*:\s*$", line, flags=re.IGNORECASE)
             if header:
                 team_label = header.group(1).strip()
@@ -892,6 +902,15 @@ class LeagueFeature:
             if current_bucket:
                 items = [x.strip() for x in re.split(r"[;,]", line) if x.strip()]
                 assists_raw[current_bucket].extend(items)
+                continue
+
+            # Fallback: if users send plain player names without "Ассисты" label.
+            if re.match(r"^(голы|сч[её]т)\b", line, flags=re.IGNORECASE):
+                continue
+            if re.search(r"\d\s*[-:]\s*\d", line):
+                continue
+            fallback_items = [x.strip("-• ") for x in re.split(r"[;,]", line) if x.strip("-• ")]
+            assists_raw["any"].extend(fallback_items)
 
         return {
             "home_team": home_match["matched"],
@@ -900,8 +919,83 @@ class LeagueFeature:
             "away_team_raw": away_raw,
             "home_assists": assists_raw["home"],
             "away_assists": assists_raw["away"],
+            "assists_any": assists_raw["any"],
             "warnings": warnings,
         }
+
+    def _normalize_player_name(self, name: str) -> str:
+        value = (name or "").strip().lower()
+        value = value.replace("ё", "е")
+        value = re.sub(r"[^a-zа-я0-9\s\-]", " ", value, flags=re.IGNORECASE)
+        value = re.sub(r"\s+", " ", value).strip()
+        return value
+
+    def _transliterate_ru_to_en(self, text: str) -> str:
+        mapping = {
+            "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ж": "zh", "з": "z", "и": "i", "й": "y",
+            "к": "k", "л": "l", "м": "m", "н": "n", "о": "o", "п": "p", "р": "r", "с": "s", "т": "t", "у": "u",
+            "ф": "f", "х": "h", "ц": "ts", "ч": "ch", "ш": "sh", "щ": "sch", "ъ": "", "ы": "y", "ь": "", "э": "e",
+            "ю": "yu", "я": "ya",
+        }
+        out = []
+        for ch in (text or ""):
+            out.append(mapping.get(ch, ch))
+        return "".join(out)
+
+    def _tokenize_player_name(self, name: str) -> List[str]:
+        norm = self._normalize_player_name(name)
+        return [t for t in re.split(r"[\s\-]+", norm) if t]
+
+    def _score_name_match(self, source: str, target: str) -> float:
+        a = self._normalize_player_name(source)
+        b = self._normalize_player_name(target)
+        if not a or not b:
+            return 0.0
+        if a == b:
+            return 1.0
+
+        base_score = SequenceMatcher(None, a, b).ratio()
+
+        a_lat = self._transliterate_ru_to_en(a)
+        b_lat = self._transliterate_ru_to_en(b)
+        translit_score = SequenceMatcher(None, a_lat, b_lat).ratio()
+
+        token_score = 0.0
+        tokens_a = self._tokenize_player_name(source)
+        tokens_b = self._tokenize_player_name(target)
+        if tokens_a and tokens_b:
+            for ta in tokens_a:
+                for tb in tokens_b:
+                    if ta == tb:
+                        token_score = max(token_score, 0.98)
+                    elif len(ta) >= 3 and len(tb) >= 3 and (ta.startswith(tb) or tb.startswith(ta)):
+                        token_score = max(token_score, 0.9)
+                    else:
+                        token_score = max(token_score, SequenceMatcher(None, ta, tb).ratio() * 0.9)
+
+        return max(base_score, translit_score, token_score)
+
+    def _resolve_assists_by_goals(self, assists_any: List[str], home_goals: List[str], away_goals: List[str]) -> Dict:
+        home = []
+        away = []
+        unknown = []
+        warnings = []
+        for assist in assists_any:
+            best_home = max([self._score_name_match(assist, x) for x in home_goals], default=0.0)
+            best_away = max([self._score_name_match(assist, x) for x in away_goals], default=0.0)
+            if best_home < 0.72 and best_away < 0.72:
+                unknown.append(assist)
+                warnings.append(f"Ассист '{assist}' не удалось сопоставить с командой автоматически.")
+                continue
+            if abs(best_home - best_away) < 0.08:
+                unknown.append(assist)
+                warnings.append(f"Ассист '{assist}' неоднозначен (оба варианта похожи).")
+                continue
+            if best_home > best_away:
+                home.append(assist)
+            else:
+                away.append(assist)
+        return {"home": home, "away": away, "unknown": unknown, "warnings": warnings}
 
     def _classify_goal_color(self, image_bgr, box: Dict[str, int]) -> str:
         try:
@@ -1093,6 +1187,11 @@ class LeagueFeature:
         return {"home_goals": home_goals, "away_goals": away_goals, "unknown_goals": unknown_goals}
 
     def _build_ocr_payload(self, caption_info: Dict, score: Optional[Dict], goals_info: Dict) -> Dict:
+        resolved = self._resolve_assists_by_goals(
+            caption_info.get("assists_any", []),
+            goals_info.get("home_goals", []),
+            goals_info.get("away_goals", []),
+        )
         return {
             "home_team": caption_info["home_team"],
             "away_team": caption_info["away_team"],
@@ -1101,8 +1200,10 @@ class LeagueFeature:
             "home_goals": goals_info.get("home_goals", []),
             "away_goals": goals_info.get("away_goals", []),
             "unknown_goals": goals_info.get("unknown_goals", []),
-            "home_assists": caption_info.get("home_assists", []),
-            "away_assists": caption_info.get("away_assists", []),
+            "home_assists": caption_info.get("home_assists", []) + resolved.get("home", []),
+            "away_assists": caption_info.get("away_assists", []) + resolved.get("away", []),
+            "unknown_assists": resolved.get("unknown", []),
+            "assist_warnings": resolved.get("warnings", []),
         }
 
     def _format_ocr_draft_text(self, draft: Dict) -> str:
@@ -1111,32 +1212,29 @@ class LeagueFeature:
         score_home = payload.get("score_home")
         score_away = payload.get("score_away")
         score_text = f"{score_home}:{score_away}" if score_home is not None and score_away is not None else "не распознан"
+        home_goals = ", ".join(payload.get("home_goals", [])) or "нет"
+        away_goals = ", ".join(payload.get("away_goals", [])) or "нет"
+        home_assists = ", ".join(payload.get("home_assists", [])) or "нет"
+        away_assists = ", ".join(payload.get("away_assists", [])) or "нет"
         lines = [
             f"🧾 OCR-черновик #{draft['ocr_id']}",
             f"Статус: {draft.get('status')}",
             f"Матч: {payload.get('home_team', '—')} - {payload.get('away_team', '—')}",
             f"Счет: {score_text}",
-            "",
-            "Голы хозяев:",
+            f"Голы хоз.: {home_goals}",
+            f"Голы гост.: {away_goals}",
+            f"Ассисты хоз.: {home_assists}",
+            f"Ассисты гост.: {away_assists}",
         ]
-        lines.extend([f"- {x}" for x in payload.get("home_goals", [])] or ["- нет"])
-        lines.append("Голы гостей:")
-        lines.extend([f"- {x}" for x in payload.get("away_goals", [])] or ["- нет"])
         if payload.get("unknown_goals"):
-            lines.append("⚠️ Неразнесенные голы:")
-            lines.extend([f"- {x}" for x in payload.get("unknown_goals", [])])
-            lines.append("Используйте /league_ocr_fix для ручного распределения.")
-        lines.append("")
-        lines.append("Ассисты (из подписи):")
-        lines.append("- Хозяева: " + (", ".join(payload.get("home_assists", [])) or "нет"))
-        lines.append("- Гости: " + (", ".join(payload.get("away_assists", [])) or "нет"))
+            lines.append("Неразнесенные голы: " + ", ".join(payload.get("unknown_goals", [])))
+        if payload.get("unknown_assists"):
+            lines.append("Неразнесенные ассисты: " + ", ".join(payload.get("unknown_assists", [])))
         if warnings:
-            lines.append("")
             lines.append("⚠️ Нужна проверка:")
             lines.extend([f"- {w}" for w in warnings])
-        lines.append("")
-        lines.append("Игроки могут прислать исправление: исправь [id] или /league_ocr_fix [id]")
-        lines.append("Подтверждение результата делает только админ.")
+        lines.append("Исправление: исправь [id] или /league_ocr_fix [id]")
+        lines.append("Подтверждает только админ.")
         return "\n".join(lines)
 
     def _parse_fix_payload(self, raw_text: str) -> Dict:
@@ -1157,12 +1255,20 @@ class LeagueFeature:
         score_away = None
 
         sections: Dict[str, List[str]] = {}
+        assists_any: List[str] = []
         current = None
         for line in non_empty[1:]:
             score_match = re.match(r"^сч[её]т\s*[:\-]?\s*(\d{1,2})\s*[-:]\s*(\d{1,2})\s*$", line, flags=re.IGNORECASE)
             if score_match:
                 score_home = int(score_match.group(1))
                 score_away = int(score_match.group(2))
+                continue
+            generic_assists = re.match(r"^ассисты\s*:\s*(.*)$", line, flags=re.IGNORECASE)
+            if generic_assists:
+                current = "assists_any"
+                inline_raw = generic_assists.group(1).strip()
+                if inline_raw:
+                    assists_any.extend([x.strip() for x in re.split(r"[;,]", inline_raw) if x.strip()])
                 continue
             h = re.match(r"^(Голы|Ассисты)\s+(.+?)\s*:\s*$", line, flags=re.IGNORECASE)
             if h:
@@ -1173,20 +1279,33 @@ class LeagueFeature:
                 sections.setdefault(current, [])
                 continue
             if current is None:
+                # Fallback: plain lines without header are treated as assists list.
+                fallback_chunks = [x.strip("-• ") for x in re.split(r"[;,]", line) if x.strip("-• ")]
+                assists_any.extend(fallback_chunks)
                 continue
             chunks = [x.strip() for x in re.split(r"[;,]", line) if x.strip()]
-            sections[current].extend(chunks)
+            if current == "assists_any":
+                assists_any.extend(chunks)
+            else:
+                sections[current].extend(chunks)
+
+        home_goals = sections.get("голы_home", [])
+        away_goals = sections.get("голы_away", [])
+        resolved = self._resolve_assists_by_goals(assists_any, home_goals, away_goals)
+        warnings = list(resolved.get("warnings", []))
 
         return {
             "home_team": home_team,
             "away_team": away_team,
             "score_home": score_home,
             "score_away": score_away,
-            "home_goals": sections.get("голы_home", []),
-            "away_goals": sections.get("голы_away", []),
+            "home_goals": home_goals,
+            "away_goals": away_goals,
             "unknown_goals": [],
-            "home_assists": sections.get("ассисты_home", []),
-            "away_assists": sections.get("ассисты_away", []),
+            "home_assists": sections.get("ассисты_home", []) + resolved.get("home", []),
+            "away_assists": sections.get("ассисты_away", []) + resolved.get("away", []),
+            "unknown_assists": resolved.get("unknown", []),
+            "_warnings": warnings,
         }
 
     async def on_ocr_photo_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1232,6 +1351,7 @@ class LeagueFeature:
             warnings.append("Есть нераспределенные голы. Нужна команда /league_ocr_fix.")
 
         payload = self._build_ocr_payload(caption_info, score, goals_info)
+        warnings.extend(payload.get("assist_warnings", []))
         ocr_id = self.db.create_ocr_draft(chat.id, message.message_id, user.id, payload, warnings)
         draft = self.db.get_ocr_draft(chat.id, ocr_id)
         if not draft:
@@ -1286,7 +1406,7 @@ class LeagueFeature:
             fixed_payload["score_home"] = existing_payload.get("score_home")
         if fixed_payload.get("score_away") is None:
             fixed_payload["score_away"] = existing_payload.get("score_away")
-        warnings = []
+        warnings = fixed_payload.pop("_warnings", [])
         updated = self.db.update_ocr_draft_payload(chat.id, draft_id, fixed_payload, warnings, user.id)
         if not updated:
             await message.reply_text("❌ Не удалось сохранить правку.")
@@ -1343,18 +1463,13 @@ class LeagueFeature:
         if action == "fix":
             await query.answer("Отправьте исправление")
             await query.message.reply_text(
-                "Ответьте на это сообщение шаблоном:\n"
+                "Шаблон исправления:\n"
                 f"исправь {draft_id}\n"
                 "Команда1 - Команда2\n"
                 "Счет: 2-1\n"
-                "Голы Команда1:\n"
-                "...\n"
-                "Голы Команда2:\n"
-                "...\n"
-                "Ассисты Команда1:\n"
-                "...\n"
-                "Ассисты Команда2:\n"
-                "..."
+                "Голы Команда1: Игрок1, Игрок2\n"
+                "Голы Команда2: Игрок3\n"
+                "Ассисты: Игрок1, Игрок3"
             )
             return
 
