@@ -861,7 +861,8 @@ class LeagueFeature:
     def _parse_caption_match_and_assists(self, caption: str, chat_id: int) -> Dict:
         lines = [x.strip() for x in (caption or "").splitlines() if x.strip()]
         warnings = []
-        has_team_map = bool(self.db.get_league_team_map(chat_id))
+        team_map_items = self.db.get_league_team_map(chat_id)
+        has_team_map = bool(team_map_items)
         home_raw = ""
         away_raw = ""
         match_line_index = -1
@@ -872,6 +873,12 @@ class LeagueFeature:
                 away_raw = m.group(2).strip()
                 match_line_index = idx
                 break
+        if (not home_raw or not away_raw) and has_team_map:
+            inferred = self._infer_match_from_caption_line(lines, team_map_items)
+            if inferred:
+                home_raw = inferred["home"]
+                away_raw = inferred["away"]
+                match_line_index = inferred["line_index"]
         if not home_raw or not away_raw:
             warnings.append("В подписи не найден формат матча 'Команда1 - Команда2'.")
         home_match = self._match_team_name(chat_id, home_raw or "Хозяева")
@@ -922,6 +929,70 @@ class LeagueFeature:
             "assists_any": assists_raw["any"],
             "warnings": warnings,
         }
+
+    def _infer_match_from_caption_line(self, lines: List[str], team_map_items: List[Dict]) -> Optional[Dict]:
+        for idx, line in enumerate(lines):
+            if re.match(r"^(ассисты|голы|сч[её]т)\b", line, flags=re.IGNORECASE):
+                continue
+            normalized_line = self.normalize_team_name(line)
+            if not normalized_line:
+                continue
+
+            words = [w for w in normalized_line.split(" ") if w]
+            if len(words) < 2:
+                continue
+
+            best = None
+            best_score = 0.0
+            for split in range(1, len(words)):
+                left = " ".join(words[:split]).strip()
+                right = " ".join(words[split:]).strip()
+                if not left or not right:
+                    continue
+
+                left_match = self._match_team_name_from_items(left, team_map_items)
+                right_match = self._match_team_name_from_items(right, team_map_items)
+                if not left_match or not right_match:
+                    continue
+                if left_match["team_name_norm"] == right_match["team_name_norm"]:
+                    continue
+
+                score = left_match["score"] + right_match["score"]
+                if score > best_score:
+                    best_score = score
+                    best = {
+                        "line_index": idx,
+                        "home": left_match["team_name_raw"],
+                        "away": right_match["team_name_raw"],
+                    }
+
+            if best and best_score >= 1.55:
+                return best
+        return None
+
+    def _match_team_name_from_items(self, raw_name: str, team_map_items: List[Dict]) -> Optional[Dict]:
+        normalized = self.normalize_team_name(raw_name)
+        if not normalized:
+            return None
+
+        for item in team_map_items:
+            if item["team_name_norm"] == normalized:
+                return {"team_name_norm": item["team_name_norm"], "team_name_raw": item["team_name_raw"], "score": 1.0}
+
+        best_item = None
+        best_score = 0.0
+        for item in team_map_items:
+            score = SequenceMatcher(None, normalized, item["team_name_norm"]).ratio()
+            if score > best_score:
+                best_item = item
+                best_score = score
+        if best_item and best_score >= 0.72:
+            return {
+                "team_name_norm": best_item["team_name_norm"],
+                "team_name_raw": best_item["team_name_raw"],
+                "score": best_score,
+            }
+        return None
 
     def _normalize_player_name(self, name: str) -> str:
         value = (name or "").strip().lower()
