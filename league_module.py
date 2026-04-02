@@ -908,11 +908,22 @@ class LeagueFeature:
             x2 = max(int(box.get("x2", 0)), x1 + 1)
             y1 = max(int(box.get("y1", 0)), 0)
             y2 = max(int(box.get("y2", 0)), y1 + 1)
-            sx1 = max(x1 - 70, 0)
-            sx2 = max(x1 - 5, sx1 + 1)
-            sy1 = max(y1 - 10, 0)
-            sy2 = min(y2 + 10, image_bgr.shape[0])
-            patch = image_bgr[sy1:sy2, sx1:sx2]
+            line_w = max(x2 - x1, 1)
+            line_h = max(y2 - y1, 1)
+            cx1 = x1 + int(line_w * 0.18)
+            cx2 = x1 + int(line_w * 0.48)
+            cy = y1 + line_h // 2
+            cy1 = max(cy - 14, 0)
+            cy2 = min(cy + 14, image_bgr.shape[0])
+            cx1 = max(cx1, 0)
+            cx2 = min(max(cx2, cx1 + 1), image_bgr.shape[1])
+            patch = image_bgr[cy1:cy2, cx1:cx2]
+            if patch.size == 0:
+                sx1 = max(x1 - 70, 0)
+                sx2 = max(x1 - 5, sx1 + 1)
+                sy1 = max(y1 - 10, 0)
+                sy2 = min(y2 + 10, image_bgr.shape[0])
+                patch = image_bgr[sy1:sy2, sx1:sx2]
             if patch.size == 0:
                 return "unknown"
             hsv = cv2.cvtColor(patch, cv2.COLOR_BGR2HSV)
@@ -976,10 +987,24 @@ class LeagueFeature:
         return lines
 
     def _extract_score(self, ocr_texts: List[str]) -> Optional[Dict]:
+        def _valid_score(home: int, away: int) -> bool:
+            return 0 <= home <= 20 and 0 <= away <= 20
+
         for text in ocr_texts:
-            m = re.search(r"(\d{1,2})\s*[-:]\s*(\d{1,2})", text)
+            cleaned = (text or "").replace("—", "-").replace("–", "-")
+            m = re.search(r"\b(\d{1,2})\s*-\s*(\d{1,2})\b", cleaned)
             if m:
-                return {"home": int(m.group(1)), "away": int(m.group(2))}
+                home, away = int(m.group(1)), int(m.group(2))
+                if _valid_score(home, away):
+                    return {"home": home, "away": away}
+
+        for text in ocr_texts:
+            cleaned = (text or "").replace("—", ":").replace("–", ":")
+            m = re.search(r"\b(\d{1,2})\s*:\s*(\d{1,2})\b", cleaned)
+            if m:
+                home, away = int(m.group(1)), int(m.group(2))
+                if _valid_score(home, away):
+                    return {"home": home, "away": away}
         return None
 
     def _extract_goal_scorers(self, image_bgr, line_items: List[Dict], offset_x: int = 0, offset_y: int = 0) -> Dict:
