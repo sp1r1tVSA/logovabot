@@ -1106,10 +1106,17 @@ class LeagueFeature:
             raise ValueError("Не найдена строка матча 'Команда1 - Команда2'.")
         home_team = m.group(1).strip()
         away_team = m.group(2).strip()
+        score_home = None
+        score_away = None
 
         sections: Dict[str, List[str]] = {}
         current = None
         for line in non_empty[1:]:
+            score_match = re.match(r"^сч[её]т\s*[:\-]?\s*(\d{1,2})\s*[-:]\s*(\d{1,2})\s*$", line, flags=re.IGNORECASE)
+            if score_match:
+                score_home = int(score_match.group(1))
+                score_away = int(score_match.group(2))
+                continue
             h = re.match(r"^(Голы|Ассисты)\s+(.+?)\s*:\s*$", line, flags=re.IGNORECASE)
             if h:
                 kind = h.group(1).lower()
@@ -1126,6 +1133,8 @@ class LeagueFeature:
         return {
             "home_team": home_team,
             "away_team": away_team,
+            "score_home": score_home,
+            "score_away": score_away,
             "home_goals": sections.get("голы_home", []),
             "away_goals": sections.get("голы_away", []),
             "unknown_goals": [],
@@ -1224,8 +1233,10 @@ class LeagueFeature:
             return
 
         existing_payload = draft.get("payload", {})
-        fixed_payload["score_home"] = existing_payload.get("score_home")
-        fixed_payload["score_away"] = existing_payload.get("score_away")
+        if fixed_payload.get("score_home") is None:
+            fixed_payload["score_home"] = existing_payload.get("score_home")
+        if fixed_payload.get("score_away") is None:
+            fixed_payload["score_away"] = existing_payload.get("score_away")
         warnings = []
         updated = self.db.update_ocr_draft_payload(chat.id, draft_id, fixed_payload, warnings, user.id)
         if not updated:
@@ -1286,6 +1297,7 @@ class LeagueFeature:
                 "Ответьте на это сообщение шаблоном:\n"
                 f"исправь {draft_id}\n"
                 "Команда1 - Команда2\n"
+                "Счет: 2-1\n"
                 "Голы Команда1:\n"
                 "...\n"
                 "Голы Команда2:\n"
