@@ -1123,9 +1123,6 @@ class LeagueFeature:
             chunks = [x.strip() for x in re.split(r"[;,]", line) if x.strip()]
             sections[current].extend(chunks)
 
-        if "голы_home" not in sections or "голы_away" not in sections:
-            raise ValueError("Не найдены секции 'Голы <команда>:' для обеих команд.")
-
         return {
             "home_team": home_team,
             "away_team": away_team,
