@@ -6,7 +6,6 @@ import sqlite3
 import urllib.request
 from difflib import SequenceMatcher
 from datetime import datetime
-from io import BytesIO
 from typing import Dict, List, Optional
 from zoneinfo import ZoneInfo
 
@@ -16,8 +15,9 @@ from telegram.ext import ApplicationBuilder, CallbackQueryHandler, CommandHandle
 
 try:
     import cv2
-    import easyocr
     import numpy as np
+    import pytesseract
+    from pytesseract import Output
 
     OCR_AVAILABLE = True
 except Exception:
@@ -451,7 +451,8 @@ class LeagueFeature:
         self.league_reminder_times = {"00:00", "04:00", "08:00", "12:00", "16:00", "20:00"}
         self._is_admin = is_admin_callable
         self.application = application
-        self._ocr_reader = None
+        self._ocr_checked = False
+        self._ocr_enabled = False
 
     def _is_allowed_chat(self, update: Update) -> bool:
         chat = update.effective_chat
@@ -789,12 +790,20 @@ class LeagueFeature:
                         custom_text=cfg.get("hourly_text") or "Напоминание: сыграйте долги в лиге.",
                     )
 
-    def _get_ocr_reader(self):
+    def _is_ocr_ready(self) -> bool:
         if not OCR_AVAILABLE:
-            return None
-        if self._ocr_reader is None:
-            self._ocr_reader = easyocr.Reader(["ru", "en"], gpu=False)
-        return self._ocr_reader
+            return False
+        if not self._ocr_checked:
+            custom_cmd = os.getenv("TESSERACT_CMD", "").strip()
+            if custom_cmd:
+                pytesseract.pytesseract.tesseract_cmd = custom_cmd
+            try:
+                pytesseract.get_tesseract_version()
+                self._ocr_enabled = True
+            except Exception:
+                self._ocr_enabled = False
+            self._ocr_checked = True
+        return self._ocr_enabled
 
     def _build_ocr_keyboard(self, chat_id: int, ocr_id: int) -> InlineKeyboardMarkup:
         return InlineKeyboardMarkup(
@@ -893,12 +902,12 @@ class LeagueFeature:
             "warnings": warnings,
         }
 
-    def _classify_goal_color(self, image_bgr, bbox) -> str:
+    def _classify_goal_color(self, image_bgr, box: Dict[str, int]) -> str:
         try:
-            xs = [int(p[0]) for p in bbox]
-            ys = [int(p[1]) for p in bbox]
-            x1, x2 = max(min(xs), 0), max(max(xs), 0)
-            y1, y2 = max(min(ys), 0), max(max(ys), 0)
+            x1 = max(int(box.get("x1", 0)), 0)
+            x2 = max(int(box.get("x2", 0)), x1 + 1)
+            y1 = max(int(box.get("y1", 0)), 0)
+            y2 = max(int(box.get("y2", 0)), y1 + 1)
             sx1 = max(x1 - 70, 0)
             sx2 = max(x1 - 5, sx1 + 1)
             sy1 = max(y1 - 10, 0)
@@ -921,6 +930,51 @@ class LeagueFeature:
         except Exception:
             return "unknown"
 
+    def _ocr_extract_lines(self, image_bgr, psm: int = 6) -> List[Dict]:
+        rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+        config = f"--oem 3 --psm {psm}"
+        data = pytesseract.image_to_data(rgb, output_type=Output.DICT, config=config, lang="eng+rus")
+        rows = len(data.get("text", []))
+        grouped: Dict[tuple, Dict] = {}
+        for i in range(rows):
+            text = str(data["text"][i] or "").strip()
+            if not text:
+                continue
+            try:
+                conf = float(data["conf"][i])
+            except Exception:
+                conf = -1.0
+            if conf < 20:
+                continue
+            key = (data["block_num"][i], data["par_num"][i], data["line_num"][i])
+            left = int(data["left"][i])
+            top = int(data["top"][i])
+            width = int(data["width"][i])
+            height = int(data["height"][i])
+            item = grouped.setdefault(
+                key,
+                {"parts": [], "x1": left, "y1": top, "x2": left + width, "y2": top + height},
+            )
+            item["parts"].append(text)
+            item["x1"] = min(item["x1"], left)
+            item["y1"] = min(item["y1"], top)
+            item["x2"] = max(item["x2"], left + width)
+            item["y2"] = max(item["y2"], top + height)
+
+        lines = []
+        for item in grouped.values():
+            text = " ".join(item["parts"]).strip()
+            if not text:
+                continue
+            lines.append({
+                "text": text,
+                "x1": item["x1"],
+                "y1": item["y1"],
+                "x2": item["x2"],
+                "y2": item["y2"],
+            })
+        return lines
+
     def _extract_score(self, ocr_texts: List[str]) -> Optional[Dict]:
         for text in ocr_texts:
             m = re.search(r"(\d{1,2})\s*[-:]\s*(\d{1,2})", text)
@@ -928,16 +982,13 @@ class LeagueFeature:
                 return {"home": int(m.group(1)), "away": int(m.group(2))}
         return None
 
-    def _extract_goal_scorers(self, image_bgr, detections: List) -> Dict:
+    def _extract_goal_scorers(self, image_bgr, line_items: List[Dict], offset_x: int = 0, offset_y: int = 0) -> Dict:
         home_goals = []
         away_goals = []
         unknown_goals = []
         seen = set()
-        for item in detections:
-            if len(item) < 3:
-                continue
-            bbox, text, conf = item
-            raw = str(text or "").strip()
+        for item in line_items:
+            raw = str(item.get("text") or "").strip()
             if not raw:
                 continue
             if not re.search(r"гол|goal", raw, flags=re.IGNORECASE):
@@ -952,7 +1003,15 @@ class LeagueFeature:
             if key in seen:
                 continue
             seen.add(key)
-            side = self._classify_goal_color(image_bgr, bbox)
+            side = self._classify_goal_color(
+                image_bgr,
+                {
+                    "x1": int(item.get("x1", 0)) + offset_x,
+                    "x2": int(item.get("x2", 0)) + offset_x,
+                    "y1": int(item.get("y1", 0)) + offset_y,
+                    "y2": int(item.get("y2", 0)) + offset_y,
+                },
+            )
             if side == "home":
                 home_goals.append(name)
             elif side == "away":
@@ -1058,8 +1117,8 @@ class LeagueFeature:
         user = update.effective_user
         if not message or not chat or not user or not message.photo:
             return
-        if not OCR_AVAILABLE:
-            await message.reply_text("❌ OCR недоступен: установите easyocr, opencv-python-headless и numpy.")
+        if not self._is_ocr_ready():
+            await message.reply_text("❌ OCR недоступен: установите Tesseract OCR в системе и пакет pytesseract.")
             return
 
         caption_info = self._parse_caption_match_and_assists(message.caption or "", chat.id)
@@ -1074,14 +1133,21 @@ class LeagueFeature:
             await message.reply_text("❌ Не удалось прочитать изображение.")
             return
 
-        reader = self._get_ocr_reader()
-        ocr_texts = reader.readtext(image_bgr, detail=0)
-        detections = reader.readtext(image_bgr, detail=1)
+        height, width = image_bgr.shape[:2]
+        score_roi = image_bgr[0 : max(int(height * 0.26), 1), max(int(width * 0.2), 0) : min(int(width * 0.8), width)]
+        events_x1 = max(int(width * 0.48), 0)
+        events_y1 = max(int(height * 0.18), 0)
+        events_roi = image_bgr[events_y1 : min(int(height * 0.92), height), events_x1:width]
 
-        score = self._extract_score([str(t) for t in ocr_texts])
+        score_lines = self._ocr_extract_lines(score_roi if score_roi.size else image_bgr, psm=6)
+        event_lines = self._ocr_extract_lines(events_roi if events_roi.size else image_bgr, psm=6)
+
+        score = self._extract_score([str(x.get("text", "")) for x in score_lines])
+        if not score:
+            score = self._extract_score([str(x.get("text", "")) for x in event_lines])
         if not score:
             warnings.append("Счет не распознан автоматически.")
-        goals_info = self._extract_goal_scorers(image_bgr, detections)
+        goals_info = self._extract_goal_scorers(image_bgr, event_lines, offset_x=events_x1, offset_y=events_y1)
         if goals_info.get("unknown_goals"):
             warnings.append("Есть нераспределенные голы. Нужна команда /league_ocr_fix.")
 

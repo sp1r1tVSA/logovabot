@@ -9,11 +9,10 @@ pip install -r requirements.txt
 python league_module.py
 ```
 
-Optional OCR dependencies (heavy):
+For OCR, install system Tesseract binary:
 
-```bash
-pip install -r requirements-ocr.txt
-```
+- Ubuntu/Debian: `sudo apt-get update && sudo apt-get install -y tesseract-ocr tesseract-ocr-rus`
+- Windows: install Tesseract and optionally set `TESSERACT_CMD` in `.env`
 
 ## Environment
 
@@ -31,6 +30,7 @@ LEAGUE_SQLITE_PATH=league.db
 
 - `Procfile` is set to run: `worker: python league_module.py`
 - Remove old Node service settings if they force `npm start`.
+- `nixpacks.toml` installs system OCR packages: `tesseract-ocr`, `tesseract-ocr-rus`.
 
 ## Behavior
 
@@ -82,8 +82,8 @@ Output file: `state/challenge_storage_state.json`
 
 ## OCR drafts from screenshots
 
-Note: OCR packages are intentionally moved to `requirements-ocr.txt` because they significantly increase container size.
-Without these packages, OCR commands will reply that OCR is unavailable.
+OCR now uses Tesseract (`pytesseract`) instead of EasyOCR/Torch.
+If Tesseract binary is missing in the runtime, OCR commands will reply that OCR is unavailable.
 
 - Send a screenshot as photo in group chat.
 - Add caption with teams and optional assists, for example:
