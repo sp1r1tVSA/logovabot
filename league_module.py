@@ -861,6 +861,7 @@ class LeagueFeature:
     def _parse_caption_match_and_assists(self, caption: str, chat_id: int) -> Dict:
         lines = [x.strip() for x in (caption or "").splitlines() if x.strip()]
         warnings = []
+        has_team_map = bool(self.db.get_league_team_map(chat_id))
         home_raw = ""
         away_raw = ""
         for line in lines:
@@ -873,9 +874,9 @@ class LeagueFeature:
             warnings.append("В подписи не найден формат матча 'Команда1 - Команда2'.")
         home_match = self._match_team_name(chat_id, home_raw or "Хозяева")
         away_match = self._match_team_name(chat_id, away_raw or "Гости")
-        if home_match["confidence"] < 0.8:
+        if has_team_map and home_raw and home_match["confidence"] < 0.8 and self.normalize_team_name(home_raw) != self.normalize_team_name(home_match["matched"]):
             warnings.append(f"Команда хозяев неуверенно сопоставлена: {home_raw or 'не указана'} -> {home_match['matched']}")
-        if away_match["confidence"] < 0.8:
+        if has_team_map and away_raw and away_match["confidence"] < 0.8 and self.normalize_team_name(away_raw) != self.normalize_team_name(away_match["matched"]):
             warnings.append(f"Команда гостей неуверенно сопоставлена: {away_raw or 'не указана'} -> {away_match['matched']}")
 
         assists_raw: Dict[str, List[str]] = {"home": [], "away": []}
