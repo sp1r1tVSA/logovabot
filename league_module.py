@@ -1007,6 +1007,52 @@ class LeagueFeature:
                     return {"home": home, "away": away}
         return None
 
+    def _extract_score_from_image(self, image_bgr) -> Optional[Dict]:
+        def parse_score(raw_text: str) -> Optional[Dict]:
+            cleaned = (raw_text or "").replace("—", "-").replace("–", "-")
+            cleaned = re.sub(r"[^0-9:\-\s]", " ", cleaned)
+            cleaned = re.sub(r"\s+", " ", cleaned).strip()
+            if not cleaned:
+                return None
+
+            m = re.search(r"\b(\d{1,2})\s*[-:]\s*(\d{1,2})\b", cleaned)
+            if m:
+                home, away = int(m.group(1)), int(m.group(2))
+                if 0 <= home <= 20 and 0 <= away <= 20:
+                    return {"home": home, "away": away}
+
+            m = re.search(r"\b(\d{1,2})\s+(\d{1,2})\b", cleaned)
+            if m:
+                home, away = int(m.group(1)), int(m.group(2))
+                if 0 <= home <= 20 and 0 <= away <= 20:
+                    return {"home": home, "away": away}
+            return None
+
+        h, w = image_bgr.shape[:2]
+        rois = [
+            image_bgr[max(int(h * 0.02), 0) : min(int(h * 0.14), h), max(int(w * 0.34), 0) : min(int(w * 0.66), w)],
+            image_bgr[max(int(h * 0.00), 0) : min(int(h * 0.18), h), max(int(w * 0.30), 0) : min(int(w * 0.70), w)],
+        ]
+
+        for roi in rois:
+            if roi.size == 0:
+                continue
+            gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+            enlarged = cv2.resize(gray, None, fx=3.0, fy=3.0, interpolation=cv2.INTER_CUBIC)
+            _, binary = cv2.threshold(enlarged, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            inv = cv2.bitwise_not(binary)
+
+            for img in (binary, inv, enlarged):
+                text = pytesseract.image_to_string(
+                    img,
+                    config="--oem 3 --psm 7 -c tessedit_char_whitelist=0123456789-:",
+                    lang="eng",
+                )
+                parsed = parse_score(text)
+                if parsed:
+                    return parsed
+        return None
+
     def _extract_goal_scorers(self, image_bgr, line_items: List[Dict], offset_x: int = 0, offset_y: int = 0) -> Dict:
         home_goals = []
         away_goals = []
@@ -1173,7 +1219,9 @@ class LeagueFeature:
         score_lines = self._ocr_extract_lines(score_roi if score_roi.size else image_bgr, psm=6)
         event_lines = self._ocr_extract_lines(events_roi if events_roi.size else image_bgr, psm=6)
 
-        score = self._extract_score([str(x.get("text", "")) for x in score_lines])
+        score = self._extract_score_from_image(image_bgr)
+        if not score:
+            score = self._extract_score([str(x.get("text", "")) for x in score_lines])
         if not score:
             score = self._extract_score([str(x.get("text", "")) for x in event_lines])
         if not score:
