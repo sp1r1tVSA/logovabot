@@ -873,6 +873,18 @@ class LeagueFeature:
                 away_raw = m.group(2).strip()
                 match_line_index = idx
                 break
+
+        # Heuristic fallback for captions like "Аякс Спортинг" (without separators).
+        if (not home_raw or not away_raw) and lines:
+            candidate = lines[0]
+            if not re.match(r"^(ассисты|голы|сч[её]т)\b", candidate, flags=re.IGNORECASE):
+                words = [w for w in re.split(r"\s+", candidate.strip()) if w]
+                if len(words) >= 2:
+                    mid = max(1, len(words) // 2)
+                    home_raw = " ".join(words[:mid]).strip()
+                    away_raw = " ".join(words[mid:]).strip()
+                    match_line_index = 0
+
         if (not home_raw or not away_raw) and has_team_map:
             inferred = self._infer_match_from_caption_line(lines, team_map_items)
             if inferred:
@@ -1415,9 +1427,16 @@ class LeagueFeature:
             score = self._extract_score([str(x.get("text", "")) for x in score_lines])
         if not score:
             score = self._extract_score([str(x.get("text", "")) for x in event_lines])
-        if not score:
-            warnings.append("Счет не распознан автоматически.")
         goals_info = self._extract_goal_scorers(image_bgr, event_lines, offset_x=events_x1, offset_y=events_y1)
+        if not score:
+            if not goals_info.get("unknown_goals") and (goals_info.get("home_goals") or goals_info.get("away_goals")):
+                score = {
+                    "home": len(goals_info.get("home_goals", [])),
+                    "away": len(goals_info.get("away_goals", [])),
+                }
+                warnings.append("Счет восстановлен по количеству распознанных голов.")
+            else:
+                warnings.append("Счет не распознан автоматически.")
         if goals_info.get("unknown_goals"):
             warnings.append("Есть нераспределенные голы. Нужна команда /league_ocr_fix.")
 
