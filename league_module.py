@@ -1349,6 +1349,99 @@ class LeagueFeature:
             "assist_selector": assist_selector,
         }
 
+    def _json_has_tokens(self, raw_value: str) -> bool:
+        try:
+            payload = json.loads(raw_value)
+        except Exception:
+            return False
+
+        if not isinstance(payload, dict):
+            return False
+
+        candidates = [
+            payload.get("accessToken"),
+            payload.get("refreshToken"),
+            payload.get("idToken"),
+        ]
+        manager = payload.get("stsTokenManager") or payload.get("tokenManager")
+        if isinstance(manager, dict):
+            candidates.extend(
+                [
+                    manager.get("accessToken"),
+                    manager.get("refreshToken"),
+                    manager.get("idToken"),
+                ]
+            )
+        return any(isinstance(item, str) and item.strip() for item in candidates)
+
+    async def _has_visible_sign_in(self, page) -> bool:
+        locator = page.locator("a[href='/login'], a:has-text('Sign in'), button:has-text('Sign in')")
+        count = await locator.count()
+        for index in range(min(count, 10)):
+            try:
+                if await locator.nth(index).is_visible(timeout=250):
+                    return True
+            except PlaywrightTimeoutError:
+                continue
+            except Exception:
+                continue
+        return False
+
+    async def _has_auth_storage(self, page) -> bool:
+        try:
+            storage = await page.evaluate(
+                """
+                () => {
+                    const out = {};
+                    for (let i = 0; i < localStorage.length; i += 1) {
+                        const key = localStorage.key(i);
+                        if (!key) continue;
+                        out[key] = localStorage.getItem(key) || "";
+                    }
+                    return out;
+                }
+                """
+            )
+        except Exception:
+            storage = {}
+
+        storage = storage if isinstance(storage, dict) else {}
+        for key, value in storage.items():
+            key_lower = str(key).lower()
+            if str(key).startswith("firebase:authUser:"):
+                return True
+            if "authuser" in key_lower and isinstance(value, str) and self._json_has_tokens(value):
+                return True
+            if "token" in key_lower and isinstance(value, str) and len(value.strip()) > 80:
+                return True
+        return False
+
+    async def _has_auth_cookie(self, context) -> bool:
+        try:
+            cookies = await context.cookies("https://challenge.place")
+        except Exception:
+            return False
+
+        for cookie in cookies:
+            name = str(cookie.get("name", "")).lower()
+            if any(part in name for part in ("session", "auth", "token")):
+                value = str(cookie.get("value", "")).strip()
+                if value and value.lower() not in {"true", "false", "1", "0"}:
+                    return True
+        return False
+
+    async def _is_challenge_session_authorized(self, page, context) -> bool:
+        current_url = (page.url or "").lower()
+        if "challenge.place" in current_url and "/login" in current_url:
+            return False
+        if await self._has_visible_sign_in(page):
+            return False
+        if await self._has_auth_storage(page):
+            return True
+        if await self._has_auth_cookie(context):
+            return True
+        return True
+
     def _resolve_challenge_state_path(self) -> Dict:
         configured = Path(os.getenv("CHALLENGE_STORAGE_STATE", "state/challenge_storage_state.json"))
         if configured.exists():
@@ -1461,8 +1554,7 @@ class LeagueFeature:
             page = await context.new_page()
             try:
                 await page.goto(match_url, wait_until="domcontentloaded", timeout=30000)
-                sign_in = page.locator("a[href='/login'], a:has-text('Sign in'), button:has-text('Sign in')")
-                if await sign_in.count() > 0:
+                if not await self._is_challenge_session_authorized(page, context):
                     await browser.close()
                     return {"ok": False, "message": "Сессия не авторизована. Перезапустите cp_auth_session.py"}
 
