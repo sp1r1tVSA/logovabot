@@ -776,18 +776,27 @@ class LeagueRepositoryPostgres(LeagueRepositorySQLite):
 
     def set_league_challenge_source(self, chat_id: int, stage_url: str, max_round: int):
         enabled_literal = self._challenge_enabled_literal(True)
+        # Legacy-friendly upsert without relying on ON CONFLICT(chat_id)
+        # because some old schemas miss unique/PK constraint on chat_id.
         self.cursor.execute(
             f"""
-            INSERT INTO league_challenge_sources (chat_id, stage_url, max_round, enabled, updated_at)
-            VALUES (?, ?, ?, {enabled_literal}, CURRENT_TIMESTAMP)
-            ON CONFLICT(chat_id) DO UPDATE SET
-                stage_url = excluded.stage_url,
-                max_round = excluded.max_round,
+            UPDATE league_challenge_sources
+            SET stage_url = ?,
+                max_round = ?,
                 enabled = {enabled_literal},
                 updated_at = CURRENT_TIMESTAMP
+            WHERE chat_id = ?
             """,
-            (chat_id, stage_url, max_round),
+            (stage_url, max_round, chat_id),
         )
+        if self.cursor.rowcount <= 0:
+            self.cursor.execute(
+                f"""
+                INSERT INTO league_challenge_sources (chat_id, stage_url, max_round, enabled, updated_at)
+                VALUES (?, ?, ?, {enabled_literal}, CURRENT_TIMESTAMP)
+                """,
+                (chat_id, stage_url, max_round),
+            )
         self.conn.commit()
 
     def disable_league_challenge_source(self, chat_id: int):
