@@ -31,6 +31,7 @@ try:
     from selenium import webdriver
     from selenium.common.exceptions import TimeoutException as SeleniumTimeoutException
     from selenium.webdriver.common.by import By
+    from selenium.webdriver.common.keys import Keys
     from selenium.webdriver.chrome.options import Options as ChromeOptions
 
     SELENIUM_AVAILABLE = True
@@ -2715,6 +2716,27 @@ class LeagueFeature:
             await self._open_email_login_method(driver)
             time.sleep(0.4)
         if not filled_email_selector:
+            if email_method_clicked:
+                try:
+                    active = driver.switch_to.active_element
+                    if active is not None:
+                        active.send_keys(email)
+                        active.send_keys(Keys.TAB)
+                        active2 = driver.switch_to.active_element
+                        if active2 is not None:
+                            active2.send_keys(password)
+                            active2.send_keys(Keys.ENTER)
+                            time.sleep(3.0)
+                            if match_url:
+                                try:
+                                    driver.get(match_url)
+                                    time.sleep(1.0)
+                                except Exception:
+                                    pass
+                            if await self._is_challenge_session_authorized(driver):
+                                return {"ok": True, "message": "Логин выполнен."}
+                except Exception:
+                    pass
             try:
                 title = driver.title or ""
             except Exception:
