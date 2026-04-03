@@ -172,7 +172,37 @@ class LeagueRepositorySQLite:
             )
             """
         )
+
+        self.cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS league_system_kv (
+                key TEXT PRIMARY KEY,
+                value TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
         self.conn.commit()
+
+    def set_system_value(self, key: str, value: str):
+        self.cursor.execute(
+            """
+            INSERT INTO league_system_kv (key, value, updated_at)
+            VALUES (?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(key) DO UPDATE SET
+                value = excluded.value,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (key, value),
+        )
+        self.conn.commit()
+
+    def get_system_value(self, key: str) -> Optional[str]:
+        self.cursor.execute("SELECT value FROM league_system_kv WHERE key = ?", (key,))
+        row = self.cursor.fetchone()
+        if not row:
+            return None
+        return row[0]
 
     def replace_league_debts(self, chat_id: int, entries: List[Dict]):
         self.cursor.execute("DELETE FROM league_debt_entries WHERE chat_id = ?", (chat_id,))
@@ -719,6 +749,16 @@ class LeagueRepositoryPostgres(LeagueRepositorySQLite):
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(chat_id, ocr_id)
+            )
+            """
+        )
+
+        self.cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS league_system_kv (
+                key TEXT PRIMARY KEY,
+                value TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
             """
         )
@@ -1472,6 +1512,14 @@ class LeagueFeature:
                 state_b64 = "".join([part for _, part in sorted(b64_parts, key=lambda x: x[0])]).strip()
 
         if not state_json and not state_b64:
+            try:
+                state_json = (self.db.get_system_value("challenge_storage_state_json") or "").strip()
+                if state_json:
+                    self.logger.info("Challenge session restored from DB")
+            except Exception:
+                state_json = ""
+
+        if not state_json and not state_b64:
             return {"ok": False, "message": f"Файл сессии не найден: {configured}"}
 
         try:
@@ -1519,10 +1567,20 @@ class LeagueFeature:
         except Exception as e:
             return {"ok": False, "message": f"Не удалось сохранить файл сессии: {e}"}
 
+        persisted_to_db = False
+        try:
+            self.db.set_system_value("challenge_storage_state_json", payload_text)
+            persisted_to_db = True
+        except Exception:
+            persisted_to_db = False
+
         cookies_count = len(payload.get("cookies") or []) if isinstance(payload, dict) else 0
         return {
             "ok": True,
-            "message": f"Сессия сохранена: {target_path} (cookies: {cookies_count})",
+            "message": (
+                f"Сессия сохранена: {target_path} (cookies: {cookies_count})"
+                + ("; резерв в БД: да" if persisted_to_db else "; резерв в БД: нет")
+            ),
         }
 
     async def _open_match_and_fill_result(self, match_url: str, payload: Dict, dry_run: bool = False) -> Dict:
