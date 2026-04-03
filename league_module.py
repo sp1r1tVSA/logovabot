@@ -1780,6 +1780,37 @@ class LeagueFeature:
         if clicked:
             time.sleep(1.0)
             return True
+
+        contexts = self._list_browser_contexts(driver)
+        for frame in contexts:
+            try:
+                self._switch_browser_context(driver, frame)
+                nodes = driver.find_elements(
+                    By.XPATH,
+                    "//*[contains(normalize-space(.), 'Use your email') or contains(normalize-space(.), 'Use email')]",
+                )
+            except Exception:
+                continue
+            for node in nodes:
+                try:
+                    node.click()
+                    self._switch_browser_context(driver, None)
+                    time.sleep(1.0)
+                    return True
+                except Exception:
+                    pass
+                try:
+                    parent = node.find_element(By.XPATH, "ancestor::*[self::button or self::a or @role='button'][1]")
+                    parent.click()
+                    self._switch_browser_context(driver, None)
+                    time.sleep(1.0)
+                    return True
+                except Exception:
+                    continue
+        try:
+            self._switch_browser_context(driver, None)
+        except Exception:
+            pass
         return False
 
     async def _attempt_challenge_login_with_credentials(self, driver, match_url: str) -> Dict:
@@ -1827,7 +1858,6 @@ class LeagueFeature:
             [
                 login_url,
                 "https://challenge.place/login",
-                "https://challenge.place/signin",
             ]
         )
         seen = set()
@@ -1848,9 +1878,9 @@ class LeagueFeature:
                 time.sleep(1.0)
                 loaded = True
                 tried_urls.append(url)
-                await self._open_email_login_method(driver)
                 email_found = False
                 for _ in range(24):
+                    await self._open_email_login_method(driver)
                     if self._has_login_email_any_context(driver):
                         email_found = True
                         break
