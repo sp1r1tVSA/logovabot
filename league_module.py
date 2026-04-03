@@ -3,42 +3,15 @@ import logging
 import os
 import re
 import sqlite3
-import time
 import unicodedata
-import urllib.parse
 import urllib.request
-from difflib import SequenceMatcher
 from datetime import datetime
-from itertools import zip_longest
 from typing import Dict, List, Optional
 from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import ApplicationBuilder, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
-
-try:
-    import cv2
-    import numpy as np
-    import pytesseract
-    from pytesseract import Output
-
-    OCR_AVAILABLE = True
-except Exception:
-    OCR_AVAILABLE = False
-
-try:
-    from selenium import webdriver
-    from selenium.common.exceptions import TimeoutException as SeleniumTimeoutException
-    from selenium.webdriver.common.by import By
-    from selenium.webdriver.common.keys import Keys
-    from selenium.webdriver.chrome.options import Options as ChromeOptions
-
-    SELENIUM_AVAILABLE = True
-except Exception:
-    SELENIUM_AVAILABLE = False
-    SeleniumTimeoutException = TimeoutError
-
+from telegram import Update
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 class LeagueRepositorySQLite:
     def __init__(self, conn, cursor):
@@ -114,39 +87,6 @@ class LeagueRepositorySQLite:
 
         self.cursor.execute(
             """
-            CREATE TABLE IF NOT EXISTS league_challenge_sources (
-                chat_id INTEGER PRIMARY KEY,
-                stage_url TEXT NOT NULL,
-                max_round INTEGER NOT NULL,
-                enabled INTEGER DEFAULT 1,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-            """
-        )
-
-        self.cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS league_ocr_drafts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                chat_id INTEGER NOT NULL,
-                ocr_id INTEGER NOT NULL,
-                source_message_id INTEGER,
-                author_user_id INTEGER,
-                status TEXT NOT NULL DEFAULT 'pending_admin_review',
-                payload_json TEXT NOT NULL,
-                warnings_json TEXT,
-                last_editor_user_id INTEGER,
-                reviewed_by_user_id INTEGER,
-                review_note TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(chat_id, ocr_id)
-            )
-            """
-        )
-
-        self.cursor.execute(
-            """
             CREATE TABLE IF NOT EXISTS league_team_players (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 chat_id INTEGER NOT NULL,
@@ -160,35 +100,30 @@ class LeagueRepositorySQLite:
             """
         )
 
-        self.cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS league_ocr_applied (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                chat_id INTEGER NOT NULL,
-                ocr_id INTEGER NOT NULL,
-                match_url TEXT,
-                status TEXT NOT NULL,
-                message TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(chat_id, ocr_id)
-            )
-            """
-        )
+
+        # Remove stage-2 / OCR artifacts from DB schema.
+        self.cursor.execute("DROP TABLE IF EXISTS league_challenge_sources")
+        self.cursor.execute("DROP TABLE IF EXISTS league_ocr_drafts")
+        self.cursor.execute("DROP TABLE IF EXISTS league_ocr_applied")
 
         self.conn.commit()
 
     def replace_league_debts(self, chat_id: int, entries: List[Dict]):
-        self.cursor.execute("DELETE FROM league_debt_entries WHERE chat_id = ?", (chat_id,))
-        for e in entries:
-            self.cursor.execute(
-                """
-                INSERT INTO league_debt_entries (chat_id, round_label, debtor_username, opponent_username, raw_line)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (chat_id, e.get("round_label"), e.get("debtor_username"), e.get("opponent_username"), e.get("raw_line")),
-            )
-        self.conn.commit()
+        self.cursor.execute("BEGIN IMMEDIATE")
+        try:
+            self.cursor.execute("DELETE FROM league_debt_entries WHERE chat_id = ?", (chat_id,))
+            for e in entries:
+                self.cursor.execute(
+                    """
+                    INSERT INTO league_debt_entries (chat_id, round_label, debtor_username, opponent_username, raw_line)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (chat_id, e.get("round_label"), e.get("debtor_username"), e.get("opponent_username"), e.get("raw_line")),
+                )
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
 
     def get_league_debt_summary(self, chat_id: int) -> List[Dict]:
         self.cursor.execute(
@@ -374,199 +309,6 @@ class LeagueRepositorySQLite:
         )
         return [{"player_name_norm": r[0], "player_name_raw": r[1]} for r in self.cursor.fetchall()]
 
-    def get_ocr_applied(self, chat_id: int, ocr_id: int) -> Optional[Dict]:
-        self.cursor.execute(
-            """
-            SELECT chat_id, ocr_id, match_url, status, message, created_at, updated_at
-            FROM league_ocr_applied
-            WHERE chat_id = ? AND ocr_id = ?
-            """,
-            (chat_id, ocr_id),
-        )
-        row = self.cursor.fetchone()
-        if not row:
-            return None
-        return {
-            "chat_id": row[0],
-            "ocr_id": row[1],
-            "match_url": row[2],
-            "status": row[3],
-            "message": row[4],
-            "created_at": row[5],
-            "updated_at": row[6],
-        }
-
-    def upsert_ocr_applied(self, chat_id: int, ocr_id: int, match_url: str, status: str, message: str):
-        self.cursor.execute(
-            """
-            INSERT INTO league_ocr_applied (chat_id, ocr_id, match_url, status, message, updated_at)
-            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-            ON CONFLICT(chat_id, ocr_id) DO UPDATE SET
-                match_url = excluded.match_url,
-                status = excluded.status,
-                message = excluded.message,
-                updated_at = CURRENT_TIMESTAMP
-            """,
-            (chat_id, ocr_id, match_url, status, message),
-        )
-        self.conn.commit()
-
-    def set_league_challenge_source(self, chat_id: int, stage_url: str, max_round: int):
-        self.cursor.execute(
-            """
-            INSERT INTO league_challenge_sources (chat_id, stage_url, max_round, enabled, updated_at)
-            VALUES (?, ?, ?, 1, CURRENT_TIMESTAMP)
-            ON CONFLICT(chat_id) DO UPDATE SET
-                stage_url = excluded.stage_url,
-                max_round = excluded.max_round,
-                enabled = 1,
-                updated_at = CURRENT_TIMESTAMP
-            """,
-            (chat_id, stage_url, max_round),
-        )
-        self.conn.commit()
-
-    def get_league_challenge_source(self, chat_id: int) -> Optional[Dict]:
-        row = None
-        try:
-            self.cursor.execute(
-                "SELECT chat_id, stage_url, max_round, enabled FROM league_challenge_sources WHERE chat_id = ?",
-                (chat_id,),
-            )
-            row = self.cursor.fetchone()
-        except Exception:
-            try:
-                self.cursor.execute(
-                    "SELECT chat_id, url, max_round, enabled FROM league_challenge_sources WHERE chat_id = ?",
-                    (chat_id,),
-                )
-                row = self.cursor.fetchone()
-            except Exception:
-                return None
-        if not row:
-            return None
-        return {"chat_id": row[0], "stage_url": row[1], "max_round": row[2], "enabled": row[3]}
-
-    def disable_league_challenge_source(self, chat_id: int):
-        self.cursor.execute(
-            "UPDATE league_challenge_sources SET enabled = 0, updated_at = CURRENT_TIMESTAMP WHERE chat_id = ?",
-            (chat_id,),
-        )
-        self.conn.commit()
-
-    def get_next_ocr_id(self, chat_id: int) -> int:
-        self.cursor.execute("SELECT COALESCE(MAX(ocr_id), 0) + 1 FROM league_ocr_drafts WHERE chat_id = ?", (chat_id,))
-        row = self.cursor.fetchone()
-        return int(row[0] if row else 1)
-
-    def create_ocr_draft(
-        self,
-        chat_id: int,
-        source_message_id: int,
-        author_user_id: int,
-        payload: Dict,
-        warnings: List[str],
-    ) -> int:
-        ocr_id = self.get_next_ocr_id(chat_id)
-        self.cursor.execute(
-            """
-            INSERT INTO league_ocr_drafts (
-                chat_id, ocr_id, source_message_id, author_user_id, status,
-                payload_json, warnings_json, last_editor_user_id, updated_at
-            )
-            VALUES (?, ?, ?, ?, 'pending_admin_review', ?, ?, ?, CURRENT_TIMESTAMP)
-            """,
-            (
-                chat_id,
-                ocr_id,
-                source_message_id,
-                author_user_id,
-                json.dumps(payload, ensure_ascii=False),
-                json.dumps(warnings, ensure_ascii=False),
-                author_user_id,
-            ),
-        )
-        self.conn.commit()
-        return ocr_id
-
-    def get_ocr_draft(self, chat_id: int, ocr_id: int) -> Optional[Dict]:
-        self.cursor.execute(
-            """
-            SELECT chat_id, ocr_id, source_message_id, author_user_id, status,
-                   payload_json, warnings_json, last_editor_user_id,
-                   reviewed_by_user_id, review_note, created_at, updated_at
-            FROM league_ocr_drafts
-            WHERE chat_id = ? AND ocr_id = ?
-            """,
-            (chat_id, ocr_id),
-        )
-        row = self.cursor.fetchone()
-        if not row:
-            return None
-        return {
-            "chat_id": row[0],
-            "ocr_id": row[1],
-            "source_message_id": row[2],
-            "author_user_id": row[3],
-            "status": row[4],
-            "payload": json.loads(row[5] or "{}"),
-            "warnings": json.loads(row[6] or "[]"),
-            "last_editor_user_id": row[7],
-            "reviewed_by_user_id": row[8],
-            "review_note": row[9],
-            "created_at": row[10],
-            "updated_at": row[11],
-        }
-
-    def update_ocr_draft_payload(self, chat_id: int, ocr_id: int, payload: Dict, warnings: List[str], editor_user_id: int) -> bool:
-        self.cursor.execute(
-            """
-            UPDATE league_ocr_drafts
-            SET payload_json = ?,
-                warnings_json = ?,
-                status = 'pending_admin_review',
-                last_editor_user_id = ?,
-                reviewed_by_user_id = NULL,
-                review_note = NULL,
-                updated_at = CURRENT_TIMESTAMP
-            WHERE chat_id = ? AND ocr_id = ?
-            """,
-            (json.dumps(payload, ensure_ascii=False), json.dumps(warnings, ensure_ascii=False), editor_user_id, chat_id, ocr_id),
-        )
-        self.conn.commit()
-        return self.cursor.rowcount > 0
-
-    def approve_ocr_draft(self, chat_id: int, ocr_id: int, reviewer_user_id: int) -> bool:
-        self.cursor.execute(
-            """
-            UPDATE league_ocr_drafts
-            SET status = 'approved',
-                reviewed_by_user_id = ?,
-                review_note = NULL,
-                updated_at = CURRENT_TIMESTAMP
-            WHERE chat_id = ? AND ocr_id = ? AND status = 'pending_admin_review'
-            """,
-            (reviewer_user_id, chat_id, ocr_id),
-        )
-        self.conn.commit()
-        return self.cursor.rowcount > 0
-
-    def reject_ocr_draft(self, chat_id: int, ocr_id: int, reviewer_user_id: int, note: str) -> bool:
-        self.cursor.execute(
-            """
-            UPDATE league_ocr_drafts
-            SET status = 'rejected',
-                reviewed_by_user_id = ?,
-                review_note = ?,
-                updated_at = CURRENT_TIMESTAMP
-            WHERE chat_id = ? AND ocr_id = ?
-            """,
-            (reviewer_user_id, note, chat_id, ocr_id),
-        )
-        self.conn.commit()
-        return self.cursor.rowcount > 0
-
-
 class LeagueRepositoryPostgres(LeagueRepositorySQLite):
     def create_tables(self):
         self.cursor.execute(
@@ -669,59 +411,6 @@ class LeagueRepositoryPostgres(LeagueRepositorySQLite):
         self.cursor.execute("ALTER TABLE league_team_map ADD COLUMN IF NOT EXISTS telegram_username TEXT")
         self.cursor.execute("ALTER TABLE league_team_map ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
 
-        self.cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS league_challenge_sources (
-                chat_id BIGINT PRIMARY KEY,
-                stage_url TEXT NOT NULL,
-                max_round INTEGER NOT NULL,
-                enabled INTEGER DEFAULT 1,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-            """
-        )
-        self.cursor.execute("ALTER TABLE league_challenge_sources ADD COLUMN IF NOT EXISTS stage_url TEXT")
-        self.cursor.execute("ALTER TABLE league_challenge_sources ADD COLUMN IF NOT EXISTS max_round INTEGER")
-        self.cursor.execute("ALTER TABLE league_challenge_sources ADD COLUMN IF NOT EXISTS enabled INTEGER DEFAULT 1")
-        self.cursor.execute(
-            "ALTER TABLE league_challenge_sources ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
-        )
-        self.cursor.execute(
-            """
-            SELECT 1
-            FROM information_schema.columns
-            WHERE table_name = 'league_challenge_sources' AND column_name = 'url'
-            """
-        )
-        if self.cursor.fetchone():
-            self.cursor.execute(
-                """
-                UPDATE league_challenge_sources
-                SET stage_url = COALESCE(stage_url, url)
-                WHERE stage_url IS NULL OR stage_url = ''
-                """
-            )
-
-        self.cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS league_ocr_drafts (
-                id BIGSERIAL PRIMARY KEY,
-                chat_id BIGINT NOT NULL,
-                ocr_id INTEGER NOT NULL,
-                source_message_id BIGINT,
-                author_user_id BIGINT,
-                status TEXT NOT NULL DEFAULT 'pending_admin_review',
-                payload_json TEXT NOT NULL,
-                warnings_json TEXT,
-                last_editor_user_id BIGINT,
-                reviewed_by_user_id BIGINT,
-                review_note TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(chat_id, ocr_id)
-            )
-            """
-        )
 
         self.cursor.execute(
             """
@@ -738,42 +427,12 @@ class LeagueRepositoryPostgres(LeagueRepositorySQLite):
             """
         )
 
-        self.cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS league_ocr_applied (
-                id BIGSERIAL PRIMARY KEY,
-                chat_id BIGINT NOT NULL,
-                ocr_id INTEGER NOT NULL,
-                match_url TEXT,
-                status TEXT NOT NULL,
-                message TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(chat_id, ocr_id)
-            )
-            """
-        )
+        # Remove stage-2 / OCR artifacts from DB schema.
+        self.cursor.execute("DROP TABLE IF EXISTS league_challenge_sources")
+        self.cursor.execute("DROP TABLE IF EXISTS league_ocr_drafts")
+        self.cursor.execute("DROP TABLE IF EXISTS league_ocr_applied")
 
         self.conn.commit()
-
-    def _challenge_enabled_literal(self, enabled: bool) -> str:
-        try:
-            self.cursor.execute(
-                """
-                SELECT data_type
-                FROM information_schema.columns
-                WHERE table_name = 'league_challenge_sources'
-                  AND column_name = 'enabled'
-                  AND table_schema = current_schema()
-                """
-            )
-            row = self.cursor.fetchone()
-            data_type = (row[0] if row else "").lower()
-            if data_type == "boolean":
-                return "TRUE" if enabled else "FALSE"
-        except Exception:
-            pass
-        return "1" if enabled else "0"
 
     def _column_meta(self, table_name: str, column_name: str) -> Dict:
         try:
@@ -875,10 +534,12 @@ class LeagueRepositoryPostgres(LeagueRepositorySQLite):
                     values.append(round_no)
 
                 if need_pair_key:
-                    left = str(debtor or "").strip().lower()
-                    right = str(opponent or "").strip().lower()
+                    left = str(debtor or "").strip().lower().lstrip("@")
+                    right = str(opponent or "").strip().lower().lstrip("@")
                     if left and right:
-                        pair_key = "::".join(sorted([left, right]))
+                        # Directed debt: same undirected pair appears twice (A owes B, B owes A).
+                        # Legacy UNIQUE(round_no, pair_key) requires distinct keys per row.
+                        pair_key = f"{left}>>{right}"
                     else:
                         pair_key = (left or right or str(raw_line or "").strip().lower() or "unknown")
                     columns.append("pair_key")
@@ -934,16 +595,21 @@ class LeagueRepositoryPostgres(LeagueRepositorySQLite):
                     if need_round_no and need_pair_key and "round_no" in columns and "pair_key" in columns:
                         row_data = dict(zip(columns, values))
                         assignments = []
-                        params = []
+                        params: List = []
                         for col in columns:
                             if col in {"round_no", "pair_key"}:
                                 continue
                             assignments.append(f"{col} = ?")
                             params.append(row_data[col])
                         if assignments:
-                            params.extend([row_data["round_no"], row_data["pair_key"]])
+                            where_extra = ""
+                            where_params: List = [row_data["round_no"], row_data["pair_key"]]
+                            if "chat_id" in all_meta:
+                                where_extra = " AND chat_id = ?"
+                                where_params.append(row_data["chat_id"])
+                            params.extend(where_params)
                             self.cursor.execute(
-                                f"UPDATE league_debt_entries SET {', '.join(assignments)} WHERE round_no = ? AND pair_key = ?",
+                                f"UPDATE league_debt_entries SET {', '.join(assignments)} WHERE round_no = ? AND pair_key = ?{where_extra}",
                                 tuple(params),
                             )
                             if self.cursor.rowcount > 0:
@@ -1045,46 +711,11 @@ class LeagueRepositoryPostgres(LeagueRepositorySQLite):
             for r in self.cursor.fetchall()
         ]
 
-    def set_league_challenge_source(self, chat_id: int, stage_url: str, max_round: int):
-        enabled_literal = self._challenge_enabled_literal(True)
-        # Legacy-friendly upsert without relying on ON CONFLICT(chat_id)
-        # because some old schemas miss unique/PK constraint on chat_id.
-        self.cursor.execute(
-            f"""
-            UPDATE league_challenge_sources
-            SET stage_url = ?,
-                max_round = ?,
-                enabled = {enabled_literal},
-                updated_at = CURRENT_TIMESTAMP
-            WHERE chat_id = ?
-            """,
-            (stage_url, max_round, chat_id),
-        )
-        if self.cursor.rowcount <= 0:
-            self.cursor.execute(
-                f"""
-                INSERT INTO league_challenge_sources (chat_id, stage_url, max_round, enabled, updated_at)
-                VALUES (?, ?, ?, {enabled_literal}, CURRENT_TIMESTAMP)
-                """,
-                (chat_id, stage_url, max_round),
-            )
-        self.conn.commit()
-
-    def disable_league_challenge_source(self, chat_id: int):
-        disabled_literal = self._challenge_enabled_literal(False)
-        self.cursor.execute(
-            f"UPDATE league_challenge_sources SET enabled = {disabled_literal}, updated_at = CURRENT_TIMESTAMP WHERE chat_id = ?",
-            (chat_id,),
-        )
-        self.conn.commit()
-
     def _sync_table_id_sequence(self, table_name: str):
         allowed = {
             "league_team_map",
             "league_team_players",
             "league_debt_entries",
-            "league_ocr_drafts",
-            "league_ocr_applied",
         }
         if table_name not in allowed:
             return
@@ -1183,12 +814,6 @@ class LeagueFeature:
         self._is_admin = is_admin_callable
         self.application = application
         self.logger = logging.getLogger("league_bot")
-        self._ocr_checked = False
-        self._ocr_enabled = False
-
-    def _get_ocr_provider(self) -> str:
-        provider = (os.getenv("OCR_PROVIDER", "tesseract") or "tesseract").strip().lower()
-        return provider
 
     def _is_allowed_chat(self, update: Update) -> bool:
         chat = update.effective_chat
@@ -1218,20 +843,11 @@ class LeagueFeature:
         application.add_handler(CommandHandler("league_map_clear", self._guard(self.cmd_league_map_clear)))
         application.add_handler(CommandHandler("league_players_seed", self._guard(self.cmd_league_players_seed)))
         application.add_handler(CommandHandler("league_sync_challenge", self._guard(self.cmd_league_sync_challenge)))
-        application.add_handler(CommandHandler("league_sync_now", self._guard(self.cmd_league_sync_now)))
-        application.add_handler(CommandHandler("league_sync_off", self._guard(self.cmd_league_sync_off)))
         application.add_handler(CommandHandler("league_reminder_on", self._guard(self.cmd_league_reminder_on)))
         application.add_handler(CommandHandler("league_reminder_off", self._guard(self.cmd_league_reminder_off)))
         application.add_handler(CommandHandler("league_reminder_now", self._guard(self.cmd_league_reminder_now)))
         application.add_handler(CommandHandler("league_reminder_hourly_on", self._guard(self.cmd_league_reminder_hourly_on)))
         application.add_handler(CommandHandler("league_reminder_hourly_off", self._guard(self.cmd_league_reminder_hourly_off)))
-        application.add_handler(CommandHandler("league_ocr_fix", self._guard(self.cmd_league_ocr_fix)))
-        application.add_handler(CommandHandler("league_ocr_show", self._guard(self.cmd_league_ocr_show)))
-        application.add_handler(CommandHandler("league_ocr_approve", self._guard(self.cmd_league_ocr_approve)))
-        application.add_handler(CommandHandler("league_ocr_reject", self._guard(self.cmd_league_ocr_reject)))
-        application.add_handler(MessageHandler(filters.PHOTO, self._guard(self.on_ocr_photo_message)))
-        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._guard(self.on_ocr_fix_text_message)))
-        application.add_handler(CallbackQueryHandler(self._guard(self.on_ocr_callback), pattern=r"^ocr:"))
 
     def setup_jobs(self, application, logger):
         if not application.job_queue:
@@ -1348,122 +964,187 @@ class LeagueFeature:
         return f"@{debtor['username']} ({debtor['team_name']}) — @{opponent['username']} ({opponent['team_name']})"
 
     def sync_challenge_stage_debts(self, chat_id: int, stage_url: str, max_round: int) -> Dict:
-        html_text = self.fetch_text_url(stage_url)
-        state = self.parse_initial_state(html_text)
-        if not state:
-            raise ValueError("Не удалось прочитать данные stage (INITIAL_STATE).")
-
-        rooms = state.get("rooms", {})
-        stage_room = None
-        for room in rooms.values():
-            if isinstance(room, dict) and "rounds" in room and "competitors" in room and "groups" in room:
-                stage_room = room
-                break
-        if not stage_room:
-            raise ValueError("Не найдена структура stage в данных страницы.")
-
-        rounds_map = stage_room.get("rounds", {})
-        competitors_map = stage_room.get("competitors", {})
-        team_map_items = self.db.get_league_team_map(chat_id)
-        team_to_user = {item["team_name_norm"]: item["telegram_username"] for item in team_map_items}
-
+        stage_url = (stage_url or "").strip()
+        if max_round <= 0:
+            raise ValueError("max_round должен быть положительным числом.")
+        self.logger.info(
+            "Challenge sync debts [start]: chat_id=%s max_round=%s stage_url=%s",
+            chat_id,
+            max_round,
+            stage_url,
+        )
+        fetch_errors = 0
+        matches_considered = 0
+        matches_finished = 0
+        matches_unmapped = 0
         debt_entries = []
         unresolved = set()
-        unresolved_matches = 0
 
-        sorted_rounds = sorted(rounds_map.values(), key=lambda x: x.get("order", 10**9))
-        for round_item in sorted_rounds:
-            order = round_item.get("order")
-            if not isinstance(order, int) or order > max_round:
-                continue
+        try:
+            html_text = self.fetch_text_url(stage_url)
+            state = self.parse_initial_state(html_text)
+            if not state:
+                raise ValueError("Не удалось прочитать данные stage (INITIAL_STATE). URL=%s" % stage_url)
 
-            for series_id in round_item.get("seriesIds", []):
-                match_id = self._object_id_add(series_id, 1)
-                match_url = re.sub(r"/stage/.*$", f"/match/{match_id}", stage_url)
-                try:
-                    match_html = self.fetch_text_url(match_url)
-                    match_state = self.parse_initial_state(match_html)
-                    if not match_state:
-                        continue
+            rooms = state.get("rooms", {})
+            stage_room = None
+            for room in rooms.values():
+                if isinstance(room, dict) and "rounds" in room and "competitors" in room and "groups" in room:
+                    stage_room = room
+                    break
+            if not stage_room:
+                raise ValueError("Не найдена структура stage в данных страницы. URL=%s" % stage_url)
 
-                    match_rooms = match_state.get("rooms", {})
-                    match_room = None
-                    for room in match_rooms.values():
-                        if isinstance(room, dict) and "homeCompetitorId" in room and "awayCompetitorId" in room:
-                            match_room = room
-                            break
-                    if not match_room:
-                        continue
+            rounds_map = stage_room.get("rounds", {})
+            competitors_map = stage_room.get("competitors", {})
+            team_map_items = self.db.get_league_team_map(chat_id)
+            team_to_user = {item["team_name_norm"]: item["telegram_username"] for item in team_map_items}
 
-                    round_name = match_room.get("roundName")
-                    round_num_match = re.search(r"(\d+)", round_name or "")
-                    if not round_num_match:
-                        continue
-                    round_num = int(round_num_match.group(1))
-                    if round_num > max_round:
-                        continue
-
-                    if match_room.get("winnerSlot") is not None:
-                        continue
-
-                    home_id = match_room.get("homeCompetitorId")
-                    away_id = match_room.get("awayCompetitorId")
-                    home_team = (
-                        (match_room.get("competitors", {}).get(home_id) or competitors_map.get(home_id) or {}).get("name")
-                    )
-                    away_team = (
-                        (match_room.get("competitors", {}).get(away_id) or competitors_map.get(away_id) or {}).get("name")
-                    )
-                    if not home_team or not away_team:
-                        continue
-
-                    home_norm = self.normalize_team_name(home_team)
-                    away_norm = self.normalize_team_name(away_team)
-                    home_user = team_to_user.get(home_norm)
-                    away_user = team_to_user.get(away_norm)
-
-                    unresolved_matches += 1
-                    if not home_user:
-                        unresolved.add(home_team)
-                    if not away_user:
-                        unresolved.add(away_team)
-                    if not home_user or not away_user:
-                        continue
-
-                    round_label = f"{round_num} тур"
-                    debt_entries.append(
-                        {
-                            "round_label": round_label,
-                            "debtor_username": home_user,
-                            "opponent_username": away_user,
-                            "raw_line": self._build_debt_line(
-                                {"username": home_user, "team_name": home_team},
-                                {"username": away_user, "team_name": away_team},
-                            ),
-                        }
-                    )
-                    debt_entries.append(
-                        {
-                            "round_label": round_label,
-                            "debtor_username": away_user,
-                            "opponent_username": home_user,
-                            "raw_line": self._build_debt_line(
-                                {"username": away_user, "team_name": away_team},
-                                {"username": home_user, "team_name": home_team},
-                            ),
-                        }
-                    )
-                except Exception:
+            sorted_rounds = sorted(rounds_map.values(), key=lambda x: x.get("order", 10**9))
+            for round_item in sorted_rounds:
+                order = round_item.get("order")
+                if not isinstance(order, int) or order > max_round:
                     continue
 
-        self.db.replace_league_debts(chat_id, debt_entries)
-        self.db.set_league_challenge_source(chat_id, stage_url, max_round)
-        return {
+                for series_id in round_item.get("seriesIds", []):
+                    match_id = self._object_id_add(series_id, 1)
+                    match_url = re.sub(r"/stage/.*$", f"/match/{match_id}", stage_url)
+                    try:
+                        match_html = self.fetch_text_url(match_url)
+                        match_state = self.parse_initial_state(match_html)
+                        if not match_state:
+                            fetch_errors += 1
+                            self.logger.warning(
+                                "Challenge sync: no INITIAL_STATE on match page chat_id=%s round_order=%s match_url=%s",
+                                chat_id,
+                                order,
+                                match_url,
+                            )
+                            continue
+
+                        match_rooms = match_state.get("rooms", {})
+                        match_room = None
+                        for room in match_rooms.values():
+                            if isinstance(room, dict) and "homeCompetitorId" in room and "awayCompetitorId" in room:
+                                match_room = room
+                                break
+                        if not match_room:
+                            fetch_errors += 1
+                            self.logger.warning(
+                                "Challenge sync: match room structure missing chat_id=%s round_order=%s match_url=%s",
+                                chat_id,
+                                order,
+                                match_url,
+                            )
+                            continue
+
+                        round_name = match_room.get("roundName")
+                        round_num_match = re.search(r"(\d+)", str(round_name or ""))
+                        if round_num_match:
+                            round_num = int(round_num_match.group(1))
+                        else:
+                            round_num = order
+                        if round_num > max_round:
+                            continue
+
+                        if match_room.get("winnerSlot") is not None:
+                            matches_finished += 1
+                            continue
+
+                        home_id = match_room.get("homeCompetitorId")
+                        away_id = match_room.get("awayCompetitorId")
+                        home_team = (
+                            (match_room.get("competitors", {}).get(home_id) or competitors_map.get(home_id) or {}).get("name")
+                        )
+                        away_team = (
+                            (match_room.get("competitors", {}).get(away_id) or competitors_map.get(away_id) or {}).get("name")
+                        )
+                        if not home_team or not away_team:
+                            self.logger.warning(
+                                "Challenge sync: missing team name chat_id=%s round=%s match_url=%s home_id=%s away_id=%s",
+                                chat_id,
+                                round_num,
+                                match_url,
+                                home_id,
+                                away_id,
+                            )
+                            continue
+
+                        matches_considered += 1
+                        home_norm = self.normalize_team_name(home_team)
+                        away_norm = self.normalize_team_name(away_team)
+                        home_user = team_to_user.get(home_norm)
+                        away_user = team_to_user.get(away_norm)
+                        if not home_user:
+                            unresolved.add(home_team)
+                        if not away_user:
+                            unresolved.add(away_team)
+                        if not home_user or not away_user:
+                            matches_unmapped += 1
+                            continue
+
+                        round_label = f"{round_num} тур"
+                        debt_entries.append(
+                            {
+                                "round_label": round_label,
+                                "debtor_username": home_user,
+                                "opponent_username": away_user,
+                                "raw_line": self._build_debt_line(
+                                    {"username": home_user, "team_name": home_team},
+                                    {"username": away_user, "team_name": away_team},
+                                ),
+                            }
+                        )
+                        debt_entries.append(
+                            {
+                                "round_label": round_label,
+                                "debtor_username": away_user,
+                                "opponent_username": home_user,
+                                "raw_line": self._build_debt_line(
+                                    {"username": away_user, "team_name": away_team},
+                                    {"username": home_user, "team_name": home_team},
+                                ),
+                            }
+                        )
+                    except Exception as exc:
+                        fetch_errors += 1
+                        self.logger.warning(
+                            "Challenge sync: match processing failed chat_id=%s round_order=%s match_url=%s err=%s",
+                            chat_id,
+                            order,
+                            match_url,
+                            exc,
+                            exc_info=self.logger.isEnabledFor(logging.DEBUG),
+                        )
+
+            self.db.replace_league_debts(chat_id, debt_entries)
+        except Exception:
+            self.logger.exception(
+                "Challenge sync debts [fail]: chat_id=%s max_round=%s stage_url=%s",
+                chat_id,
+                max_round,
+                stage_url,
+            )
+            raise
+
+        result = {
             "entries_count": len(debt_entries),
             "unresolved_teams": sorted(unresolved),
-            "unresolved_matches": unresolved_matches,
+            "unresolved_matches": matches_unmapped,
+            "matches_considered": matches_considered,
+            "matches_finished_skipped": matches_finished,
+            "fetch_errors": fetch_errors,
             "max_round": max_round,
         }
+        self.logger.info(
+            "Challenge sync debts [done]: chat_id=%s entries=%s unmapped_matches=%s teams_without_map=%s fetch_errors=%s",
+            chat_id,
+            result["entries_count"],
+            matches_unmapped,
+            len(result["unresolved_teams"]),
+            fetch_errors,
+        )
+        return result
 
     def format_league_debts_post(self, chat_id: int) -> str:
         by_round = self.db.get_league_debts_by_round(chat_id)
@@ -1515,1452 +1196,18 @@ class LeagueFeature:
             lines.extend([it["raw_line"] for it in uniq_entries])
         return "\n".join(lines)
 
-    def _find_match_candidates_by_teams(self, chat_id: int, home_team: str, away_team: str) -> List[Dict]:
-        source = self.db.get_league_challenge_source(chat_id)
-        if not source or not source.get("enabled"):
-            return []
-
-        stage_url = source.get("stage_url")
-        max_round = int(source.get("max_round") or 0)
-        if not stage_url:
-            return []
-
-        html_text = self.fetch_text_url(stage_url)
-        state = self.parse_initial_state(html_text)
-        if not state:
-            return []
-
-        rooms = state.get("rooms", {})
-        stage_room = None
-        for room in rooms.values():
-            if isinstance(room, dict) and "rounds" in room and "competitors" in room:
-                stage_room = room
-                break
-        if not stage_room:
-            return []
-
-        rounds_map = stage_room.get("rounds", {})
-        target_set = {self.normalize_team_name(home_team), self.normalize_team_name(away_team)}
-        candidates = []
-
-        sorted_rounds = sorted(rounds_map.values(), key=lambda x: x.get("order", 10**9))
-        for round_item in sorted_rounds:
-            round_num = int(round_item.get("order") or 0)
-            if max_round and round_num > max_round:
-                continue
-            for series_id in round_item.get("seriesIds", []):
-                match_id = self._object_id_add(series_id, 1)
-                match_url = re.sub(r"/stage/.*$", f"/match/{match_id}", stage_url)
-                try:
-                    match_html = self.fetch_text_url(match_url)
-                    match_state = self.parse_initial_state(match_html)
-                    if not match_state:
-                        continue
-                    match_rooms = match_state.get("rooms", {})
-                    match_room = None
-                    for room in match_rooms.values():
-                        if isinstance(room, dict) and "homeCompetitorId" in room and "awayCompetitorId" in room:
-                            match_room = room
-                            break
-                    if not match_room:
-                        continue
-                    home_id = match_room.get("homeCompetitorId")
-                    away_id = match_room.get("awayCompetitorId")
-                    comps = match_room.get("competitors", {})
-                    home_name = (comps.get(home_id) or {}).get("name")
-                    away_name = (comps.get(away_id) or {}).get("name")
-                    if not home_name or not away_name:
-                        continue
-                    found_set = {self.normalize_team_name(home_name), self.normalize_team_name(away_name)}
-                    if found_set != target_set:
-                        continue
-                    candidates.append(
-                        {
-                            "round_num": round_num,
-                            "match_url": match_url,
-                            "home_team": home_name,
-                            "away_team": away_name,
-                        }
-                    )
-                except Exception:
-                    continue
-
-        return candidates
-
-    def _select_candidate_min_round(self, candidates: List[Dict]) -> Optional[Dict]:
-        if not candidates:
-            return None
-        return sorted(candidates, key=lambda x: (x.get("round_num") or 10**9, x.get("match_url") or ""))[0]
-
-    def _extract_match_teams_from_url(self, match_url: str) -> Optional[Dict]:
-        try:
-            match_html = self.fetch_text_url(match_url)
-            match_state = self.parse_initial_state(match_html)
-            if not match_state:
-                return None
-            match_rooms = match_state.get("rooms", {})
-            match_room = None
-            for room in match_rooms.values():
-                if isinstance(room, dict) and "homeCompetitorId" in room and "awayCompetitorId" in room:
-                    match_room = room
-                    break
-            if not match_room:
-                return None
-            home_id = match_room.get("homeCompetitorId")
-            away_id = match_room.get("awayCompetitorId")
-            comps = match_room.get("competitors", {})
-            home_name = (comps.get(home_id) or {}).get("name")
-            away_name = (comps.get(away_id) or {}).get("name")
-            if not home_name or not away_name:
-                return None
-            round_name = (match_room.get("roundName") or "").strip()
-            round_num = None
-            round_match = re.search(r"(\d+)", round_name)
-            if round_match:
-                round_num = int(round_match.group(1))
-            return {
-                "match_url": match_url,
-                "home_team": home_name,
-                "away_team": away_name,
-                "round_num": round_num,
-                "round_name": round_name,
-            }
-        except Exception:
-            return None
-
-    def _map_payload_to_site_sides(self, payload: Dict, site_home: str, site_away: str) -> Dict:
-        payload_home_norm = self.normalize_team_name(payload.get("home_team") or "")
-        payload_away_norm = self.normalize_team_name(payload.get("away_team") or "")
-        site_home_norm = self.normalize_team_name(site_home or "")
-        site_away_norm = self.normalize_team_name(site_away or "")
-
-        swapped = payload_home_norm == site_away_norm and payload_away_norm == site_home_norm
-        if not swapped:
-            return {
-                "swapped": False,
-                "home_team": payload.get("home_team"),
-                "away_team": payload.get("away_team"),
-                "score_home": payload.get("score_home"),
-                "score_away": payload.get("score_away"),
-                "home_goals": list(payload.get("home_goals") or []),
-                "away_goals": list(payload.get("away_goals") or []),
-                "home_assists": list(payload.get("home_assists") or []),
-                "away_assists": list(payload.get("away_assists") or []),
-            }
-
-        return {
-            "swapped": True,
-            "home_team": payload.get("away_team"),
-            "away_team": payload.get("home_team"),
-            "score_home": payload.get("score_away"),
-            "score_away": payload.get("score_home"),
-            "home_goals": list(payload.get("away_goals") or []),
-            "away_goals": list(payload.get("home_goals") or []),
-            "home_assists": list(payload.get("away_assists") or []),
-            "away_assists": list(payload.get("home_assists") or []),
-        }
-
-    def _selectors_from_env(self, key: str, defaults: List[str]) -> List[str]:
-        raw = (os.getenv(key) or "").strip()
-        if not raw:
-            return list(defaults)
-        parts = [part.strip() for part in re.split(r"[\n|]+", raw) if part.strip()]
-        return parts or list(defaults)
-
-    def _get_env_loose(self, key: str) -> str:
-        value = os.getenv(key)
-        if value is None:
-            target = (key or "").strip().upper()
-            for env_key, env_value in os.environ.items():
-                if (env_key or "").strip().upper() == target:
-                    value = env_value
-                    break
-        value = str(value or "").strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
-            value = value[1:-1].strip()
-        return value
-
-    def _is_login_debug_enabled(self) -> bool:
-        raw = self._get_env_loose("CHALLENGE_LOGIN_DEBUG").lower()
-        return raw in {"1", "true", "yes", "on", "y"}
-
     @staticmethod
-    def _xpath_literal(value: str) -> str:
-        if "'" not in value:
-            return f"'{value}'"
-        if '"' not in value:
-            return f'"{value}"'
-        chunks = value.split("'")
-        return "concat(" + ", \"'\", ".join([f"'{chunk}'" for chunk in chunks]) + ")"
-
-    @staticmethod
-    def _attr_contains_any(element, needles: List[str]) -> bool:
-        try:
-            values = [
-                (element.get_attribute("name") or ""),
-                (element.get_attribute("id") or ""),
-                (element.get_attribute("placeholder") or ""),
-                (element.get_attribute("autocomplete") or ""),
-                (element.get_attribute("aria-label") or ""),
-            ]
-        except Exception:
-            return False
-        hay = " ".join(values).lower()
-        return any(needle in hay for needle in needles)
-
-    def _find_login_email_element(self, driver):
-        try:
-            inputs = driver.find_elements(By.CSS_SELECTOR, "input")
-        except Exception:
-            return None
-
-        candidates = []
-        for element in inputs:
-            try:
-                if element.is_enabled():
-                    candidates.append(element)
-            except Exception:
-                continue
-
-        if not candidates:
-            candidates = list(inputs)
-
-        for element in candidates:
-            try:
-                input_type = (element.get_attribute("type") or "").lower().strip()
-            except Exception:
-                input_type = ""
-            if input_type == "email":
-                return element
-            if self._attr_contains_any(element, ["email", "mail", "login", "user", "username"]):
-                return element
-
-        for element in candidates:
-            try:
-                input_type = (element.get_attribute("type") or "text").lower().strip()
-            except Exception:
-                input_type = "text"
-            if input_type in {"text", "search", "tel"}:
-                return element
-
-        try:
-            shadow_email = driver.execute_script(
-                """
-                const needles = ['email', 'mail', 'login', 'user', 'username'];
-                const walk = (root) => {
-                  if (!root || !root.querySelectorAll) return null;
-                  const inputs = root.querySelectorAll('input');
-                  for (const el of inputs) {
-                    const type = (el.getAttribute('type') || '').toLowerCase().trim();
-                    const attrs = [
-                      el.getAttribute('name') || '',
-                      el.getAttribute('id') || '',
-                      el.getAttribute('placeholder') || '',
-                      el.getAttribute('autocomplete') || '',
-                      el.getAttribute('aria-label') || '',
-                    ].join(' ').toLowerCase();
-                    if (type === 'email') return el;
-                    if (needles.some(n => attrs.includes(n))) return el;
-                  }
-                  const all = root.querySelectorAll('*');
-                  for (const node of all) {
-                    if (node.shadowRoot) {
-                      const found = walk(node.shadowRoot);
-                      if (found) return found;
-                    }
-                  }
-                  return null;
-                };
-                return walk(document);
-                """
-            )
-            if shadow_email is not None:
-                return shadow_email
-        except Exception:
-            pass
-        return None
-
-    def _find_login_password_element(self, driver):
-        try:
-            inputs = driver.find_elements(By.CSS_SELECTOR, "input")
-        except Exception:
-            return None
-
-        candidates = []
-        for element in inputs:
-            try:
-                if element.is_enabled():
-                    candidates.append(element)
-            except Exception:
-                continue
-
-        if not candidates:
-            candidates = list(inputs)
-
-        for element in candidates:
-            try:
-                input_type = (element.get_attribute("type") or "").lower().strip()
-            except Exception:
-                input_type = ""
-            if input_type == "password":
-                return element
-            if self._attr_contains_any(element, ["pass", "парол"]):
-                return element
-
-        try:
-            shadow_password = driver.execute_script(
-                """
-                const needles = ['pass', 'парол'];
-                const walk = (root) => {
-                  if (!root || !root.querySelectorAll) return null;
-                  const inputs = root.querySelectorAll('input');
-                  for (const el of inputs) {
-                    const type = (el.getAttribute('type') || '').toLowerCase().trim();
-                    const attrs = [
-                      el.getAttribute('name') || '',
-                      el.getAttribute('id') || '',
-                      el.getAttribute('placeholder') || '',
-                      el.getAttribute('autocomplete') || '',
-                      el.getAttribute('aria-label') || '',
-                    ].join(' ').toLowerCase();
-                    if (type === 'password') return el;
-                    if (needles.some(n => attrs.includes(n))) return el;
-                  }
-                  const all = root.querySelectorAll('*');
-                  for (const node of all) {
-                    if (node.shadowRoot) {
-                      const found = walk(node.shadowRoot);
-                      if (found) return found;
-                    }
-                  }
-                  return null;
-                };
-                return walk(document);
-                """
-            )
-            if shadow_password is not None:
-                return shadow_password
-        except Exception:
-            pass
-        return None
-
-    def _set_input_value_js(self, driver, element, value: str) -> bool:
-        try:
-            driver.execute_script(
-                """
-                const el = arguments[0];
-                const val = arguments[1];
-                if (!el) return false;
-                el.focus();
-                el.value = '';
-                el.value = val;
-                el.dispatchEvent(new Event('input', { bubbles: true }));
-                el.dispatchEvent(new Event('change', { bubbles: true }));
-                return true;
-                """,
-                element,
-                value,
-            )
-            return True
-        except Exception:
-            return False
-
-    def _list_browser_contexts(self, driver):
-        return self._collect_frame_paths(driver)
-
-    def _collect_frame_paths(self, driver, max_depth: int = 5):
-        paths = [()]
-
-        def dfs(path, depth):
-            if depth >= max_depth:
-                return
-            try:
-                self._switch_to_frame_path(driver, path)
-                frames = driver.find_elements(By.TAG_NAME, "iframe")
-            except Exception:
-                return
-            for idx in range(len(frames)):
-                new_path = tuple(list(path) + [idx])
-                paths.append(new_path)
-                dfs(new_path, depth + 1)
-
-        dfs((), 0)
-        try:
-            self._switch_to_frame_path(driver, ())
-        except Exception:
-            pass
-        return paths
-
-    def _switch_to_frame_path(self, driver, path):
-        driver.switch_to.default_content()
-        if not path:
-            return
-        for idx in path:
-            frames = driver.find_elements(By.TAG_NAME, "iframe")
-            if idx >= len(frames):
-                raise IndexError("iframe index out of range")
-            driver.switch_to.frame(frames[idx])
-
-    def _switch_browser_context(self, driver, frame):
-        # Backward compatible wrapper.
-        if frame is None:
-            self._switch_to_frame_path(driver, ())
-            return
-        if isinstance(frame, tuple):
-            self._switch_to_frame_path(driver, frame)
-            return
-        driver.switch_to.default_content()
-        driver.switch_to.frame(frame)
-
-    def _count_inputs_all_contexts(self, driver) -> int:
-        total = 0
-        for path in self._collect_frame_paths(driver):
-            try:
-                self._switch_to_frame_path(driver, path)
-                total += int(driver.execute_script("return document.querySelectorAll('input').length;") or 0)
-            except Exception:
-                continue
-        try:
-            self._switch_to_frame_path(driver, ())
-        except Exception:
-            pass
-        return total
-
-    def _debug_login_snapshot(self, driver, stage: str) -> None:
-        if not self._is_login_debug_enabled():
-            return
-        try:
-            current = driver.current_url or ""
-        except Exception:
-            current = ""
-        try:
-            title = driver.title or ""
-        except Exception:
-            title = ""
-        try:
-            handles = list(driver.window_handles or [])
-        except Exception:
-            handles = []
-        try:
-            active_handle = driver.current_window_handle or ""
-        except Exception:
-            active_handle = ""
-        try:
-            frame_count = int(driver.execute_script("return window.frames.length;") or 0)
-        except Exception:
-            frame_count = 0
-        input_count = self._count_inputs_all_contexts(driver)
-        self.logger.info(
-            "Challenge login debug [%s]: url=%s; title=%s; inputs=%s; frames=%s; handles=%s; active_handle=%s",
-            stage,
-            current,
-            title,
-            input_count,
-            frame_count,
-            len(handles),
-            active_handle,
-        )
-
-    def _fill_login_field_any_context(self, driver, selectors: List[str], value: str, field_kind: str) -> Optional[str]:
-        contexts = self._collect_frame_paths(driver)
-        for frame_path in contexts:
-            try:
-                self._switch_to_frame_path(driver, frame_path)
-            except Exception:
-                continue
-
-            for selector in selectors:
-                try:
-                    elements = self._find_elements_in_current_context(driver, selector)
-                except Exception:
-                    continue
-                for element in elements:
-                    try:
-                        try:
-                            visible = element.is_displayed()
-                        except Exception:
-                            visible = False
-                        if visible:
-                            element.clear()
-                            element.send_keys(value)
-                        else:
-                            if not self._set_input_value_js(driver, element, value):
-                                continue
-                        self._switch_to_frame_path(driver, ())
-                        return selector
-                    except Exception:
-                        continue
-
-            try:
-                fallback = (
-                    self._find_login_email_element(driver)
-                    if field_kind == "email"
-                    else self._find_login_password_element(driver)
-                )
-            except Exception:
-                fallback = None
-
-            if fallback is not None:
-                try:
-                    try:
-                        visible = fallback.is_displayed()
-                    except Exception:
-                        visible = False
-                    if visible:
-                        fallback.clear()
-                        fallback.send_keys(value)
-                    else:
-                        if not self._set_input_value_js(driver, fallback, value):
-                            raise RuntimeError("fallback input fill failed")
-                    self._switch_to_frame_path(driver, ())
-                    return f"fallback:{field_kind}"
-                except Exception:
-                    pass
-
-        try:
-            self._switch_to_frame_path(driver, ())
-        except Exception:
-            pass
-        return None
-
-    def _has_login_email_any_context(self, driver) -> bool:
-        contexts = self._collect_frame_paths(driver)
-        for frame_path in contexts:
-            try:
-                self._switch_to_frame_path(driver, frame_path)
-            except Exception:
-                continue
-            try:
-                if self._find_login_email_element(driver) is not None:
-                    self._switch_to_frame_path(driver, ())
-                    return True
-            except Exception:
-                continue
-        try:
-            self._switch_to_frame_path(driver, ())
-        except Exception:
-            pass
-        return False
-
-    def _switch_to_auth_window_if_needed(self, driver) -> bool:
-        try:
-            handles = list(driver.window_handles or [])
-        except Exception:
-            return False
-        if len(handles) <= 1:
-            return False
-
-        try:
-            current = driver.current_window_handle
-        except Exception:
-            current = None
-
-        preferred_handle = None
-        preferred_score = -1
-        for handle in reversed(handles):
-            try:
-                driver.switch_to.window(handle)
-                url = (driver.current_url or "").lower()
-                title = (driver.title or "").lower()
-            except Exception:
-                continue
-
-            score = 0
-            if "challenge.place" in url:
-                score += 2
-            if any(part in url for part in ("/login", "/signin", "auth", "oauth")):
-                score += 3
-            if any(part in title for part in ("sign in", "login", "log in", "войти", "автор")):
-                score += 1
-            if score > preferred_score:
-                preferred_score = score
-                preferred_handle = handle
-
-        if preferred_handle is None:
-            if current:
-                try:
-                    driver.switch_to.window(current)
-                except Exception:
-                    pass
-            return False
-
-        switched = preferred_handle != current
-        try:
-            driver.switch_to.window(preferred_handle)
-        except Exception:
-            if current:
-                try:
-                    driver.switch_to.window(current)
-                except Exception:
-                    pass
-            return False
-
-        try:
-            self._switch_to_frame_path(driver, ())
-        except Exception:
-            pass
-        return switched
-
-    def _search_selector_in_frames(self, driver, selector: str):
-        found = []
-        try:
-            driver.switch_to.default_content()
-        except Exception:
-            pass
-
-        try:
-            found.extend(self._find_elements_in_current_context(driver, selector))
-        except Exception:
-            pass
-
-        for frame_path in self._collect_frame_paths(driver):
-            if not frame_path:
-                continue
-            try:
-                self._switch_to_frame_path(driver, frame_path)
-                found.extend(self._find_elements_in_current_context(driver, selector))
-            except Exception:
-                continue
-        try:
-            driver.switch_to.default_content()
-        except Exception:
-            pass
-        return found
-
-    def _find_elements_in_current_context(self, driver, selector: str):
-        selector = (selector or "").strip()
-        if not selector:
-            return []
-
-        if selector.startswith("xpath="):
-            xpath = selector.split("=", 1)[1].strip()
-            if not xpath:
-                return []
-            return driver.find_elements(By.XPATH, xpath)
-
-        if selector.startswith("css="):
-            css_selector = selector.split("=", 1)[1].strip()
-            if not css_selector:
-                return []
-            return driver.find_elements(By.CSS_SELECTOR, css_selector)
-
-        if selector.startswith("text="):
-            text = selector.split("=", 1)[1].strip()
-            if not text:
-                return []
-            xpath = f"//*[contains(normalize-space(.), {self._xpath_literal(text)})]"
-            return driver.find_elements(By.XPATH, xpath)
-
-        has_text_match = re.match(r"^([a-zA-Z0-9_-]+):has-text\((['\"])(.*?)\2\)$", selector)
-        if has_text_match:
-            tag = has_text_match.group(1)
-            text = has_text_match.group(3)
-            xpath = f"//{tag}[contains(normalize-space(.), {self._xpath_literal(text)})]"
-            return driver.find_elements(By.XPATH, xpath)
-
-        return driver.find_elements(By.CSS_SELECTOR, selector)
-
-    def _find_elements_by_selector(self, driver, selector: str):
-        return self._search_selector_in_frames(driver, selector)
-
-    async def _click_first_available(self, driver, selectors: List[str], timeout: int = 3000) -> Optional[str]:
-        for selector in selectors:
-            try:
-                elements = self._find_elements_by_selector(driver, selector)
-            except Exception:
-                continue
-            if not elements:
-                continue
-            for element in elements:
-                try:
-                    if not element.is_displayed():
-                        continue
-                    element.click()
-                    return selector
-                except Exception:
-                    try:
-                        driver.execute_script("arguments[0].click();", element)
-                        return selector
-                    except Exception:
-                        pass
-                    # Last-resort: click nearest clickable ancestor.
-                    try:
-                        parent = element.find_element(By.XPATH, "ancestor::*[self::button or self::a or @role='button'][1]")
-                        parent.click()
-                        return selector
-                    except Exception:
-                        continue
-        return None
-
-    async def _fill_first_available(self, driver, selectors: List[str], value: str) -> Optional[str]:
-        for selector in selectors:
-            try:
-                elements = self._find_elements_by_selector(driver, selector)
-            except Exception:
-                continue
-            if not elements:
-                continue
-            for element in elements:
-                try:
-                    if not element.is_displayed():
-                        continue
-                    element.clear()
-                    element.send_keys(value)
-                    return selector
-                except Exception:
-                    continue
-        return None
-
-    async def _pick_first_input_group(self, driver, selectors: List[str]):
-        for selector in selectors:
-            try:
-                elements = self._find_elements_by_selector(driver, selector)
-            except Exception:
-                continue
-            visible = [element for element in elements if element.is_displayed()]
-            count = len(visible)
-            if count > 0:
-                return visible, count, selector
-        return None, 0, None
-
-    def _build_side_events(self, payload: Dict, side: str) -> List[Dict]:
-        goals = list(payload.get(f"{side}_goals") or [])
-        assists = list(payload.get(f"{side}_assists") or [])
-        events = []
-        for goal, assist in zip_longest(goals, assists, fillvalue=""):
-            if not goal and not assist:
-                continue
-            events.append({"goal": str(goal or ""), "assist": str(assist or "")})
-        return events
-
-    async def _fill_side_events(self, driver, payload: Dict, side: str) -> Dict:
-        events = self._build_side_events(payload, side)
-        if not events:
-            return {"ok": True, "events": 0, "filled_goals": 0, "filled_assists": 0}
-
-        goal_defaults = [
-            f"input[name*='{side}'][name*='goal']",
-            f"input[name*='{side}'][name*='scorer']",
-            f"input[name*='{side}'][name*='player']",
-            f"input[id*='{side}'][id*='goal']",
+    def _format_challenge_sync_user_message(result: Dict, headline: str) -> str:
+        lines = [
+            headline,
+            "Старые долги очищены, записаны актуальные данные после синка.",
+            f"Записей долгов: {result.get('entries_count', 0)}",
+            f"Незавершённых матчей обработано: {result.get('matches_considered', 0)} "
+            f"(пропущено с результатом: {result.get('matches_finished_skipped', 0)}).",
+            f"Матчей с непривязанными командами: {result.get('unresolved_matches', 0)}",
+            f"Ошибок при загрузке матчей: {result.get('fetch_errors', 0)}",
         ]
-        assist_defaults = [
-            f"input[name*='{side}'][name*='assist']",
-            f"input[id*='{side}'][id*='assist']",
-        ]
-        goal_selectors = self._selectors_from_env(f"CHALLENGE_{side.upper()}_GOAL_SELECTORS", goal_defaults)
-        assist_selectors = self._selectors_from_env(f"CHALLENGE_{side.upper()}_ASSIST_SELECTORS", assist_defaults)
-
-        goal_group, goal_count, goal_selector = await self._pick_first_input_group(driver, goal_selectors)
-        assist_group, assist_count, assist_selector = await self._pick_first_input_group(driver, assist_selectors)
-
-        if goal_count <= 0 and assist_count <= 0:
-            return {
-                "ok": False,
-                "events": len(events),
-                "filled_goals": 0,
-                "filled_assists": 0,
-                "message": f"Не найдены поля событий для стороны {side}",
-            }
-
-        filled_goals = 0
-        filled_assists = 0
-        for i, event in enumerate(events):
-            if goal_group is not None and i < goal_count and event.get("goal"):
-                try:
-                    goal_group[i].clear()
-                    goal_group[i].send_keys(event["goal"])
-                    filled_goals += 1
-                except Exception:
-                    pass
-            if assist_group is not None and i < assist_count and event.get("assist"):
-                try:
-                    assist_group[i].clear()
-                    assist_group[i].send_keys(event["assist"])
-                    filled_assists += 1
-                except Exception:
-                    pass
-
-        return {
-            "ok": True,
-            "events": len(events),
-            "filled_goals": filled_goals,
-            "filled_assists": filled_assists,
-            "goal_selector": goal_selector,
-            "assist_selector": assist_selector,
-        }
-
-    def _json_has_tokens(self, raw_value: str) -> bool:
-        try:
-            payload = json.loads(raw_value)
-        except Exception:
-            return False
-
-        if not isinstance(payload, dict):
-            return False
-
-        candidates = [
-            payload.get("accessToken"),
-            payload.get("refreshToken"),
-            payload.get("idToken"),
-        ]
-        manager = payload.get("stsTokenManager") or payload.get("tokenManager")
-        if isinstance(manager, dict):
-            candidates.extend(
-                [
-                    manager.get("accessToken"),
-                    manager.get("refreshToken"),
-                    manager.get("idToken"),
-                ]
-            )
-        return any(isinstance(item, str) and item.strip() for item in candidates)
-
-    async def _has_visible_sign_in(self, driver) -> bool:
-        selectors = [
-            "a[href='/login']",
-            "a:has-text('Sign in')",
-            "button:has-text('Sign in')",
-            "a:has-text('Log in')",
-            "button:has-text('Log in')",
-            "a:has-text('Login')",
-            "button:has-text('Login')",
-            "a:has-text('Войти')",
-            "button:has-text('Войти')",
-        ]
-        for selector in selectors:
-            try:
-                elements = self._find_elements_by_selector(driver, selector)
-            except Exception:
-                continue
-            for element in elements[:10]:
-                try:
-                    if element.is_displayed():
-                        return True
-                except Exception:
-                    continue
-        return False
-
-    async def _has_auth_storage(self, driver) -> bool:
-        try:
-            storage = driver.execute_script(
-                """
-                () => {
-                    const out = {};
-                    for (let i = 0; i < localStorage.length; i += 1) {
-                        const key = localStorage.key(i);
-                        if (!key) continue;
-                        out[key] = localStorage.getItem(key) || "";
-                    }
-                    return out;
-                }
-                """
-            )
-        except Exception:
-            storage = {}
-
-        storage = storage if isinstance(storage, dict) else {}
-        for key, value in storage.items():
-            key_lower = str(key).lower()
-            if str(key).startswith("firebase:authUser:"):
-                return True
-            if "authuser" in key_lower and isinstance(value, str) and self._json_has_tokens(value):
-                return True
-            if "token" in key_lower and isinstance(value, str) and len(value.strip()) > 80:
-                return True
-        return False
-
-    async def _has_auth_cookie(self, driver) -> bool:
-        try:
-            cookies = driver.get_cookies()
-        except Exception:
-            return False
-
-        for cookie in cookies:
-            name = str(cookie.get("name", "")).lower()
-            if any(part in name for part in ("session", "auth", "token")):
-                value = str(cookie.get("value", "")).strip()
-                if value and value.lower() not in {"true", "false", "1", "0"}:
-                    return True
-        return False
-
-    async def _is_challenge_session_authorized(self, driver) -> bool:
-        current_url = (driver.current_url or "").lower()
-        if "challenge.place" in current_url and "/login" in current_url:
-            return False
-        if await self._has_visible_sign_in(driver):
-            return False
-        if await self._has_auth_storage(driver):
-            return True
-        if await self._has_auth_cookie(driver):
-            return True
-        return True
-
-    async def _open_email_login_method(self, driver) -> bool:
-        selectors = self._selectors_from_env(
-            "CHALLENGE_LOGIN_METHOD_SELECTORS",
-            [
-                "text=Use your email",
-                "text=Continue with email",
-                "text=Continue with e-mail",
-                "text=Email",
-                "text=E-mail",
-                "text=Sign in with email",
-                "css=.flex-grow-1.px-3.text-truncate",
-                "button:has-text('Use your email')",
-                "button:has-text('Continue with email')",
-                "button:has-text('Sign in with email')",
-                "button:has-text('Email')",
-                "div:has-text('Use your email')",
-                "div:has-text('Continue with email')",
-                "xpath=//*[contains(@class,'flex-grow-1') and contains(@class,'text-truncate') and contains(normalize-space(.), 'Use your email')]",
-                "text=Use email",
-                "text=Использовать email",
-                "text=Войти по email",
-            ],
-        )
-        clicked = await self._click_first_available(driver, selectors, timeout=5000)
-        if clicked:
-            time.sleep(1.0)
-            switched = self._switch_to_auth_window_if_needed(driver)
-            if self._is_login_debug_enabled():
-                self.logger.info("Challenge login debug [open_email_method_click]: switched_window=%s", switched)
-            self._debug_login_snapshot(driver, "open_email_method_click")
-            return True
-
-        try:
-            js_clicked = driver.execute_script(
-                """
-                const phrases = [
-                  'use your email',
-                  'use email',
-                  'continue with email',
-                  'continue with e-mail',
-                  'sign in with email',
-                  'email',
-                  'e-mail',
-                  'использовать email',
-                  'войти по email'
-                ];
-                const roots = [document];
-                const collect = (root, out) => {
-                  if (!root || !root.querySelectorAll) return;
-                  for (const el of root.querySelectorAll('*')) {
-                    out.push(el);
-                    if (el.shadowRoot) collect(el.shadowRoot, out);
-                  }
-                };
-                const all = [];
-                collect(document, all);
-                const score = (el) => {
-                  const text = (el.textContent || '').trim().toLowerCase();
-                  if (!text) return 0;
-                  for (const p of phrases) {
-                    if (text === p) return 3;
-                    if (text.includes(p)) return 2;
-                  }
-                  return 0;
-                };
-                const candidates = all
-                  .map(el => ({ el, s: score(el) }))
-                  .filter(x => x.s > 0)
-                  .sort((a, b) => b.s - a.s);
-                for (const c of candidates) {
-                  let node = c.el;
-                  for (let i = 0; i < 6 && node; i += 1) {
-                    try {
-                      node.scrollIntoView({ block: 'center', inline: 'center' });
-                    } catch (e) {}
-                    try { node.click(); return true; } catch (e) {}
-                    try {
-                      node.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-                      return true;
-                    } catch (e) {}
-                    node = node.parentElement;
-                  }
-                }
-                return false;
-                """
-            )
-            if bool(js_clicked):
-                time.sleep(1.0)
-                switched = self._switch_to_auth_window_if_needed(driver)
-                if self._is_login_debug_enabled():
-                    self.logger.info("Challenge login debug [open_email_method_js_click]: switched_window=%s", switched)
-                self._debug_login_snapshot(driver, "open_email_method_js_click")
-                return True
-        except Exception:
-            pass
-
-        contexts = self._collect_frame_paths(driver)
-        for frame_path in contexts:
-            try:
-                self._switch_to_frame_path(driver, frame_path)
-                nodes = driver.find_elements(
-                    By.XPATH,
-                    "//*[contains(normalize-space(.), 'Use your email') or contains(normalize-space(.), 'Use email')]",
-                )
-            except Exception:
-                continue
-            for node in nodes:
-                try:
-                    node.click()
-                    self._switch_browser_context(driver, None)
-                    time.sleep(1.0)
-                    return True
-                except Exception:
-                    pass
-                try:
-                    parent = node.find_element(By.XPATH, "ancestor::*[self::button or self::a or @role='button'][1]")
-                    parent.click()
-                    self._switch_to_frame_path(driver, ())
-                    time.sleep(1.0)
-                    switched = self._switch_to_auth_window_if_needed(driver)
-                    if self._is_login_debug_enabled():
-                        self.logger.info("Challenge login debug [open_email_method_xpath_parent]: switched_window=%s", switched)
-                    self._debug_login_snapshot(driver, "open_email_method_xpath_parent")
-                    return True
-                except Exception:
-                    continue
-        try:
-            self._switch_to_frame_path(driver, ())
-        except Exception:
-            pass
-        return False
-
-    async def _attempt_challenge_login_with_credentials(self, driver, match_url: str) -> Dict:
-        login_email_raw = self._get_env_loose("CHALLENGE_LOGIN_EMAIL")
-        login_password_raw = self._get_env_loose("CHALLENGE_LOGIN_PASSWORD")
-        alt_email_raw = self._get_env_loose("CHALLENGE_EMAIL")
-        alt_password_raw = self._get_env_loose("CHALLENGE_PASSWORD")
-
-        email = login_email_raw or alt_email_raw
-        password = login_password_raw or alt_password_raw
-        self.logger.info(
-            "Challenge login env presence: CHALLENGE_LOGIN_EMAIL=%s CHALLENGE_LOGIN_PASSWORD=%s CHALLENGE_EMAIL=%s CHALLENGE_PASSWORD=%s",
-            bool(login_email_raw),
-            bool(login_password_raw),
-            bool(alt_email_raw),
-            bool(alt_password_raw),
-        )
-        if not email or not password:
-            presence = (
-                "["
-                f"CHALLENGE_LOGIN_EMAIL={'yes' if bool(login_email_raw) else 'no'}, "
-                f"CHALLENGE_LOGIN_PASSWORD={'yes' if bool(login_password_raw) else 'no'}, "
-                f"CHALLENGE_EMAIL={'yes' if bool(alt_email_raw) else 'no'}, "
-                f"CHALLENGE_PASSWORD={'yes' if bool(alt_password_raw) else 'no'}"
-                "]"
-            )
-            return {
-                "ok": False,
-                "message": (
-                    "Не авторизовано в challenge.place. "
-                    "Укажите CHALLENGE_LOGIN_EMAIL и CHALLENGE_LOGIN_PASSWORD "
-                    "(или CHALLENGE_EMAIL и CHALLENGE_PASSWORD) и перезапустите сервис. "
-                    f"Статус env: {presence}"
-                ),
-            }
-
-        login_url = self._get_env_loose("CHALLENGE_LOGIN_URL") or "https://challenge.place/login"
-        self.logger.info("Trying credential login for challenge.place")
-
-        login_urls = []
-        current_url = (driver.current_url or "").strip()
-        if current_url.startswith("http") and ("/login" in current_url or "/signin" in current_url):
-            login_urls.append(current_url)
-        login_urls.extend(
-            [
-                login_url,
-                "https://challenge.place/login",
-            ]
-        )
-        seen = set()
-        normalized_urls = []
-        for url in login_urls:
-            url = (url or "").strip()
-            if not url or url in seen:
-                continue
-            seen.add(url)
-            normalized_urls.append(url)
-
-        loaded = False
-        login_page_with_email = False
-        email_method_clicked = False
-        tried_urls = []
-        for url in normalized_urls:
-            try:
-                driver.get(url)
-                time.sleep(1.0)
-                switched = self._switch_to_auth_window_if_needed(driver)
-                if self._is_login_debug_enabled():
-                    self.logger.info("Challenge login debug [navigate_login_url]: target=%s; switched_window=%s", url, switched)
-                self._debug_login_snapshot(driver, "after_login_navigation")
-                loaded = True
-                tried_urls.append(url)
-                email_found = False
-                for attempt_idx in range(60):
-                    if await self._open_email_login_method(driver):
-                        email_method_clicked = True
-                    switched = self._switch_to_auth_window_if_needed(driver)
-                    if self._has_login_email_any_context(driver):
-                        if self._is_login_debug_enabled():
-                            self.logger.info(
-                                "Challenge login debug [email_context_found]: poll_attempt=%s; switched_window=%s",
-                                attempt_idx + 1,
-                                switched,
-                            )
-                        self._debug_login_snapshot(driver, "email_context_found")
-                        email_found = True
-                        break
-                    if attempt_idx in {0, 4, 9, 19, 39, 59}:
-                        if self._is_login_debug_enabled():
-                            self.logger.info(
-                                "Challenge login debug [email_context_waiting]: poll_attempt=%s; switched_window=%s",
-                                attempt_idx + 1,
-                                switched,
-                            )
-                        self._debug_login_snapshot(driver, f"email_context_waiting_{attempt_idx + 1}")
-                    time.sleep(0.5)
-                if email_found:
-                    login_page_with_email = True
-                    break
-            except Exception:
-                continue
-        if not loaded:
-            return {"ok": False, "message": "Не удалось открыть страницу логина."}
-        if not login_page_with_email and not email_method_clicked:
-            try:
-                title = driver.title or ""
-            except Exception:
-                title = ""
-            try:
-                current = driver.current_url or ""
-            except Exception:
-                current = ""
-            return {
-                "ok": False,
-                "message": (
-                    "Не удалось открыть форму логина по email. "
-                    f"url={current}; title={title}; tried={','.join(tried_urls)}; method_clicked={email_method_clicked}"
-                ),
-            }
-
-        email_selectors = self._selectors_from_env(
-            "CHALLENGE_LOGIN_EMAIL_SELECTORS",
-            [
-                "input[type='email']",
-                "input[type='text'][name='identifier']",
-                "input[type='email'][name='identifier']",
-                "input[name*='email']",
-                "input[id*='email']",
-                "input[name*='identifier']",
-                "input[id*='identifier']",
-                "input[name*='login']",
-                "input[name*='user']",
-                "input[name*='account']",
-                "input[autocomplete='username']",
-                "input[type='text'][autocomplete='username']",
-                "input[autocomplete='email']",
-                "input[placeholder*='mail']",
-                "input[placeholder*='Email']",
-                "input[placeholder*='email']",
-            ],
-        )
-        password_selectors = self._selectors_from_env(
-            "CHALLENGE_LOGIN_PASSWORD_SELECTORS",
-            [
-                "input[type='password']",
-                "input[name*='password']",
-                "input[autocomplete='current-password']",
-                "input[placeholder*='Password']",
-                "input[placeholder*='password']",
-            ],
-        )
-        submit_selectors = self._selectors_from_env(
-            "CHALLENGE_LOGIN_SUBMIT_SELECTORS",
-            [
-                "button[type='submit']",
-                "button:has-text('Sign in')",
-                "button:has-text('Log in')",
-                "button:has-text('Login')",
-                "button:has-text('Войти')",
-                "button:has-text('Continue')",
-                "button:has-text('Next')",
-                "button:has-text('Продолжить')",
-            ],
-        )
-
-        filled_email_selector = None
-        for attempt_idx in range(50):
-            switched = self._switch_to_auth_window_if_needed(driver)
-            filled_email_selector = self._fill_login_field_any_context(driver, email_selectors, email, "email")
-            if filled_email_selector:
-                if self._is_login_debug_enabled():
-                    self.logger.info(
-                        "Challenge login debug [email_filled]: attempt=%s; selector=%s; switched_window=%s",
-                        attempt_idx + 1,
-                        filled_email_selector,
-                        switched,
-                    )
-                self._debug_login_snapshot(driver, "email_filled")
-                break
-            if attempt_idx in {0, 4, 9, 19, 29, 39, 49}:
-                if self._is_login_debug_enabled():
-                    self.logger.info(
-                        "Challenge login debug [email_fill_retry]: attempt=%s; switched_window=%s",
-                        attempt_idx + 1,
-                        switched,
-                    )
-                self._debug_login_snapshot(driver, f"email_fill_retry_{attempt_idx + 1}")
-            await self._open_email_login_method(driver)
-            time.sleep(0.4)
-        if not filled_email_selector:
-            if email_method_clicked:
-                try:
-                    active = driver.switch_to.active_element
-                    if active is not None:
-                        active.send_keys(email)
-                        active.send_keys(Keys.TAB)
-                        active2 = driver.switch_to.active_element
-                        if active2 is not None:
-                            active2.send_keys(password)
-                            active2.send_keys(Keys.ENTER)
-                            time.sleep(3.0)
-                            if match_url:
-                                try:
-                                    driver.get(match_url)
-                                    time.sleep(1.0)
-                                except Exception:
-                                    pass
-                            if await self._is_challenge_session_authorized(driver):
-                                return {"ok": True, "message": "Логин выполнен."}
-                except Exception:
-                    pass
-            try:
-                title = driver.title or ""
-            except Exception:
-                title = ""
-            try:
-                current = driver.current_url or ""
-            except Exception:
-                current = ""
-            input_count = self._count_inputs_all_contexts(driver)
-            return {
-                "ok": False,
-                "message": (
-                    "Не удалось найти поле email на странице логина. "
-                    f"url={current}; title={title}; inputs={input_count}"
-                ),
-            }
-
-        filled_password_selector = self._fill_login_field_any_context(driver, password_selectors, password, "password")
-
-        if not filled_password_selector:
-            clicked_continue = await self._click_first_available(driver, submit_selectors, timeout=5000)
-            if not clicked_continue:
-                try:
-                    active = driver.switch_to.active_element
-                    active.send_keys("\n")
-                except Exception:
-                    pass
-            time.sleep(2.0)
-            filled_password_selector = self._fill_login_field_any_context(driver, password_selectors, password, "password")
-
-        if not filled_password_selector:
-            return {
-                "ok": False,
-                "message": (
-                    "Не удалось найти поле пароля на странице логина. "
-                    "Возможно, у challenge.place сейчас email-only/кодовый вход (без пароля)."
-                ),
-            }
-
-        clicked_submit = await self._click_first_available(driver, submit_selectors, timeout=5000)
-        if not clicked_submit:
-            try:
-                active = driver.switch_to.active_element
-                active.send_keys("\n")
-            except Exception:
-                pass
-
-        time.sleep(3.0)
-        if match_url:
-            try:
-                driver.get(match_url)
-                time.sleep(1.0)
-            except Exception:
-                pass
-
-        if not await self._is_challenge_session_authorized(driver):
-            return {
-                "ok": False,
-                "message": "Логин по email/password не прошел. Проверьте креды/2FA/captcha.",
-            }
-        return {"ok": True, "message": "Логин выполнен."}
-
-    async def _open_match_and_fill_result(self, match_url: str, payload: Dict, dry_run: bool = False) -> Dict:
-        if not SELENIUM_AVAILABLE:
-            return {"ok": False, "message": "Selenium недоступен в окружении."}
-
-        self.logger.info(
-            "Apply result started: dry_run=%s match_url=%s home=%s away=%s",
-            dry_run,
-            match_url,
-            payload.get("home_team"),
-            payload.get("away_team"),
-        )
-
-        msk_now = datetime.now(ZoneInfo("Europe/Moscow"))
-        date_value = msk_now.strftime("%Y-%m-%d")
-
-        options = ChromeOptions()
-        options.add_argument("--headless=new")
-        options.add_argument("--no-sandbox")
-        options.add_argument("--disable-dev-shm-usage")
-        options.add_argument("--disable-gpu")
-        options.add_argument("--window-size=1920,1080")
-
-        driver = None
-        try:
-            driver = webdriver.Chrome(options=options)
-        except Exception as e:
-            self.logger.error("Failed to launch Chromium via Selenium: %s", e)
-            return {
-                "ok": False,
-                "message": "Не удалось запустить Selenium Chromium. Проверьте chromium/chromedriver в контейнере.",
-            }
-
-        try:
-            driver.set_page_load_timeout(30)
-            driver.get(match_url)
-            time.sleep(1.0)
-            self.logger.info("Match page opened: %s", driver.current_url)
-
-            if not await self._is_challenge_session_authorized(driver):
-                self.logger.warning("Challenge session unauthorized for url=%s; trying credential login", match_url)
-                login_result = await self._attempt_challenge_login_with_credentials(driver, match_url)
-                if not login_result.get("ok"):
-                    return {
-                        "ok": False,
-                        "message": login_result.get("message") or "Не удалось авторизоваться в challenge.place.",
-                    }
-                if not await self._is_challenge_session_authorized(driver):
-                    return {
-                        "ok": False,
-                        "message": "После логина сессия все еще не авторизована (возможен captcha/2FA).",
-                    }
-
-            if dry_run:
-                self.logger.info("Dry-run success for match_url=%s", match_url)
-                return {"ok": True, "message": f"Dry-run ok: матч открыт, дата к установке {date_value}"}
-
-            edit_selectors = self._selectors_from_env("CHALLENGE_EDIT_SELECTORS", [
-                "button:has-text('Edit')",
-                "button:has-text('Редактировать')",
-                "button:has-text('Set result')",
-                "button:has-text('Результат')",
-            ])
-            await self._click_first_available(driver, edit_selectors)
-
-            date_inputs = self._selectors_from_env("CHALLENGE_DATE_SELECTORS", [
-                "input[type='date']",
-                "input[name*='date']",
-                "input[placeholder*='Date']",
-                "input[placeholder*='Дата']",
-            ])
-            await self._fill_first_available(driver, date_inputs, date_value)
-
-            if payload.get("score_home") is not None and payload.get("score_away") is not None:
-                home_score_selectors = self._selectors_from_env(
-                    "CHALLENGE_HOME_SCORE_SELECTORS",
-                    ["input[name*='home'][name*='score']", "input[placeholder*='Home']"],
-                )
-                away_score_selectors = self._selectors_from_env(
-                    "CHALLENGE_AWAY_SCORE_SELECTORS",
-                    ["input[name*='away'][name*='score']", "input[placeholder*='Away']"],
-                )
-                try:
-                    await self._fill_first_available(driver, home_score_selectors, str(payload.get("score_home")))
-                    await self._fill_first_available(driver, away_score_selectors, str(payload.get("score_away")))
-                except Exception:
-                    pass
-
-            home_events_result = await self._fill_side_events(driver, payload, "home")
-            away_events_result = await self._fill_side_events(driver, payload, "away")
-            if not home_events_result.get("ok") or not away_events_result.get("ok"):
-                return {
-                    "ok": False,
-                    "message": "; ".join(
-                        [
-                            part
-                            for part in [
-                                home_events_result.get("message", ""),
-                                away_events_result.get("message", ""),
-                            ]
-                            if part
-                        ]
-                    ),
-                }
-
-            save_buttons = self._selectors_from_env("CHALLENGE_SAVE_SELECTORS", [
-                "button:has-text('Save')",
-                "button:has-text('Сохранить')",
-                "button:has-text('Confirm')",
-                "button:has-text('Подтвердить')",
-            ])
-            clicked_selector = await self._click_first_available(driver, save_buttons)
-            saved = bool(clicked_selector)
-
-            time.sleep(1.2)
-            success_selectors = self._selectors_from_env("CHALLENGE_SUCCESS_SELECTORS", [
-                "text=Saved",
-                "text=Сохранено",
-                "text=успешно",
-                "text=Updated",
-            ])
-            success_hint = False
-            for selector in success_selectors:
-                try:
-                    if self._find_elements_by_selector(driver, selector):
-                        success_hint = True
-                        break
-                except Exception:
-                    continue
-
-            if not saved:
-                self.logger.warning("Save button not found for match_url=%s", match_url)
-                return {"ok": False, "message": "Не найдено кнопки сохранения результата."}
-
-            self.logger.info(
-                "Apply result saved: match_url=%s home_goals=%s home_assists=%s away_goals=%s away_assists=%s success_hint=%s",
-                match_url,
-                home_events_result.get("filled_goals", 0),
-                home_events_result.get("filled_assists", 0),
-                away_events_result.get("filled_goals", 0),
-                away_events_result.get("filled_assists", 0),
-                success_hint,
-            )
-            return {
-                "ok": True,
-                "message": (
-                    "Результат отправлен на сохранение"
-                    f". Home: {home_events_result.get('filled_goals', 0)} гол(ов), {home_events_result.get('filled_assists', 0)} ассист(ов)"
-                    f"; Away: {away_events_result.get('filled_goals', 0)} гол(ов), {away_events_result.get('filled_assists', 0)} ассист(ов)"
-                    + (". Подтверждение UI найдено." if success_hint else ". Подтверждение UI не найдено.")
-                ),
-            }
-        except SeleniumTimeoutException:
-            self.logger.warning("Selenium timeout for match_url=%s", match_url)
-            return {"ok": False, "message": "Таймаут при открытии страницы матча."}
-        except Exception as e:
-            self.logger.exception("Selenium error for match_url=%s", match_url)
-            return {"ok": False, "message": f"Ошибка Selenium: {e}"}
-        finally:
-            try:
-                if driver is not None:
-                    driver.quit()
-            except Exception:
-                pass
+        return "\n".join(lines)
 
     async def on_error(self, update: object, context: ContextTypes.DEFAULT_TYPE):
         if context.error is None:
@@ -3047,311 +1294,6 @@ class LeagueFeature:
                         custom_text=cfg.get("hourly_text") or "Напоминание: сыграйте долги в лиге.",
                     )
 
-    def _is_ocr_ready(self) -> bool:
-        if not OCR_AVAILABLE:
-            return False
-        provider = self._get_ocr_provider()
-        if provider == "ocrspace":
-            return bool((os.getenv("OCRSPACE_API_KEY", "") or "").strip())
-        if not self._ocr_checked:
-            custom_cmd = os.getenv("TESSERACT_CMD", "").strip()
-            if custom_cmd:
-                pytesseract.pytesseract.tesseract_cmd = custom_cmd
-            try:
-                pytesseract.get_tesseract_version()
-                self._ocr_enabled = True
-            except Exception:
-                self._ocr_enabled = False
-            self._ocr_checked = True
-        return self._ocr_enabled
-
-    def _ocr_timeout_seconds(self) -> int:
-        raw = (os.getenv("OCR_TIMEOUT_SEC", "20") or "20").strip()
-        try:
-            value = int(raw)
-            return max(5, min(value, 120))
-        except Exception:
-            return 20
-
-    def _ocrspace_extract_lines(self, image_bytes: bytes) -> List[Dict]:
-        api_key = (os.getenv("OCRSPACE_API_KEY", "") or "").strip()
-        if not api_key:
-            raise RuntimeError("OCRSPACE_API_KEY не задан")
-
-        encoded = base64.b64encode(image_bytes).decode("ascii")
-        timeout_sec = self._ocr_timeout_seconds()
-
-        def parse_ocrspace_payload(data: Dict) -> List[Dict]:
-            parsed = data.get("ParsedResults") or []
-            if not parsed:
-                return []
-
-            out = []
-            for pr in parsed:
-                overlay = ((pr.get("TextOverlay") or {}).get("Lines") or [])
-                for line in overlay:
-                    words = line.get("Words") or []
-                    text = " ".join([str(w.get("WordText") or "").strip() for w in words]).strip()
-                    if not text:
-                        continue
-                    if words:
-                        x1 = min(int(w.get("Left", 0)) for w in words)
-                        y1 = min(int(w.get("Top", line.get("MinTop", 0))) for w in words)
-                        x2 = max(int(w.get("Left", 0)) + int(w.get("Width", 0)) for w in words)
-                        y2 = max(int(w.get("Top", line.get("MinTop", 0))) + int(w.get("Height", line.get("MaxHeight", 0))) for w in words)
-                    else:
-                        x1 = int(line.get("MinLeft", 0))
-                        y1 = int(line.get("MinTop", 0))
-                        x2 = x1 + int(line.get("MaxWidth", 0))
-                        y2 = y1 + int(line.get("MaxHeight", 0))
-                    out.append({"text": text, "x1": x1, "y1": y1, "x2": x2, "y2": y2})
-
-            if out:
-                return out
-
-            text_fallback = "\n".join([(pr.get("ParsedText") or "") for pr in parsed]).strip()
-            return [{"text": ln.strip(), "x1": 0, "y1": 0, "x2": 1, "y2": 1} for ln in text_fallback.splitlines() if ln.strip()]
-
-        # OCR.space accepts a single language code, not comma-separated list.
-        for language in ("eng", "rus"):
-            payload = {
-                "apikey": api_key,
-                "language": language,
-                "isOverlayRequired": "true",
-                "OCREngine": "2",
-                "base64Image": f"data:image/jpeg;base64,{encoded}",
-            }
-            body = urllib.parse.urlencode(payload).encode("utf-8")
-            req = urllib.request.Request(
-                "https://api.ocr.space/parse/image",
-                data=body,
-                headers={
-                    "Content-Type": "application/x-www-form-urlencoded",
-                    "User-Agent": "LeagueBot-OCR/1.0",
-                },
-            )
-
-            with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
-                raw = resp.read().decode("utf-8", errors="ignore")
-            data = json.loads(raw)
-
-            if data.get("IsErroredOnProcessing"):
-                err_text = " ".join((data.get("ErrorMessage") or []))
-                # Continue on language-specific error and try next language.
-                if "Value for parameter 'language' is invalid" in err_text:
-                    continue
-                err = err_text or data.get("ErrorDetails") or "OCRSpace error"
-                raise RuntimeError(str(err))
-
-            lines = parse_ocrspace_payload(data)
-            if lines:
-                return lines
-
-        return []
-
-    def _build_ocr_keyboard(self, chat_id: int, ocr_id: int) -> InlineKeyboardMarkup:
-        return InlineKeyboardMarkup(
-            [
-                [
-                    InlineKeyboardButton("Показать", callback_data=f"ocr:show:{chat_id}:{ocr_id}"),
-                    InlineKeyboardButton("Исправить", callback_data=f"ocr:fix:{chat_id}:{ocr_id}"),
-                ],
-                [
-                    InlineKeyboardButton("Подтвердить", callback_data=f"ocr:approve:{chat_id}:{ocr_id}"),
-                    InlineKeyboardButton("Отклонить", callback_data=f"ocr:reject:{chat_id}:{ocr_id}"),
-                ],
-            ]
-        )
-
-    def _extract_ocr_id_from_message_text(self, text: str) -> Optional[int]:
-        m = re.search(r"#(\d+)", text or "")
-        if not m:
-            return None
-        try:
-            return int(m.group(1))
-        except Exception:
-            return None
-
-    def _resolve_draft_id(self, update: Update, args: Optional[List[str]] = None) -> Optional[int]:
-        if args:
-            try:
-                return int(args[0])
-            except Exception:
-                return None
-        msg = update.effective_message
-        if msg and msg.reply_to_message:
-            return self._extract_ocr_id_from_message_text(msg.reply_to_message.text or msg.reply_to_message.caption or "")
-        return None
-
-    def _match_team_name(self, chat_id: int, raw_name: str) -> Dict:
-        team_map = self.db.get_league_team_map(chat_id)
-        if not team_map:
-            return {"matched": raw_name.strip(), "confidence": 0.0, "exact": False}
-        norm = self.normalize_team_name(raw_name)
-        exact = next((item for item in team_map if item["team_name_norm"] == norm), None)
-        if exact:
-            return {"matched": exact["team_name_raw"], "confidence": 1.0, "exact": True}
-        best_item = None
-        best_score = 0.0
-        for item in team_map:
-            score = SequenceMatcher(None, norm, item["team_name_norm"]).ratio()
-            if score > best_score:
-                best_item = item
-                best_score = score
-        if best_item and best_score >= 0.72:
-            return {"matched": best_item["team_name_raw"], "confidence": round(best_score, 2), "exact": False}
-        return {"matched": raw_name.strip(), "confidence": round(best_score, 2), "exact": False}
-
-    def _parse_caption_match_and_assists(self, caption: str, chat_id: int) -> Dict:
-        lines = [x.strip() for x in (caption or "").splitlines() if x.strip()]
-        warnings = []
-        team_map_items = self.db.get_league_team_map(chat_id)
-        has_team_map = bool(team_map_items)
-        home_raw = ""
-        away_raw = ""
-        match_line_index = -1
-        for idx, line in enumerate(lines):
-            m = re.match(r"^(.+?)\s*(?:-|—|vs|VS|v\.?s\.?)\s*(.+)$", line)
-            if m:
-                home_raw = m.group(1).strip()
-                away_raw = m.group(2).strip()
-                match_line_index = idx
-                break
-
-        # Heuristic fallback for captions like "Аякс Спортинг" (without separators).
-        if (not home_raw or not away_raw) and lines:
-            candidate = lines[0]
-            if not re.match(r"^(ассисты|голы|сч[её]т)\b", candidate, flags=re.IGNORECASE):
-                words = [w for w in re.split(r"\s+", candidate.strip()) if w]
-                if len(words) >= 2:
-                    mid = max(1, len(words) // 2)
-                    home_raw = " ".join(words[:mid]).strip()
-                    away_raw = " ".join(words[mid:]).strip()
-                    match_line_index = 0
-
-        if (not home_raw or not away_raw) and has_team_map:
-            inferred = self._infer_match_from_caption_line(lines, team_map_items)
-            if inferred:
-                home_raw = inferred["home"]
-                away_raw = inferred["away"]
-                match_line_index = inferred["line_index"]
-        if not home_raw or not away_raw:
-            warnings.append("В подписи не найден формат матча 'Команда1 - Команда2'.")
-        home_match = self._match_team_name(chat_id, home_raw or "Хозяева")
-        away_match = self._match_team_name(chat_id, away_raw or "Гости")
-        if has_team_map and home_raw and home_match["confidence"] < 0.8 and self.normalize_team_name(home_raw) != self.normalize_team_name(home_match["matched"]):
-            warnings.append(f"Команда хозяев неуверенно сопоставлена: {home_raw or 'не указана'} -> {home_match['matched']}")
-        if has_team_map and away_raw and away_match["confidence"] < 0.8 and self.normalize_team_name(away_raw) != self.normalize_team_name(away_match["matched"]):
-            warnings.append(f"Команда гостей неуверенно сопоставлена: {away_raw or 'не указана'} -> {away_match['matched']}")
-
-        assists_raw: Dict[str, List[str]] = {"home": [], "away": [], "any": []}
-        current_bucket = None
-        start_index = match_line_index + 1 if match_line_index >= 0 else 0
-        for line in lines[start_index:]:
-            generic_header = re.match(r"^ассисты\b\s*:?\s*(.*)$", line, flags=re.IGNORECASE)
-            if generic_header:
-                current_bucket = "any"
-                inline_raw = generic_header.group(1).strip()
-                if inline_raw:
-                    for token in [x.strip() for x in re.split(r"[;,]", inline_raw) if x.strip()]:
-                        assists_raw["any"].extend(self._expand_person_token(token))
-                continue
-            header = re.match(r"^ассисты\s+(.+?)\s*:\s*$", line, flags=re.IGNORECASE)
-            if header:
-                team_label = header.group(1).strip()
-                home_score = SequenceMatcher(None, self.normalize_team_name(team_label), self.normalize_team_name(home_raw)).ratio()
-                away_score = SequenceMatcher(None, self.normalize_team_name(team_label), self.normalize_team_name(away_raw)).ratio()
-                current_bucket = "home" if home_score >= away_score else "away"
-                continue
-            if current_bucket:
-                for token in [x.strip() for x in re.split(r"[;,]", line) if x.strip()]:
-                    assists_raw[current_bucket].extend(self._expand_person_token(token))
-                continue
-
-            # Fallback: if users send plain player names without "Ассисты" label.
-            if re.match(r"^(голы|сч[её]т)\b", line, flags=re.IGNORECASE):
-                continue
-            if re.search(r"\d\s*[-:]\s*\d", line):
-                continue
-            for token in [x.strip("-• ") for x in re.split(r"[;,]", line) if x.strip("-• ")]:
-                assists_raw["any"].extend(self._expand_person_token(token))
-
-        return {
-            "chat_id": chat_id,
-            "home_team": home_match["matched"],
-            "away_team": away_match["matched"],
-            "home_team_raw": home_raw,
-            "away_team_raw": away_raw,
-            "home_assists": assists_raw["home"],
-            "away_assists": assists_raw["away"],
-            "assists_any": assists_raw["any"],
-            "warnings": warnings,
-        }
-
-    def _infer_match_from_caption_line(self, lines: List[str], team_map_items: List[Dict]) -> Optional[Dict]:
-        for idx, line in enumerate(lines):
-            if re.match(r"^(ассисты|голы|сч[её]т)\b", line, flags=re.IGNORECASE):
-                continue
-            normalized_line = self.normalize_team_name(line)
-            if not normalized_line:
-                continue
-
-            words = [w for w in normalized_line.split(" ") if w]
-            if len(words) < 2:
-                continue
-
-            best = None
-            best_score = 0.0
-            for split in range(1, len(words)):
-                left = " ".join(words[:split]).strip()
-                right = " ".join(words[split:]).strip()
-                if not left or not right:
-                    continue
-
-                left_match = self._match_team_name_from_items(left, team_map_items)
-                right_match = self._match_team_name_from_items(right, team_map_items)
-                if not left_match or not right_match:
-                    continue
-                if left_match["team_name_norm"] == right_match["team_name_norm"]:
-                    continue
-
-                score = left_match["score"] + right_match["score"]
-                if score > best_score:
-                    best_score = score
-                    best = {
-                        "line_index": idx,
-                        "home": left_match["team_name_raw"],
-                        "away": right_match["team_name_raw"],
-                    }
-
-            if best and best_score >= 1.55:
-                return best
-        return None
-
-    def _match_team_name_from_items(self, raw_name: str, team_map_items: List[Dict]) -> Optional[Dict]:
-        normalized = self.normalize_team_name(raw_name)
-        if not normalized:
-            return None
-
-        for item in team_map_items:
-            if item["team_name_norm"] == normalized:
-                return {"team_name_norm": item["team_name_norm"], "team_name_raw": item["team_name_raw"], "score": 1.0}
-
-        best_item = None
-        best_score = 0.0
-        for item in team_map_items:
-            score = SequenceMatcher(None, normalized, item["team_name_norm"]).ratio()
-            if score > best_score:
-                best_item = item
-                best_score = score
-        if best_item and best_score >= 0.72:
-            return {
-                "team_name_norm": best_item["team_name_norm"],
-                "team_name_raw": best_item["team_name_raw"],
-                "score": best_score,
-            }
-        return None
-
     def _normalize_player_name(self, name: str) -> str:
         value = (name or "").strip().lower()
         value = unicodedata.normalize("NFKD", value)
@@ -3361,827 +1303,6 @@ class LeagueFeature:
         value = re.sub(r"\s+", " ", value).strip()
         return value
 
-    def _clean_person_label(self, text: str) -> str:
-        value = (text or "").strip()
-        value = re.sub(r"^(ассист(?:ы)?|assist(?:s)?)\b\s*:?\s*", "", value, flags=re.IGNORECASE)
-        value = re.sub(r"\s+", " ", value).strip(" ,;:-")
-        return value
-
-    def _expand_person_token(self, text: str) -> List[str]:
-        value = self._clean_person_label(text)
-        if not value:
-            return []
-
-        m = re.match(r"^(.*?)\s*[\(\[]\s*(\d{1,2})\s*[\)\]]\s*$", value)
-        if not m:
-            m = re.match(r"^(.*?)\s*[xх\*]\s*(\d{1,2})\s*$", value, flags=re.IGNORECASE)
-
-        if m:
-            name = self._clean_person_label(m.group(1))
-            if not name:
-                return []
-            count = max(1, min(int(m.group(2)), 20))
-            return [name for _ in range(count)]
-
-        return [value]
-
-    def _transliterate_ru_to_en(self, text: str) -> str:
-        mapping = {
-            "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ж": "zh", "з": "z", "и": "i", "й": "y",
-            "к": "k", "л": "l", "м": "m", "н": "n", "о": "o", "п": "p", "р": "r", "с": "s", "т": "t", "у": "u",
-            "ф": "f", "х": "h", "ц": "ts", "ч": "ch", "ш": "sh", "щ": "sch", "ъ": "", "ы": "y", "ь": "", "э": "e",
-            "ю": "yu", "я": "ya",
-        }
-        out = []
-        for ch in (text or ""):
-            out.append(mapping.get(ch, ch))
-        return "".join(out)
-
-    def _transliterate_en_to_ru(self, text: str) -> str:
-        value = (text or "").lower()
-        # Order matters for multi-char combinations.
-        pairs = [
-            ("sch", "щ"), ("sh", "ш"), ("ch", "ч"), ("zh", "ж"), ("kh", "х"),
-            ("yu", "ю"), ("ya", "я"), ("yo", "е"), ("ts", "ц"), ("th", "т"),
-            ("ph", "ф"), ("qu", "к"), ("ck", "к"),
-        ]
-        for src, dst in pairs:
-            value = value.replace(src, dst)
-
-        single = {
-            "a": "а", "b": "б", "c": "к", "d": "д", "e": "е", "f": "ф", "g": "г", "h": "х",
-            "i": "и", "j": "й", "k": "к", "l": "л", "m": "м", "n": "н", "o": "о", "p": "п",
-            "q": "к", "r": "р", "s": "с", "t": "т", "u": "у", "v": "в", "w": "в", "x": "кс",
-            "y": "и", "z": "з",
-        }
-        out = []
-        for ch in value:
-            out.append(single.get(ch, ch))
-        return "".join(out)
-
-    def _tokenize_player_name(self, name: str) -> List[str]:
-        norm = self._normalize_player_name(name)
-        return [t for t in re.split(r"[\s\-]+", norm) if t]
-
-    def _simplify_name_for_match(self, name: str) -> str:
-        value = self._transliterate_ru_to_en(self._normalize_player_name(name))
-        value = value.replace("ph", "f").replace("ck", "k").replace("qu", "k")
-        value = value.replace("zh", "j").replace("kh", "h").replace("ch", "c").replace("sh", "s")
-        value = value.replace("ts", "s")
-        value = re.sub(r"[^a-z0-9]", "", value)
-        value = re.sub(r"(.)\1+", r"\1", value)
-        return value
-
-    def _score_name_match(self, source: str, target: str) -> float:
-        a = self._normalize_player_name(source)
-        b = self._normalize_player_name(target)
-        if not a or not b:
-            return 0.0
-        if a == b:
-            return 1.0
-
-        base_score = SequenceMatcher(None, a, b).ratio()
-
-        a_lat = self._transliterate_ru_to_en(a)
-        b_lat = self._transliterate_ru_to_en(b)
-        translit_score = SequenceMatcher(None, a_lat, b_lat).ratio()
-
-        a_ru = self._transliterate_en_to_ru(a)
-        b_ru = self._transliterate_en_to_ru(b)
-        translit_ru_score = SequenceMatcher(None, a_ru, b_ru).ratio()
-
-        simple_a = self._simplify_name_for_match(source)
-        simple_b = self._simplify_name_for_match(target)
-        simple_score = SequenceMatcher(None, simple_a, simple_b).ratio() if simple_a and simple_b else 0.0
-
-        cons_a = re.sub(r"[aeiouy]", "", simple_a)
-        cons_b = re.sub(r"[aeiouy]", "", simple_b)
-        consonant_score = SequenceMatcher(None, cons_a, cons_b).ratio() if cons_a and cons_b else 0.0
-
-        contain_score = 0.0
-        if simple_a and simple_b and (simple_a in simple_b or simple_b in simple_a):
-            contain_score = 0.93
-
-        token_score = 0.0
-        tokens_a = self._tokenize_player_name(source)
-        tokens_b = self._tokenize_player_name(target)
-        if tokens_a and tokens_b:
-            for ta in tokens_a:
-                for tb in tokens_b:
-                    if ta == tb:
-                        token_score = max(token_score, 0.98)
-                    elif len(ta) >= 3 and len(tb) >= 3 and (ta.startswith(tb) or tb.startswith(ta)):
-                        token_score = max(token_score, 0.9)
-                    else:
-                        token_score = max(token_score, SequenceMatcher(None, ta, tb).ratio() * 0.9)
-                    ta_lat = self._transliterate_ru_to_en(ta)
-                    tb_lat = self._transliterate_ru_to_en(tb)
-                    token_score = max(token_score, SequenceMatcher(None, ta_lat, tb_lat).ratio() * 0.92)
-                    ta_ru = self._transliterate_en_to_ru(ta)
-                    tb_ru = self._transliterate_en_to_ru(tb)
-                    token_score = max(token_score, SequenceMatcher(None, ta_ru, tb_ru).ratio() * 0.9)
-
-        return max(base_score, translit_score, translit_ru_score, token_score, simple_score, consonant_score * 0.95, contain_score)
-
-    def _resolve_assists_by_goals(
-        self,
-        chat_id: int,
-        home_team: str,
-        away_team: str,
-        assists_any: List[str],
-        home_goals: List[str],
-        away_goals: List[str],
-    ) -> Dict:
-        home_team_norm = self.normalize_team_name(home_team)
-        away_team_norm = self.normalize_team_name(away_team)
-        if isinstance(chat_id, int):
-            home_players = self.db.get_league_team_players(chat_id, home_team_norm)
-            away_players = self.db.get_league_team_players(chat_id, away_team_norm)
-        else:
-            home_players = []
-            away_players = []
-        home_pool = [x["player_name_raw"] for x in home_players]
-        away_pool = [x["player_name_raw"] for x in away_players]
-
-        home = []
-        away = []
-        unknown = []
-        warnings = []
-        for assist in assists_any:
-            assist = self._clean_person_label(assist)
-            if not assist:
-                continue
-            best_home_goal = max([self._score_name_match(assist, x) for x in home_goals], default=0.0)
-            best_away_goal = max([self._score_name_match(assist, x) for x in away_goals], default=0.0)
-            best_home_player = max([self._score_name_match(assist, x) for x in home_pool], default=0.0)
-            best_away_player = max([self._score_name_match(assist, x) for x in away_pool], default=0.0)
-            best_home = max(best_home_goal, best_home_player)
-            best_away = max(best_away_goal, best_away_player)
-
-            if best_home < 0.65 and best_away < 0.65:
-                unknown.append(assist)
-                warnings.append(f"Ассист '{assist}' не удалось сопоставить с командой автоматически.")
-                continue
-            if abs(best_home - best_away) < 0.06:
-                unknown.append(assist)
-                warnings.append(f"Ассист '{assist}' неоднозначен (оба варианта похожи).")
-                continue
-            if best_home > best_away:
-                home.append(assist)
-            else:
-                away.append(assist)
-        return {"home": home, "away": away, "unknown": unknown, "warnings": warnings}
-
-    def _resolve_goals_by_players(self, chat_id: int, home_team: str, away_team: str, goals_info: Dict) -> Dict:
-        home_team_norm = self.normalize_team_name(home_team)
-        away_team_norm = self.normalize_team_name(away_team)
-        home_players = self.db.get_league_team_players(chat_id, home_team_norm) if isinstance(chat_id, int) else []
-        away_players = self.db.get_league_team_players(chat_id, away_team_norm) if isinstance(chat_id, int) else []
-        home_pool = [x["player_name_raw"] for x in home_players]
-        away_pool = [x["player_name_raw"] for x in away_players]
-
-        # If no rosters are loaded for both teams, keep OCR color result untouched.
-        if not home_pool and not away_pool:
-            return {
-                "home_goals": list(goals_info.get("home_goals", [])),
-                "away_goals": list(goals_info.get("away_goals", [])),
-                "unknown_goals": list(goals_info.get("unknown_goals", [])),
-            }
-
-        home_goals = list(goals_info.get("home_goals", []))
-        away_goals = list(goals_info.get("away_goals", []))
-        still_unknown = []
-
-        for raw_name in goals_info.get("unknown_goals", []):
-            name = self._clean_person_label(raw_name)
-            if not name:
-                continue
-            best_home = max([self._score_name_match(name, p) for p in home_pool], default=0.0)
-            best_away = max([self._score_name_match(name, p) for p in away_pool], default=0.0)
-
-            # Both rosters exist: compare both sides.
-            if home_pool and away_pool:
-                if best_home >= 0.65 and best_home > best_away + 0.05:
-                    home_goals.append(name)
-                    continue
-                if best_away >= 0.65 and best_away > best_home + 0.05:
-                    away_goals.append(name)
-                    continue
-                still_unknown.append(name)
-                continue
-
-            # Only home roster exists: map only confident home matches, keep others unknown.
-            if home_pool and not away_pool:
-                if best_home >= 0.65:
-                    home_goals.append(name)
-                else:
-                    still_unknown.append(name)
-                continue
-
-            # Only away roster exists: map only confident away matches, keep others unknown.
-            if away_pool and not home_pool:
-                if best_away >= 0.65:
-                    away_goals.append(name)
-                else:
-                    still_unknown.append(name)
-                continue
-            still_unknown.append(name)
-
-        return {"home_goals": home_goals, "away_goals": away_goals, "unknown_goals": still_unknown}
-
-    def _classify_goal_color(self, image_bgr, box: Dict[str, int]) -> str:
-        try:
-            x1 = max(int(box.get("x1", 0)), 0)
-            x2 = max(int(box.get("x2", 0)), x1 + 1)
-            y1 = max(int(box.get("y1", 0)), 0)
-            y2 = max(int(box.get("y2", 0)), y1 + 1)
-            line_w = max(x2 - x1, 1)
-            line_h = max(y2 - y1, 1)
-            cx1 = x1 + int(line_w * 0.18)
-            cx2 = x1 + int(line_w * 0.48)
-            cy = y1 + line_h // 2
-            cy1 = max(cy - 14, 0)
-            cy2 = min(cy + 14, image_bgr.shape[0])
-            cx1 = max(cx1, 0)
-            cx2 = min(max(cx2, cx1 + 1), image_bgr.shape[1])
-            patch = image_bgr[cy1:cy2, cx1:cx2]
-            if patch.size == 0:
-                sx1 = max(x1 - 70, 0)
-                sx2 = max(x1 - 5, sx1 + 1)
-                sy1 = max(y1 - 10, 0)
-                sy2 = min(y2 + 10, image_bgr.shape[0])
-                patch = image_bgr[sy1:sy2, sx1:sx2]
-            if patch.size == 0:
-                return "unknown"
-            hsv = cv2.cvtColor(patch, cv2.COLOR_BGR2HSV)
-            blue_mask = cv2.inRange(hsv, (90, 70, 70), (140, 255, 255))
-            green_mask = cv2.inRange(hsv, (35, 60, 60), (90, 255, 255))
-            blue_count = int(cv2.countNonZero(blue_mask))
-            green_count = int(cv2.countNonZero(green_mask))
-            if blue_count < 20 and green_count < 20:
-                return "unknown"
-            if green_count > blue_count * 1.25:
-                return "home"
-            if blue_count > green_count * 1.25:
-                return "away"
-            return "unknown"
-        except Exception:
-            return "unknown"
-
-    def _ocr_extract_lines(self, image_bgr, psm: int = 6) -> List[Dict]:
-        rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
-        config = f"--oem 3 --psm {psm}"
-        data = pytesseract.image_to_data(rgb, output_type=Output.DICT, config=config, lang="eng+rus")
-        rows = len(data.get("text", []))
-        grouped: Dict[tuple, Dict] = {}
-        for i in range(rows):
-            text = str(data["text"][i] or "").strip()
-            if not text:
-                continue
-            try:
-                conf = float(data["conf"][i])
-            except Exception:
-                conf = -1.0
-            if conf < 20:
-                continue
-            key = (data["block_num"][i], data["par_num"][i], data["line_num"][i])
-            left = int(data["left"][i])
-            top = int(data["top"][i])
-            width = int(data["width"][i])
-            height = int(data["height"][i])
-            item = grouped.setdefault(
-                key,
-                {"parts": [], "x1": left, "y1": top, "x2": left + width, "y2": top + height},
-            )
-            item["parts"].append(text)
-            item["x1"] = min(item["x1"], left)
-            item["y1"] = min(item["y1"], top)
-            item["x2"] = max(item["x2"], left + width)
-            item["y2"] = max(item["y2"], top + height)
-
-        lines = []
-        for item in grouped.values():
-            text = " ".join(item["parts"]).strip()
-            if not text:
-                continue
-            lines.append({
-                "text": text,
-                "x1": item["x1"],
-                "y1": item["y1"],
-                "x2": item["x2"],
-                "y2": item["y2"],
-            })
-        return lines
-
-    def _extract_score(self, ocr_texts: List[str]) -> Optional[Dict]:
-        def _valid_score(home: int, away: int) -> bool:
-            return 0 <= home <= 20 and 0 <= away <= 20
-
-        for text in ocr_texts:
-            cleaned = (text or "").replace("—", "-").replace("–", "-")
-            m = re.search(r"\b(\d{1,2})\s*-\s*(\d{1,2})\b", cleaned)
-            if m:
-                home, away = int(m.group(1)), int(m.group(2))
-                if _valid_score(home, away):
-                    return {"home": home, "away": away}
-
-        for text in ocr_texts:
-            cleaned = (text or "").replace("—", ":").replace("–", ":")
-            m = re.search(r"\b(\d{1,2})\s*:\s*(\d{1,2})\b", cleaned)
-            if m:
-                home, away = int(m.group(1)), int(m.group(2))
-                if _valid_score(home, away):
-                    return {"home": home, "away": away}
-        return None
-
-    def _extract_score_from_line_items(self, line_items: List[Dict], img_width: int, img_height: int) -> Optional[Dict]:
-        top_limit = int(img_height * 0.28)
-        center_left = int(img_width * 0.30)
-        center_right = int(img_width * 0.70)
-
-        candidates = []
-        for item in line_items:
-            y1 = int(item.get("y1", 0))
-            y2 = int(item.get("y2", 0))
-            x1 = int(item.get("x1", 0))
-            x2 = int(item.get("x2", 0))
-            if y1 > top_limit and y2 > top_limit:
-                continue
-            if x2 < center_left or x1 > center_right:
-                continue
-            candidates.append(str(item.get("text", "")))
-
-        # Prefer top-center candidates, then fallback to all lines.
-        score = self._extract_score(candidates)
-        if score:
-            return score
-        return self._extract_score([str(x.get("text", "")) for x in line_items])
-
-    def _extract_score_from_image(self, image_bgr) -> Optional[Dict]:
-        def parse_score(raw_text: str) -> Optional[Dict]:
-            cleaned = (raw_text or "").replace("—", "-").replace("–", "-")
-            cleaned = re.sub(r"[^0-9:\-\s]", " ", cleaned)
-            cleaned = re.sub(r"\s+", " ", cleaned).strip()
-            if not cleaned:
-                return None
-
-            # Remove clock-like fragments (e.g. 90:00) before score matching.
-            no_clock = re.sub(r"\b\d{1,2}\s*:\s*\d{2}\b", " ", cleaned)
-            no_clock = re.sub(r"\s+", " ", no_clock).strip()
-
-            m = re.search(r"\b(\d{1,2})\s*[-:]\s*(\d{1,2})\b", cleaned)
-            if m:
-                home, away = int(m.group(1)), int(m.group(2))
-                if 0 <= home <= 20 and 0 <= away <= 20:
-                    return {"home": home, "away": away}
-
-            m = re.search(r"\b(\d{1,2})\s*[-:]\s*(\d{1,2})\b", no_clock)
-            if m:
-                home, away = int(m.group(1)), int(m.group(2))
-                if 0 <= home <= 20 and 0 <= away <= 20:
-                    return {"home": home, "away": away}
-
-            # Pattern like "2 0 90:00" or "2 0".
-            m = re.search(r"\b(\d{1,2})\s+(\d{1,2})\b", no_clock)
-            if m:
-                home, away = int(m.group(1)), int(m.group(2))
-                if 0 <= home <= 20 and 0 <= away <= 20:
-                    return {"home": home, "away": away}
-
-            # Compact fallback like "20" for 2:0 (only for one-digit scores).
-            m = re.search(r"\b([0-9])([0-9])\b", no_clock)
-            if m:
-                return {"home": int(m.group(1)), "away": int(m.group(2))}
-
-            m = re.search(r"\b(\d{1,2})\s+(\d{1,2})\b", cleaned)
-            if m:
-                home, away = int(m.group(1)), int(m.group(2))
-                if 0 <= home <= 20 and 0 <= away <= 20:
-                    return {"home": home, "away": away}
-            return None
-
-        h, w = image_bgr.shape[:2]
-        rois = [
-            image_bgr[max(int(h * 0.03), 0) : min(int(h * 0.20), h), max(int(w * 0.38), 0) : min(int(w * 0.62), w)],
-            image_bgr[max(int(h * 0.02), 0) : min(int(h * 0.14), h), max(int(w * 0.34), 0) : min(int(w * 0.66), w)],
-            image_bgr[max(int(h * 0.00), 0) : min(int(h * 0.18), h), max(int(w * 0.30), 0) : min(int(w * 0.70), w)],
-        ]
-
-        for roi in rois:
-            if roi.size == 0:
-                continue
-            gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-            enlarged = cv2.resize(gray, None, fx=3.0, fy=3.0, interpolation=cv2.INTER_CUBIC)
-            _, binary = cv2.threshold(enlarged, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-            inv = cv2.bitwise_not(binary)
-
-            for img in (binary, inv, enlarged):
-                for psm in (7, 6, 11):
-                    text = pytesseract.image_to_string(
-                        img,
-                        config=f"--oem 3 --psm {psm} -c tessedit_char_whitelist=0123456789-:",
-                        lang="eng",
-                    )
-                    parsed = parse_score(text)
-                    if parsed:
-                        return parsed
-        return None
-
-    def _extract_goal_scorers(self, image_bgr, line_items: List[Dict], offset_x: int = 0, offset_y: int = 0) -> Dict:
-        home_goals = []
-        away_goals = []
-        unknown_goals = []
-        seen = set()
-        for item in line_items:
-            raw = str(item.get("text") or "").strip()
-            if not raw:
-                continue
-            if not re.search(r"гол|goal", raw, flags=re.IGNORECASE):
-                continue
-            name = re.sub(r"(?i)гол|goal", "", raw)
-            name = re.sub(r"\b\d{1,2}\s*\(?\d*\)?\b", "", name)
-            name = re.sub(r"[^A-Za-zА-Яа-яЁё\-\s]", " ", name)
-            name = re.sub(r"\s+", " ", name).strip()
-            if not name:
-                continue
-            y1_raw = int(item.get("y1", 0))
-            key = f"{name.lower()}::{y1_raw // 12}"
-            if key in seen:
-                continue
-            seen.add(key)
-            side = self._classify_goal_color(
-                image_bgr,
-                {
-                    "x1": int(item.get("x1", 0)) + offset_x,
-                    "x2": int(item.get("x2", 0)) + offset_x,
-                    "y1": int(item.get("y1", 0)) + offset_y,
-                    "y2": int(item.get("y2", 0)) + offset_y,
-                },
-            )
-            if side == "home":
-                home_goals.append(name)
-            elif side == "away":
-                away_goals.append(name)
-            else:
-                unknown_goals.append(name)
-        return {"home_goals": home_goals, "away_goals": away_goals, "unknown_goals": unknown_goals}
-
-    def _build_ocr_payload(self, caption_info: Dict, score: Optional[Dict], goals_info: Dict) -> Dict:
-        resolved = self._resolve_assists_by_goals(
-            caption_info.get("chat_id"),
-            caption_info.get("home_team", ""),
-            caption_info.get("away_team", ""),
-            caption_info.get("assists_any", []),
-            goals_info.get("home_goals", []),
-            goals_info.get("away_goals", []),
-        )
-        return {
-            "home_team": caption_info["home_team"],
-            "away_team": caption_info["away_team"],
-            "score_home": (score or {}).get("home"),
-            "score_away": (score or {}).get("away"),
-            "home_goals": goals_info.get("home_goals", []),
-            "away_goals": goals_info.get("away_goals", []),
-            "unknown_goals": goals_info.get("unknown_goals", []),
-            "home_assists": caption_info.get("home_assists", []) + resolved.get("home", []),
-            "away_assists": caption_info.get("away_assists", []) + resolved.get("away", []),
-            "unknown_assists": resolved.get("unknown", []),
-            "assist_warnings": resolved.get("warnings", []),
-        }
-
-    def _format_ocr_draft_text(self, draft: Dict) -> str:
-        payload = draft.get("payload", {})
-        warnings = draft.get("warnings", [])
-        score_home = payload.get("score_home")
-        score_away = payload.get("score_away")
-        home_goals_list = payload.get("home_goals", []) or []
-        away_goals_list = payload.get("away_goals", []) or []
-        unknown_goals_list = payload.get("unknown_goals", []) or []
-        home_assists_list = payload.get("home_assists", []) or []
-        away_assists_list = payload.get("away_assists", []) or []
-        unknown_assists_list = payload.get("unknown_assists", []) or []
-        lines = [
-            f"🧾 OCR-черновик #{draft['ocr_id']}",
-            f"Статус: {draft.get('status')}",
-            f"Матч: {payload.get('home_team', '—')} - {payload.get('away_team', '—')}",
-        ]
-
-        if score_home is not None and score_away is not None:
-            lines.append(f"Счет: {score_home}:{score_away}")
-
-        if home_goals_list:
-            lines.append("Голы хоз.: " + ", ".join(home_goals_list))
-        if away_goals_list:
-            lines.append("Голы гост.: " + ", ".join(away_goals_list))
-        if unknown_goals_list:
-            lines.append("Неразнесенные голы: " + ", ".join(unknown_goals_list))
-
-        if home_assists_list or away_assists_list or unknown_assists_list:
-            lines.append("Ассисты хоз.: " + (", ".join(home_assists_list) if home_assists_list else "нет"))
-            lines.append("Ассисты гост.: " + (", ".join(away_assists_list) if away_assists_list else "нет"))
-        if unknown_assists_list:
-            lines.append("Неразнесенные ассисты: " + ", ".join(unknown_assists_list))
-
-        if warnings:
-            lines.append("⚠️ Нужна проверка:")
-            lines.extend([f"- {w}" for w in warnings])
-        lines.append("Исправление: исправь [id] или /league_ocr_fix [id]")
-        lines.append("Подтверждает только админ.")
-        return "\n".join(lines)
-
-    def _parse_fix_payload(self, raw_text: str, chat_id: int) -> Dict:
-        text = (raw_text or "").strip()
-        text = re.sub(r"^/league_ocr_fix\b[^\n]*", "", text, count=1).strip()
-        text = re.sub(r"^исправ[ьт]?\s*\d*\s*", "", text, count=1, flags=re.IGNORECASE).strip()
-        lines = [x.strip() for x in text.splitlines()]
-        non_empty = [x for x in lines if x]
-        if not non_empty:
-            raise ValueError("Пустой шаблон исправления.")
-
-        m = re.match(r"^(.+?)\s*(?:-|—|vs|VS|v\.?s\.?)\s*(.+)$", non_empty[0])
-        if not m:
-            raise ValueError("Не найдена строка матча 'Команда1 - Команда2'.")
-        home_team = m.group(1).strip()
-        away_team = m.group(2).strip()
-        score_home = None
-        score_away = None
-
-        sections: Dict[str, List[str]] = {}
-        assists_any: List[str] = []
-        current = None
-        for line in non_empty[1:]:
-            score_match = re.match(r"^сч[её]т\s*[:\-]?\s*(\d{1,2})\s*[-:]\s*(\d{1,2})\s*$", line, flags=re.IGNORECASE)
-            if score_match:
-                score_home = int(score_match.group(1))
-                score_away = int(score_match.group(2))
-                continue
-            generic_assists = re.match(r"^ассисты\b\s*:?\s*(.*)$", line, flags=re.IGNORECASE)
-            if generic_assists:
-                current = "assists_any"
-                inline_raw = generic_assists.group(1).strip()
-                if inline_raw:
-                    for token in [x.strip() for x in re.split(r"[;,]", inline_raw) if x.strip()]:
-                        assists_any.extend(self._expand_person_token(token))
-                continue
-            h = re.match(r"^(Голы|Ассисты)\s+(.+?)\s*:\s*$", line, flags=re.IGNORECASE)
-            if h:
-                kind = h.group(1).lower()
-                team = h.group(2).strip()
-                side = "home" if SequenceMatcher(None, self.normalize_team_name(team), self.normalize_team_name(home_team)).ratio() >= SequenceMatcher(None, self.normalize_team_name(team), self.normalize_team_name(away_team)).ratio() else "away"
-                current = f"{kind}_{side}"
-                sections.setdefault(current, [])
-                continue
-            if current is None:
-                # Fallback: plain lines without header are treated as assists list.
-                for token in [x.strip("-• ") for x in re.split(r"[;,]", line) if x.strip("-• ")]:
-                    assists_any.extend(self._expand_person_token(token))
-                continue
-            chunks: List[str] = []
-            for token in [x.strip() for x in re.split(r"[;,]", line) if x.strip()]:
-                chunks.extend(self._expand_person_token(token))
-            if current == "assists_any":
-                assists_any.extend(chunks)
-            else:
-                sections[current].extend(chunks)
-
-        home_goals = sections.get("голы_home", [])
-        away_goals = sections.get("голы_away", [])
-        resolved = self._resolve_assists_by_goals(
-            chat_id,
-            home_team,
-            away_team,
-            assists_any,
-            home_goals,
-            away_goals,
-        )
-        warnings = list(resolved.get("warnings", []))
-
-        return {
-            "home_team": home_team,
-            "away_team": away_team,
-            "score_home": score_home,
-            "score_away": score_away,
-            "home_goals": home_goals,
-            "away_goals": away_goals,
-            "unknown_goals": [],
-            "home_assists": sections.get("ассисты_home", []) + resolved.get("home", []),
-            "away_assists": sections.get("ассисты_away", []) + resolved.get("away", []),
-            "unknown_assists": resolved.get("unknown", []),
-            "_warnings": warnings,
-        }
-
-    async def on_ocr_photo_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        message = update.effective_message
-        chat = update.effective_chat
-        user = update.effective_user
-        if not message or not chat or not user or not message.photo:
-            return
-        if not self._is_ocr_ready():
-            await message.reply_text("❌ OCR недоступен: установите Tesseract OCR в системе и пакет pytesseract.")
-            return
-
-        caption_info = self._parse_caption_match_and_assists(message.caption or "", chat.id)
-        warnings = list(caption_info.get("warnings", []))
-
-        photo = message.photo[-1]
-        tg_file = await context.bot.get_file(photo.file_id)
-        image_bytes = await tg_file.download_as_bytearray()
-        image_np = np.frombuffer(bytes(image_bytes), dtype=np.uint8)
-        image_bgr = cv2.imdecode(image_np, cv2.IMREAD_COLOR)
-        if image_bgr is None:
-            await message.reply_text("❌ Не удалось прочитать изображение.")
-            return
-
-        provider = self._get_ocr_provider()
-        if provider == "ocrspace":
-            try:
-                line_items = self._ocrspace_extract_lines(bytes(image_bytes))
-            except Exception as e:
-                await message.reply_text(f"❌ OCR API временно недоступен: {e}")
-                return
-            img_h, img_w = image_bgr.shape[:2]
-            score = self._extract_score_from_line_items(line_items, img_w, img_h)
-            goals_info = self._extract_goal_scorers(image_bgr, line_items, offset_x=0, offset_y=0)
-        else:
-            height, width = image_bgr.shape[:2]
-            score_roi = image_bgr[0 : max(int(height * 0.26), 1), max(int(width * 0.2), 0) : min(int(width * 0.8), width)]
-            events_x1 = max(int(width * 0.48), 0)
-            events_y1 = max(int(height * 0.18), 0)
-            events_roi = image_bgr[events_y1 : min(int(height * 0.92), height), events_x1:width]
-
-            score_lines = self._ocr_extract_lines(score_roi if score_roi.size else image_bgr, psm=6)
-            event_lines = self._ocr_extract_lines(events_roi if events_roi.size else image_bgr, psm=6)
-
-            score = self._extract_score_from_image(image_bgr)
-            if not score:
-                score = self._extract_score([str(x.get("text", "")) for x in score_lines])
-            if not score:
-                score = self._extract_score([str(x.get("text", "")) for x in event_lines])
-            goals_info = self._extract_goal_scorers(image_bgr, event_lines, offset_x=events_x1, offset_y=events_y1)
-
-        goals_info = self._resolve_goals_by_players(
-            chat.id,
-            caption_info.get("home_team", ""),
-            caption_info.get("away_team", ""),
-            goals_info,
-        )
-
-        if not score:
-            if not goals_info.get("unknown_goals") and (goals_info.get("home_goals") or goals_info.get("away_goals")):
-                score = {
-                    "home": len(goals_info.get("home_goals", [])),
-                    "away": len(goals_info.get("away_goals", [])),
-                }
-                warnings.append("Счет восстановлен по количеству распознанных голов.")
-            else:
-                warnings.append("Счет не распознан автоматически.")
-        if goals_info.get("unknown_goals"):
-            warnings.append("Есть нераспределенные голы. Нужна команда /league_ocr_fix.")
-
-        payload = self._build_ocr_payload(caption_info, score, goals_info)
-        warnings.extend(payload.get("assist_warnings", []))
-        ocr_id = self.db.create_ocr_draft(chat.id, message.message_id, user.id, payload, warnings)
-        draft = self.db.get_ocr_draft(chat.id, ocr_id)
-        if not draft:
-            await message.reply_text("❌ Ошибка сохранения OCR-черновика.")
-            return
-
-        await message.reply_text(
-            self._format_ocr_draft_text(draft),
-            reply_markup=self._build_ocr_keyboard(chat.id, ocr_id),
-        )
-
-    async def on_ocr_fix_text_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        message = update.effective_message
-        if not message:
-            return
-        text = (message.text or "").strip()
-        if not re.match(r"^исправ[ьт]?\b", text, flags=re.IGNORECASE):
-            return
-        await self._apply_ocr_fix(update, context, from_text=True)
-
-    async def _apply_ocr_fix(self, update: Update, context: ContextTypes.DEFAULT_TYPE, from_text: bool = False):
-        message = update.effective_message
-        user = update.effective_user
-        chat = update.effective_chat
-        if not message or not user or not chat:
-            return
-        draft_id = self._resolve_draft_id(update, context.args if not from_text else None)
-        if draft_id is None:
-            if from_text:
-                m = re.match(r"^исправ[ьт]?\s*(\d+)?", message.text or "", flags=re.IGNORECASE)
-                draft_id = int(m.group(1)) if m and m.group(1) else self._resolve_draft_id(update, None)
-            if draft_id is None:
-                await message.reply_text("❌ Не указан ID черновика. Используйте: исправь [id] или reply на сообщение черновика.")
-                return
-
-        draft = self.db.get_ocr_draft(chat.id, draft_id)
-        if not draft:
-            await message.reply_text(f"❌ Черновик #{draft_id} не найден.")
-            return
-        if draft.get("status") == "approved":
-            await message.reply_text(f"❌ Черновик #{draft_id} уже подтвержден и недоступен для правок.")
-            return
-
-        try:
-            fixed_payload = self._parse_fix_payload(message.text or "", chat.id)
-        except ValueError as e:
-            await message.reply_text(f"❌ Ошибка формата: {e}")
-            return
-
-        existing_payload = draft.get("payload", {})
-        if fixed_payload.get("score_home") is None:
-            fixed_payload["score_home"] = existing_payload.get("score_home")
-        if fixed_payload.get("score_away") is None:
-            fixed_payload["score_away"] = existing_payload.get("score_away")
-        warnings = fixed_payload.pop("_warnings", [])
-        updated = self.db.update_ocr_draft_payload(chat.id, draft_id, fixed_payload, warnings, user.id)
-        if not updated:
-            await message.reply_text("❌ Не удалось сохранить правку.")
-            return
-        updated_draft = self.db.get_ocr_draft(chat.id, draft_id)
-        if not updated_draft:
-            await message.reply_text("❌ Не удалось получить обновленный черновик.")
-            return
-        await message.reply_text(
-            f"✅ Правка для черновика #{draft_id} сохранена. Ожидает подтверждения админа."
-        )
-        await message.reply_text(
-            self._format_ocr_draft_text(updated_draft),
-            reply_markup=self._build_ocr_keyboard(chat.id, draft_id),
-        )
-
-    async def on_ocr_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        query = update.callback_query
-        user = update.effective_user
-        chat = update.effective_chat
-        if not query or not user or not chat:
-            return
-        data = query.data or ""
-        parts = data.split(":")
-        if len(parts) != 4:
-            await query.answer("Некорректная кнопка", show_alert=True)
-            return
-        _, action, chat_id_raw, draft_id_raw = parts
-        try:
-            chat_id = int(chat_id_raw)
-            draft_id = int(draft_id_raw)
-        except Exception:
-            await query.answer("Некорректный ID", show_alert=True)
-            return
-        if chat.id != chat_id:
-            await query.answer("Эта кнопка из другого чата", show_alert=True)
-            return
-        draft = self.db.get_ocr_draft(chat.id, draft_id)
-        if not draft:
-            await query.answer("Черновик не найден", show_alert=True)
-            return
-
-        if action == "show":
-            if not self._is_admin(user.id):
-                await query.answer("Только админ", show_alert=True)
-                return
-            await query.answer("Показываю")
-            await query.message.reply_text(
-                self._format_ocr_draft_text(draft),
-                reply_markup=self._build_ocr_keyboard(chat.id, draft_id),
-            )
-            return
-
-        if action == "fix":
-            await query.answer("Отправьте исправление")
-            await query.message.reply_text(
-                "Шаблон исправления:\n"
-                f"исправь {draft_id}\n"
-                "Команда1 - Команда2\n"
-                "Счет: 2-1\n"
-                "Голы Команда1: Игрок1, Игрок2\n"
-                "Голы Команда2: Игрок3\n"
-                "Ассисты: Игрок1, Игрок3"
-            )
-            return
-
-        if not self._is_admin(user.id):
-            await query.answer("Только админ", show_alert=True)
-            return
-
-        if action == "approve":
-            ok = self.db.approve_ocr_draft(chat.id, draft_id, user.id)
-            await query.answer("Подтверждено" if ok else "Не удалось подтвердить", show_alert=not ok)
-            refreshed = self.db.get_ocr_draft(chat.id, draft_id)
-            if refreshed:
-                await query.message.reply_text(self._format_ocr_draft_text(refreshed))
-            return
-
-        if action == "reject":
-            ok = self.db.reject_ocr_draft(chat.id, draft_id, user.id, "Отклонено администратором")
-            await query.answer("Отклонено" if ok else "Не удалось отклонить", show_alert=not ok)
-            refreshed = self.db.get_ocr_draft(chat.id, draft_id)
-            if refreshed:
-                await query.message.reply_text(self._format_ocr_draft_text(refreshed))
-            return
-
-    # --- Commands (copy these into your bot class if needed) ---
     async def cmd_league_debts_show(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not self._is_admin(update.effective_user.id):
             await update.message.reply_text("❌ Команда доступна только админам.")
@@ -4203,17 +1324,11 @@ class LeagueFeature:
                     "/league_map_clear - очистить все привязки команд",
                     "/league_players_seed - загрузить базу футболистов для этой лиги",
                     "/league_sync_challenge [url] [N] - синк долгов из challenge.place до тура N",
-                    "/league_sync_now [N] - повторить синк из сохраненного источника",
-                    "/league_sync_off - отключить сохраненный источник синка",
                     "/league_reminder_on - включить напоминания каждые 4 часа (00:00, 04:00, 08:00, 12:00, 16:00, 20:00 МСК)",
                     "/league_reminder_off - выключить ежедневные напоминания",
                     "/league_reminder_now - отправить напоминание сразу",
                     "/league_reminder_hourly_on [текст] - включить ежечасные напоминания в :00",
                     "/league_reminder_hourly_off - выключить ежечасные напоминания",
-                    "/league_ocr_fix [id] - исправить OCR-черновик (доступно игрокам)",
-                    "/league_ocr_show [id] - показать OCR-черновик",
-                    "/league_ocr_approve [id] - подтвердить OCR-черновик",
-                    "/league_ocr_reject [id] [причина] - отклонить OCR-черновик",
                 ]
             )
         )
@@ -4324,106 +1439,24 @@ class LeagueFeature:
         try:
             result = self.sync_challenge_stage_debts(chat_id, stage_url, max_round)
             await update.message.reply_text(
-                f"✅ Синк выполнен до {max_round} тура включительно.\n"
-                "Старые долги очищены, записаны актуальные данные после синка.\n"
-                f"Записей долгов: {result['entries_count']}\n"
-                f"Неразобранных матчей: {result['unresolved_matches']}"
+                self._format_challenge_sync_user_message(
+                    result,
+                    f"✅ Синк выполнен до {max_round} тура включительно.",
+                )
             )
             if result["unresolved_teams"]:
                 unresolved_text = "\n".join([f"- {team}" for team in result["unresolved_teams"]])
                 await update.message.reply_text("⚠️ Команды без привязки к @username:\n" + unresolved_text)
             await update.message.reply_text(self.format_league_debts_post(chat_id))
         except Exception as e:
-            await update.message.reply_text(f"❌ Ошибка синка: {e}")
-
-    async def cmd_league_sync_now(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not self._is_admin(update.effective_user.id):
-            await update.message.reply_text("❌ Команда доступна только админам.")
-            return
-        chat_id = update.effective_chat.id
-        source = self.db.get_league_challenge_source(chat_id)
-        if not source or not source.get("enabled"):
-            await update.message.reply_text("Источник не настроен. Используйте /league_sync_challenge <stage_url> <max_round>.")
-            return
-        max_round = source.get("max_round", 0)
-        if context.args:
-            try:
-                max_round = int(context.args[0])
-            except ValueError:
-                await update.message.reply_text("max_round должен быть числом.")
-                return
-        try:
-            result = self.sync_challenge_stage_debts(chat_id, source["stage_url"], max_round)
-            await update.message.reply_text(
-                f"✅ Повторный синк выполнен до {max_round} тура включительно.\n"
-                "Старые долги очищены, записаны актуальные данные после синка.\n"
-                f"Записей долгов: {result['entries_count']}"
+            self.logger.exception(
+                "cmd league_sync_challenge failed chat_id=%s stage_url=%s max_round=%s err=%s",
+                chat_id,
+                stage_url,
+                max_round,
+                e,
             )
-            await update.message.reply_text(self.format_league_debts_post(chat_id))
-        except Exception as e:
             await update.message.reply_text(f"❌ Ошибка синка: {e}")
-
-    async def cmd_league_sync_off(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not self._is_admin(update.effective_user.id):
-            await update.message.reply_text("❌ Команда доступна только админам.")
-            return
-        self.db.disable_league_challenge_source(update.effective_chat.id)
-        await update.message.reply_text("✅ Источник синка Challenge отключен.")
-
-    async def cmd_league_ocr_fix(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        await self._apply_ocr_fix(update, context, from_text=False)
-
-    async def cmd_league_ocr_show(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not self._is_admin(update.effective_user.id):
-            await update.message.reply_text("❌ Команда доступна только админам.")
-            return
-        draft_id = self._resolve_draft_id(update, context.args)
-        if draft_id is None:
-            await update.message.reply_text("Использование: /league_ocr_show [id] или reply на сообщение черновика.")
-            return
-        draft = self.db.get_ocr_draft(update.effective_chat.id, draft_id)
-        if not draft:
-            await update.message.reply_text(f"❌ Черновик #{draft_id} не найден.")
-            return
-        await update.message.reply_text(
-            self._format_ocr_draft_text(draft),
-            reply_markup=self._build_ocr_keyboard(update.effective_chat.id, draft_id),
-        )
-
-    async def cmd_league_ocr_approve(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not self._is_admin(update.effective_user.id):
-            await update.message.reply_text("❌ Команда доступна только админам.")
-            return
-        draft_id = self._resolve_draft_id(update, context.args)
-        if draft_id is None:
-            await update.message.reply_text("Использование: /league_ocr_approve [id] или reply на сообщение черновика.")
-            return
-        ok = self.db.approve_ocr_draft(update.effective_chat.id, draft_id, update.effective_user.id)
-        if not ok:
-            await update.message.reply_text(f"❌ Не удалось подтвердить черновик #{draft_id} (возможно уже подтвержден/отклонен).")
-            return
-        draft = self.db.get_ocr_draft(update.effective_chat.id, draft_id)
-        await update.message.reply_text(f"✅ Черновик #{draft_id} подтвержден админом.")
-        if draft:
-            await update.message.reply_text(self._format_ocr_draft_text(draft))
-
-    async def cmd_league_ocr_reject(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not self._is_admin(update.effective_user.id):
-            await update.message.reply_text("❌ Команда доступна только админам.")
-            return
-        draft_id = self._resolve_draft_id(update, context.args)
-        if draft_id is None:
-            await update.message.reply_text("Использование: /league_ocr_reject [id] [причина] или reply на сообщение черновика.")
-            return
-        reason = " ".join(context.args[1:]).strip() if len(context.args) > 1 else "Отклонено администратором"
-        ok = self.db.reject_ocr_draft(update.effective_chat.id, draft_id, update.effective_user.id, reason)
-        if not ok:
-            await update.message.reply_text(f"❌ Не удалось отклонить черновик #{draft_id}.")
-            return
-        draft = self.db.get_ocr_draft(update.effective_chat.id, draft_id)
-        await update.message.reply_text(f"🛑 Черновик #{draft_id} отклонен. Причина: {reason}")
-        if draft:
-            await update.message.reply_text(self._format_ocr_draft_text(draft))
 
     async def cmd_league_reminder_on(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not self._is_admin(update.effective_user.id):
