@@ -1217,6 +1217,9 @@ class LeagueFeature:
         application.add_handler(CommandHandler("league_map_show", self._guard(self.cmd_league_map_show)))
         application.add_handler(CommandHandler("league_map_clear", self._guard(self.cmd_league_map_clear)))
         application.add_handler(CommandHandler("league_players_seed", self._guard(self.cmd_league_players_seed)))
+        application.add_handler(CommandHandler("league_sync_challenge", self._guard(self.cmd_league_sync_challenge)))
+        application.add_handler(CommandHandler("league_sync_now", self._guard(self.cmd_league_sync_now)))
+        application.add_handler(CommandHandler("league_sync_off", self._guard(self.cmd_league_sync_off)))
         application.add_handler(CommandHandler("league_reminder_on", self._guard(self.cmd_league_reminder_on)))
         application.add_handler(CommandHandler("league_reminder_off", self._guard(self.cmd_league_reminder_off)))
         application.add_handler(CommandHandler("league_reminder_now", self._guard(self.cmd_league_reminder_now)))
@@ -4199,6 +4202,9 @@ class LeagueFeature:
                     "/league_map_show - показать текущие привязки команд",
                     "/league_map_clear - очистить все привязки команд",
                     "/league_players_seed - загрузить базу футболистов для этой лиги",
+                    "/league_sync_challenge [url] [N] - синк долгов из challenge.place до тура N",
+                    "/league_sync_now [N] - повторить синк из сохраненного источника",
+                    "/league_sync_off - отключить сохраненный источник синка",
                     "/league_reminder_on - включить напоминания каждые 4 часа (00:00, 04:00, 08:00, 12:00, 16:00, 20:00 МСК)",
                     "/league_reminder_off - выключить ежедневные напоминания",
                     "/league_reminder_now - отправить напоминание сразу",
@@ -4300,6 +4306,69 @@ class LeagueFeature:
         await update.message.reply_text(
             f"✅ База футболистов загружена для этой лиги. Команд: {teams_loaded}, игроков: {players_loaded}."
         )
+
+    async def cmd_league_sync_challenge(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not self._is_admin(update.effective_user.id):
+            await update.message.reply_text("❌ Команда доступна только админам.")
+            return
+        if len(context.args) < 2:
+            await update.message.reply_text("Использование: /league_sync_challenge <stage_url> <max_round>")
+            return
+        stage_url = context.args[0].strip()
+        try:
+            max_round = int(context.args[1])
+        except ValueError:
+            await update.message.reply_text("max_round должен быть числом.")
+            return
+        chat_id = update.effective_chat.id
+        try:
+            result = self.sync_challenge_stage_debts(chat_id, stage_url, max_round)
+            await update.message.reply_text(
+                f"✅ Синк выполнен до {max_round} тура включительно.\n"
+                "Старые долги очищены, записаны актуальные данные после синка.\n"
+                f"Записей долгов: {result['entries_count']}\n"
+                f"Неразобранных матчей: {result['unresolved_matches']}"
+            )
+            if result["unresolved_teams"]:
+                unresolved_text = "\n".join([f"- {team}" for team in result["unresolved_teams"]])
+                await update.message.reply_text("⚠️ Команды без привязки к @username:\n" + unresolved_text)
+            await update.message.reply_text(self.format_league_debts_post(chat_id))
+        except Exception as e:
+            await update.message.reply_text(f"❌ Ошибка синка: {e}")
+
+    async def cmd_league_sync_now(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not self._is_admin(update.effective_user.id):
+            await update.message.reply_text("❌ Команда доступна только админам.")
+            return
+        chat_id = update.effective_chat.id
+        source = self.db.get_league_challenge_source(chat_id)
+        if not source or not source.get("enabled"):
+            await update.message.reply_text("Источник не настроен. Используйте /league_sync_challenge <stage_url> <max_round>.")
+            return
+        max_round = source.get("max_round", 0)
+        if context.args:
+            try:
+                max_round = int(context.args[0])
+            except ValueError:
+                await update.message.reply_text("max_round должен быть числом.")
+                return
+        try:
+            result = self.sync_challenge_stage_debts(chat_id, source["stage_url"], max_round)
+            await update.message.reply_text(
+                f"✅ Повторный синк выполнен до {max_round} тура включительно.\n"
+                "Старые долги очищены, записаны актуальные данные после синка.\n"
+                f"Записей долгов: {result['entries_count']}"
+            )
+            await update.message.reply_text(self.format_league_debts_post(chat_id))
+        except Exception as e:
+            await update.message.reply_text(f"❌ Ошибка синка: {e}")
+
+    async def cmd_league_sync_off(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not self._is_admin(update.effective_user.id):
+            await update.message.reply_text("❌ Команда доступна только админам.")
+            return
+        self.db.disable_league_challenge_source(update.effective_chat.id)
+        await update.message.reply_text("✅ Источник синка Challenge отключен.")
 
     async def cmd_league_ocr_fix(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         await self._apply_ocr_fix(update, context, from_text=False)

@@ -53,6 +53,9 @@ OCR_TIMEOUT_SEC=20
 - `/league_map_bulk [list]`
 - `/league_map_show`
 - `/league_map_clear`
+- `/league_sync_challenge [url] [N]`
+- `/league_sync_now [N]`
+- `/league_sync_off`
 - `/league_reminder_on`
 - `/league_reminder_off`
 - `/league_reminder_now`
