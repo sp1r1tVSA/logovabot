@@ -96,6 +96,12 @@ You can upload session file directly from Telegram (no env vars needed):
 
 Bot saves file into `CHALLENGE_STORAGE_STATE` path.
 
+Alternative auth mode (recommended if session keeps dropping):
+
+- set `CHALLENGE_LOGIN_EMAIL` and `CHALLENGE_LOGIN_PASSWORD` in env
+- bot will auto-login in Playwright when session file is missing/expired
+- successful login is saved back to file and DB backup automatically
+
 Alternative (advanced): you can still pass session via env variables,
 but Telegram upload via `/league_session_upload` is the recommended path.
 
@@ -111,6 +117,9 @@ Optional selector tuning (if Challenge UI changes):
 - `CHALLENGE_AWAY_ASSIST_SELECTORS`
 - `CHALLENGE_SAVE_SELECTORS`
 - `CHALLENGE_SUCCESS_SELECTORS`
+- `CHALLENGE_LOGIN_EMAIL_SELECTORS`
+- `CHALLENGE_LOGIN_PASSWORD_SELECTORS`
+- `CHALLENGE_LOGIN_SUBMIT_SELECTORS`
 
 Use `|` between selectors in env values.
 

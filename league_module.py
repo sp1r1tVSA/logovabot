@@ -1486,6 +1486,118 @@ class LeagueFeature:
             return True
         return True
 
+    async def _persist_context_storage_state(self, context) -> Dict:
+        target_path = Path(os.getenv("CHALLENGE_STORAGE_STATE", "state/challenge_storage_state.json"))
+        try:
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            temp_path = target_path.with_suffix(target_path.suffix + ".tmp")
+            await context.storage_state(path=str(temp_path))
+            temp_path.replace(target_path)
+            payload_text = target_path.read_text(encoding="utf-8")
+        except Exception as e:
+            return {"ok": False, "message": f"Не удалось сохранить storage_state: {e}"}
+
+        persisted_to_db = False
+        try:
+            self.db.set_system_value("challenge_storage_state_json", payload_text)
+            persisted_to_db = True
+        except Exception:
+            persisted_to_db = False
+
+        return {
+            "ok": True,
+            "path": str(target_path),
+            "db_backup": persisted_to_db,
+        }
+
+    async def _attempt_challenge_login_with_credentials(self, page, context, match_url: str) -> Dict:
+        email = (os.getenv("CHALLENGE_LOGIN_EMAIL") or os.getenv("CHALLENGE_EMAIL") or "").strip()
+        password = (os.getenv("CHALLENGE_LOGIN_PASSWORD") or os.getenv("CHALLENGE_PASSWORD") or "").strip()
+        if not email or not password:
+            return {
+                "ok": False,
+                "message": (
+                    "Сессия не авторизована и логин по паролю не настроен. "
+                    "Укажите CHALLENGE_LOGIN_EMAIL и CHALLENGE_LOGIN_PASSWORD."
+                ),
+            }
+
+        login_url = (os.getenv("CHALLENGE_LOGIN_URL") or "https://challenge.place/login").strip()
+        self.logger.info("Trying credential login for challenge.place")
+
+        await page.goto(login_url, wait_until="domcontentloaded", timeout=30000)
+
+        email_selectors = self._selectors_from_env(
+            "CHALLENGE_LOGIN_EMAIL_SELECTORS",
+            [
+                "input[type='email']",
+                "input[name*='email']",
+                "input[autocomplete='email']",
+                "input[placeholder*='mail']",
+            ],
+        )
+        password_selectors = self._selectors_from_env(
+            "CHALLENGE_LOGIN_PASSWORD_SELECTORS",
+            [
+                "input[type='password']",
+                "input[name*='password']",
+                "input[autocomplete='current-password']",
+            ],
+        )
+        submit_selectors = self._selectors_from_env(
+            "CHALLENGE_LOGIN_SUBMIT_SELECTORS",
+            [
+                "button[type='submit']",
+                "button:has-text('Sign in')",
+                "button:has-text('Log in')",
+                "button:has-text('Login')",
+                "button:has-text('Войти')",
+            ],
+        )
+
+        filled_email_selector = await self._fill_first_available(page, email_selectors, email)
+        filled_password_selector = await self._fill_first_available(page, password_selectors, password)
+        if not filled_email_selector or not filled_password_selector:
+            return {
+                "ok": False,
+                "message": "Не удалось найти поля email/password на странице логина.",
+            }
+
+        clicked_submit = await self._click_first_available(page, submit_selectors, timeout=5000)
+        if not clicked_submit:
+            try:
+                await page.keyboard.press("Enter")
+            except Exception:
+                pass
+
+        await page.wait_for_timeout(3000)
+        if match_url:
+            try:
+                await page.goto(match_url, wait_until="domcontentloaded", timeout=30000)
+            except Exception:
+                pass
+
+        if not await self._is_challenge_session_authorized(page, context):
+            return {
+                "ok": False,
+                "message": "Логин по email/password не прошел. Проверьте креды/2FA/captcha.",
+            }
+
+        persist_res = await self._persist_context_storage_state(context)
+        if not persist_res.get("ok"):
+            self.logger.warning("Credential login ok, but state save failed: %s", persist_res.get("message", ""))
+            return {
+                "ok": True,
+                "message": "Логин выполнен, но не удалось сохранить сессию на диск.",
+            }
+
+        self.logger.info(
+            "Credential login succeeded; state saved path=%s db_backup=%s",
+            persist_res.get("path"),
+            persist_res.get("db_backup"),
+        )
+        return {"ok": True, "message": "Логин выполнен и сессия сохранена."}
+
     def _resolve_challenge_state_path(self) -> Dict:
         configured = Path(os.getenv("CHALLENGE_STORAGE_STATE", "state/challenge_storage_state.json"))
         if configured.exists():
@@ -1596,9 +1708,9 @@ class LeagueFeature:
         )
 
         state_resolved = self._resolve_challenge_state_path()
-        if not state_resolved.get("ok"):
-            return {"ok": False, "message": state_resolved.get("message", "Не удалось подготовить сессию.")}
-        state_path = state_resolved["path"]
+        state_path = state_resolved.get("path") if state_resolved.get("ok") else None
+        if not state_path:
+            self.logger.info("No preloaded storage_state: %s", state_resolved.get("message", "not found"))
 
         msk_now = datetime.now(ZoneInfo("Europe/Moscow"))
         date_value = msk_now.strftime("%Y-%m-%d")
@@ -1620,15 +1732,32 @@ class LeagueFeature:
                         "Свяжитесь с администратором."
                     ),
                 }
-            context = await browser.new_context(storage_state=str(state_path))
+            context_kwargs = {}
+            if state_path:
+                context_kwargs["storage_state"] = str(state_path)
+            context = await browser.new_context(**context_kwargs)
             page = await context.new_page()
             try:
                 await page.goto(match_url, wait_until="domcontentloaded", timeout=30000)
                 self.logger.info("Match page opened: %s", page.url)
                 if not await self._is_challenge_session_authorized(page, context):
-                    self.logger.warning("Challenge session unauthorized for url=%s", match_url)
-                    await browser.close()
-                    return {"ok": False, "message": "Сессия не авторизована. Перезапустите cp_auth_session.py"}
+                    self.logger.warning("Challenge session unauthorized for url=%s; trying credential login", match_url)
+                    login_result = await self._attempt_challenge_login_with_credentials(page, context, match_url)
+                    if not login_result.get("ok"):
+                        await browser.close()
+                        return {
+                            "ok": False,
+                            "message": (
+                                login_result.get("message")
+                                or "Сессия не авторизована. Загрузите session JSON или настройте логин по паролю."
+                            ),
+                        }
+                    if not await self._is_challenge_session_authorized(page, context):
+                        await browser.close()
+                        return {
+                            "ok": False,
+                            "message": "После логина сессия все еще не авторизована (возможен captcha/2FA).",
+                        }
 
                 if dry_run:
                     self.logger.info("Dry-run success for match_url=%s", match_url)
