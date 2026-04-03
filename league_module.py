@@ -1862,24 +1862,71 @@ class LeagueFeature:
             return False
 
     def _list_browser_contexts(self, driver):
-        contexts = [None]
+        return self._collect_frame_paths(driver)
+
+    def _collect_frame_paths(self, driver, max_depth: int = 5):
+        paths = [()]
+
+        def dfs(path, depth):
+            if depth >= max_depth:
+                return
+            try:
+                self._switch_to_frame_path(driver, path)
+                frames = driver.find_elements(By.TAG_NAME, "iframe")
+            except Exception:
+                return
+            for idx in range(len(frames)):
+                new_path = tuple(list(path) + [idx])
+                paths.append(new_path)
+                dfs(new_path, depth + 1)
+
+        dfs((), 0)
         try:
-            frames = driver.find_elements(By.TAG_NAME, "iframe")
+            self._switch_to_frame_path(driver, ())
         except Exception:
-            frames = []
-        contexts.extend(frames)
-        return contexts
+            pass
+        return paths
+
+    def _switch_to_frame_path(self, driver, path):
+        driver.switch_to.default_content()
+        if not path:
+            return
+        for idx in path:
+            frames = driver.find_elements(By.TAG_NAME, "iframe")
+            if idx >= len(frames):
+                raise IndexError("iframe index out of range")
+            driver.switch_to.frame(frames[idx])
 
     def _switch_browser_context(self, driver, frame):
+        # Backward compatible wrapper.
+        if frame is None:
+            self._switch_to_frame_path(driver, ())
+            return
+        if isinstance(frame, tuple):
+            self._switch_to_frame_path(driver, frame)
+            return
         driver.switch_to.default_content()
-        if frame is not None:
-            driver.switch_to.frame(frame)
+        driver.switch_to.frame(frame)
+
+    def _count_inputs_all_contexts(self, driver) -> int:
+        total = 0
+        for path in self._collect_frame_paths(driver):
+            try:
+                self._switch_to_frame_path(driver, path)
+                total += int(driver.execute_script("return document.querySelectorAll('input').length;") or 0)
+            except Exception:
+                continue
+        try:
+            self._switch_to_frame_path(driver, ())
+        except Exception:
+            pass
+        return total
 
     def _fill_login_field_any_context(self, driver, selectors: List[str], value: str, field_kind: str) -> Optional[str]:
-        contexts = self._list_browser_contexts(driver)
-        for frame in contexts:
+        contexts = self._collect_frame_paths(driver)
+        for frame_path in contexts:
             try:
-                self._switch_browser_context(driver, frame)
+                self._switch_to_frame_path(driver, frame_path)
             except Exception:
                 continue
 
@@ -1900,7 +1947,7 @@ class LeagueFeature:
                         else:
                             if not self._set_input_value_js(driver, element, value):
                                 continue
-                        self._switch_browser_context(driver, None)
+                        self._switch_to_frame_path(driver, ())
                         return selector
                     except Exception:
                         continue
@@ -1926,32 +1973,32 @@ class LeagueFeature:
                     else:
                         if not self._set_input_value_js(driver, fallback, value):
                             raise RuntimeError("fallback input fill failed")
-                    self._switch_browser_context(driver, None)
+                    self._switch_to_frame_path(driver, ())
                     return f"fallback:{field_kind}"
                 except Exception:
                     pass
 
         try:
-            self._switch_browser_context(driver, None)
+            self._switch_to_frame_path(driver, ())
         except Exception:
             pass
         return None
 
     def _has_login_email_any_context(self, driver) -> bool:
-        contexts = self._list_browser_contexts(driver)
-        for frame in contexts:
+        contexts = self._collect_frame_paths(driver)
+        for frame_path in contexts:
             try:
-                self._switch_browser_context(driver, frame)
+                self._switch_to_frame_path(driver, frame_path)
             except Exception:
                 continue
             try:
                 if self._find_login_email_element(driver) is not None:
-                    self._switch_browser_context(driver, None)
+                    self._switch_to_frame_path(driver, ())
                     return True
             except Exception:
                 continue
         try:
-            self._switch_browser_context(driver, None)
+            self._switch_to_frame_path(driver, ())
         except Exception:
             pass
         return False
@@ -1968,15 +2015,11 @@ class LeagueFeature:
         except Exception:
             pass
 
-        try:
-            frames = driver.find_elements(By.TAG_NAME, "iframe")
-        except Exception:
-            frames = []
-
-        for frame in frames:
+        for frame_path in self._collect_frame_paths(driver):
+            if not frame_path:
+                continue
             try:
-                driver.switch_to.default_content()
-                driver.switch_to.frame(frame)
+                self._switch_to_frame_path(driver, frame_path)
                 found.extend(self._find_elements_in_current_context(driver, selector))
             except Exception:
                 continue
@@ -2322,10 +2365,10 @@ class LeagueFeature:
         except Exception:
             pass
 
-        contexts = self._list_browser_contexts(driver)
-        for frame in contexts:
+        contexts = self._collect_frame_paths(driver)
+        for frame_path in contexts:
             try:
-                self._switch_browser_context(driver, frame)
+                self._switch_to_frame_path(driver, frame_path)
                 nodes = driver.find_elements(
                     By.XPATH,
                     "//*[contains(normalize-space(.), 'Use your email') or contains(normalize-space(.), 'Use email')]",
@@ -2343,13 +2386,13 @@ class LeagueFeature:
                 try:
                     parent = node.find_element(By.XPATH, "ancestor::*[self::button or self::a or @role='button'][1]")
                     parent.click()
-                    self._switch_browser_context(driver, None)
+                    self._switch_to_frame_path(driver, ())
                     time.sleep(1.0)
                     return True
                 except Exception:
                     continue
         try:
-            self._switch_browser_context(driver, None)
+            self._switch_to_frame_path(driver, ())
         except Exception:
             pass
         return False
@@ -2506,10 +2549,7 @@ class LeagueFeature:
                 current = driver.current_url or ""
             except Exception:
                 current = ""
-            try:
-                input_count = int(driver.execute_script("return document.querySelectorAll('input').length;") or 0)
-            except Exception:
-                input_count = -1
+            input_count = self._count_inputs_all_contexts(driver)
             return {
                 "ok": False,
                 "message": (
