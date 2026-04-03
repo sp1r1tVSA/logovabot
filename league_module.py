@@ -807,6 +807,49 @@ class LeagueRepositoryPostgres(LeagueRepositorySQLite):
         )
         self.conn.commit()
 
+    def _sync_table_id_sequence(self, table_name: str):
+        allowed = {
+            "league_team_map",
+            "league_team_players",
+            "league_debt_entries",
+            "league_ocr_drafts",
+            "league_ocr_applied",
+        }
+        if table_name not in allowed:
+            return
+        try:
+            self.cursor.execute("SELECT pg_get_serial_sequence(?, 'id')", (table_name,))
+            row = self.cursor.fetchone()
+            seq_name = row[0] if row else None
+            if not seq_name:
+                return
+            self.cursor.execute(
+                f"""
+                SELECT setval(
+                    ?,
+                    COALESCE((SELECT MAX(id) FROM {table_name}), 1),
+                    COALESCE((SELECT MAX(id) FROM {table_name}), 0) > 0
+                )
+                """,
+                (seq_name,),
+            )
+        except Exception:
+            # best-effort only; if sequence cannot be synced we keep old behavior
+            pass
+
+    def replace_league_team_map(self, chat_id: int, mappings: List[Dict]):
+        self.cursor.execute("DELETE FROM league_team_map WHERE chat_id = ?", (chat_id,))
+        self._sync_table_id_sequence("league_team_map")
+        for item in mappings:
+            self.cursor.execute(
+                """
+                INSERT INTO league_team_map (chat_id, team_name_norm, team_name_raw, telegram_username)
+                VALUES (?, ?, ?, ?)
+                """,
+                (chat_id, item["team_name_norm"], item["team_name_raw"], item["telegram_username"]),
+            )
+        self.conn.commit()
+
 
 class PostgresCursorAdapter:
     def __init__(self, raw_cursor):
