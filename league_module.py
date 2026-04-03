@@ -2041,6 +2041,13 @@ class LeagueFeature:
                         driver.execute_script("arguments[0].click();", element)
                         return selector
                     except Exception:
+                        pass
+                    # Last-resort: click nearest clickable ancestor.
+                    try:
+                        parent = element.find_element(By.XPATH, "ancestor::*[self::button or self::a or @role='button'][1]")
+                        parent.click()
+                        return selector
+                    except Exception:
                         continue
         return None
 
@@ -2405,6 +2412,7 @@ class LeagueFeature:
 
         loaded = False
         login_page_with_email = False
+        email_method_clicked = False
         tried_urls = []
         for url in normalized_urls:
             try:
@@ -2414,7 +2422,8 @@ class LeagueFeature:
                 tried_urls.append(url)
                 email_found = False
                 for _ in range(60):
-                    await self._open_email_login_method(driver)
+                    if await self._open_email_login_method(driver):
+                        email_method_clicked = True
                     if self._has_login_email_any_context(driver):
                         email_found = True
                         break
@@ -2439,7 +2448,7 @@ class LeagueFeature:
                 "ok": False,
                 "message": (
                     "Не удалось открыть форму логина по email. "
-                    f"url={current}; title={title}; tried={','.join(tried_urls)}"
+                    f"url={current}; title={title}; tried={','.join(tried_urls)}; method_clicked={email_method_clicked}"
                 ),
             }
 
