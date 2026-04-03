@@ -581,6 +581,15 @@ class LeagueRepositoryPostgres(LeagueRepositorySQLite):
             )
             """
         )
+        # Backward-compatible migration for legacy schemas (old table without chat_id).
+        self.cursor.execute("ALTER TABLE league_debt_entries ADD COLUMN IF NOT EXISTS chat_id BIGINT")
+        self.cursor.execute("ALTER TABLE league_debt_entries ADD COLUMN IF NOT EXISTS round_label TEXT")
+        self.cursor.execute("ALTER TABLE league_debt_entries ADD COLUMN IF NOT EXISTS debtor_username TEXT")
+        self.cursor.execute("ALTER TABLE league_debt_entries ADD COLUMN IF NOT EXISTS opponent_username TEXT")
+        self.cursor.execute("ALTER TABLE league_debt_entries ADD COLUMN IF NOT EXISTS raw_line TEXT")
+        self.cursor.execute(
+            "ALTER TABLE league_debt_entries ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+        )
 
         self.cursor.execute(
             """
