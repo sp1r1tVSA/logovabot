@@ -1529,6 +1529,14 @@ class LeagueFeature:
         if not PLAYWRIGHT_AVAILABLE:
             return {"ok": False, "message": "Playwright недоступен в окружении."}
 
+        self.logger.info(
+            "Apply result started: dry_run=%s match_url=%s home=%s away=%s",
+            dry_run,
+            match_url,
+            payload.get("home_team"),
+            payload.get("away_team"),
+        )
+
         state_resolved = self._resolve_challenge_state_path()
         if not state_resolved.get("ok"):
             return {"ok": False, "message": state_resolved.get("message", "Не удалось подготовить сессию.")}
@@ -1558,11 +1566,14 @@ class LeagueFeature:
             page = await context.new_page()
             try:
                 await page.goto(match_url, wait_until="domcontentloaded", timeout=30000)
+                self.logger.info("Match page opened: %s", page.url)
                 if not await self._is_challenge_session_authorized(page, context):
+                    self.logger.warning("Challenge session unauthorized for url=%s", match_url)
                     await browser.close()
                     return {"ok": False, "message": "Сессия не авторизована. Перезапустите cp_auth_session.py"}
 
                 if dry_run:
+                    self.logger.info("Dry-run success for match_url=%s", match_url)
                     await browser.close()
                     return {"ok": True, "message": f"Dry-run ok: матч открыт, дата к установке {date_value}"}
 
@@ -1646,7 +1657,17 @@ class LeagueFeature:
                         continue
                 await browser.close()
                 if not saved:
+                    self.logger.warning("Save button not found for match_url=%s", match_url)
                     return {"ok": False, "message": "Не найдено кнопки сохранения результата."}
+                self.logger.info(
+                    "Apply result saved: match_url=%s home_goals=%s home_assists=%s away_goals=%s away_assists=%s success_hint=%s",
+                    match_url,
+                    home_events_result.get("filled_goals", 0),
+                    home_events_result.get("filled_assists", 0),
+                    away_events_result.get("filled_goals", 0),
+                    away_events_result.get("filled_assists", 0),
+                    success_hint,
+                )
                 return {
                     "ok": True,
                     "message": (
@@ -1657,9 +1678,11 @@ class LeagueFeature:
                     ),
                 }
             except PlaywrightTimeoutError:
+                self.logger.warning("Playwright timeout for match_url=%s", match_url)
                 await browser.close()
                 return {"ok": False, "message": "Таймаут при открытии страницы матча."}
             except Exception as e:
+                self.logger.exception("Playwright error for match_url=%s", match_url)
                 await browser.close()
                 return {"ok": False, "message": f"Ошибка Playwright: {e}"}
 
@@ -3165,6 +3188,16 @@ class LeagueFeature:
                 manual_match_url = token.strip()
                 break
 
+        self.logger.info(
+            "Command /league_apply_result: chat_id=%s user_id=%s draft_id=%s dry_run=%s force=%s manual_url=%s",
+            update.effective_chat.id if update.effective_chat else None,
+            update.effective_user.id if update.effective_user else None,
+            draft_id,
+            dry_run,
+            force,
+            bool(manual_match_url),
+        )
+
         chat_id = update.effective_chat.id
         draft = self.db.get_ocr_draft(chat_id, draft_id)
         if not draft:
@@ -3201,6 +3234,12 @@ class LeagueFeature:
             selected = self._select_candidate_min_round(candidates)
         if not selected:
             self.db.upsert_ocr_applied(chat_id, draft_id, "", "failed", "Матч не найден по паре команд")
+            self.logger.warning(
+                "Match not found for draft_id=%s home=%s away=%s",
+                draft_id,
+                home_team,
+                away_team,
+            )
             await update.message.reply_text(
                 "❌ Не удалось найти матч по паре команд в источнике лиги. "
                 "Можно указать ссылку вручную: /league_apply_result [id] [match_url]"
@@ -3218,6 +3257,13 @@ class LeagueFeature:
         status = "success" if result.get("ok") else "failed"
         status = "dry_run" if dry_run and result.get("ok") else status
         self.db.upsert_ocr_applied(chat_id, draft_id, selected.get("match_url", ""), status, result.get("message", ""))
+        self.logger.info(
+            "Apply result finished: draft_id=%s status=%s ok=%s message=%s",
+            draft_id,
+            status,
+            result.get("ok"),
+            result.get("message", ""),
+        )
 
         if result.get("ok"):
             await update.message.reply_text(
