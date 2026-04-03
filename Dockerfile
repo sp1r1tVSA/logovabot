@@ -26,11 +26,12 @@ RUN apt-get update \
         libpango-1.0-0 \
         libcairo2 \
         libasound2 \
-    && rm -rf /var/lib/apt/lists/* \
-    && playwright install --with-deps chromium
+    && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
+
+RUN playwright install --with-deps chromium
 
 COPY . /app
 
