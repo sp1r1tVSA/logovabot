@@ -1269,6 +1269,19 @@ class LeagueFeature:
         parts = [part.strip() for part in re.split(r"[\n|]+", raw) if part.strip()]
         return parts or list(defaults)
 
+    def _get_env_loose(self, key: str) -> str:
+        value = os.getenv(key)
+        if value is None:
+            target = (key or "").strip().upper()
+            for env_key, env_value in os.environ.items():
+                if (env_key or "").strip().upper() == target:
+                    value = env_value
+                    break
+        value = str(value or "").strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+            value = value[1:-1].strip()
+        return value
+
     @staticmethod
     def _xpath_literal(value: str) -> str:
         if "'" not in value:
@@ -1525,27 +1538,27 @@ class LeagueFeature:
         return True
 
     async def _attempt_challenge_login_with_credentials(self, driver, match_url: str) -> Dict:
-        login_email_raw = os.getenv("CHALLENGE_LOGIN_EMAIL")
-        login_password_raw = os.getenv("CHALLENGE_LOGIN_PASSWORD")
-        alt_email_raw = os.getenv("CHALLENGE_EMAIL")
-        alt_password_raw = os.getenv("CHALLENGE_PASSWORD")
+        login_email_raw = self._get_env_loose("CHALLENGE_LOGIN_EMAIL")
+        login_password_raw = self._get_env_loose("CHALLENGE_LOGIN_PASSWORD")
+        alt_email_raw = self._get_env_loose("CHALLENGE_EMAIL")
+        alt_password_raw = self._get_env_loose("CHALLENGE_PASSWORD")
 
-        email = (login_email_raw or alt_email_raw or "").strip()
-        password = (login_password_raw or alt_password_raw or "").strip()
+        email = login_email_raw or alt_email_raw
+        password = login_password_raw or alt_password_raw
         self.logger.info(
             "Challenge login env presence: CHALLENGE_LOGIN_EMAIL=%s CHALLENGE_LOGIN_PASSWORD=%s CHALLENGE_EMAIL=%s CHALLENGE_PASSWORD=%s",
-            bool((login_email_raw or "").strip()),
-            bool((login_password_raw or "").strip()),
-            bool((alt_email_raw or "").strip()),
-            bool((alt_password_raw or "").strip()),
+            bool(login_email_raw),
+            bool(login_password_raw),
+            bool(alt_email_raw),
+            bool(alt_password_raw),
         )
         if not email or not password:
             presence = (
                 "["
-                f"CHALLENGE_LOGIN_EMAIL={'yes' if bool((login_email_raw or '').strip()) else 'no'}, "
-                f"CHALLENGE_LOGIN_PASSWORD={'yes' if bool((login_password_raw or '').strip()) else 'no'}, "
-                f"CHALLENGE_EMAIL={'yes' if bool((alt_email_raw or '').strip()) else 'no'}, "
-                f"CHALLENGE_PASSWORD={'yes' if bool((alt_password_raw or '').strip()) else 'no'}"
+                f"CHALLENGE_LOGIN_EMAIL={'yes' if bool(login_email_raw) else 'no'}, "
+                f"CHALLENGE_LOGIN_PASSWORD={'yes' if bool(login_password_raw) else 'no'}, "
+                f"CHALLENGE_EMAIL={'yes' if bool(alt_email_raw) else 'no'}, "
+                f"CHALLENGE_PASSWORD={'yes' if bool(alt_password_raw) else 'no'}"
                 "]"
             )
             return {
@@ -1558,7 +1571,7 @@ class LeagueFeature:
                 ),
             }
 
-        login_url = (os.getenv("CHALLENGE_LOGIN_URL") or "https://challenge.place/login").strip()
+        login_url = self._get_env_loose("CHALLENGE_LOGIN_URL") or "https://challenge.place/login"
         self.logger.info("Trying credential login for challenge.place")
 
         try:
