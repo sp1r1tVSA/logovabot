@@ -1991,6 +1991,18 @@ class LeagueFeature:
         if not selector:
             return []
 
+        if selector.startswith("xpath="):
+            xpath = selector.split("=", 1)[1].strip()
+            if not xpath:
+                return []
+            return driver.find_elements(By.XPATH, xpath)
+
+        if selector.startswith("css="):
+            css_selector = selector.split("=", 1)[1].strip()
+            if not css_selector:
+                return []
+            return driver.find_elements(By.CSS_SELECTOR, css_selector)
+
         if selector.startswith("text="):
             text = selector.split("=", 1)[1].strip()
             if not text:
@@ -2240,8 +2252,10 @@ class LeagueFeature:
             "CHALLENGE_LOGIN_METHOD_SELECTORS",
             [
                 "text=Use your email",
+                "css=.flex-grow-1.px-3.text-truncate",
                 "button:has-text('Use your email')",
                 "div:has-text('Use your email')",
+                "xpath=//*[contains(@class,'flex-grow-1') and contains(@class,'text-truncate') and contains(normalize-space(.), 'Use your email')]",
                 "text=Use email",
                 "text=Использовать email",
             ],
