@@ -1466,6 +1466,29 @@ class LeagueFeature:
                     return {"home": home, "away": away}
         return None
 
+    def _extract_score_from_line_items(self, line_items: List[Dict], img_width: int, img_height: int) -> Optional[Dict]:
+        top_limit = int(img_height * 0.28)
+        center_left = int(img_width * 0.30)
+        center_right = int(img_width * 0.70)
+
+        candidates = []
+        for item in line_items:
+            y1 = int(item.get("y1", 0))
+            y2 = int(item.get("y2", 0))
+            x1 = int(item.get("x1", 0))
+            x2 = int(item.get("x2", 0))
+            if y1 > top_limit and y2 > top_limit:
+                continue
+            if x2 < center_left or x1 > center_right:
+                continue
+            candidates.append(str(item.get("text", "")))
+
+        # Prefer top-center candidates, then fallback to all lines.
+        score = self._extract_score(candidates)
+        if score:
+            return score
+        return self._extract_score([str(x.get("text", "")) for x in line_items])
+
     def _extract_score_from_image(self, image_bgr) -> Optional[Dict]:
         def parse_score(raw_text: str) -> Optional[Dict]:
             cleaned = (raw_text or "").replace("—", "-").replace("–", "-")
@@ -1553,7 +1576,8 @@ class LeagueFeature:
             name = re.sub(r"\s+", " ", name).strip()
             if not name:
                 continue
-            key = name.lower()
+            y1_raw = int(item.get("y1", 0))
+            key = f"{name.lower()}::{y1_raw // 12}"
             if key in seen:
                 continue
             seen.add(key)
@@ -1743,7 +1767,8 @@ class LeagueFeature:
             except Exception as e:
                 await message.reply_text(f"❌ OCR API временно недоступен: {e}")
                 return
-            score = self._extract_score([str(x.get("text", "")) for x in line_items])
+            img_h, img_w = image_bgr.shape[:2]
+            score = self._extract_score_from_line_items(line_items, img_w, img_h)
             goals_info = self._extract_goal_scorers(image_bgr, line_items, offset_x=0, offset_y=0)
         else:
             height, width = image_bgr.shape[:2]
