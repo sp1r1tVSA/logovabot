@@ -1347,13 +1347,42 @@ class LeagueFeature:
             "assist_selector": assist_selector,
         }
 
+    def _resolve_challenge_state_path(self) -> Dict:
+        configured = Path(os.getenv("CHALLENGE_STORAGE_STATE", "state/challenge_storage_state.json"))
+        if configured.exists():
+            return {"ok": True, "path": configured}
+
+        state_json = (os.getenv("CHALLENGE_STORAGE_STATE_JSON") or "").strip()
+        state_b64 = (os.getenv("CHALLENGE_STORAGE_STATE_B64") or "").strip()
+        if not state_json and not state_b64:
+            return {"ok": False, "message": f"Файл сессии не найден: {configured}"}
+
+        try:
+            payload_text = state_json
+            if state_b64:
+                payload_text = base64.b64decode(state_b64).decode("utf-8")
+            json.loads(payload_text)
+        except Exception:
+            return {
+                "ok": False,
+                "message": "Некорректный CHALLENGE_STORAGE_STATE_JSON/CHALLENGE_STORAGE_STATE_B64 (невалидный JSON)",
+            }
+
+        try:
+            configured.parent.mkdir(parents=True, exist_ok=True)
+            configured.write_text(payload_text, encoding="utf-8")
+            return {"ok": True, "path": configured}
+        except Exception as e:
+            return {"ok": False, "message": f"Не удалось создать файл сессии: {e}"}
+
     async def _open_match_and_fill_result(self, match_url: str, payload: Dict, dry_run: bool = False) -> Dict:
         if not PLAYWRIGHT_AVAILABLE:
             return {"ok": False, "message": "Playwright недоступен в окружении."}
 
-        state_path = Path(os.getenv("CHALLENGE_STORAGE_STATE", "state/challenge_storage_state.json"))
-        if not state_path.exists():
-            return {"ok": False, "message": f"Файл сессии не найден: {state_path}"}
+        state_resolved = self._resolve_challenge_state_path()
+        if not state_resolved.get("ok"):
+            return {"ok": False, "message": state_resolved.get("message", "Не удалось подготовить сессию.")}
+        state_path = state_resolved["path"]
 
         msk_now = datetime.now(ZoneInfo("Europe/Moscow"))
         date_value = msk_now.strftime("%Y-%m-%d")

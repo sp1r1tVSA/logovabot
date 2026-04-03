@@ -88,6 +88,13 @@ python scripts/cp_auth_session.py
 
 Output file: `state/challenge_storage_state.json`
 
+For Railway/cloud deploys without local file upload, you can pass session via env:
+
+- `CHALLENGE_STORAGE_STATE_JSON` - raw JSON from Playwright storage state
+- or `CHALLENGE_STORAGE_STATE_B64` - base64 encoded JSON
+
+Bot will create `CHALLENGE_STORAGE_STATE` file automatically on startup of apply flow.
+
 Optional selector tuning (if Challenge UI changes):
 
 - `CHALLENGE_EDIT_SELECTORS`
