@@ -1865,9 +1865,10 @@ class LeagueFeature:
         if score_home is not None and score_away is not None:
             lines.append(f"Счет: {score_home}:{score_away}")
 
-        if home_goals_list or away_goals_list or unknown_goals_list:
-            lines.append("Голы хоз.: " + (", ".join(home_goals_list) if home_goals_list else "нет"))
-            lines.append("Голы гост.: " + (", ".join(away_goals_list) if away_goals_list else "нет"))
+        if home_goals_list:
+            lines.append("Голы хоз.: " + ", ".join(home_goals_list))
+        if away_goals_list:
+            lines.append("Голы гост.: " + ", ".join(away_goals_list))
         if unknown_goals_list:
             lines.append("Неразнесенные голы: " + ", ".join(unknown_goals_list))
 
