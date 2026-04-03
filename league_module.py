@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters
 
 class LeagueRepositorySQLite:
     def __init__(self, conn, cursor):
@@ -834,20 +834,111 @@ class LeagueFeature:
 
         return guarded
 
+    async def _on_text_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        text = (update.message.text or "").strip()
+        if not text:
+            return
+
+        first_line = text.split("\n", 1)[0].strip()
+        parts = first_line.split()
+        if not parts:
+            return
+        cmd = parts[0].strip()
+
+        if cmd == "+":
+            if len(parts) < 2:
+                return
+            subcmd = parts[1].strip().lower()
+            if subcmd == "долги":
+                rest = first_line[len(parts[0]) + len(parts[1]) + 2:].strip()
+                body = rest
+                if not rest and len(text.split("\n", 1)) > 1:
+                    body = text.split("\n", 1)[1].strip()
+                await self._handle_debts_command(update, body)
+                return
+            if subcmd == "команды":
+                rest = first_line[len(parts[0]) + len(parts[1]) + 2:].strip()
+                body = rest
+                if not rest and len(text.split("\n", 1)) > 1:
+                    body = "\n".join(text.split("\n", 1)[1:]).strip()
+                await self._handle_commands_command(update, body)
+                return
+            if subcmd == "пиналка":
+                await self._handle_pinalka_on(update)
+                return
+
+        if cmd == "-":
+            if len(parts) < 2:
+                return
+            subcmd = parts[1].strip().lower()
+            if subcmd == "пиналка":
+                await self._handle_pinalka_off(update)
+                return
+
+    async def _handle_debts_command(self, update: Update, body: str):
+        url = None
+        max_round = None
+        for line in body.split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+            if line.startswith("http://") or line.startswith("https://"):
+                url = line.split()[0].strip()
+            else:
+                tokens = line.split()
+                for token in tokens:
+                    try:
+                        n = int(token)
+                        if n > 0:
+                            max_round = n
+                            break
+                    except ValueError:
+                        pass
+        if not url:
+            await update.message.reply_text("Не указан URL. Пример: + долги https://challenge.place/stage/... 5")
+            return
+        if not max_round:
+            await update.message.reply_text("Не указан номер тура. Пример: + долги https://challenge.place/stage/... 5")
+            return
+        chat_id = update.effective_chat.id
+        try:
+            result = self.sync_challenge_stage_debts(chat_id, url, max_round)
+            await update.message.reply_text(
+                self._format_challenge_sync_user_message(
+                    result,
+                    f"✅ Синк выполнен до {max_round} тура.",
+                )
+            )
+            if result["unresolved_teams"]:
+                unresolved_text = "\n".join([f"- {team}" for team in result["unresolved_teams"]])
+                await update.message.reply_text("⚠️ Команды без привязки к @username:\n" + unresolved_text)
+            await update.message.reply_text(self.format_league_debts_post(chat_id))
+        except Exception as e:
+            self.logger.exception("handle_debts_command failed")
+            await update.message.reply_text(f"❌ Ошибка: {e}")
+
+    async def _handle_commands_command(self, update: Update, body: str):
+        if not body:
+            await update.message.reply_text("Использование: + команды\nКоманда1 - @username1\nКоманда2 - @username2\n...")
+            return
+        mappings = self.parse_league_map_bulk_text(body)
+        if not mappings:
+            await update.message.reply_text("Не удалось распознать команды. Формат: Команда - @username")
+            return
+        self.db.replace_league_team_map(update.effective_chat.id, mappings)
+        await update.message.reply_text(f"✅ Обновил привязки: {len(mappings)} команд.")
+
+    async def _handle_pinalka_on(self, update: Update):
+        self.db.set_league_reminder_enabled(update.effective_chat.id, True)
+        await update.message.reply_text("✅ Пиналка включена (каждые 4 часа: 00, 04, 08, 12, 16, 20 по Москве).")
+
+    async def _handle_pinalka_off(self, update: Update):
+        self.db.set_league_reminder_enabled(update.effective_chat.id, False)
+        await update.message.reply_text("✅ Пиналка выключена.")
+
     def register_handlers(self, application):
         application.add_handler(CommandHandler("admin", self._guard(self.cmd_admin)))
-        application.add_handler(CommandHandler("league_debts_show", self._guard(self.cmd_league_debts_show)))
-        application.add_handler(CommandHandler("league_debts_round", self._guard(self.cmd_league_debts_round)))
-        application.add_handler(CommandHandler("league_map_bulk", self._guard(self.cmd_league_map_bulk)))
-        application.add_handler(CommandHandler("league_map_show", self._guard(self.cmd_league_map_show)))
-        application.add_handler(CommandHandler("league_map_clear", self._guard(self.cmd_league_map_clear)))
-        application.add_handler(CommandHandler("league_players_seed", self._guard(self.cmd_league_players_seed)))
-        application.add_handler(CommandHandler("league_sync_challenge", self._guard(self.cmd_league_sync_challenge)))
-        application.add_handler(CommandHandler("league_reminder_on", self._guard(self.cmd_league_reminder_on)))
-        application.add_handler(CommandHandler("league_reminder_off", self._guard(self.cmd_league_reminder_off)))
-        application.add_handler(CommandHandler("league_reminder_now", self._guard(self.cmd_league_reminder_now)))
-        application.add_handler(CommandHandler("league_reminder_hourly_on", self._guard(self.cmd_league_reminder_hourly_on)))
-        application.add_handler(CommandHandler("league_reminder_hourly_off", self._guard(self.cmd_league_reminder_hourly_off)))
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._guard(self._on_text_command)))
 
     def setup_jobs(self, application, logger):
         if not application.job_queue:
@@ -862,55 +953,6 @@ class LeagueFeature:
         normalized = normalized.replace(" - ", "-")
         normalized = normalized.replace("глимпт", "глимт")
         return normalized
-
-    def default_league_players_seed(self) -> Dict[str, List[str]]:
-        return {
-            "АЕК": ["Eliasson", "Filipe Relvas", "Joao Mario", "Jovic", "Koita", "Marin", "Pilios", "Pineda", "Rota", "Vida"],
-            "Аякс": ["Baas", "Berghuis", "Carrizo", "Edvardsen", "Gaaei", "Itakura", "Regeer", "Sutalo", "Weghorst", "Wijndal", "Zinchenko"],
-            "Бенфика": ["Antonio Silva", "Aursnes", "Bah", "Dahl", "Dedic", "Lukebakio", "Otamendi", "Rafa", "Rios", "Sudakov"],
-            "Бока Хуниорс": ["Ander Herrera", "Ascacibar", "Blanco", "Blondel", "Cavani", "Costa", "Figal", "Merentiel", "Palacios", "Paredes", "Zeballos"],
-            "Брага": ["Arrey-mbi", "Gabri Martinez", "Grillitsch", "Joao Moutinho", "Leonardo Lelo", "Niakate", "Ricardo Horta", "Victor Gomez", "Vitor Carvalho", "Zalazar"],
-            "Брюгге": [
-                "Nordin Jackers",
-                "Simon Mignolet",
-                "Dani van den Heuvel",
-                "Axl De Corte",
-                "Joel Ordonez",
-                "Brandon Mechele",
-                "Jorne Spileers",
-                "Vince Osuji",
-                "Joaquin Seys",
-                "Bjorn Meijer",
-                "Kyriani Sabbe",
-                "Hugo Siquet",
-                "Aleksandar Stankovic",
-                "Raphael Onyedika",
-                "Lynnt Audoor",
-                "Ludovit Reis",
-                "Hugo Vetlesen",
-                "Alejandro Granados",
-                "Felix Lemarechal",
-                "Hans Vanaken",
-                "Cisse Sandra",
-                "Christos Tzolis",
-                "Carlos Forbs",
-                "Mamadou Diakhon",
-                "Shandre Campbell",
-                "Nicolo Tresoldi",
-                "Romeo Vermant",
-                "Gustaf Nilsson",
-            ],
-            "Буде Глимт": ["Berg", "Bjorkan", "Evjen", "Fet", "Gundersen", "Hauge", "Hogh", "Maatta", "Saltnes", "Slovold"],
-            "Копенгаген": ["Achouri", "Aurelio Buta", "Delaney", "Elyounoussi", "Huescas", "Larsson", "Lopez", "Mattsson", "Moukoko", "Zanka"],
-            "ПСВ": ["Boadu", "Dest", "Flamingo", "Man", "Mauro Junior", "Perisic", "Schouten", "Van Bommel", "Veerman", "Yarek"],
-            "Порту": ["Borja Sainz", "Fofana", "Francisco Moura", "Gabri Vega", "Pepe", "Perez", "Samu", "Sanusi", "Varela", "de Jong"],
-            "Расинг": ["Almendra", "Colombo", "Conechny", "Martinez", "Matias Zaracho", "Mura", "Rojas", "Rojo", "Sosa", "Vergara", "Vietto"],
-            "Рейнджерс": ["Aarons", "Antman", "Chukwuani", "Cornelius", "Diamonde", "Raskin", "Skov Olsen", "Souttar", "Sterling", "Tavernier"],
-            "Ривер Плейт": ["Acuna", "Bustos", "Driussi", "Fernandez", "Galarza", "Galoppo", "Meza", "Montiel", "Portillo", "Quintero"],
-            "Селтик": ["Carter-Vickers", "Hatate", "Iheanacho", "Johnston", "Jota", "Maeda", "McGregor", "Nygren", "Oxl.-Chamberlain", "Scales", "Tierney", "Yang Hyun Jun"],
-            "Спортинг": ["Doimande", "Eduardo Quaresma", "Geovany Quenda", "Goncalo Inacio", "Hjulmand", "Morita", "Nuno Santos", "Pedro Goncalves", "St. Juste", "Trincao"],
-            "Фейеноорд": ["Deijl", "Goncalo Borges", "Hadj-Moussa", "Hwang In Beom", "Kotarski", "Lotomba", "Read", "Smal", "Steijn", "Sterling", "Trauner"],
-        }
 
     def parse_league_map_bulk_text(self, raw_text: str) -> List[Dict]:
         mappings = []
@@ -1175,28 +1217,6 @@ class LeagueFeature:
             lines.append("")
         return "\n".join(lines).strip()
 
-    def format_league_debts_round(self, chat_id: int, round_num: int) -> str:
-        label = f"{round_num} тур"
-        entries = self.db.get_league_debts_by_round(chat_id).get(label, [])
-        seen = set()
-        uniq_entries = []
-        for it in entries:
-            a = (it.get("debtor_username") or "").lower()
-            b = (it.get("opponent_username") or "").lower()
-            k = tuple(sorted([a, b]))
-            if a and b and k in seen:
-                continue
-            if a and b:
-                seen.add(k)
-            uniq_entries.append(it)
-        lines = [f"{label}:"]
-        if not uniq_entries:
-            lines.append("Нет долгов.")
-        else:
-            lines.extend([it["raw_line"] for it in uniq_entries])
-        return "\n".join(lines)
-
-    @staticmethod
     def _format_challenge_sync_user_message(result: Dict, headline: str) -> str:
         lines = [
             headline,
@@ -1226,19 +1246,6 @@ class LeagueFeature:
                 rollback()
         except Exception:
             pass
-
-    def build_league_summary_text(self, chat_id: int, threshold: int = 2) -> str:
-        summary = self.db.get_league_debt_summary(chat_id)
-        total = self.db.get_league_debts_count(chat_id)
-        if not summary:
-            return "Долги лиги не загружены."
-        lines = [f"📋 Долги лиги (всего матчей-долгов: {total})", ""]
-        for row in summary:
-            marker = " ⚠️" if row["debts_count"] >= threshold else ""
-            lines.append(f"@{row['debtor_username']} — {row['debts_count']}{marker}")
-        lines.append("")
-        lines.append(f"Порог для напоминания: >= {threshold}")
-        return "\n".join(lines)
 
     async def send_league_reminder_message(self, chat_id: int, threshold: int = 2, bot=None, custom_text: Optional[str] = None) -> bool:
         summary = self.db.get_league_debt_summary(chat_id)
@@ -1294,21 +1301,6 @@ class LeagueFeature:
                         custom_text=cfg.get("hourly_text") or "Напоминание: сыграйте долги в лиге.",
                     )
 
-    def _normalize_player_name(self, name: str) -> str:
-        value = (name or "").strip().lower()
-        value = unicodedata.normalize("NFKD", value)
-        value = "".join(ch for ch in value if not unicodedata.combining(ch))
-        value = value.replace("ё", "е")
-        value = re.sub(r"[^a-zа-я0-9\s\-]", " ", value, flags=re.IGNORECASE)
-        value = re.sub(r"\s+", " ", value).strip()
-        return value
-
-    async def cmd_league_debts_show(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not self._is_admin(update.effective_user.id):
-            await update.message.reply_text("❌ Команда доступна только админам.")
-            return
-        await update.message.reply_text(self.build_league_summary_text(update.effective_chat.id))
-
     async def cmd_admin(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not self._is_admin(update.effective_user.id):
             return
@@ -1316,193 +1308,14 @@ class LeagueFeature:
             "\n".join(
                 [
                     "Доступные команды:",
-                    "/admin - список доступных команд",
-                    "/league_debts_show - показать сводку долгов по игрокам",
-                    "/league_debts_round [N] - показать долги за конкретный тур",
-                    "/league_map_bulk [список] - массово задать привязки Команда - @username",
-                    "/league_map_show - показать текущие привязки команд",
-                    "/league_map_clear - очистить все привязки команд",
-                    "/league_players_seed - загрузить базу футболистов для этой лиги",
-                    "/league_sync_challenge [url] [N] - синк долгов из challenge.place до тура N",
-                    "/league_reminder_on - включить напоминания каждые 4 часа (00:00, 04:00, 08:00, 12:00, 16:00, 20:00 МСК)",
-                    "/league_reminder_off - выключить ежедневные напоминания",
-                    "/league_reminder_now - отправить напоминание сразу",
-                    "/league_reminder_hourly_on [текст] - включить ежечасные напоминания в :00",
-                    "/league_reminder_hourly_off - выключить ежечасные напоминания",
+                    "/admin - список команд",
+                    "+ долги <url> <тур> - загрузить долги из challenge.place",
+                    "+ команды\nКоманда - @username\n... - задать привязки команд",
+                    "+ пиналка - включить напоминания (каждые 4 часа МСК)",
+                    "- пиналка - выключить напоминания",
                 ]
             )
         )
-
-    async def cmd_league_debts_round(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not self._is_admin(update.effective_user.id):
-            await update.message.reply_text("❌ Команда доступна только админам.")
-            return
-        if not context.args:
-            await update.message.reply_text("Использование: /league_debts_round [номер тура]")
-            return
-        try:
-            round_num = int(context.args[0])
-        except ValueError:
-            await update.message.reply_text("Номер тура должен быть числом.")
-            return
-        await update.message.reply_text(self.format_league_debts_round(update.effective_chat.id, round_num))
-
-    async def cmd_league_map_bulk(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not self._is_admin(update.effective_user.id):
-            await update.message.reply_text("❌ Команда доступна только админам.")
-            return
-        message_text = (update.effective_message.text or "").strip()
-        if "\n" in message_text:
-            payload = message_text.split("\n", 1)[1].strip()
-        else:
-            payload = " ".join(context.args).strip()
-        if not payload:
-            await update.message.reply_text("Использование: /league_map_bulk [список]")
-            return
-        mappings = self.parse_league_map_bulk_text(payload)
-        if not mappings:
-            await update.message.reply_text("Не удалось распознать ни одной строки.")
-            return
-        self.db.replace_league_team_map(update.effective_chat.id, mappings)
-        await update.message.reply_text(f"✅ Обновил привязки клубов: {len(mappings)}")
-
-    async def cmd_league_map_show(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not self._is_admin(update.effective_user.id):
-            await update.message.reply_text("❌ Команда доступна только админам.")
-            return
-        items = self.db.get_league_team_map(update.effective_chat.id)
-        if not items:
-            await update.message.reply_text("Привязки клубов пустые.")
-            return
-        lines = ["📌 Привязки клубов:", ""]
-        lines.extend([f"{i}) {x['team_name_raw']} - @{x['telegram_username']}" for i, x in enumerate(items, 1)])
-        await update.message.reply_text("\n".join(lines))
-
-    async def cmd_league_map_clear(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not self._is_admin(update.effective_user.id):
-            await update.message.reply_text("❌ Команда доступна только админам.")
-            return
-        self.db.clear_league_team_map(update.effective_chat.id)
-        await update.message.reply_text("✅ Привязки клубов очищены.")
-
-    async def cmd_league_players_seed(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not self._is_admin(update.effective_user.id):
-            await update.message.reply_text("❌ Команда доступна только админам.")
-            return
-
-        chat_id = update.effective_chat.id
-        team_map = {x["team_name_norm"]: x["team_name_raw"] for x in self.db.get_league_team_map(chat_id)}
-        seed = self.default_league_players_seed()
-
-        rows = []
-        teams_loaded = 0
-        players_loaded = 0
-        for team_raw, players in seed.items():
-            team_norm = self.normalize_team_name(team_raw)
-            mapped_raw = team_map.get(team_norm, team_raw)
-            if not players:
-                continue
-            teams_loaded += 1
-            for player in players:
-                player_raw = (player or "").strip()
-                if not player_raw:
-                    continue
-                rows.append(
-                    {
-                        "team_name_norm": team_norm,
-                        "team_name_raw": mapped_raw,
-                        "player_name_norm": self._normalize_player_name(player_raw),
-                        "player_name_raw": player_raw,
-                    }
-                )
-                players_loaded += 1
-
-        self.db.replace_league_team_players(chat_id, rows)
-        await update.message.reply_text(
-            f"✅ База футболистов загружена для этой лиги. Команд: {teams_loaded}, игроков: {players_loaded}."
-        )
-
-    async def cmd_league_sync_challenge(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not self._is_admin(update.effective_user.id):
-            await update.message.reply_text("❌ Команда доступна только админам.")
-            return
-        if len(context.args) < 2:
-            await update.message.reply_text("Использование: /league_sync_challenge <stage_url> <max_round>")
-            return
-        stage_url = context.args[0].strip()
-        try:
-            max_round = int(context.args[1])
-        except ValueError:
-            await update.message.reply_text("max_round должен быть числом.")
-            return
-        chat_id = update.effective_chat.id
-        try:
-            result = self.sync_challenge_stage_debts(chat_id, stage_url, max_round)
-            await update.message.reply_text(
-                self._format_challenge_sync_user_message(
-                    result,
-                    f"✅ Синк выполнен до {max_round} тура включительно.",
-                )
-            )
-            if result["unresolved_teams"]:
-                unresolved_text = "\n".join([f"- {team}" for team in result["unresolved_teams"]])
-                await update.message.reply_text("⚠️ Команды без привязки к @username:\n" + unresolved_text)
-            await update.message.reply_text(self.format_league_debts_post(chat_id))
-        except Exception as e:
-            self.logger.exception(
-                "cmd league_sync_challenge failed chat_id=%s stage_url=%s max_round=%s err=%s",
-                chat_id,
-                stage_url,
-                max_round,
-                e,
-            )
-            await update.message.reply_text(f"❌ Ошибка синка: {e}")
-
-    async def cmd_league_reminder_on(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not self._is_admin(update.effective_user.id):
-            await update.message.reply_text("❌ Команда доступна только админам.")
-            return
-        self.db.set_league_reminder_enabled(update.effective_chat.id, True)
-        await update.message.reply_text(
-            "✅ Авто-напоминания включены: каждые 4 часа (00:00, 04:00, 08:00, 12:00, 16:00, 20:00 Europe/Moscow)."
-        )
-
-    async def cmd_league_reminder_off(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not self._is_admin(update.effective_user.id):
-            await update.message.reply_text("❌ Команда доступна только админам.")
-            return
-        self.db.set_league_reminder_enabled(update.effective_chat.id, False)
-        await update.message.reply_text("✅ Авто-напоминания выключены.")
-
-    async def cmd_league_reminder_now(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not self._is_admin(update.effective_user.id):
-            await update.message.reply_text("❌ Команда доступна только админам.")
-            return
-        settings = self.db.get_league_reminder_settings(update.effective_chat.id)
-        threshold = settings.get("threshold", 2)
-        sent = await self.send_league_reminder_message(update.effective_chat.id, threshold=threshold, bot=context.bot)
-        await update.message.reply_text(
-            "✅ Напоминание отправлено." if sent else f"Нет игроков с долгами >= {threshold}."
-        )
-
-    async def cmd_league_reminder_hourly_on(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not self._is_admin(update.effective_user.id):
-            await update.message.reply_text("❌ Команда доступна только админам.")
-            return
-        text = " ".join(context.args).strip() or "Напоминание: сыграйте долги в лиге."
-        self.db.set_league_hourly_reminder(update.effective_chat.id, True, text)
-        await update.message.reply_text(
-            "✅ Ежечасное напоминание включено.\nОтправка: каждый час в :00 (Europe/Moscow).\n"
-            f"Текст: {text}"
-        )
-
-    async def cmd_league_reminder_hourly_off(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not self._is_admin(update.effective_user.id):
-            await update.message.reply_text("❌ Команда доступна только админам.")
-            return
-        self.db.set_league_hourly_reminder(update.effective_chat.id, False, None)
-        await update.message.reply_text("✅ Ежечасное напоминание выключено.")
-
 
 def _parse_admin_ids(raw: str) -> set[str]:
     return {value.strip() for value in str(raw or "").split(",") if value.strip()}
