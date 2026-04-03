@@ -755,6 +755,49 @@ class LeagueRepositoryPostgres(LeagueRepositorySQLite):
 
         self.conn.commit()
 
+    def _challenge_enabled_literal(self, enabled: bool) -> str:
+        try:
+            self.cursor.execute(
+                """
+                SELECT data_type
+                FROM information_schema.columns
+                WHERE table_name = 'league_challenge_sources'
+                  AND column_name = 'enabled'
+                  AND table_schema = current_schema()
+                """
+            )
+            row = self.cursor.fetchone()
+            data_type = (row[0] if row else "").lower()
+            if data_type == "boolean":
+                return "TRUE" if enabled else "FALSE"
+        except Exception:
+            pass
+        return "1" if enabled else "0"
+
+    def set_league_challenge_source(self, chat_id: int, stage_url: str, max_round: int):
+        enabled_literal = self._challenge_enabled_literal(True)
+        self.cursor.execute(
+            f"""
+            INSERT INTO league_challenge_sources (chat_id, stage_url, max_round, enabled, updated_at)
+            VALUES (?, ?, ?, {enabled_literal}, CURRENT_TIMESTAMP)
+            ON CONFLICT(chat_id) DO UPDATE SET
+                stage_url = excluded.stage_url,
+                max_round = excluded.max_round,
+                enabled = {enabled_literal},
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (chat_id, stage_url, max_round),
+        )
+        self.conn.commit()
+
+    def disable_league_challenge_source(self, chat_id: int):
+        disabled_literal = self._challenge_enabled_literal(False)
+        self.cursor.execute(
+            f"UPDATE league_challenge_sources SET enabled = {disabled_literal}, updated_at = CURRENT_TIMESTAMP WHERE chat_id = ?",
+            (chat_id,),
+        )
+        self.conn.commit()
+
 
 class PostgresCursorAdapter:
     def __init__(self, raw_cursor):
