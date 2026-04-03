@@ -557,6 +557,12 @@ class LeagueRepositoryPostgres(LeagueRepositorySQLite):
             )
             """
         )
+        # Backward-compatible migration for pre-existing schemas.
+        self.cursor.execute("ALTER TABLE league_team_map ADD COLUMN IF NOT EXISTS chat_id BIGINT")
+        self.cursor.execute("ALTER TABLE league_team_map ADD COLUMN IF NOT EXISTS team_name_norm TEXT")
+        self.cursor.execute("ALTER TABLE league_team_map ADD COLUMN IF NOT EXISTS team_name_raw TEXT")
+        self.cursor.execute("ALTER TABLE league_team_map ADD COLUMN IF NOT EXISTS telegram_username TEXT")
+        self.cursor.execute("ALTER TABLE league_team_map ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
 
         self.cursor.execute(
             """
