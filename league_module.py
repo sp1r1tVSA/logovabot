@@ -917,10 +917,37 @@ class LeagueRepositoryPostgres(LeagueRepositorySQLite):
 
                 placeholders = ", ".join(["?"] * len(values))
                 cols_sql = ", ".join(columns)
-                self.cursor.execute(
-                    f"INSERT INTO league_debt_entries ({cols_sql}) VALUES ({placeholders})",
-                    tuple(values),
-                )
+                self.cursor.execute("SAVEPOINT league_debt_row_sp")
+                try:
+                    self.cursor.execute(
+                        f"INSERT INTO league_debt_entries ({cols_sql}) VALUES ({placeholders})",
+                        tuple(values),
+                    )
+                    self.cursor.execute("RELEASE SAVEPOINT league_debt_row_sp")
+                except Exception:
+                    self.cursor.execute("ROLLBACK TO SAVEPOINT league_debt_row_sp")
+                    self.cursor.execute("RELEASE SAVEPOINT league_debt_row_sp")
+
+                    # Legacy fallback: some schemas enforce UNIQUE(round_no, pair_key)
+                    # without chat_id; update existing row instead of failing sync.
+                    if need_round_no and need_pair_key and "round_no" in columns and "pair_key" in columns:
+                        row_data = dict(zip(columns, values))
+                        assignments = []
+                        params = []
+                        for col in columns:
+                            if col in {"round_no", "pair_key"}:
+                                continue
+                            assignments.append(f"{col} = ?")
+                            params.append(row_data[col])
+                        if assignments:
+                            params.extend([row_data["round_no"], row_data["pair_key"]])
+                            self.cursor.execute(
+                                f"UPDATE league_debt_entries SET {', '.join(assignments)} WHERE round_no = ? AND pair_key = ?",
+                                tuple(params),
+                            )
+                            if self.cursor.rowcount > 0:
+                                continue
+                    raise
             self.conn.commit()
         except Exception:
             self.conn.rollback()
