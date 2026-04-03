@@ -2485,9 +2485,9 @@ def run_bot():
     database_url = (os.getenv("DATABASE_URL") or os.getenv("POSTGRES_URL") or "").strip()
     if database_url:
         try:
-            import psycopg2
+            import psycopg
 
-            connection = psycopg2.connect(database_url)
+            connection = psycopg.connect(database_url)
             raw_cursor = connection.cursor()
             cursor = PostgresCursorAdapter(raw_cursor)
             repo = LeagueRepositoryPostgres(connection, cursor)
