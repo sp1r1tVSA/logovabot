@@ -1312,15 +1312,18 @@ class LeagueFeature:
         except Exception:
             return None
 
-        visible = []
+        candidates = []
         for element in inputs:
             try:
-                if element.is_displayed():
-                    visible.append(element)
+                if element.is_enabled():
+                    candidates.append(element)
             except Exception:
                 continue
 
-        for element in visible:
+        if not candidates:
+            candidates = list(inputs)
+
+        for element in candidates:
             try:
                 input_type = (element.get_attribute("type") or "").lower().strip()
             except Exception:
@@ -1330,7 +1333,7 @@ class LeagueFeature:
             if self._attr_contains_any(element, ["email", "mail", "login", "user", "username"]):
                 return element
 
-        for element in visible:
+        for element in candidates:
             try:
                 input_type = (element.get_attribute("type") or "text").lower().strip()
             except Exception:
@@ -1345,15 +1348,18 @@ class LeagueFeature:
         except Exception:
             return None
 
-        visible = []
+        candidates = []
         for element in inputs:
             try:
-                if element.is_displayed():
-                    visible.append(element)
+                if element.is_enabled():
+                    candidates.append(element)
             except Exception:
                 continue
 
-        for element in visible:
+        if not candidates:
+            candidates = list(inputs)
+
+        for element in candidates:
             try:
                 input_type = (element.get_attribute("type") or "").lower().strip()
             except Exception:
@@ -1363,6 +1369,27 @@ class LeagueFeature:
             if self._attr_contains_any(element, ["pass", "парол"]):
                 return element
         return None
+
+    def _set_input_value_js(self, driver, element, value: str) -> bool:
+        try:
+            driver.execute_script(
+                """
+                const el = arguments[0];
+                const val = arguments[1];
+                if (!el) return false;
+                el.focus();
+                el.value = '';
+                el.value = val;
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+                return true;
+                """,
+                element,
+                value,
+            )
+            return True
+        except Exception:
+            return False
 
     def _list_browser_contexts(self, driver):
         contexts = [None]
@@ -1393,10 +1420,16 @@ class LeagueFeature:
                     continue
                 for element in elements:
                     try:
-                        if not element.is_displayed():
-                            continue
-                        element.clear()
-                        element.send_keys(value)
+                        try:
+                            visible = element.is_displayed()
+                        except Exception:
+                            visible = False
+                        if visible:
+                            element.clear()
+                            element.send_keys(value)
+                        else:
+                            if not self._set_input_value_js(driver, element, value):
+                                continue
                         self._switch_browser_context(driver, None)
                         return selector
                     except Exception:
@@ -1413,8 +1446,16 @@ class LeagueFeature:
 
             if fallback is not None:
                 try:
-                    fallback.clear()
-                    fallback.send_keys(value)
+                    try:
+                        visible = fallback.is_displayed()
+                    except Exception:
+                        visible = False
+                    if visible:
+                        fallback.clear()
+                        fallback.send_keys(value)
+                    else:
+                        if not self._set_input_value_js(driver, fallback, value):
+                            raise RuntimeError("fallback input fill failed")
                     self._switch_browser_context(driver, None)
                     return f"fallback:{field_kind}"
                 except Exception:
@@ -1788,7 +1829,13 @@ class LeagueFeature:
                 driver.get(url)
                 time.sleep(1.0)
                 loaded = True
-                if self._has_login_email_any_context(driver):
+                email_found = False
+                for _ in range(24):
+                    if self._has_login_email_any_context(driver):
+                        email_found = True
+                        break
+                    time.sleep(0.5)
+                if email_found:
                     break
             except Exception:
                 continue
@@ -1835,9 +1882,24 @@ class LeagueFeature:
 
         filled_email_selector = self._fill_login_field_any_context(driver, email_selectors, email, "email")
         if not filled_email_selector:
+            try:
+                title = driver.title or ""
+            except Exception:
+                title = ""
+            try:
+                current = driver.current_url or ""
+            except Exception:
+                current = ""
+            try:
+                input_count = int(driver.execute_script("return document.querySelectorAll('input').length;") or 0)
+            except Exception:
+                input_count = -1
             return {
                 "ok": False,
-                "message": "Не удалось найти поле email на странице логина.",
+                "message": (
+                    "Не удалось найти поле email на странице логина. "
+                    f"url={current}; title={title}; inputs={input_count}"
+                ),
             }
 
         filled_password_selector = self._fill_login_field_any_context(driver, password_selectors, password, "password")
