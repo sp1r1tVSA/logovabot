@@ -1525,14 +1525,27 @@ class LeagueFeature:
         return True
 
     async def _attempt_challenge_login_with_credentials(self, driver, match_url: str) -> Dict:
-        email = (os.getenv("CHALLENGE_LOGIN_EMAIL") or os.getenv("CHALLENGE_EMAIL") or "").strip()
-        password = (os.getenv("CHALLENGE_LOGIN_PASSWORD") or os.getenv("CHALLENGE_PASSWORD") or "").strip()
+        login_email_raw = os.getenv("CHALLENGE_LOGIN_EMAIL")
+        login_password_raw = os.getenv("CHALLENGE_LOGIN_PASSWORD")
+        alt_email_raw = os.getenv("CHALLENGE_EMAIL")
+        alt_password_raw = os.getenv("CHALLENGE_PASSWORD")
+
+        email = (login_email_raw or alt_email_raw or "").strip()
+        password = (login_password_raw or alt_password_raw or "").strip()
+        self.logger.info(
+            "Challenge login env presence: CHALLENGE_LOGIN_EMAIL=%s CHALLENGE_LOGIN_PASSWORD=%s CHALLENGE_EMAIL=%s CHALLENGE_PASSWORD=%s",
+            bool((login_email_raw or "").strip()),
+            bool((login_password_raw or "").strip()),
+            bool((alt_email_raw or "").strip()),
+            bool((alt_password_raw or "").strip()),
+        )
         if not email or not password:
             return {
                 "ok": False,
                 "message": (
                     "Не авторизовано в challenge.place. "
-                    "Укажите CHALLENGE_LOGIN_EMAIL и CHALLENGE_LOGIN_PASSWORD."
+                    "Укажите CHALLENGE_LOGIN_EMAIL и CHALLENGE_LOGIN_PASSWORD "
+                    "(или CHALLENGE_EMAIL и CHALLENGE_PASSWORD) и перезапустите сервис."
                 ),
             }
 
