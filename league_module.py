@@ -1064,12 +1064,12 @@ class LeagueFeature:
         current_bucket = None
         start_index = match_line_index + 1 if match_line_index >= 0 else 0
         for line in lines[start_index:]:
-            generic_header = re.match(r"^ассисты\s*:\s*(.*)$", line, flags=re.IGNORECASE)
+            generic_header = re.match(r"^ассисты\b\s*:?\s*(.*)$", line, flags=re.IGNORECASE)
             if generic_header:
                 current_bucket = "any"
                 inline_raw = generic_header.group(1).strip()
                 if inline_raw:
-                    assists_raw["any"].extend([x.strip() for x in re.split(r"[;,]", inline_raw) if x.strip()])
+                    assists_raw["any"].extend([self._clean_person_label(x.strip()) for x in re.split(r"[;,]", inline_raw) if x.strip()])
                 continue
             header = re.match(r"^ассисты\s+(.+?)\s*:\s*$", line, flags=re.IGNORECASE)
             if header:
@@ -1079,7 +1079,7 @@ class LeagueFeature:
                 current_bucket = "home" if home_score >= away_score else "away"
                 continue
             if current_bucket:
-                items = [x.strip() for x in re.split(r"[;,]", line) if x.strip()]
+                items = [self._clean_person_label(x.strip()) for x in re.split(r"[;,]", line) if x.strip()]
                 assists_raw[current_bucket].extend(items)
                 continue
 
@@ -1088,7 +1088,7 @@ class LeagueFeature:
                 continue
             if re.search(r"\d\s*[-:]\s*\d", line):
                 continue
-            fallback_items = [x.strip("-• ") for x in re.split(r"[;,]", line) if x.strip("-• ")]
+            fallback_items = [self._clean_person_label(x.strip("-• ")) for x in re.split(r"[;,]", line) if x.strip("-• ")]
             assists_raw["any"].extend(fallback_items)
 
         return {
@@ -1174,6 +1174,12 @@ class LeagueFeature:
         value = re.sub(r"\s+", " ", value).strip()
         return value
 
+    def _clean_person_label(self, text: str) -> str:
+        value = (text or "").strip()
+        value = re.sub(r"^(ассист(?:ы)?|assist(?:s)?)\b\s*:?\s*", "", value, flags=re.IGNORECASE)
+        value = re.sub(r"\s+", " ", value).strip(" ,;:-")
+        return value
+
     def _transliterate_ru_to_en(self, text: str) -> str:
         mapping = {
             "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ж": "zh", "з": "z", "и": "i", "й": "y",
@@ -1244,6 +1250,9 @@ class LeagueFeature:
         unknown = []
         warnings = []
         for assist in assists_any:
+            assist = self._clean_person_label(assist)
+            if not assist:
+                continue
             best_home_goal = max([self._score_name_match(assist, x) for x in home_goals], default=0.0)
             best_away_goal = max([self._score_name_match(assist, x) for x in away_goals], default=0.0)
             best_home_player = max([self._score_name_match(assist, x) for x in home_pool], default=0.0)
@@ -1264,6 +1273,44 @@ class LeagueFeature:
             else:
                 away.append(assist)
         return {"home": home, "away": away, "unknown": unknown, "warnings": warnings}
+
+    def _resolve_goals_by_players(self, chat_id: int, home_team: str, away_team: str, goals_info: Dict) -> Dict:
+        home_team_norm = self.normalize_team_name(home_team)
+        away_team_norm = self.normalize_team_name(away_team)
+        home_players = self.db.get_league_team_players(chat_id, home_team_norm) if isinstance(chat_id, int) else []
+        away_players = self.db.get_league_team_players(chat_id, away_team_norm) if isinstance(chat_id, int) else []
+        home_pool = [x["player_name_raw"] for x in home_players]
+        away_pool = [x["player_name_raw"] for x in away_players]
+
+        home_goals = list(goals_info.get("home_goals", []))
+        away_goals = list(goals_info.get("away_goals", []))
+        still_unknown = []
+
+        for raw_name in goals_info.get("unknown_goals", []):
+            name = self._clean_person_label(raw_name)
+            if not name:
+                continue
+            best_home = max([self._score_name_match(name, p) for p in home_pool], default=0.0)
+            best_away = max([self._score_name_match(name, p) for p in away_pool], default=0.0)
+
+            if best_home >= 0.65 and best_home > best_away + 0.05:
+                home_goals.append(name)
+                continue
+            if best_away >= 0.65 and best_away > best_home + 0.05:
+                away_goals.append(name)
+                continue
+
+            # If one side has no roster loaded, route unmatched names to opposite side.
+            if not away_pool and best_home < 0.6:
+                away_goals.append(name)
+                continue
+            if not home_pool and best_away < 0.6:
+                home_goals.append(name)
+                continue
+
+            still_unknown.append(name)
+
+        return {"home_goals": home_goals, "away_goals": away_goals, "unknown_goals": still_unknown}
 
     def _classify_goal_color(self, image_bgr, box: Dict[str, int]) -> str:
         try:
@@ -1558,12 +1605,12 @@ class LeagueFeature:
                 score_home = int(score_match.group(1))
                 score_away = int(score_match.group(2))
                 continue
-            generic_assists = re.match(r"^ассисты\s*:\s*(.*)$", line, flags=re.IGNORECASE)
+            generic_assists = re.match(r"^ассисты\b\s*:?\s*(.*)$", line, flags=re.IGNORECASE)
             if generic_assists:
                 current = "assists_any"
                 inline_raw = generic_assists.group(1).strip()
                 if inline_raw:
-                    assists_any.extend([x.strip() for x in re.split(r"[;,]", inline_raw) if x.strip()])
+                    assists_any.extend([self._clean_person_label(x.strip()) for x in re.split(r"[;,]", inline_raw) if x.strip()])
                 continue
             h = re.match(r"^(Голы|Ассисты)\s+(.+?)\s*:\s*$", line, flags=re.IGNORECASE)
             if h:
@@ -1575,10 +1622,10 @@ class LeagueFeature:
                 continue
             if current is None:
                 # Fallback: plain lines without header are treated as assists list.
-                fallback_chunks = [x.strip("-• ") for x in re.split(r"[;,]", line) if x.strip("-• ")]
+                fallback_chunks = [self._clean_person_label(x.strip("-• ")) for x in re.split(r"[;,]", line) if x.strip("-• ")]
                 assists_any.extend(fallback_chunks)
                 continue
-            chunks = [x.strip() for x in re.split(r"[;,]", line) if x.strip()]
+            chunks = [self._clean_person_label(x.strip()) for x in re.split(r"[;,]", line) if x.strip()]
             if current == "assists_any":
                 assists_any.extend(chunks)
             else:
@@ -1657,6 +1704,13 @@ class LeagueFeature:
             if not score:
                 score = self._extract_score([str(x.get("text", "")) for x in event_lines])
             goals_info = self._extract_goal_scorers(image_bgr, event_lines, offset_x=events_x1, offset_y=events_y1)
+
+        goals_info = self._resolve_goals_by_players(
+            chat.id,
+            caption_info.get("home_team", ""),
+            caption_info.get("away_team", ""),
+            goals_info,
+        )
 
         if not score:
             if not goals_info.get("unknown_goals") and (goals_info.get("home_goals") or goals_info.get("away_goals")):
