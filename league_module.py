@@ -1680,6 +1680,10 @@ class LeagueFeature:
             value = value[1:-1].strip()
         return value
 
+    def _is_login_debug_enabled(self) -> bool:
+        raw = self._get_env_loose("CHALLENGE_LOGIN_DEBUG").lower()
+        return raw in {"1", "true", "yes", "on", "y"}
+
     @staticmethod
     def _xpath_literal(value: str) -> str:
         if "'" not in value:
@@ -1922,6 +1926,41 @@ class LeagueFeature:
             pass
         return total
 
+    def _debug_login_snapshot(self, driver, stage: str) -> None:
+        if not self._is_login_debug_enabled():
+            return
+        try:
+            current = driver.current_url or ""
+        except Exception:
+            current = ""
+        try:
+            title = driver.title or ""
+        except Exception:
+            title = ""
+        try:
+            handles = list(driver.window_handles or [])
+        except Exception:
+            handles = []
+        try:
+            active_handle = driver.current_window_handle or ""
+        except Exception:
+            active_handle = ""
+        try:
+            frame_count = int(driver.execute_script("return window.frames.length;") or 0)
+        except Exception:
+            frame_count = 0
+        input_count = self._count_inputs_all_contexts(driver)
+        self.logger.info(
+            "Challenge login debug [%s]: url=%s; title=%s; inputs=%s; frames=%s; handles=%s; active_handle=%s",
+            stage,
+            current,
+            title,
+            input_count,
+            frame_count,
+            len(handles),
+            active_handle,
+        )
+
     def _fill_login_field_any_context(self, driver, selectors: List[str], value: str, field_kind: str) -> Optional[str]:
         contexts = self._collect_frame_paths(driver)
         for frame_path in contexts:
@@ -2002,6 +2041,65 @@ class LeagueFeature:
         except Exception:
             pass
         return False
+
+    def _switch_to_auth_window_if_needed(self, driver) -> bool:
+        try:
+            handles = list(driver.window_handles or [])
+        except Exception:
+            return False
+        if len(handles) <= 1:
+            return False
+
+        try:
+            current = driver.current_window_handle
+        except Exception:
+            current = None
+
+        preferred_handle = None
+        preferred_score = -1
+        for handle in reversed(handles):
+            try:
+                driver.switch_to.window(handle)
+                url = (driver.current_url or "").lower()
+                title = (driver.title or "").lower()
+            except Exception:
+                continue
+
+            score = 0
+            if "challenge.place" in url:
+                score += 2
+            if any(part in url for part in ("/login", "/signin", "auth", "oauth")):
+                score += 3
+            if any(part in title for part in ("sign in", "login", "log in", "войти", "автор")):
+                score += 1
+            if score > preferred_score:
+                preferred_score = score
+                preferred_handle = handle
+
+        if preferred_handle is None:
+            if current:
+                try:
+                    driver.switch_to.window(current)
+                except Exception:
+                    pass
+            return False
+
+        switched = preferred_handle != current
+        try:
+            driver.switch_to.window(preferred_handle)
+        except Exception:
+            if current:
+                try:
+                    driver.switch_to.window(current)
+                except Exception:
+                    pass
+            return False
+
+        try:
+            self._switch_to_frame_path(driver, ())
+        except Exception:
+            pass
+        return switched
 
     def _search_selector_in_frames(self, driver, selector: str):
         found = []
@@ -2302,23 +2400,47 @@ class LeagueFeature:
             "CHALLENGE_LOGIN_METHOD_SELECTORS",
             [
                 "text=Use your email",
+                "text=Continue with email",
+                "text=Continue with e-mail",
+                "text=Email",
+                "text=E-mail",
+                "text=Sign in with email",
                 "css=.flex-grow-1.px-3.text-truncate",
                 "button:has-text('Use your email')",
+                "button:has-text('Continue with email')",
+                "button:has-text('Sign in with email')",
+                "button:has-text('Email')",
                 "div:has-text('Use your email')",
+                "div:has-text('Continue with email')",
                 "xpath=//*[contains(@class,'flex-grow-1') and contains(@class,'text-truncate') and contains(normalize-space(.), 'Use your email')]",
                 "text=Use email",
                 "text=Использовать email",
+                "text=Войти по email",
             ],
         )
         clicked = await self._click_first_available(driver, selectors, timeout=5000)
         if clicked:
             time.sleep(1.0)
+            switched = self._switch_to_auth_window_if_needed(driver)
+            if self._is_login_debug_enabled():
+                self.logger.info("Challenge login debug [open_email_method_click]: switched_window=%s", switched)
+            self._debug_login_snapshot(driver, "open_email_method_click")
             return True
 
         try:
             js_clicked = driver.execute_script(
                 """
-                const phrases = ['use your email', 'use email', 'использовать email'];
+                const phrases = [
+                  'use your email',
+                  'use email',
+                  'continue with email',
+                  'continue with e-mail',
+                  'sign in with email',
+                  'email',
+                  'e-mail',
+                  'использовать email',
+                  'войти по email'
+                ];
                 const roots = [document];
                 const collect = (root, out) => {
                   if (!root || !root.querySelectorAll) return;
@@ -2361,6 +2483,10 @@ class LeagueFeature:
             )
             if bool(js_clicked):
                 time.sleep(1.0)
+                switched = self._switch_to_auth_window_if_needed(driver)
+                if self._is_login_debug_enabled():
+                    self.logger.info("Challenge login debug [open_email_method_js_click]: switched_window=%s", switched)
+                self._debug_login_snapshot(driver, "open_email_method_js_click")
                 return True
         except Exception:
             pass
@@ -2388,6 +2514,10 @@ class LeagueFeature:
                     parent.click()
                     self._switch_to_frame_path(driver, ())
                     time.sleep(1.0)
+                    switched = self._switch_to_auth_window_if_needed(driver)
+                    if self._is_login_debug_enabled():
+                        self.logger.info("Challenge login debug [open_email_method_xpath_parent]: switched_window=%s", switched)
+                    self._debug_login_snapshot(driver, "open_email_method_xpath_parent")
                     return True
                 except Exception:
                     continue
@@ -2461,15 +2591,35 @@ class LeagueFeature:
             try:
                 driver.get(url)
                 time.sleep(1.0)
+                switched = self._switch_to_auth_window_if_needed(driver)
+                if self._is_login_debug_enabled():
+                    self.logger.info("Challenge login debug [navigate_login_url]: target=%s; switched_window=%s", url, switched)
+                self._debug_login_snapshot(driver, "after_login_navigation")
                 loaded = True
                 tried_urls.append(url)
                 email_found = False
-                for _ in range(60):
+                for attempt_idx in range(60):
                     if await self._open_email_login_method(driver):
                         email_method_clicked = True
+                    switched = self._switch_to_auth_window_if_needed(driver)
                     if self._has_login_email_any_context(driver):
+                        if self._is_login_debug_enabled():
+                            self.logger.info(
+                                "Challenge login debug [email_context_found]: poll_attempt=%s; switched_window=%s",
+                                attempt_idx + 1,
+                                switched,
+                            )
+                        self._debug_login_snapshot(driver, "email_context_found")
                         email_found = True
                         break
+                    if attempt_idx in {0, 4, 9, 19, 39, 59}:
+                        if self._is_login_debug_enabled():
+                            self.logger.info(
+                                "Challenge login debug [email_context_waiting]: poll_attempt=%s; switched_window=%s",
+                                attempt_idx + 1,
+                                switched,
+                            )
+                        self._debug_login_snapshot(driver, f"email_context_waiting_{attempt_idx + 1}")
                     time.sleep(0.5)
                 if email_found:
                     login_page_with_email = True
@@ -2499,9 +2649,16 @@ class LeagueFeature:
             "CHALLENGE_LOGIN_EMAIL_SELECTORS",
             [
                 "input[type='email']",
+                "input[type='text'][name='identifier']",
+                "input[type='email'][name='identifier']",
                 "input[name*='email']",
+                "input[id*='email']",
+                "input[name*='identifier']",
+                "input[id*='identifier']",
                 "input[name*='login']",
                 "input[name*='user']",
+                "input[name*='account']",
+                "input[autocomplete='username']",
                 "input[type='text'][autocomplete='username']",
                 "input[autocomplete='email']",
                 "input[placeholder*='mail']",
@@ -2534,10 +2691,27 @@ class LeagueFeature:
         )
 
         filled_email_selector = None
-        for _ in range(50):
+        for attempt_idx in range(50):
+            switched = self._switch_to_auth_window_if_needed(driver)
             filled_email_selector = self._fill_login_field_any_context(driver, email_selectors, email, "email")
             if filled_email_selector:
+                if self._is_login_debug_enabled():
+                    self.logger.info(
+                        "Challenge login debug [email_filled]: attempt=%s; selector=%s; switched_window=%s",
+                        attempt_idx + 1,
+                        filled_email_selector,
+                        switched,
+                    )
+                self._debug_login_snapshot(driver, "email_filled")
                 break
+            if attempt_idx in {0, 4, 9, 19, 29, 39, 49}:
+                if self._is_login_debug_enabled():
+                    self.logger.info(
+                        "Challenge login debug [email_fill_retry]: attempt=%s; switched_window=%s",
+                        attempt_idx + 1,
+                        switched,
+                    )
+                self._debug_login_snapshot(driver, f"email_fill_retry_{attempt_idx + 1}")
             await self._open_email_login_method(driver)
             time.sleep(0.4)
         if not filled_email_selector:

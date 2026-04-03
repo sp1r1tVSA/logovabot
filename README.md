@@ -84,6 +84,7 @@ pip install -r requirements.txt
 - `CHALLENGE_LOGIN_EMAIL`
 - `CHALLENGE_LOGIN_PASSWORD`
 - `CHALLENGE_LOGIN_URL` (опционально, по умолчанию `https://challenge.place/login`)
+- `CHALLENGE_LOGIN_DEBUG` (опционально; `1/true/on` включает подробные debug-логи процесса логина)
 
 Если на сайте включены captcha/2FA, автоматический логин может не пройти.
 
