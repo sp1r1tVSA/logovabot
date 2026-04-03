@@ -571,6 +571,36 @@ class LeagueFeature:
             "Бенфика": ["Antonio Silva", "Aursnes", "Bah", "Dahl", "Dedic", "Lukebakio", "Otamendi", "Rafa", "Rios", "Sudakov"],
             "Бока Хуниорс": ["Ander Herrera", "Ascacibar", "Blanco", "Blondel", "Cavani", "Costa", "Figal", "Merentiel", "Palacios", "Paredes", "Zeballos"],
             "Брага": ["Arrey-mbi", "Gabri Martinez", "Grillitsch", "Joao Moutinho", "Leonardo Lelo", "Niakate", "Ricardo Horta", "Victor Gomez", "Vitor Carvalho", "Zalazar"],
+            "Брюгге": [
+                "Nordin Jackers",
+                "Simon Mignolet",
+                "Dani van den Heuvel",
+                "Axl De Corte",
+                "Joel Ordonez",
+                "Brandon Mechele",
+                "Jorne Spileers",
+                "Vince Osuji",
+                "Joaquin Seys",
+                "Bjorn Meijer",
+                "Kyriani Sabbe",
+                "Hugo Siquet",
+                "Aleksandar Stankovic",
+                "Raphael Onyedika",
+                "Lynnt Audoor",
+                "Ludovit Reis",
+                "Hugo Vetlesen",
+                "Alejandro Granados",
+                "Felix Lemarechal",
+                "Hans Vanaken",
+                "Cisse Sandra",
+                "Christos Tzolis",
+                "Carlos Forbs",
+                "Mamadou Diakhon",
+                "Shandre Campbell",
+                "Nicolo Tresoldi",
+                "Romeo Vermant",
+                "Gustaf Nilsson",
+            ],
             "Буде Глимт": ["Berg", "Bjorkan", "Evjen", "Fet", "Gundersen", "Hauge", "Hogh", "Maatta", "Saltnes", "Slovold"],
             "Копенгаген": ["Achouri", "Aurelio Buta", "Delaney", "Elyounoussi", "Huescas", "Larsson", "Lopez", "Mattsson", "Moukoko", "Zanka"],
             "ПСВ": ["Boadu", "Dest", "Flamingo", "Man", "Mauro Junior", "Perisic", "Schouten", "Van Bommel", "Veerman", "Yarek"],
@@ -1282,6 +1312,14 @@ class LeagueFeature:
         home_pool = [x["player_name_raw"] for x in home_players]
         away_pool = [x["player_name_raw"] for x in away_players]
 
+        # If no rosters are loaded for both teams, keep OCR color result untouched.
+        if not home_pool and not away_pool:
+            return {
+                "home_goals": list(goals_info.get("home_goals", [])),
+                "away_goals": list(goals_info.get("away_goals", [])),
+                "unknown_goals": list(goals_info.get("unknown_goals", [])),
+            }
+
         home_goals = list(goals_info.get("home_goals", []))
         away_goals = list(goals_info.get("away_goals", []))
         still_unknown = []
@@ -1293,21 +1331,32 @@ class LeagueFeature:
             best_home = max([self._score_name_match(name, p) for p in home_pool], default=0.0)
             best_away = max([self._score_name_match(name, p) for p in away_pool], default=0.0)
 
-            if best_home >= 0.65 and best_home > best_away + 0.05:
-                home_goals.append(name)
-                continue
-            if best_away >= 0.65 and best_away > best_home + 0.05:
-                away_goals.append(name)
-                continue
-
-            # If one side has no roster loaded, route unmatched names to opposite side.
-            if not away_pool and best_home < 0.6:
-                away_goals.append(name)
-                continue
-            if not home_pool and best_away < 0.6:
-                home_goals.append(name)
+            # Both rosters exist: compare both sides.
+            if home_pool and away_pool:
+                if best_home >= 0.65 and best_home > best_away + 0.05:
+                    home_goals.append(name)
+                    continue
+                if best_away >= 0.65 and best_away > best_home + 0.05:
+                    away_goals.append(name)
+                    continue
+                still_unknown.append(name)
                 continue
 
+            # Only home roster exists: map only confident home matches, keep others unknown.
+            if home_pool and not away_pool:
+                if best_home >= 0.65:
+                    home_goals.append(name)
+                else:
+                    still_unknown.append(name)
+                continue
+
+            # Only away roster exists: map only confident away matches, keep others unknown.
+            if away_pool and not home_pool:
+                if best_away >= 0.65:
+                    away_goals.append(name)
+                else:
+                    still_unknown.append(name)
+                continue
             still_unknown.append(name)
 
         return {"home_goals": home_goals, "away_goals": away_goals, "unknown_goals": still_unknown}
