@@ -798,42 +798,55 @@ class LeagueRepositoryPostgres(LeagueRepositorySQLite):
             return {"exists": False, "data_type": "", "not_null": False}
 
     def replace_league_debts(self, chat_id: int, entries: List[Dict]):
-        self.cursor.execute("DELETE FROM league_debt_entries WHERE chat_id = ?", (chat_id,))
+        try:
+            self.cursor.execute("DELETE FROM league_debt_entries WHERE chat_id = ?", (chat_id,))
 
-        round_no_meta = self._column_meta("league_debt_entries", "round_no")
-        need_round_no = bool(round_no_meta.get("exists") and round_no_meta.get("not_null"))
+            round_no_meta = self._column_meta("league_debt_entries", "round_no")
+            need_round_no = bool(round_no_meta.get("exists") and round_no_meta.get("not_null"))
 
-        for e in entries:
-            round_label = e.get("round_label")
-            debtor = e.get("debtor_username")
-            opponent = e.get("opponent_username")
-            raw_line = e.get("raw_line")
+            pair_key_meta = self._column_meta("league_debt_entries", "pair_key")
+            need_pair_key = bool(pair_key_meta.get("exists") and pair_key_meta.get("not_null"))
 
-            if need_round_no:
-                round_no = 0
-                m = re.search(r"(\d+)", str(round_label or ""))
-                if m:
-                    try:
-                        round_no = int(m.group(1))
-                    except Exception:
-                        round_no = 0
+            for e in entries:
+                round_label = e.get("round_label")
+                debtor = e.get("debtor_username")
+                opponent = e.get("opponent_username")
+                raw_line = e.get("raw_line")
+
+                columns = ["chat_id", "round_label", "debtor_username", "opponent_username", "raw_line"]
+                values = [chat_id, round_label, debtor, opponent, raw_line]
+
+                if need_round_no:
+                    round_no = 0
+                    m = re.search(r"(\d+)", str(round_label or ""))
+                    if m:
+                        try:
+                            round_no = int(m.group(1))
+                        except Exception:
+                            round_no = 0
+                    columns.append("round_no")
+                    values.append(round_no)
+
+                if need_pair_key:
+                    left = str(debtor or "").strip().lower()
+                    right = str(opponent or "").strip().lower()
+                    if left and right:
+                        pair_key = "::".join(sorted([left, right]))
+                    else:
+                        pair_key = (left or right or str(raw_line or "").strip().lower() or "unknown")
+                    columns.append("pair_key")
+                    values.append(pair_key)
+
+                placeholders = ", ".join(["?"] * len(values))
+                cols_sql = ", ".join(columns)
                 self.cursor.execute(
-                    """
-                    INSERT INTO league_debt_entries
-                        (chat_id, round_no, round_label, debtor_username, opponent_username, raw_line)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    """,
-                    (chat_id, round_no, round_label, debtor, opponent, raw_line),
+                    f"INSERT INTO league_debt_entries ({cols_sql}) VALUES ({placeholders})",
+                    tuple(values),
                 )
-            else:
-                self.cursor.execute(
-                    """
-                    INSERT INTO league_debt_entries (chat_id, round_label, debtor_username, opponent_username, raw_line)
-                    VALUES (?, ?, ?, ?, ?)
-                    """,
-                    (chat_id, round_label, debtor, opponent, raw_line),
-                )
-        self.conn.commit()
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
 
     def _reminder_enabled_literal(self, column_name: str, enabled: bool) -> str:
         try:
