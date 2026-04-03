@@ -1441,7 +1441,22 @@ class LeagueFeature:
         date_value = msk_now.strftime("%Y-%m-%d")
 
         async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
+            try:
+                browser = await p.chromium.launch(
+                    headless=True,
+                    args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
+                )
+            except Exception as e:
+                self.logger.error(f"Failed to launch Chromium: {e}")
+                return {
+                    "ok": False,
+                    "message": (
+                        "Не удалось запустить браузер на сервере. "
+                        "Возможно, не установлены системные зависимости Chromium (libnss3, libatk и др.) "
+                        "или образ контейнера собран без Playwright deps. "
+                        "Свяжитесь с администратором."
+                    ),
+                }
             context = await browser.new_context(storage_state=str(state_path))
             page = await context.new_page()
             try:
