@@ -774,6 +774,97 @@ class LeagueRepositoryPostgres(LeagueRepositorySQLite):
             pass
         return "1" if enabled else "0"
 
+    def _reminder_enabled_literal(self, column_name: str, enabled: bool) -> str:
+        try:
+            self.cursor.execute(
+                """
+                SELECT data_type
+                FROM information_schema.columns
+                WHERE table_name = 'league_reminder_settings'
+                  AND column_name = ?
+                  AND table_schema = current_schema()
+                """,
+                (column_name,),
+            )
+            row = self.cursor.fetchone()
+            data_type = (row[0] if row else "").lower()
+            if data_type == "boolean":
+                return "TRUE" if enabled else "FALSE"
+        except Exception:
+            pass
+        return "1" if enabled else "0"
+
+    def set_league_reminder_enabled(self, chat_id: int, enabled: bool):
+        enabled_literal = self._reminder_enabled_literal("enabled", enabled)
+        # Legacy-safe upsert without ON CONFLICT dependency.
+        self.cursor.execute(
+            f"""
+            UPDATE league_reminder_settings
+            SET enabled = {enabled_literal},
+                updated_at = CURRENT_TIMESTAMP
+            WHERE chat_id = ?
+            """,
+            (chat_id,),
+        )
+        if self.cursor.rowcount <= 0:
+            hourly_off = self._reminder_enabled_literal("hourly_enabled", False)
+            self.cursor.execute(
+                f"""
+                INSERT INTO league_reminder_settings
+                    (chat_id, enabled, timezone, threshold, hourly_enabled, hourly_text, updated_at)
+                VALUES
+                    (?, {enabled_literal}, 'Europe/Moscow', 2, {hourly_off}, NULL, CURRENT_TIMESTAMP)
+                """,
+                (chat_id,),
+            )
+        self.conn.commit()
+
+    def set_league_hourly_reminder(self, chat_id: int, enabled: bool, hourly_text: Optional[str]):
+        hourly_literal = self._reminder_enabled_literal("hourly_enabled", enabled)
+        enabled_off = self._reminder_enabled_literal("enabled", False)
+        self.cursor.execute(
+            f"""
+            UPDATE league_reminder_settings
+            SET hourly_enabled = {hourly_literal},
+                hourly_text = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE chat_id = ?
+            """,
+            (hourly_text, chat_id),
+        )
+        if self.cursor.rowcount <= 0:
+            self.cursor.execute(
+                f"""
+                INSERT INTO league_reminder_settings
+                    (chat_id, enabled, timezone, threshold, hourly_enabled, hourly_text, updated_at)
+                VALUES
+                    (?, {enabled_off}, 'Europe/Moscow', 2, {hourly_literal}, ?, CURRENT_TIMESTAMP)
+                """,
+                (chat_id, hourly_text),
+            )
+        self.conn.commit()
+
+    def get_enabled_league_reminder_chats(self) -> List[Dict]:
+        self.cursor.execute(
+            """
+            SELECT chat_id, enabled, timezone, threshold, hourly_enabled, hourly_text
+            FROM league_reminder_settings
+            WHERE LOWER(COALESCE(enabled::text, '')) IN ('1', 't', 'true')
+               OR LOWER(COALESCE(hourly_enabled::text, '')) IN ('1', 't', 'true')
+            """
+        )
+        return [
+            {
+                "chat_id": r[0],
+                "enabled": r[1],
+                "timezone": r[2],
+                "threshold": r[3],
+                "hourly_enabled": r[4],
+                "hourly_text": r[5],
+            }
+            for r in self.cursor.fetchall()
+        ]
+
     def set_league_challenge_source(self, chat_id: int, stage_url: str, max_round: int):
         enabled_literal = self._challenge_enabled_literal(True)
         # Legacy-friendly upsert without relying on ON CONFLICT(chat_id)
