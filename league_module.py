@@ -1364,6 +1364,87 @@ class LeagueFeature:
                 return element
         return None
 
+    def _list_browser_contexts(self, driver):
+        contexts = [None]
+        try:
+            frames = driver.find_elements(By.TAG_NAME, "iframe")
+        except Exception:
+            frames = []
+        contexts.extend(frames)
+        return contexts
+
+    def _switch_browser_context(self, driver, frame):
+        driver.switch_to.default_content()
+        if frame is not None:
+            driver.switch_to.frame(frame)
+
+    def _fill_login_field_any_context(self, driver, selectors: List[str], value: str, field_kind: str) -> Optional[str]:
+        contexts = self._list_browser_contexts(driver)
+        for frame in contexts:
+            try:
+                self._switch_browser_context(driver, frame)
+            except Exception:
+                continue
+
+            for selector in selectors:
+                try:
+                    elements = self._find_elements_in_current_context(driver, selector)
+                except Exception:
+                    continue
+                for element in elements:
+                    try:
+                        if not element.is_displayed():
+                            continue
+                        element.clear()
+                        element.send_keys(value)
+                        self._switch_browser_context(driver, None)
+                        return selector
+                    except Exception:
+                        continue
+
+            try:
+                fallback = (
+                    self._find_login_email_element(driver)
+                    if field_kind == "email"
+                    else self._find_login_password_element(driver)
+                )
+            except Exception:
+                fallback = None
+
+            if fallback is not None:
+                try:
+                    fallback.clear()
+                    fallback.send_keys(value)
+                    self._switch_browser_context(driver, None)
+                    return f"fallback:{field_kind}"
+                except Exception:
+                    pass
+
+        try:
+            self._switch_browser_context(driver, None)
+        except Exception:
+            pass
+        return None
+
+    def _has_login_email_any_context(self, driver) -> bool:
+        contexts = self._list_browser_contexts(driver)
+        for frame in contexts:
+            try:
+                self._switch_browser_context(driver, frame)
+            except Exception:
+                continue
+            try:
+                if self._find_login_email_element(driver) is not None:
+                    self._switch_browser_context(driver, None)
+                    return True
+            except Exception:
+                continue
+        try:
+            self._switch_browser_context(driver, None)
+        except Exception:
+            pass
+        return False
+
     def _search_selector_in_frames(self, driver, selector: str):
         found = []
         try:
@@ -1707,7 +1788,7 @@ class LeagueFeature:
                 driver.get(url)
                 time.sleep(1.0)
                 loaded = True
-                if self._find_login_email_element(driver) is not None:
+                if self._has_login_email_any_context(driver):
                     break
             except Exception:
                 continue
@@ -1752,23 +1833,14 @@ class LeagueFeature:
             ],
         )
 
-        filled_email_selector = await self._fill_first_available(driver, email_selectors, email)
-        if not filled_email_selector:
-            email_element = self._find_login_email_element(driver)
-            if email_element is not None:
-                try:
-                    email_element.clear()
-                    email_element.send_keys(email)
-                    filled_email_selector = "fallback:visible_input"
-                except Exception:
-                    filled_email_selector = None
+        filled_email_selector = self._fill_login_field_any_context(driver, email_selectors, email, "email")
         if not filled_email_selector:
             return {
                 "ok": False,
                 "message": "Не удалось найти поле email на странице логина.",
             }
 
-        filled_password_selector = await self._fill_first_available(driver, password_selectors, password)
+        filled_password_selector = self._fill_login_field_any_context(driver, password_selectors, password, "password")
 
         if not filled_password_selector:
             clicked_continue = await self._click_first_available(driver, submit_selectors, timeout=5000)
@@ -1779,17 +1851,7 @@ class LeagueFeature:
                 except Exception:
                     pass
             time.sleep(2.0)
-            filled_password_selector = await self._fill_first_available(driver, password_selectors, password)
-
-        if not filled_password_selector:
-            password_element = self._find_login_password_element(driver)
-            if password_element is not None:
-                try:
-                    password_element.clear()
-                    password_element.send_keys(password)
-                    filled_password_selector = "fallback:password_input"
-                except Exception:
-                    filled_password_selector = None
+            filled_password_selector = self._fill_login_field_any_context(driver, password_selectors, password, "password")
 
         if not filled_password_selector:
             return {
