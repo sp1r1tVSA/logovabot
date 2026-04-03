@@ -1220,16 +1220,10 @@ class LeagueFeature:
         return "\n".join(lines).strip()
 
     def _format_challenge_sync_user_message(self, result: Dict, headline: str) -> str:
-        lines = [
-            headline,
-            "Старые долги очищены, записаны актуальные данные после синка.",
-            f"Записей долгов: {result.get('entries_count', 0)}",
-            f"Незавершённых матчей обработано: {result.get('matches_considered', 0)} "
-            f"(пропущено с результатом: {result.get('matches_finished_skipped', 0)}).",
-            f"Матчей с непривязанными командами: {result.get('unresolved_matches', 0)}",
-            f"Ошибок при загрузке матчей: {result.get('fetch_errors', 0)}",
-        ]
-        return "\n".join(lines)
+        return (f"{headline} | Долгов: {result.get('entries_count', 0)}, "
+                f"обработано: {result.get('matches_considered', 0)}, "
+                f"без привязки: {result.get('unresolved_matches', 0)}, "
+                f"ошибок: {result.get('fetch_errors', 0)}")
 
     async def on_error(self, update: object, context: ContextTypes.DEFAULT_TYPE):
         if context.error is None:
