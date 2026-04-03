@@ -1,6 +1,6 @@
 python-telegram-bot[job-queue]==21.6
 python-dotenv==1.0.1
-playwright==1.52.0
+selenium==4.30.0
 pytesseract==0.3.13
 opencv-python-headless==4.10.0.84
 psycopg[binary]==3.2.13

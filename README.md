@@ -71,13 +71,12 @@ Text command for players:
 
 - `исправь [id]` (or reply to draft)
 
-## Challenge auth (Playwright)
+## Challenge automation (Selenium)
 
 One-time setup:
 
 ```bash
 pip install -r requirements.txt
-playwright install chromium
 ```
 
 Авто-авторизация через сессию/логин отключена.

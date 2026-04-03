@@ -3,6 +3,7 @@ import logging
 import os
 import re
 import sqlite3
+import time
 import unicodedata
 import urllib.parse
 import urllib.request
@@ -27,12 +28,15 @@ except Exception:
     OCR_AVAILABLE = False
 
 try:
-    from playwright.async_api import TimeoutError as PlaywrightTimeoutError
-    from playwright.async_api import async_playwright
+    from selenium import webdriver
+    from selenium.common.exceptions import TimeoutException as SeleniumTimeoutException
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.chrome.options import Options as ChromeOptions
 
-    PLAYWRIGHT_AVAILABLE = True
+    SELENIUM_AVAILABLE = True
 except Exception:
-    PLAYWRIGHT_AVAILABLE = False
+    SELENIUM_AVAILABLE = False
+    SeleniumTimeoutException = TimeoutError
 
 
 class LeagueRepositorySQLite:
@@ -1247,39 +1251,87 @@ class LeagueFeature:
         parts = [part.strip() for part in re.split(r"[\n|]+", raw) if part.strip()]
         return parts or list(defaults)
 
-    async def _click_first_available(self, page, selectors: List[str], timeout: int = 3000) -> Optional[str]:
+    @staticmethod
+    def _xpath_literal(value: str) -> str:
+        if "'" not in value:
+            return f"'{value}'"
+        if '"' not in value:
+            return f'"{value}"'
+        chunks = value.split("'")
+        return "concat(" + ", \"'\", ".join([f"'{chunk}'" for chunk in chunks]) + ")"
+
+    def _find_elements_by_selector(self, driver, selector: str):
+        selector = (selector or "").strip()
+        if not selector:
+            return []
+
+        if selector.startswith("text="):
+            text = selector.split("=", 1)[1].strip()
+            if not text:
+                return []
+            xpath = f"//*[contains(normalize-space(.), {self._xpath_literal(text)})]"
+            return driver.find_elements(By.XPATH, xpath)
+
+        has_text_match = re.match(r"^([a-zA-Z0-9_-]+):has-text\((['\"])(.*?)\2\)$", selector)
+        if has_text_match:
+            tag = has_text_match.group(1)
+            text = has_text_match.group(3)
+            xpath = f"//{tag}[contains(normalize-space(.), {self._xpath_literal(text)})]"
+            return driver.find_elements(By.XPATH, xpath)
+
+        return driver.find_elements(By.CSS_SELECTOR, selector)
+
+    async def _click_first_available(self, driver, selectors: List[str], timeout: int = 3000) -> Optional[str]:
         for selector in selectors:
-            locator = page.locator(selector)
-            if await locator.count() <= 0:
-                continue
             try:
-                await locator.first.click(timeout=timeout)
-                return selector
+                elements = self._find_elements_by_selector(driver, selector)
             except Exception:
                 continue
+            if not elements:
+                continue
+            for element in elements:
+                try:
+                    if not element.is_displayed():
+                        continue
+                    element.click()
+                    return selector
+                except Exception:
+                    try:
+                        driver.execute_script("arguments[0].click();", element)
+                        return selector
+                    except Exception:
+                        continue
         return None
 
-    async def _fill_first_available(self, page, selectors: List[str], value: str) -> Optional[str]:
+    async def _fill_first_available(self, driver, selectors: List[str], value: str) -> Optional[str]:
         for selector in selectors:
-            locator = page.locator(selector)
-            if await locator.count() <= 0:
-                continue
             try:
-                await locator.first.fill(value)
-                return selector
+                elements = self._find_elements_by_selector(driver, selector)
             except Exception:
                 continue
+            if not elements:
+                continue
+            for element in elements:
+                try:
+                    if not element.is_displayed():
+                        continue
+                    element.clear()
+                    element.send_keys(value)
+                    return selector
+                except Exception:
+                    continue
         return None
 
-    async def _pick_first_input_group(self, page, selectors: List[str]):
+    async def _pick_first_input_group(self, driver, selectors: List[str]):
         for selector in selectors:
-            locator = page.locator(selector)
             try:
-                count = await locator.count()
+                elements = self._find_elements_by_selector(driver, selector)
             except Exception:
                 continue
+            visible = [element for element in elements if element.is_displayed()]
+            count = len(visible)
             if count > 0:
-                return locator, count, selector
+                return visible, count, selector
         return None, 0, None
 
     def _build_side_events(self, payload: Dict, side: str) -> List[Dict]:
@@ -1292,7 +1344,7 @@ class LeagueFeature:
             events.append({"goal": str(goal or ""), "assist": str(assist or "")})
         return events
 
-    async def _fill_side_events(self, page, payload: Dict, side: str) -> Dict:
+    async def _fill_side_events(self, driver, payload: Dict, side: str) -> Dict:
         events = self._build_side_events(payload, side)
         if not events:
             return {"ok": True, "events": 0, "filled_goals": 0, "filled_assists": 0}
@@ -1310,8 +1362,8 @@ class LeagueFeature:
         goal_selectors = self._selectors_from_env(f"CHALLENGE_{side.upper()}_GOAL_SELECTORS", goal_defaults)
         assist_selectors = self._selectors_from_env(f"CHALLENGE_{side.upper()}_ASSIST_SELECTORS", assist_defaults)
 
-        goal_group, goal_count, goal_selector = await self._pick_first_input_group(page, goal_selectors)
-        assist_group, assist_count, assist_selector = await self._pick_first_input_group(page, assist_selectors)
+        goal_group, goal_count, goal_selector = await self._pick_first_input_group(driver, goal_selectors)
+        assist_group, assist_count, assist_selector = await self._pick_first_input_group(driver, assist_selectors)
 
         if goal_count <= 0 and assist_count <= 0:
             return {
@@ -1327,13 +1379,15 @@ class LeagueFeature:
         for i, event in enumerate(events):
             if goal_group is not None and i < goal_count and event.get("goal"):
                 try:
-                    await goal_group.nth(i).fill(event["goal"])
+                    goal_group[i].clear()
+                    goal_group[i].send_keys(event["goal"])
                     filled_goals += 1
                 except Exception:
                     pass
             if assist_group is not None and i < assist_count and event.get("assist"):
                 try:
-                    await assist_group.nth(i).fill(event["assist"])
+                    assist_group[i].clear()
+                    assist_group[i].send_keys(event["assist"])
                     filled_assists += 1
                 except Exception:
                     pass
@@ -1372,26 +1426,34 @@ class LeagueFeature:
             )
         return any(isinstance(item, str) and item.strip() for item in candidates)
 
-    async def _has_visible_sign_in(self, page) -> bool:
-        locator = page.locator(
-            "a[href='/login'], a:has-text('Sign in'), button:has-text('Sign in'), "
-            "a:has-text('Log in'), button:has-text('Log in'), a:has-text('Login'), button:has-text('Login'), "
-            "a:has-text('Войти'), button:has-text('Войти')"
-        )
-        count = await locator.count()
-        for index in range(min(count, 10)):
+    async def _has_visible_sign_in(self, driver) -> bool:
+        selectors = [
+            "a[href='/login']",
+            "a:has-text('Sign in')",
+            "button:has-text('Sign in')",
+            "a:has-text('Log in')",
+            "button:has-text('Log in')",
+            "a:has-text('Login')",
+            "button:has-text('Login')",
+            "a:has-text('Войти')",
+            "button:has-text('Войти')",
+        ]
+        for selector in selectors:
             try:
-                if await locator.nth(index).is_visible(timeout=250):
-                    return True
-            except PlaywrightTimeoutError:
-                continue
+                elements = self._find_elements_by_selector(driver, selector)
             except Exception:
                 continue
+            for element in elements[:10]:
+                try:
+                    if element.is_displayed():
+                        return True
+                except Exception:
+                    continue
         return False
 
-    async def _has_auth_storage(self, page) -> bool:
+    async def _has_auth_storage(self, driver) -> bool:
         try:
-            storage = await page.evaluate(
+            storage = driver.execute_script(
                 """
                 () => {
                     const out = {};
@@ -1418,9 +1480,9 @@ class LeagueFeature:
                 return True
         return False
 
-    async def _has_auth_cookie(self, context) -> bool:
+    async def _has_auth_cookie(self, driver) -> bool:
         try:
-            cookies = await context.cookies("https://challenge.place")
+            cookies = driver.get_cookies()
         except Exception:
             return False
 
@@ -1432,21 +1494,21 @@ class LeagueFeature:
                     return True
         return False
 
-    async def _is_challenge_session_authorized(self, page, context) -> bool:
-        current_url = (page.url or "").lower()
+    async def _is_challenge_session_authorized(self, driver) -> bool:
+        current_url = (driver.current_url or "").lower()
         if "challenge.place" in current_url and "/login" in current_url:
             return False
-        if await self._has_visible_sign_in(page):
+        if await self._has_visible_sign_in(driver):
             return False
-        if await self._has_auth_storage(page):
+        if await self._has_auth_storage(driver):
             return True
-        if await self._has_auth_cookie(context):
+        if await self._has_auth_cookie(driver):
             return True
         return True
 
     async def _open_match_and_fill_result(self, match_url: str, payload: Dict, dry_run: bool = False) -> Dict:
-        if not PLAYWRIGHT_AVAILABLE:
-            return {"ok": False, "message": "Playwright недоступен в окружении."}
+        if not SELENIUM_AVAILABLE:
+            return {"ok": False, "message": "Selenium недоступен в окружении."}
 
         self.logger.info(
             "Apply result started: dry_run=%s match_url=%s home=%s away=%s",
@@ -1459,149 +1521,147 @@ class LeagueFeature:
         msk_now = datetime.now(ZoneInfo("Europe/Moscow"))
         date_value = msk_now.strftime("%Y-%m-%d")
 
-        async with async_playwright() as p:
-            try:
-                browser = await p.chromium.launch(
-                    headless=True,
-                    args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
-                )
-            except Exception as e:
-                self.logger.error(f"Failed to launch Chromium: {e}")
+        options = ChromeOptions()
+        options.add_argument("--headless=new")
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--disable-gpu")
+        options.add_argument("--window-size=1920,1080")
+
+        driver = None
+        try:
+            driver = webdriver.Chrome(options=options)
+        except Exception as e:
+            self.logger.error("Failed to launch Chromium via Selenium: %s", e)
+            return {
+                "ok": False,
+                "message": "Не удалось запустить Selenium Chromium. Проверьте chromium/chromedriver в контейнере.",
+            }
+
+        try:
+            driver.set_page_load_timeout(30)
+            driver.get(match_url)
+            time.sleep(1.0)
+            self.logger.info("Match page opened: %s", driver.current_url)
+
+            if not await self._is_challenge_session_authorized(driver):
+                self.logger.warning("Challenge session unauthorized for url=%s", match_url)
                 return {
                     "ok": False,
-                    "message": (
-                        "Не удалось запустить браузер на сервере. "
-                        "Возможно, не установлены системные зависимости Chromium (libnss3, libatk и др.) "
-                        "или образ контейнера собран без Playwright deps. "
-                        "Свяжитесь с администратором."
-                    ),
+                    "message": "Не авторизовано в challenge.place. Авто-авторизация отключена.",
                 }
-            context = await browser.new_context()
-            page = await context.new_page()
-            try:
-                await page.goto(match_url, wait_until="domcontentloaded", timeout=30000)
-                self.logger.info("Match page opened: %s", page.url)
-                if not await self._is_challenge_session_authorized(page, context):
-                    self.logger.warning("Challenge session unauthorized for url=%s", match_url)
-                    await browser.close()
-                    return {
-                        "ok": False,
-                        "message": "Не авторизовано в challenge.place. Авто-авторизация отключена.",
-                    }
 
-                if dry_run:
-                    self.logger.info("Dry-run success for match_url=%s", match_url)
-                    await browser.close()
-                    return {"ok": True, "message": f"Dry-run ok: матч открыт, дата к установке {date_value}"}
+            if dry_run:
+                self.logger.info("Dry-run success for match_url=%s", match_url)
+                return {"ok": True, "message": f"Dry-run ok: матч открыт, дата к установке {date_value}"}
 
-                # Try to open editing mode.
-                edit_selectors = self._selectors_from_env("CHALLENGE_EDIT_SELECTORS", [
-                    "button:has-text('Edit')",
-                    "button:has-text('Редактировать')",
-                    "button:has-text('Set result')",
-                    "button:has-text('Результат')",
-                ])
-                await self._click_first_available(page, edit_selectors)
+            edit_selectors = self._selectors_from_env("CHALLENGE_EDIT_SELECTORS", [
+                "button:has-text('Edit')",
+                "button:has-text('Редактировать')",
+                "button:has-text('Set result')",
+                "button:has-text('Результат')",
+            ])
+            await self._click_first_available(driver, edit_selectors)
 
-                # Set date to current moment (date input expected by UI).
-                date_inputs = self._selectors_from_env("CHALLENGE_DATE_SELECTORS", [
-                    "input[type='date']",
-                    "input[name*='date']",
-                    "input[placeholder*='Date']",
-                    "input[placeholder*='Дата']",
-                ])
-                await self._fill_first_available(page, date_inputs, date_value)
+            date_inputs = self._selectors_from_env("CHALLENGE_DATE_SELECTORS", [
+                "input[type='date']",
+                "input[name*='date']",
+                "input[placeholder*='Date']",
+                "input[placeholder*='Дата']",
+            ])
+            await self._fill_first_available(driver, date_inputs, date_value)
 
-                # Generic score fallback in UI if available.
-                if payload.get("score_home") is not None and payload.get("score_away") is not None:
-                    home_score_selectors = self._selectors_from_env(
-                        "CHALLENGE_HOME_SCORE_SELECTORS",
-                        ["input[name*='home'][name*='score']", "input[placeholder*='Home']"],
-                    )
-                    away_score_selectors = self._selectors_from_env(
-                        "CHALLENGE_AWAY_SCORE_SELECTORS",
-                        ["input[name*='away'][name*='score']", "input[placeholder*='Away']"],
-                    )
-                    try:
-                        await self._fill_first_available(page, home_score_selectors, str(payload.get("score_home")))
-                        await self._fill_first_available(page, away_score_selectors, str(payload.get("score_away")))
-                    except Exception:
-                        pass
-
-                home_events_result = await self._fill_side_events(page, payload, "home")
-                away_events_result = await self._fill_side_events(page, payload, "away")
-                if not home_events_result.get("ok") or not away_events_result.get("ok"):
-                    await browser.close()
-                    return {
-                        "ok": False,
-                        "message": "; ".join(
-                            [
-                                part
-                                for part in [
-                                    home_events_result.get("message", ""),
-                                    away_events_result.get("message", ""),
-                                ]
-                                if part
-                            ]
-                        ),
-                    }
-
-                # Save.
-                save_buttons = self._selectors_from_env("CHALLENGE_SAVE_SELECTORS", [
-                    "button:has-text('Save')",
-                    "button:has-text('Сохранить')",
-                    "button:has-text('Confirm')",
-                    "button:has-text('Подтвердить')",
-                ])
-                clicked_selector = await self._click_first_available(page, save_buttons)
-                saved = bool(clicked_selector)
-
-                await page.wait_for_timeout(1200)
-                success_selectors = self._selectors_from_env("CHALLENGE_SUCCESS_SELECTORS", [
-                    "text=Saved",
-                    "text=Сохранено",
-                    "text=успешно",
-                    "text=Updated",
-                ])
-                success_hint = False
-                for selector in success_selectors:
-                    locator = page.locator(selector)
-                    try:
-                        if await locator.count() > 0:
-                            success_hint = True
-                            break
-                    except Exception:
-                        continue
-                await browser.close()
-                if not saved:
-                    self.logger.warning("Save button not found for match_url=%s", match_url)
-                    return {"ok": False, "message": "Не найдено кнопки сохранения результата."}
-                self.logger.info(
-                    "Apply result saved: match_url=%s home_goals=%s home_assists=%s away_goals=%s away_assists=%s success_hint=%s",
-                    match_url,
-                    home_events_result.get("filled_goals", 0),
-                    home_events_result.get("filled_assists", 0),
-                    away_events_result.get("filled_goals", 0),
-                    away_events_result.get("filled_assists", 0),
-                    success_hint,
+            if payload.get("score_home") is not None and payload.get("score_away") is not None:
+                home_score_selectors = self._selectors_from_env(
+                    "CHALLENGE_HOME_SCORE_SELECTORS",
+                    ["input[name*='home'][name*='score']", "input[placeholder*='Home']"],
                 )
+                away_score_selectors = self._selectors_from_env(
+                    "CHALLENGE_AWAY_SCORE_SELECTORS",
+                    ["input[name*='away'][name*='score']", "input[placeholder*='Away']"],
+                )
+                try:
+                    await self._fill_first_available(driver, home_score_selectors, str(payload.get("score_home")))
+                    await self._fill_first_available(driver, away_score_selectors, str(payload.get("score_away")))
+                except Exception:
+                    pass
+
+            home_events_result = await self._fill_side_events(driver, payload, "home")
+            away_events_result = await self._fill_side_events(driver, payload, "away")
+            if not home_events_result.get("ok") or not away_events_result.get("ok"):
                 return {
-                    "ok": True,
-                    "message": (
-                        "Результат отправлен на сохранение"
-                        f". Home: {home_events_result.get('filled_goals', 0)} гол(ов), {home_events_result.get('filled_assists', 0)} ассист(ов)"
-                        f"; Away: {away_events_result.get('filled_goals', 0)} гол(ов), {away_events_result.get('filled_assists', 0)} ассист(ов)"
-                        + (". Подтверждение UI найдено." if success_hint else ". Подтверждение UI не найдено.")
+                    "ok": False,
+                    "message": "; ".join(
+                        [
+                            part
+                            for part in [
+                                home_events_result.get("message", ""),
+                                away_events_result.get("message", ""),
+                            ]
+                            if part
+                        ]
                     ),
                 }
-            except PlaywrightTimeoutError:
-                self.logger.warning("Playwright timeout for match_url=%s", match_url)
-                await browser.close()
-                return {"ok": False, "message": "Таймаут при открытии страницы матча."}
-            except Exception as e:
-                self.logger.exception("Playwright error for match_url=%s", match_url)
-                await browser.close()
-                return {"ok": False, "message": f"Ошибка Playwright: {e}"}
+
+            save_buttons = self._selectors_from_env("CHALLENGE_SAVE_SELECTORS", [
+                "button:has-text('Save')",
+                "button:has-text('Сохранить')",
+                "button:has-text('Confirm')",
+                "button:has-text('Подтвердить')",
+            ])
+            clicked_selector = await self._click_first_available(driver, save_buttons)
+            saved = bool(clicked_selector)
+
+            time.sleep(1.2)
+            success_selectors = self._selectors_from_env("CHALLENGE_SUCCESS_SELECTORS", [
+                "text=Saved",
+                "text=Сохранено",
+                "text=успешно",
+                "text=Updated",
+            ])
+            success_hint = False
+            for selector in success_selectors:
+                try:
+                    if self._find_elements_by_selector(driver, selector):
+                        success_hint = True
+                        break
+                except Exception:
+                    continue
+
+            if not saved:
+                self.logger.warning("Save button not found for match_url=%s", match_url)
+                return {"ok": False, "message": "Не найдено кнопки сохранения результата."}
+
+            self.logger.info(
+                "Apply result saved: match_url=%s home_goals=%s home_assists=%s away_goals=%s away_assists=%s success_hint=%s",
+                match_url,
+                home_events_result.get("filled_goals", 0),
+                home_events_result.get("filled_assists", 0),
+                away_events_result.get("filled_goals", 0),
+                away_events_result.get("filled_assists", 0),
+                success_hint,
+            )
+            return {
+                "ok": True,
+                "message": (
+                    "Результат отправлен на сохранение"
+                    f". Home: {home_events_result.get('filled_goals', 0)} гол(ов), {home_events_result.get('filled_assists', 0)} ассист(ов)"
+                    f"; Away: {away_events_result.get('filled_goals', 0)} гол(ов), {away_events_result.get('filled_assists', 0)} ассист(ов)"
+                    + (". Подтверждение UI найдено." if success_hint else ". Подтверждение UI не найдено.")
+                ),
+            }
+        except SeleniumTimeoutException:
+            self.logger.warning("Selenium timeout for match_url=%s", match_url)
+            return {"ok": False, "message": "Таймаут при открытии страницы матча."}
+        except Exception as e:
+            self.logger.exception("Selenium error for match_url=%s", match_url)
+            return {"ok": False, "message": f"Ошибка Selenium: {e}"}
+        finally:
+            try:
+                if driver is not None:
+                    driver.quit()
+            except Exception:
+                pass
 
     async def on_error(self, update: object, context: ContextTypes.DEFAULT_TYPE):
         if context.error is None:
