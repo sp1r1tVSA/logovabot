@@ -1099,7 +1099,8 @@ class LeagueFeature:
                 current_bucket = "any"
                 inline_raw = generic_header.group(1).strip()
                 if inline_raw:
-                    assists_raw["any"].extend([self._clean_person_label(x.strip()) for x in re.split(r"[;,]", inline_raw) if x.strip()])
+                    for token in [x.strip() for x in re.split(r"[;,]", inline_raw) if x.strip()]:
+                        assists_raw["any"].extend(self._expand_person_token(token))
                 continue
             header = re.match(r"^ассисты\s+(.+?)\s*:\s*$", line, flags=re.IGNORECASE)
             if header:
@@ -1109,8 +1110,8 @@ class LeagueFeature:
                 current_bucket = "home" if home_score >= away_score else "away"
                 continue
             if current_bucket:
-                items = [self._clean_person_label(x.strip()) for x in re.split(r"[;,]", line) if x.strip()]
-                assists_raw[current_bucket].extend(items)
+                for token in [x.strip() for x in re.split(r"[;,]", line) if x.strip()]:
+                    assists_raw[current_bucket].extend(self._expand_person_token(token))
                 continue
 
             # Fallback: if users send plain player names without "Ассисты" label.
@@ -1118,8 +1119,8 @@ class LeagueFeature:
                 continue
             if re.search(r"\d\s*[-:]\s*\d", line):
                 continue
-            fallback_items = [self._clean_person_label(x.strip("-• ")) for x in re.split(r"[;,]", line) if x.strip("-• ")]
-            assists_raw["any"].extend(fallback_items)
+            for token in [x.strip("-• ") for x in re.split(r"[;,]", line) if x.strip("-• ")]:
+                assists_raw["any"].extend(self._expand_person_token(token))
 
         return {
             "chat_id": chat_id,
@@ -1209,6 +1210,24 @@ class LeagueFeature:
         value = re.sub(r"^(ассист(?:ы)?|assist(?:s)?)\b\s*:?\s*", "", value, flags=re.IGNORECASE)
         value = re.sub(r"\s+", " ", value).strip(" ,;:-")
         return value
+
+    def _expand_person_token(self, text: str) -> List[str]:
+        value = self._clean_person_label(text)
+        if not value:
+            return []
+
+        m = re.match(r"^(.*?)\s*[\(\[]\s*(\d{1,2})\s*[\)\]]\s*$", value)
+        if not m:
+            m = re.match(r"^(.*?)\s*[xх\*]\s*(\d{1,2})\s*$", value, flags=re.IGNORECASE)
+
+        if m:
+            name = self._clean_person_label(m.group(1))
+            if not name:
+                return []
+            count = max(1, min(int(m.group(2)), 20))
+            return [name for _ in range(count)]
+
+        return [value]
 
     def _transliterate_ru_to_en(self, text: str) -> str:
         mapping = {
@@ -1691,7 +1710,8 @@ class LeagueFeature:
                 current = "assists_any"
                 inline_raw = generic_assists.group(1).strip()
                 if inline_raw:
-                    assists_any.extend([self._clean_person_label(x.strip()) for x in re.split(r"[;,]", inline_raw) if x.strip()])
+                    for token in [x.strip() for x in re.split(r"[;,]", inline_raw) if x.strip()]:
+                        assists_any.extend(self._expand_person_token(token))
                 continue
             h = re.match(r"^(Голы|Ассисты)\s+(.+?)\s*:\s*$", line, flags=re.IGNORECASE)
             if h:
@@ -1703,10 +1723,12 @@ class LeagueFeature:
                 continue
             if current is None:
                 # Fallback: plain lines without header are treated as assists list.
-                fallback_chunks = [self._clean_person_label(x.strip("-• ")) for x in re.split(r"[;,]", line) if x.strip("-• ")]
-                assists_any.extend(fallback_chunks)
+                for token in [x.strip("-• ") for x in re.split(r"[;,]", line) if x.strip("-• ")]:
+                    assists_any.extend(self._expand_person_token(token))
                 continue
-            chunks = [self._clean_person_label(x.strip()) for x in re.split(r"[;,]", line) if x.strip()]
+            chunks: List[str] = []
+            for token in [x.strip() for x in re.split(r"[;,]", line) if x.strip()]:
+                chunks.extend(self._expand_person_token(token))
             if current == "assists_any":
                 assists_any.extend(chunks)
             else:
