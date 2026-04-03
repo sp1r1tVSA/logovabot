@@ -882,18 +882,20 @@ class LeagueFeature:
             line = line.strip()
             if not line:
                 continue
-            if line.startswith("http://") or line.startswith("https://"):
-                url = line.split()[0].strip()
+            parts = line.split()
+            if parts[0].startswith("http://") or parts[0].startswith("https://"):
+                if url is None:
+                    url = parts[0]
+                tokens = parts[1:]
             else:
-                tokens = line.split()
-                for token in tokens:
-                    try:
-                        n = int(token)
-                        if n > 0:
-                            max_round = n
-                            break
-                    except ValueError:
-                        pass
+                tokens = parts
+            for token in tokens:
+                try:
+                    n = int(token)
+                    if n > 0:
+                        max_round = n
+                except ValueError:
+                    pass
         if not url:
             await update.message.reply_text("Не указан URL. Пример: + долги https://challenge.place/stage/... 5")
             return
