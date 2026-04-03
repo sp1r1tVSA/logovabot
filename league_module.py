@@ -1172,6 +1172,42 @@ class LeagueFeature:
             return None
         return sorted(candidates, key=lambda x: (x.get("round_num") or 10**9, x.get("match_url") or ""))[0]
 
+    def _extract_match_teams_from_url(self, match_url: str) -> Optional[Dict]:
+        try:
+            match_html = self.fetch_text_url(match_url)
+            match_state = self.parse_initial_state(match_html)
+            if not match_state:
+                return None
+            match_rooms = match_state.get("rooms", {})
+            match_room = None
+            for room in match_rooms.values():
+                if isinstance(room, dict) and "homeCompetitorId" in room and "awayCompetitorId" in room:
+                    match_room = room
+                    break
+            if not match_room:
+                return None
+            home_id = match_room.get("homeCompetitorId")
+            away_id = match_room.get("awayCompetitorId")
+            comps = match_room.get("competitors", {})
+            home_name = (comps.get(home_id) or {}).get("name")
+            away_name = (comps.get(away_id) or {}).get("name")
+            if not home_name or not away_name:
+                return None
+            round_name = (match_room.get("roundName") or "").strip()
+            round_num = None
+            round_match = re.search(r"(\d+)", round_name)
+            if round_match:
+                round_num = int(round_match.group(1))
+            return {
+                "match_url": match_url,
+                "home_team": home_name,
+                "away_team": away_name,
+                "round_num": round_num,
+                "round_name": round_name,
+            }
+        except Exception:
+            return None
+
     def _map_payload_to_site_sides(self, payload: Dict, site_home: str, site_away: str) -> Dict:
         payload_home_norm = self.normalize_team_name(payload.get("home_team") or "")
         payload_away_norm = self.normalize_team_name(payload.get("away_team") or "")
@@ -2671,7 +2707,7 @@ class LeagueFeature:
                     "/league_ocr_show [id] - показать OCR-черновик",
                     "/league_ocr_approve [id] - подтвердить OCR-черновик",
                     "/league_ocr_reject [id] [причина] - отклонить OCR-черновик",
-                    "/league_apply_result [id] [--dry-run] [--force] - внести подтвержденный результат на сайт",
+                    "/league_apply_result [id] [match_url] [--dry-run] [--force] - внести подтвержденный результат на сайт",
                 ]
             )
         )
@@ -2894,8 +2930,14 @@ class LeagueFeature:
         clean_args = [x for x in args if x not in {"--dry-run", "--force"}]
         draft_id = self._resolve_draft_id(update, clean_args)
         if draft_id is None:
-            await update.message.reply_text("Использование: /league_apply_result [id] [--dry-run] [--force]")
+            await update.message.reply_text("Использование: /league_apply_result [id] [match_url] [--dry-run] [--force]")
             return
+
+        manual_match_url = ""
+        for token in clean_args[1:]:
+            if re.match(r"^https?://", token or "", flags=re.IGNORECASE):
+                manual_match_url = token.strip()
+                break
 
         chat_id = update.effective_chat.id
         draft = self.db.get_ocr_draft(chat_id, draft_id)
@@ -2921,16 +2963,28 @@ class LeagueFeature:
             return
 
         await update.message.reply_text("⏳ Ищу матч по командам...")
-        candidates = self._find_match_candidates_by_teams(chat_id, home_team, away_team)
-        selected = self._select_candidate_min_round(candidates)
+        selected = None
+        if manual_match_url:
+            selected = self._extract_match_teams_from_url(manual_match_url)
+            if not selected:
+                self.db.upsert_ocr_applied(chat_id, draft_id, manual_match_url, "failed", "Не удалось прочитать данные матча по ссылке")
+                await update.message.reply_text("❌ Не удалось прочитать команды матча по переданной ссылке.")
+                return
+        else:
+            candidates = self._find_match_candidates_by_teams(chat_id, home_team, away_team)
+            selected = self._select_candidate_min_round(candidates)
         if not selected:
             self.db.upsert_ocr_applied(chat_id, draft_id, "", "failed", "Матч не найден по паре команд")
-            await update.message.reply_text("❌ Не удалось найти матч по паре команд в источнике лиги.")
+            await update.message.reply_text(
+                "❌ Не удалось найти матч по паре команд в источнике лиги. "
+                "Можно указать ссылку вручную: /league_apply_result [id] [match_url]"
+            )
             return
 
         mapped = self._map_payload_to_site_sides(payload, selected.get("home_team", ""), selected.get("away_team", ""))
+        round_info = selected.get("round_name") or (f"тур {selected.get('round_num')}" if selected.get("round_num") else "тур не определен")
         await update.message.reply_text(
-            f"🔎 Выбран матч: тур {selected.get('round_num')}\n{selected.get('match_url')}\n"
+            f"🔎 Выбран матч: {round_info}\n{selected.get('match_url')}\n"
             + ("↔️ Стороны переставлены под сайт." if mapped.get("swapped") else "✅ Стороны совпали.")
         )
 

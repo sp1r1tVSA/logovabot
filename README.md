@@ -65,7 +65,7 @@ OCR_TIMEOUT_SEC=20
 - `/league_ocr_show [id]` (admins)
 - `/league_ocr_approve [id]` (admins)
 - `/league_ocr_reject [id] [reason]` (admins)
-- `/league_apply_result [id] [--dry-run] [--force]` (admins)
+- `/league_apply_result [id] [match_url] [--dry-run] [--force]` (admins)
 
 Text command for players:
 
