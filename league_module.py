@@ -1524,6 +1524,86 @@ class LeagueFeature:
             return True
         return True
 
+    async def _attempt_challenge_login_with_credentials(self, driver, match_url: str) -> Dict:
+        email = (os.getenv("CHALLENGE_LOGIN_EMAIL") or os.getenv("CHALLENGE_EMAIL") or "").strip()
+        password = (os.getenv("CHALLENGE_LOGIN_PASSWORD") or os.getenv("CHALLENGE_PASSWORD") or "").strip()
+        if not email or not password:
+            return {
+                "ok": False,
+                "message": (
+                    "Не авторизовано в challenge.place. "
+                    "Укажите CHALLENGE_LOGIN_EMAIL и CHALLENGE_LOGIN_PASSWORD."
+                ),
+            }
+
+        login_url = (os.getenv("CHALLENGE_LOGIN_URL") or "https://challenge.place/login").strip()
+        self.logger.info("Trying credential login for challenge.place")
+
+        try:
+            driver.get(login_url)
+            time.sleep(1.0)
+        except Exception as e:
+            return {"ok": False, "message": f"Не удалось открыть страницу логина: {e}"}
+
+        email_selectors = self._selectors_from_env(
+            "CHALLENGE_LOGIN_EMAIL_SELECTORS",
+            [
+                "input[type='email']",
+                "input[name*='email']",
+                "input[autocomplete='email']",
+                "input[placeholder*='mail']",
+            ],
+        )
+        password_selectors = self._selectors_from_env(
+            "CHALLENGE_LOGIN_PASSWORD_SELECTORS",
+            [
+                "input[type='password']",
+                "input[name*='password']",
+                "input[autocomplete='current-password']",
+            ],
+        )
+        submit_selectors = self._selectors_from_env(
+            "CHALLENGE_LOGIN_SUBMIT_SELECTORS",
+            [
+                "button[type='submit']",
+                "button:has-text('Sign in')",
+                "button:has-text('Log in')",
+                "button:has-text('Login')",
+                "button:has-text('Войти')",
+            ],
+        )
+
+        filled_email_selector = await self._fill_first_available(driver, email_selectors, email)
+        filled_password_selector = await self._fill_first_available(driver, password_selectors, password)
+        if not filled_email_selector or not filled_password_selector:
+            return {
+                "ok": False,
+                "message": "Не удалось найти поля email/password на странице логина.",
+            }
+
+        clicked_submit = await self._click_first_available(driver, submit_selectors, timeout=5000)
+        if not clicked_submit:
+            try:
+                active = driver.switch_to.active_element
+                active.send_keys("\n")
+            except Exception:
+                pass
+
+        time.sleep(3.0)
+        if match_url:
+            try:
+                driver.get(match_url)
+                time.sleep(1.0)
+            except Exception:
+                pass
+
+        if not await self._is_challenge_session_authorized(driver):
+            return {
+                "ok": False,
+                "message": "Логин по email/password не прошел. Проверьте креды/2FA/captcha.",
+            }
+        return {"ok": True, "message": "Логин выполнен."}
+
     async def _open_match_and_fill_result(self, match_url: str, payload: Dict, dry_run: bool = False) -> Dict:
         if not SELENIUM_AVAILABLE:
             return {"ok": False, "message": "Selenium недоступен в окружении."}
@@ -1563,11 +1643,18 @@ class LeagueFeature:
             self.logger.info("Match page opened: %s", driver.current_url)
 
             if not await self._is_challenge_session_authorized(driver):
-                self.logger.warning("Challenge session unauthorized for url=%s", match_url)
-                return {
-                    "ok": False,
-                    "message": "Не авторизовано в challenge.place. Авто-авторизация отключена.",
-                }
+                self.logger.warning("Challenge session unauthorized for url=%s; trying credential login", match_url)
+                login_result = await self._attempt_challenge_login_with_credentials(driver, match_url)
+                if not login_result.get("ok"):
+                    return {
+                        "ok": False,
+                        "message": login_result.get("message") or "Не удалось авторизоваться в challenge.place.",
+                    }
+                if not await self._is_challenge_session_authorized(driver):
+                    return {
+                        "ok": False,
+                        "message": "После логина сессия все еще не авторизована (возможен captcha/2FA).",
+                    }
 
             if dry_run:
                 self.logger.info("Dry-run success for match_url=%s", match_url)

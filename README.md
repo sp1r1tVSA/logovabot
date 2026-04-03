@@ -79,10 +79,13 @@ One-time setup:
 pip install -r requirements.txt
 ```
 
-Авто-авторизация через сессию/логин отключена.
+Если матч требует логин, бот пробует войти через env-креды:
 
-`/league_apply_result` работает только если цель открывается без логина.
-Если challenge.place требует авторизацию, результат нужно вносить вручную на сайте.
+- `CHALLENGE_LOGIN_EMAIL`
+- `CHALLENGE_LOGIN_PASSWORD`
+- `CHALLENGE_LOGIN_URL` (опционально, по умолчанию `https://challenge.place/login`)
+
+Если на сайте включены captcha/2FA, автоматический логин может не пройти.
 
 Optional selector tuning (if Challenge UI changes):
 
@@ -96,6 +99,9 @@ Optional selector tuning (if Challenge UI changes):
 - `CHALLENGE_AWAY_ASSIST_SELECTORS`
 - `CHALLENGE_SAVE_SELECTORS`
 - `CHALLENGE_SUCCESS_SELECTORS`
+- `CHALLENGE_LOGIN_EMAIL_SELECTORS`
+- `CHALLENGE_LOGIN_PASSWORD_SELECTORS`
+- `CHALLENGE_LOGIN_SUBMIT_SELECTORS`
 
 Use `|` between selectors in env values.
 
