@@ -1540,12 +1540,21 @@ class LeagueFeature:
             bool((alt_password_raw or "").strip()),
         )
         if not email or not password:
+            presence = (
+                "["
+                f"CHALLENGE_LOGIN_EMAIL={'yes' if bool((login_email_raw or '').strip()) else 'no'}, "
+                f"CHALLENGE_LOGIN_PASSWORD={'yes' if bool((login_password_raw or '').strip()) else 'no'}, "
+                f"CHALLENGE_EMAIL={'yes' if bool((alt_email_raw or '').strip()) else 'no'}, "
+                f"CHALLENGE_PASSWORD={'yes' if bool((alt_password_raw or '').strip()) else 'no'}"
+                "]"
+            )
             return {
                 "ok": False,
                 "message": (
                     "Не авторизовано в challenge.place. "
                     "Укажите CHALLENGE_LOGIN_EMAIL и CHALLENGE_LOGIN_PASSWORD "
-                    "(или CHALLENGE_EMAIL и CHALLENGE_PASSWORD) и перезапустите сервис."
+                    "(или CHALLENGE_EMAIL и CHALLENGE_PASSWORD) и перезапустите сервис. "
+                    f"Статус env: {presence}"
                 ),
             }
 
