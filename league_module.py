@@ -3,11 +3,9 @@ import logging
 import os
 import re
 import sqlite3
-import base64
 import unicodedata
 import urllib.parse
 import urllib.request
-from pathlib import Path
 from difflib import SequenceMatcher
 from datetime import datetime
 from itertools import zip_longest
@@ -173,36 +171,7 @@ class LeagueRepositorySQLite:
             """
         )
 
-        self.cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS league_system_kv (
-                key TEXT PRIMARY KEY,
-                value TEXT,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-            """
-        )
         self.conn.commit()
-
-    def set_system_value(self, key: str, value: str):
-        self.cursor.execute(
-            """
-            INSERT INTO league_system_kv (key, value, updated_at)
-            VALUES (?, ?, CURRENT_TIMESTAMP)
-            ON CONFLICT(key) DO UPDATE SET
-                value = excluded.value,
-                updated_at = CURRENT_TIMESTAMP
-            """,
-            (key, value),
-        )
-        self.conn.commit()
-
-    def get_system_value(self, key: str) -> Optional[str]:
-        self.cursor.execute("SELECT value FROM league_system_kv WHERE key = ?", (key,))
-        row = self.cursor.fetchone()
-        if not row:
-            return None
-        return row[0]
 
     def replace_league_debts(self, chat_id: int, entries: List[Dict]):
         self.cursor.execute("DELETE FROM league_debt_entries WHERE chat_id = ?", (chat_id,))
@@ -753,15 +722,6 @@ class LeagueRepositoryPostgres(LeagueRepositorySQLite):
             """
         )
 
-        self.cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS league_system_kv (
-                key TEXT PRIMARY KEY,
-                value TEXT,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-            """
-        )
         self.conn.commit()
 
 
@@ -848,10 +808,8 @@ class LeagueFeature:
         application.add_handler(CommandHandler("league_ocr_show", self._guard(self.cmd_league_ocr_show)))
         application.add_handler(CommandHandler("league_ocr_approve", self._guard(self.cmd_league_ocr_approve)))
         application.add_handler(CommandHandler("league_ocr_reject", self._guard(self.cmd_league_ocr_reject)))
-        application.add_handler(CommandHandler("league_session_upload", self._guard(self.cmd_league_session_upload)))
         application.add_handler(CommandHandler("league_apply_result", self._guard(self.cmd_league_apply_result)))
         application.add_handler(MessageHandler(filters.PHOTO, self._guard(self.on_ocr_photo_message)))
-        application.add_handler(MessageHandler(filters.Document.ALL, self._guard(self.on_session_document_message)))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._guard(self.on_ocr_fix_text_message)))
         application.add_handler(CallbackQueryHandler(self._guard(self.on_ocr_callback), pattern=r"^ocr:"))
 
@@ -1486,215 +1444,6 @@ class LeagueFeature:
             return True
         return True
 
-    async def _persist_context_storage_state(self, context) -> Dict:
-        target_path = Path(os.getenv("CHALLENGE_STORAGE_STATE", "state/challenge_storage_state.json"))
-        try:
-            target_path.parent.mkdir(parents=True, exist_ok=True)
-            temp_path = target_path.with_suffix(target_path.suffix + ".tmp")
-            await context.storage_state(path=str(temp_path))
-            temp_path.replace(target_path)
-            payload_text = target_path.read_text(encoding="utf-8")
-        except Exception as e:
-            return {"ok": False, "message": f"Не удалось сохранить storage_state: {e}"}
-
-        persisted_to_db = False
-        try:
-            self.db.set_system_value("challenge_storage_state_json", payload_text)
-            persisted_to_db = True
-        except Exception:
-            persisted_to_db = False
-
-        return {
-            "ok": True,
-            "path": str(target_path),
-            "db_backup": persisted_to_db,
-        }
-
-    async def _attempt_challenge_login_with_credentials(self, page, context, match_url: str) -> Dict:
-        email = (os.getenv("CHALLENGE_LOGIN_EMAIL") or os.getenv("CHALLENGE_EMAIL") or "").strip()
-        password = (os.getenv("CHALLENGE_LOGIN_PASSWORD") or os.getenv("CHALLENGE_PASSWORD") or "").strip()
-        if not email or not password:
-            return {
-                "ok": False,
-                "message": (
-                    "Сессия не авторизована и логин по паролю не настроен. "
-                    "Укажите CHALLENGE_LOGIN_EMAIL и CHALLENGE_LOGIN_PASSWORD."
-                ),
-            }
-
-        login_url = (os.getenv("CHALLENGE_LOGIN_URL") or "https://challenge.place/login").strip()
-        self.logger.info("Trying credential login for challenge.place")
-
-        await page.goto(login_url, wait_until="domcontentloaded", timeout=30000)
-
-        email_selectors = self._selectors_from_env(
-            "CHALLENGE_LOGIN_EMAIL_SELECTORS",
-            [
-                "input[type='email']",
-                "input[name*='email']",
-                "input[autocomplete='email']",
-                "input[placeholder*='mail']",
-            ],
-        )
-        password_selectors = self._selectors_from_env(
-            "CHALLENGE_LOGIN_PASSWORD_SELECTORS",
-            [
-                "input[type='password']",
-                "input[name*='password']",
-                "input[autocomplete='current-password']",
-            ],
-        )
-        submit_selectors = self._selectors_from_env(
-            "CHALLENGE_LOGIN_SUBMIT_SELECTORS",
-            [
-                "button[type='submit']",
-                "button:has-text('Sign in')",
-                "button:has-text('Log in')",
-                "button:has-text('Login')",
-                "button:has-text('Войти')",
-            ],
-        )
-
-        filled_email_selector = await self._fill_first_available(page, email_selectors, email)
-        filled_password_selector = await self._fill_first_available(page, password_selectors, password)
-        if not filled_email_selector or not filled_password_selector:
-            return {
-                "ok": False,
-                "message": "Не удалось найти поля email/password на странице логина.",
-            }
-
-        clicked_submit = await self._click_first_available(page, submit_selectors, timeout=5000)
-        if not clicked_submit:
-            try:
-                await page.keyboard.press("Enter")
-            except Exception:
-                pass
-
-        await page.wait_for_timeout(3000)
-        if match_url:
-            try:
-                await page.goto(match_url, wait_until="domcontentloaded", timeout=30000)
-            except Exception:
-                pass
-
-        if not await self._is_challenge_session_authorized(page, context):
-            return {
-                "ok": False,
-                "message": "Логин по email/password не прошел. Проверьте креды/2FA/captcha.",
-            }
-
-        persist_res = await self._persist_context_storage_state(context)
-        if not persist_res.get("ok"):
-            self.logger.warning("Credential login ok, but state save failed: %s", persist_res.get("message", ""))
-            return {
-                "ok": True,
-                "message": "Логин выполнен, но не удалось сохранить сессию на диск.",
-            }
-
-        self.logger.info(
-            "Credential login succeeded; state saved path=%s db_backup=%s",
-            persist_res.get("path"),
-            persist_res.get("db_backup"),
-        )
-        return {"ok": True, "message": "Логин выполнен и сессия сохранена."}
-
-    def _resolve_challenge_state_path(self) -> Dict:
-        configured = Path(os.getenv("CHALLENGE_STORAGE_STATE", "state/challenge_storage_state.json"))
-        if configured.exists():
-            return {"ok": True, "path": configured}
-
-        state_json = (os.getenv("CHALLENGE_STORAGE_STATE_JSON") or "").strip()
-        state_b64 = (os.getenv("CHALLENGE_STORAGE_STATE_B64") or "").strip()
-        if not state_json:
-            json_parts = []
-            for key in sorted(os.environ.keys()):
-                m = re.match(r"^CHALLENGE_STORAGE_STATE_JSON_PART(\d+)$", key)
-                if m:
-                    json_parts.append((int(m.group(1)), os.getenv(key) or ""))
-            if json_parts:
-                state_json = "".join([part for _, part in sorted(json_parts, key=lambda x: x[0])]).strip()
-
-        if not state_b64:
-            b64_parts = []
-            for key in sorted(os.environ.keys()):
-                m = re.match(r"^CHALLENGE_STORAGE_STATE_B64_PART(\d+)$", key)
-                if m:
-                    b64_parts.append((int(m.group(1)), os.getenv(key) or ""))
-            if b64_parts:
-                state_b64 = "".join([part for _, part in sorted(b64_parts, key=lambda x: x[0])]).strip()
-
-        if not state_json and not state_b64:
-            try:
-                state_json = (self.db.get_system_value("challenge_storage_state_json") or "").strip()
-                if state_json:
-                    self.logger.info("Challenge session restored from DB")
-            except Exception:
-                state_json = ""
-
-        if not state_json and not state_b64:
-            return {"ok": False, "message": f"Файл сессии не найден: {configured}"}
-
-        try:
-            payload_text = state_json
-            if state_b64:
-                payload_text = base64.b64decode(state_b64).decode("utf-8")
-            json.loads(payload_text)
-        except Exception:
-            return {
-                "ok": False,
-                "message": "Некорректный CHALLENGE_STORAGE_STATE_JSON/CHALLENGE_STORAGE_STATE_B64 (невалидный JSON)",
-            }
-
-        try:
-            configured.parent.mkdir(parents=True, exist_ok=True)
-            configured.write_text(payload_text, encoding="utf-8")
-            return {"ok": True, "path": configured}
-        except Exception as e:
-            return {"ok": False, "message": f"Не удалось создать файл сессии: {e}"}
-
-    async def _save_challenge_session_document(self, document, context: ContextTypes.DEFAULT_TYPE) -> Dict:
-        if not document:
-            return {"ok": False, "message": "Прикрепите JSON-файл сессии."}
-        filename = (document.file_name or "").lower()
-        if filename and not filename.endswith(".json"):
-            return {"ok": False, "message": "Нужен файл .json (Playwright storage_state)."}
-        try:
-            tg_file = await context.bot.get_file(document.file_id)
-            raw_bytes = await tg_file.download_as_bytearray()
-        except Exception as e:
-            return {"ok": False, "message": f"Не удалось скачать файл из Telegram: {e}"}
-
-        try:
-            payload_text = bytes(raw_bytes).decode("utf-8")
-            payload = json.loads(payload_text)
-            if not isinstance(payload, dict):
-                return {"ok": False, "message": "Файл должен содержать JSON-объект storage_state."}
-        except Exception:
-            return {"ok": False, "message": "Невалидный JSON в файле сессии."}
-
-        target_path = Path(os.getenv("CHALLENGE_STORAGE_STATE", "state/challenge_storage_state.json"))
-        try:
-            target_path.parent.mkdir(parents=True, exist_ok=True)
-            target_path.write_text(payload_text, encoding="utf-8")
-        except Exception as e:
-            return {"ok": False, "message": f"Не удалось сохранить файл сессии: {e}"}
-
-        persisted_to_db = False
-        try:
-            self.db.set_system_value("challenge_storage_state_json", payload_text)
-            persisted_to_db = True
-        except Exception:
-            persisted_to_db = False
-
-        cookies_count = len(payload.get("cookies") or []) if isinstance(payload, dict) else 0
-        return {
-            "ok": True,
-            "message": (
-                f"Сессия сохранена: {target_path} (cookies: {cookies_count})"
-                + ("; резерв в БД: да" if persisted_to_db else "; резерв в БД: нет")
-            ),
-        }
-
     async def _open_match_and_fill_result(self, match_url: str, payload: Dict, dry_run: bool = False) -> Dict:
         if not PLAYWRIGHT_AVAILABLE:
             return {"ok": False, "message": "Playwright недоступен в окружении."}
@@ -1706,11 +1455,6 @@ class LeagueFeature:
             payload.get("home_team"),
             payload.get("away_team"),
         )
-
-        state_resolved = self._resolve_challenge_state_path()
-        state_path = state_resolved.get("path") if state_resolved.get("ok") else None
-        if not state_path:
-            self.logger.info("No preloaded storage_state: %s", state_resolved.get("message", "not found"))
 
         msk_now = datetime.now(ZoneInfo("Europe/Moscow"))
         date_value = msk_now.strftime("%Y-%m-%d")
@@ -1732,32 +1476,18 @@ class LeagueFeature:
                         "Свяжитесь с администратором."
                     ),
                 }
-            context_kwargs = {}
-            if state_path:
-                context_kwargs["storage_state"] = str(state_path)
-            context = await browser.new_context(**context_kwargs)
+            context = await browser.new_context()
             page = await context.new_page()
             try:
                 await page.goto(match_url, wait_until="domcontentloaded", timeout=30000)
                 self.logger.info("Match page opened: %s", page.url)
                 if not await self._is_challenge_session_authorized(page, context):
-                    self.logger.warning("Challenge session unauthorized for url=%s; trying credential login", match_url)
-                    login_result = await self._attempt_challenge_login_with_credentials(page, context, match_url)
-                    if not login_result.get("ok"):
-                        await browser.close()
-                        return {
-                            "ok": False,
-                            "message": (
-                                login_result.get("message")
-                                or "Сессия не авторизована. Загрузите session JSON или настройте логин по паролю."
-                            ),
-                        }
-                    if not await self._is_challenge_session_authorized(page, context):
-                        await browser.close()
-                        return {
-                            "ok": False,
-                            "message": "После логина сессия все еще не авторизована (возможен captcha/2FA).",
-                        }
+                    self.logger.warning("Challenge session unauthorized for url=%s", match_url)
+                    await browser.close()
+                    return {
+                        "ok": False,
+                        "message": "Не авторизовано в challenge.place. Авто-авторизация отключена.",
+                    }
 
                 if dry_run:
                     self.logger.info("Dry-run success for match_url=%s", match_url)
@@ -3110,43 +2840,10 @@ class LeagueFeature:
                     "/league_ocr_show [id] - показать OCR-черновик",
                     "/league_ocr_approve [id] - подтвердить OCR-черновик",
                     "/league_ocr_reject [id] [причина] - отклонить OCR-черновик",
-                    "/league_session_upload - ответьте этой командой на JSON-файл сессии challenge",
                     "/league_apply_result [id] [match_url] [--dry-run] [--force] - внести подтвержденный результат на сайт",
                 ]
             )
         )
-
-    async def on_session_document_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        message = update.effective_message
-        user = update.effective_user
-        if not message or not user or not message.document:
-            return
-        if not self._is_admin(user.id):
-            return
-        caption = (message.caption or "").strip().lower()
-        if not caption.startswith("/league_session_upload"):
-            return
-        result = await self._save_challenge_session_document(message.document, context)
-        await message.reply_text(("✅ " if result.get("ok") else "❌ ") + result.get("message", ""))
-
-    async def cmd_league_session_upload(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not self._is_admin(update.effective_user.id):
-            await update.message.reply_text("❌ Команда доступна только админам.")
-            return
-        message = update.effective_message
-        document = None
-        if message and message.reply_to_message and message.reply_to_message.document:
-            document = message.reply_to_message.document
-        elif message and message.document:
-            document = message.document
-        if not document:
-            await update.message.reply_text(
-                "Использование: отправьте JSON-файл и ответьте на него командой /league_session_upload "
-                "или отправьте документ с подписью /league_session_upload"
-            )
-            return
-        result = await self._save_challenge_session_document(document, context)
-        await update.message.reply_text(("✅ " if result.get("ok") else "❌ ") + result.get("message", ""))
 
     async def cmd_league_debts_round(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not self._is_admin(update.effective_user.id):
