@@ -2435,7 +2435,7 @@ class LeagueFeature:
                 continue
         if not loaded:
             return {"ok": False, "message": "Не удалось открыть страницу логина."}
-        if not login_page_with_email:
+        if not login_page_with_email and not email_method_clicked:
             try:
                 title = driver.title or ""
             except Exception:
@@ -2490,7 +2490,13 @@ class LeagueFeature:
             ],
         )
 
-        filled_email_selector = self._fill_login_field_any_context(driver, email_selectors, email, "email")
+        filled_email_selector = None
+        for _ in range(50):
+            filled_email_selector = self._fill_login_field_any_context(driver, email_selectors, email, "email")
+            if filled_email_selector:
+                break
+            await self._open_email_login_method(driver)
+            time.sleep(0.4)
         if not filled_email_selector:
             try:
                 title = driver.title or ""
