@@ -4568,8 +4568,24 @@ def _clean_env_value(raw: str | None) -> str:
     return value
 
 
-def run_bot():
+def _load_dotenv_resilient() -> None:
+    # Some Windows editors save .env as cp1251/cp866; try common encodings.
+    encodings = ("utf-8", "utf-8-sig", "cp1251", "cp866")
+    last_error: Exception | None = None
+    for encoding in encodings:
+        try:
+            load_dotenv(encoding=encoding)
+            return
+        except UnicodeDecodeError as exc:
+            last_error = exc
+            continue
+    if last_error is not None:
+        raise last_error
     load_dotenv()
+
+
+def run_bot():
+    _load_dotenv_resilient()
     logging.basicConfig(
         level=(os.getenv("LOG_LEVEL") or "INFO").upper(),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
