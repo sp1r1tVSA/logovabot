@@ -1553,25 +1553,33 @@ class LeagueFeature:
         warnings = draft.get("warnings", [])
         score_home = payload.get("score_home")
         score_away = payload.get("score_away")
-        score_text = f"{score_home}:{score_away}" if score_home is not None and score_away is not None else "не распознан"
-        home_goals = ", ".join(payload.get("home_goals", [])) or "нет"
-        away_goals = ", ".join(payload.get("away_goals", [])) or "нет"
-        home_assists = ", ".join(payload.get("home_assists", [])) or "нет"
-        away_assists = ", ".join(payload.get("away_assists", [])) or "нет"
+        home_goals_list = payload.get("home_goals", []) or []
+        away_goals_list = payload.get("away_goals", []) or []
+        unknown_goals_list = payload.get("unknown_goals", []) or []
+        home_assists_list = payload.get("home_assists", []) or []
+        away_assists_list = payload.get("away_assists", []) or []
+        unknown_assists_list = payload.get("unknown_assists", []) or []
         lines = [
             f"🧾 OCR-черновик #{draft['ocr_id']}",
             f"Статус: {draft.get('status')}",
             f"Матч: {payload.get('home_team', '—')} - {payload.get('away_team', '—')}",
-            f"Счет: {score_text}",
-            f"Голы хоз.: {home_goals}",
-            f"Голы гост.: {away_goals}",
-            f"Ассисты хоз.: {home_assists}",
-            f"Ассисты гост.: {away_assists}",
         ]
-        if payload.get("unknown_goals"):
-            lines.append("Неразнесенные голы: " + ", ".join(payload.get("unknown_goals", [])))
-        if payload.get("unknown_assists"):
-            lines.append("Неразнесенные ассисты: " + ", ".join(payload.get("unknown_assists", [])))
+
+        if score_home is not None and score_away is not None:
+            lines.append(f"Счет: {score_home}:{score_away}")
+
+        if home_goals_list or away_goals_list or unknown_goals_list:
+            lines.append("Голы хоз.: " + (", ".join(home_goals_list) if home_goals_list else "нет"))
+            lines.append("Голы гост.: " + (", ".join(away_goals_list) if away_goals_list else "нет"))
+        if unknown_goals_list:
+            lines.append("Неразнесенные голы: " + ", ".join(unknown_goals_list))
+
+        if home_assists_list or away_assists_list or unknown_assists_list:
+            lines.append("Ассисты хоз.: " + (", ".join(home_assists_list) if home_assists_list else "нет"))
+            lines.append("Ассисты гост.: " + (", ".join(away_assists_list) if away_assists_list else "нет"))
+        if unknown_assists_list:
+            lines.append("Неразнесенные ассисты: " + ", ".join(unknown_assists_list))
+
         if warnings:
             lines.append("⚠️ Нужна проверка:")
             lines.extend([f"- {w}" for w in warnings])
