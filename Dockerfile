@@ -26,12 +26,13 @@ RUN apt-get update \
         libpango-1.0-0 \
         libcairo2 \
         libasound2 \
+        fonts-unifont \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
-RUN playwright install --with-deps chromium
+RUN playwright install --with-deps chromium || playwright install chromium
 
 COPY . /app
 
