@@ -1738,6 +1738,42 @@ class LeagueFeature:
                 input_type = "text"
             if input_type in {"text", "search", "tel"}:
                 return element
+
+        try:
+            shadow_email = driver.execute_script(
+                """
+                const needles = ['email', 'mail', 'login', 'user', 'username'];
+                const walk = (root) => {
+                  if (!root || !root.querySelectorAll) return null;
+                  const inputs = root.querySelectorAll('input');
+                  for (const el of inputs) {
+                    const type = (el.getAttribute('type') || '').toLowerCase().trim();
+                    const attrs = [
+                      el.getAttribute('name') || '',
+                      el.getAttribute('id') || '',
+                      el.getAttribute('placeholder') || '',
+                      el.getAttribute('autocomplete') || '',
+                      el.getAttribute('aria-label') || '',
+                    ].join(' ').toLowerCase();
+                    if (type === 'email') return el;
+                    if (needles.some(n => attrs.includes(n))) return el;
+                  }
+                  const all = root.querySelectorAll('*');
+                  for (const node of all) {
+                    if (node.shadowRoot) {
+                      const found = walk(node.shadowRoot);
+                      if (found) return found;
+                    }
+                  }
+                  return null;
+                };
+                return walk(document);
+                """
+            )
+            if shadow_email is not None:
+                return shadow_email
+        except Exception:
+            pass
         return None
 
     def _find_login_password_element(self, driver):
@@ -1766,6 +1802,42 @@ class LeagueFeature:
                 return element
             if self._attr_contains_any(element, ["pass", "парол"]):
                 return element
+
+        try:
+            shadow_password = driver.execute_script(
+                """
+                const needles = ['pass', 'парол'];
+                const walk = (root) => {
+                  if (!root || !root.querySelectorAll) return null;
+                  const inputs = root.querySelectorAll('input');
+                  for (const el of inputs) {
+                    const type = (el.getAttribute('type') || '').toLowerCase().trim();
+                    const attrs = [
+                      el.getAttribute('name') || '',
+                      el.getAttribute('id') || '',
+                      el.getAttribute('placeholder') || '',
+                      el.getAttribute('autocomplete') || '',
+                      el.getAttribute('aria-label') || '',
+                    ].join(' ').toLowerCase();
+                    if (type === 'password') return el;
+                    if (needles.some(n => attrs.includes(n))) return el;
+                  }
+                  const all = root.querySelectorAll('*');
+                  for (const node of all) {
+                    if (node.shadowRoot) {
+                      const found = walk(node.shadowRoot);
+                      if (found) return found;
+                    }
+                  }
+                  return null;
+                };
+                return walk(document);
+                """
+            )
+            if shadow_password is not None:
+                return shadow_password
+        except Exception:
+            pass
         return None
 
     def _set_input_value_js(self, driver, element, value: str) -> bool:
@@ -2179,6 +2251,56 @@ class LeagueFeature:
             time.sleep(1.0)
             return True
 
+        try:
+            js_clicked = driver.execute_script(
+                """
+                const phrases = ['use your email', 'use email', 'использовать email'];
+                const roots = [document];
+                const collect = (root, out) => {
+                  if (!root || !root.querySelectorAll) return;
+                  for (const el of root.querySelectorAll('*')) {
+                    out.push(el);
+                    if (el.shadowRoot) collect(el.shadowRoot, out);
+                  }
+                };
+                const all = [];
+                collect(document, all);
+                const score = (el) => {
+                  const text = (el.textContent || '').trim().toLowerCase();
+                  if (!text) return 0;
+                  for (const p of phrases) {
+                    if (text === p) return 3;
+                    if (text.includes(p)) return 2;
+                  }
+                  return 0;
+                };
+                const candidates = all
+                  .map(el => ({ el, s: score(el) }))
+                  .filter(x => x.s > 0)
+                  .sort((a, b) => b.s - a.s);
+                for (const c of candidates) {
+                  let node = c.el;
+                  for (let i = 0; i < 6 && node; i += 1) {
+                    try {
+                      node.scrollIntoView({ block: 'center', inline: 'center' });
+                    } catch (e) {}
+                    try { node.click(); return true; } catch (e) {}
+                    try {
+                      node.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+                      return true;
+                    } catch (e) {}
+                    node = node.parentElement;
+                  }
+                }
+                return false;
+                """
+            )
+            if bool(js_clicked):
+                time.sleep(1.0)
+                return True
+        except Exception:
+            pass
+
         contexts = self._list_browser_contexts(driver)
         for frame in contexts:
             try:
@@ -2277,7 +2399,7 @@ class LeagueFeature:
                 loaded = True
                 tried_urls.append(url)
                 email_found = False
-                for _ in range(24):
+                for _ in range(60):
                     await self._open_email_login_method(driver)
                     if self._has_login_email_any_context(driver):
                         email_found = True
