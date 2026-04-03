@@ -65,6 +65,7 @@ OCR_TIMEOUT_SEC=20
 - `/league_ocr_show [id]` (admins)
 - `/league_ocr_approve [id]` (admins)
 - `/league_ocr_reject [id] [reason]` (admins)
+- `/league_apply_result [id] [--dry-run] [--force]` (admins)
 
 Text command for players:
 
@@ -86,6 +87,21 @@ python scripts/cp_auth_session.py
 ```
 
 Output file: `state/challenge_storage_state.json`
+
+Optional selector tuning (if Challenge UI changes):
+
+- `CHALLENGE_EDIT_SELECTORS`
+- `CHALLENGE_DATE_SELECTORS`
+- `CHALLENGE_HOME_SCORE_SELECTORS`
+- `CHALLENGE_AWAY_SCORE_SELECTORS`
+- `CHALLENGE_HOME_GOAL_SELECTORS`
+- `CHALLENGE_AWAY_GOAL_SELECTORS`
+- `CHALLENGE_HOME_ASSIST_SELECTORS`
+- `CHALLENGE_AWAY_ASSIST_SELECTORS`
+- `CHALLENGE_SAVE_SELECTORS`
+- `CHALLENGE_SUCCESS_SELECTORS`
+
+Use `|` between selectors in env values.
 
 ## OCR drafts from screenshots
 

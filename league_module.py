@@ -10,6 +10,7 @@ import urllib.request
 from pathlib import Path
 from difflib import SequenceMatcher
 from datetime import datetime
+from itertools import zip_longest
 from typing import Dict, List, Optional
 from zoneinfo import ZoneInfo
 
@@ -422,11 +423,22 @@ class LeagueRepositorySQLite:
         self.conn.commit()
 
     def get_league_challenge_source(self, chat_id: int) -> Optional[Dict]:
-        self.cursor.execute(
-            "SELECT chat_id, stage_url, max_round, enabled FROM league_challenge_sources WHERE chat_id = ?",
-            (chat_id,),
-        )
-        row = self.cursor.fetchone()
+        row = None
+        try:
+            self.cursor.execute(
+                "SELECT chat_id, stage_url, max_round, enabled FROM league_challenge_sources WHERE chat_id = ?",
+                (chat_id,),
+            )
+            row = self.cursor.fetchone()
+        except Exception:
+            try:
+                self.cursor.execute(
+                    "SELECT chat_id, url, max_round, enabled FROM league_challenge_sources WHERE chat_id = ?",
+                    (chat_id,),
+                )
+                row = self.cursor.fetchone()
+            except Exception:
+                return None
         if not row:
             return None
         return {"chat_id": row[0], "stage_url": row[1], "max_round": row[2], "enabled": row[3]}
@@ -637,6 +649,27 @@ class LeagueRepositoryPostgres(LeagueRepositorySQLite):
             )
             """
         )
+        self.cursor.execute("ALTER TABLE league_challenge_sources ADD COLUMN IF NOT EXISTS stage_url TEXT")
+        self.cursor.execute("ALTER TABLE league_challenge_sources ADD COLUMN IF NOT EXISTS max_round INTEGER")
+        self.cursor.execute("ALTER TABLE league_challenge_sources ADD COLUMN IF NOT EXISTS enabled INTEGER DEFAULT 1")
+        self.cursor.execute(
+            "ALTER TABLE league_challenge_sources ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+        )
+        self.cursor.execute(
+            """
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_name = 'league_challenge_sources' AND column_name = 'url'
+            """
+        )
+        if self.cursor.fetchone():
+            self.cursor.execute(
+                """
+                UPDATE league_challenge_sources
+                SET stage_url = COALESCE(stage_url, url)
+                WHERE stage_url IS NULL OR stage_url = ''
+                """
+            )
 
         self.cursor.execute(
             """
@@ -728,6 +761,7 @@ class LeagueFeature:
         self.league_reminder_times = {"00:00", "04:00", "08:00", "12:00", "16:00", "20:00"}
         self._is_admin = is_admin_callable
         self.application = application
+        self.logger = logging.getLogger("league_bot")
         self._ocr_checked = False
         self._ocr_enabled = False
 
@@ -1170,6 +1204,113 @@ class LeagueFeature:
             "away_assists": list(payload.get("home_assists") or []),
         }
 
+    def _selectors_from_env(self, key: str, defaults: List[str]) -> List[str]:
+        raw = (os.getenv(key) or "").strip()
+        if not raw:
+            return list(defaults)
+        parts = [part.strip() for part in re.split(r"[\n|]+", raw) if part.strip()]
+        return parts or list(defaults)
+
+    async def _click_first_available(self, page, selectors: List[str], timeout: int = 3000) -> Optional[str]:
+        for selector in selectors:
+            locator = page.locator(selector)
+            if await locator.count() <= 0:
+                continue
+            try:
+                await locator.first.click(timeout=timeout)
+                return selector
+            except Exception:
+                continue
+        return None
+
+    async def _fill_first_available(self, page, selectors: List[str], value: str) -> Optional[str]:
+        for selector in selectors:
+            locator = page.locator(selector)
+            if await locator.count() <= 0:
+                continue
+            try:
+                await locator.first.fill(value)
+                return selector
+            except Exception:
+                continue
+        return None
+
+    async def _pick_first_input_group(self, page, selectors: List[str]):
+        for selector in selectors:
+            locator = page.locator(selector)
+            try:
+                count = await locator.count()
+            except Exception:
+                continue
+            if count > 0:
+                return locator, count, selector
+        return None, 0, None
+
+    def _build_side_events(self, payload: Dict, side: str) -> List[Dict]:
+        goals = list(payload.get(f"{side}_goals") or [])
+        assists = list(payload.get(f"{side}_assists") or [])
+        events = []
+        for goal, assist in zip_longest(goals, assists, fillvalue=""):
+            if not goal and not assist:
+                continue
+            events.append({"goal": str(goal or ""), "assist": str(assist or "")})
+        return events
+
+    async def _fill_side_events(self, page, payload: Dict, side: str) -> Dict:
+        events = self._build_side_events(payload, side)
+        if not events:
+            return {"ok": True, "events": 0, "filled_goals": 0, "filled_assists": 0}
+
+        goal_defaults = [
+            f"input[name*='{side}'][name*='goal']",
+            f"input[name*='{side}'][name*='scorer']",
+            f"input[name*='{side}'][name*='player']",
+            f"input[id*='{side}'][id*='goal']",
+        ]
+        assist_defaults = [
+            f"input[name*='{side}'][name*='assist']",
+            f"input[id*='{side}'][id*='assist']",
+        ]
+        goal_selectors = self._selectors_from_env(f"CHALLENGE_{side.upper()}_GOAL_SELECTORS", goal_defaults)
+        assist_selectors = self._selectors_from_env(f"CHALLENGE_{side.upper()}_ASSIST_SELECTORS", assist_defaults)
+
+        goal_group, goal_count, goal_selector = await self._pick_first_input_group(page, goal_selectors)
+        assist_group, assist_count, assist_selector = await self._pick_first_input_group(page, assist_selectors)
+
+        if goal_count <= 0 and assist_count <= 0:
+            return {
+                "ok": False,
+                "events": len(events),
+                "filled_goals": 0,
+                "filled_assists": 0,
+                "message": f"Не найдены поля событий для стороны {side}",
+            }
+
+        filled_goals = 0
+        filled_assists = 0
+        for i, event in enumerate(events):
+            if goal_group is not None and i < goal_count and event.get("goal"):
+                try:
+                    await goal_group.nth(i).fill(event["goal"])
+                    filled_goals += 1
+                except Exception:
+                    pass
+            if assist_group is not None and i < assist_count and event.get("assist"):
+                try:
+                    await assist_group.nth(i).fill(event["assist"])
+                    filled_assists += 1
+                except Exception:
+                    pass
+
+        return {
+            "ok": True,
+            "events": len(events),
+            "filled_goals": filled_goals,
+            "filled_assists": filled_assists,
+            "goal_selector": goal_selector,
+            "assist_selector": assist_selector,
+        }
+
     async def _open_match_and_fill_result(self, match_url: str, payload: Dict, dry_run: bool = False) -> Dict:
         if not PLAYWRIGHT_AVAILABLE:
             return {"ok": False, "message": "Playwright недоступен в окружении."}
@@ -1197,78 +1338,110 @@ class LeagueFeature:
                     return {"ok": True, "message": f"Dry-run ok: матч открыт, дата к установке {date_value}"}
 
                 # Try to open editing mode.
-                edit_selectors = [
+                edit_selectors = self._selectors_from_env("CHALLENGE_EDIT_SELECTORS", [
                     "button:has-text('Edit')",
                     "button:has-text('Редактировать')",
                     "button:has-text('Set result')",
                     "button:has-text('Результат')",
-                ]
-                for sel in edit_selectors:
-                    loc = page.locator(sel)
-                    if await loc.count() > 0:
-                        try:
-                            await loc.first.click(timeout=3000)
-                            break
-                        except Exception:
-                            continue
+                ])
+                await self._click_first_available(page, edit_selectors)
 
                 # Set date to current moment (date input expected by UI).
-                date_inputs = [
+                date_inputs = self._selectors_from_env("CHALLENGE_DATE_SELECTORS", [
                     "input[type='date']",
                     "input[name*='date']",
                     "input[placeholder*='Date']",
                     "input[placeholder*='Дата']",
-                ]
-                for sel in date_inputs:
-                    loc = page.locator(sel)
-                    if await loc.count() > 0:
-                        try:
-                            await loc.first.fill(date_value)
-                            break
-                        except Exception:
-                            continue
+                ])
+                await self._fill_first_available(page, date_inputs, date_value)
 
                 # Generic score fallback in UI if available.
                 if payload.get("score_home") is not None and payload.get("score_away") is not None:
-                    home_score_inputs = page.locator("input[name*='home'][name*='score'], input[placeholder*='Home']")
-                    away_score_inputs = page.locator("input[name*='away'][name*='score'], input[placeholder*='Away']")
+                    home_score_selectors = self._selectors_from_env(
+                        "CHALLENGE_HOME_SCORE_SELECTORS",
+                        ["input[name*='home'][name*='score']", "input[placeholder*='Home']"],
+                    )
+                    away_score_selectors = self._selectors_from_env(
+                        "CHALLENGE_AWAY_SCORE_SELECTORS",
+                        ["input[name*='away'][name*='score']", "input[placeholder*='Away']"],
+                    )
                     try:
-                        if await home_score_inputs.count() > 0:
-                            await home_score_inputs.first.fill(str(payload.get("score_home")))
-                        if await away_score_inputs.count() > 0:
-                            await away_score_inputs.first.fill(str(payload.get("score_away")))
+                        await self._fill_first_available(page, home_score_selectors, str(payload.get("score_home")))
+                        await self._fill_first_available(page, away_score_selectors, str(payload.get("score_away")))
                     except Exception:
                         pass
 
+                home_events_result = await self._fill_side_events(page, payload, "home")
+                away_events_result = await self._fill_side_events(page, payload, "away")
+                if not home_events_result.get("ok") or not away_events_result.get("ok"):
+                    await browser.close()
+                    return {
+                        "ok": False,
+                        "message": "; ".join(
+                            [
+                                part
+                                for part in [
+                                    home_events_result.get("message", ""),
+                                    away_events_result.get("message", ""),
+                                ]
+                                if part
+                            ]
+                        ),
+                    }
+
                 # Save.
-                save_buttons = [
+                save_buttons = self._selectors_from_env("CHALLENGE_SAVE_SELECTORS", [
                     "button:has-text('Save')",
                     "button:has-text('Сохранить')",
                     "button:has-text('Confirm')",
                     "button:has-text('Подтвердить')",
-                ]
-                saved = False
-                for sel in save_buttons:
-                    loc = page.locator(sel)
-                    if await loc.count() > 0:
-                        try:
-                            await loc.first.click(timeout=3000)
-                            saved = True
-                            break
-                        except Exception:
-                            continue
+                ])
+                clicked_selector = await self._click_first_available(page, save_buttons)
+                saved = bool(clicked_selector)
 
                 await page.wait_for_timeout(1200)
+                success_selectors = self._selectors_from_env("CHALLENGE_SUCCESS_SELECTORS", [
+                    "text=Saved",
+                    "text=Сохранено",
+                    "text=успешно",
+                    "text=Updated",
+                ])
+                success_hint = False
+                for selector in success_selectors:
+                    locator = page.locator(selector)
+                    try:
+                        if await locator.count() > 0:
+                            success_hint = True
+                            break
+                    except Exception:
+                        continue
                 await browser.close()
                 if not saved:
                     return {"ok": False, "message": "Не найдено кнопки сохранения результата."}
-                return {"ok": True, "message": "Результат отправлен на сохранение."}
+                return {
+                    "ok": True,
+                    "message": (
+                        "Результат отправлен на сохранение"
+                        f". Home: {home_events_result.get('filled_goals', 0)} гол(ов), {home_events_result.get('filled_assists', 0)} ассист(ов)"
+                        f"; Away: {away_events_result.get('filled_goals', 0)} гол(ов), {away_events_result.get('filled_assists', 0)} ассист(ов)"
+                        + (". Подтверждение UI найдено." if success_hint else ". Подтверждение UI не найдено.")
+                    ),
+                }
             except PlaywrightTimeoutError:
                 await browser.close()
                 return {"ok": False, "message": "Таймаут при открытии страницы матча."}
             except Exception as e:
                 await browser.close()
                 return {"ok": False, "message": f"Ошибка Playwright: {e}"}
+
+    async def on_error(self, update: object, context: ContextTypes.DEFAULT_TYPE):
+        if context.error is None:
+            self.logger.error("Unhandled update error without exception object")
+            return
+        self.logger.error(
+            "Unhandled update error",
+            exc_info=(type(context.error), context.error, context.error.__traceback__),
+        )
 
     def build_league_summary_text(self, chat_id: int, threshold: int = 2) -> str:
         summary = self.db.get_league_debt_summary(chat_id)
@@ -2834,6 +3007,10 @@ def _clean_env_value(raw: str | None) -> str:
 
 def run_bot():
     load_dotenv()
+    logging.basicConfig(
+        level=(os.getenv("LOG_LEVEL") or "INFO").upper(),
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
 
     token = _clean_env_value(os.getenv("BOT_TOKEN")) or _clean_env_value(
         os.getenv("TELEGRAM_BOT_TOKEN")
@@ -2874,6 +3051,7 @@ def run_bot():
         application=application,
     )
     feature.register_handlers(application)
+    application.add_error_handler(feature.on_error)
     feature.setup_jobs(application, logging.getLogger("league_bot"))
 
     print(f"League bot started via league_module.py (admins: {len(admin_ids)})")
