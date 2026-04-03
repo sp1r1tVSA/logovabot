@@ -1291,7 +1291,110 @@ class LeagueFeature:
         chunks = value.split("'")
         return "concat(" + ", \"'\", ".join([f"'{chunk}'" for chunk in chunks]) + ")"
 
-    def _find_elements_by_selector(self, driver, selector: str):
+    @staticmethod
+    def _attr_contains_any(element, needles: List[str]) -> bool:
+        try:
+            values = [
+                (element.get_attribute("name") or ""),
+                (element.get_attribute("id") or ""),
+                (element.get_attribute("placeholder") or ""),
+                (element.get_attribute("autocomplete") or ""),
+                (element.get_attribute("aria-label") or ""),
+            ]
+        except Exception:
+            return False
+        hay = " ".join(values).lower()
+        return any(needle in hay for needle in needles)
+
+    def _find_login_email_element(self, driver):
+        try:
+            inputs = driver.find_elements(By.CSS_SELECTOR, "input")
+        except Exception:
+            return None
+
+        visible = []
+        for element in inputs:
+            try:
+                if element.is_displayed():
+                    visible.append(element)
+            except Exception:
+                continue
+
+        for element in visible:
+            try:
+                input_type = (element.get_attribute("type") or "").lower().strip()
+            except Exception:
+                input_type = ""
+            if input_type == "email":
+                return element
+            if self._attr_contains_any(element, ["email", "mail", "login", "user", "username"]):
+                return element
+
+        for element in visible:
+            try:
+                input_type = (element.get_attribute("type") or "text").lower().strip()
+            except Exception:
+                input_type = "text"
+            if input_type in {"text", "search", "tel"}:
+                return element
+        return None
+
+    def _find_login_password_element(self, driver):
+        try:
+            inputs = driver.find_elements(By.CSS_SELECTOR, "input")
+        except Exception:
+            return None
+
+        visible = []
+        for element in inputs:
+            try:
+                if element.is_displayed():
+                    visible.append(element)
+            except Exception:
+                continue
+
+        for element in visible:
+            try:
+                input_type = (element.get_attribute("type") or "").lower().strip()
+            except Exception:
+                input_type = ""
+            if input_type == "password":
+                return element
+            if self._attr_contains_any(element, ["pass", "парол"]):
+                return element
+        return None
+
+    def _search_selector_in_frames(self, driver, selector: str):
+        found = []
+        try:
+            driver.switch_to.default_content()
+        except Exception:
+            pass
+
+        try:
+            found.extend(self._find_elements_in_current_context(driver, selector))
+        except Exception:
+            pass
+
+        try:
+            frames = driver.find_elements(By.TAG_NAME, "iframe")
+        except Exception:
+            frames = []
+
+        for frame in frames:
+            try:
+                driver.switch_to.default_content()
+                driver.switch_to.frame(frame)
+                found.extend(self._find_elements_in_current_context(driver, selector))
+            except Exception:
+                continue
+        try:
+            driver.switch_to.default_content()
+        except Exception:
+            pass
+        return found
+
+    def _find_elements_in_current_context(self, driver, selector: str):
         selector = (selector or "").strip()
         if not selector:
             return []
@@ -1311,6 +1414,9 @@ class LeagueFeature:
             return driver.find_elements(By.XPATH, xpath)
 
         return driver.find_elements(By.CSS_SELECTOR, selector)
+
+    def _find_elements_by_selector(self, driver, selector: str):
+        return self._search_selector_in_frames(driver, selector)
 
     async def _click_first_available(self, driver, selectors: List[str], timeout: int = 3000) -> Optional[str]:
         for selector in selectors:
@@ -1574,11 +1680,39 @@ class LeagueFeature:
         login_url = self._get_env_loose("CHALLENGE_LOGIN_URL") or "https://challenge.place/login"
         self.logger.info("Trying credential login for challenge.place")
 
-        try:
-            driver.get(login_url)
-            time.sleep(1.0)
-        except Exception as e:
-            return {"ok": False, "message": f"Не удалось открыть страницу логина: {e}"}
+        login_urls = []
+        current_url = (driver.current_url or "").strip()
+        if current_url.startswith("http"):
+            login_urls.append(current_url)
+        login_urls.extend(
+            [
+                login_url,
+                "https://challenge.place/login",
+                "https://challenge.place/signin",
+                "https://challenge.place/auth/login",
+            ]
+        )
+        seen = set()
+        normalized_urls = []
+        for url in login_urls:
+            url = (url or "").strip()
+            if not url or url in seen:
+                continue
+            seen.add(url)
+            normalized_urls.append(url)
+
+        loaded = False
+        for url in normalized_urls:
+            try:
+                driver.get(url)
+                time.sleep(1.0)
+                loaded = True
+                if self._find_login_email_element(driver) is not None:
+                    break
+            except Exception:
+                continue
+        if not loaded:
+            return {"ok": False, "message": "Не удалось открыть страницу логина."}
 
         email_selectors = self._selectors_from_env(
             "CHALLENGE_LOGIN_EMAIL_SELECTORS",
@@ -1620,6 +1754,15 @@ class LeagueFeature:
 
         filled_email_selector = await self._fill_first_available(driver, email_selectors, email)
         if not filled_email_selector:
+            email_element = self._find_login_email_element(driver)
+            if email_element is not None:
+                try:
+                    email_element.clear()
+                    email_element.send_keys(email)
+                    filled_email_selector = "fallback:visible_input"
+                except Exception:
+                    filled_email_selector = None
+        if not filled_email_selector:
             return {
                 "ok": False,
                 "message": "Не удалось найти поле email на странице логина.",
@@ -1637,6 +1780,16 @@ class LeagueFeature:
                     pass
             time.sleep(2.0)
             filled_password_selector = await self._fill_first_available(driver, password_selectors, password)
+
+        if not filled_password_selector:
+            password_element = self._find_login_password_element(driver)
+            if password_element is not None:
+                try:
+                    password_element.clear()
+                    password_element.send_keys(password)
+                    filled_password_selector = "fallback:password_input"
+                except Exception:
+                    filled_password_selector = None
 
         if not filled_password_selector:
             return {
