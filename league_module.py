@@ -1585,8 +1585,13 @@ class LeagueFeature:
             [
                 "input[type='email']",
                 "input[name*='email']",
+                "input[name*='login']",
+                "input[name*='user']",
+                "input[type='text'][autocomplete='username']",
                 "input[autocomplete='email']",
                 "input[placeholder*='mail']",
+                "input[placeholder*='Email']",
+                "input[placeholder*='email']",
             ],
         )
         password_selectors = self._selectors_from_env(
@@ -1595,6 +1600,8 @@ class LeagueFeature:
                 "input[type='password']",
                 "input[name*='password']",
                 "input[autocomplete='current-password']",
+                "input[placeholder*='Password']",
+                "input[placeholder*='password']",
             ],
         )
         submit_selectors = self._selectors_from_env(
@@ -1605,15 +1612,39 @@ class LeagueFeature:
                 "button:has-text('Log in')",
                 "button:has-text('Login')",
                 "button:has-text('Войти')",
+                "button:has-text('Continue')",
+                "button:has-text('Next')",
+                "button:has-text('Продолжить')",
             ],
         )
 
         filled_email_selector = await self._fill_first_available(driver, email_selectors, email)
-        filled_password_selector = await self._fill_first_available(driver, password_selectors, password)
-        if not filled_email_selector or not filled_password_selector:
+        if not filled_email_selector:
             return {
                 "ok": False,
-                "message": "Не удалось найти поля email/password на странице логина.",
+                "message": "Не удалось найти поле email на странице логина.",
+            }
+
+        filled_password_selector = await self._fill_first_available(driver, password_selectors, password)
+
+        if not filled_password_selector:
+            clicked_continue = await self._click_first_available(driver, submit_selectors, timeout=5000)
+            if not clicked_continue:
+                try:
+                    active = driver.switch_to.active_element
+                    active.send_keys("\n")
+                except Exception:
+                    pass
+            time.sleep(2.0)
+            filled_password_selector = await self._fill_first_available(driver, password_selectors, password)
+
+        if not filled_password_selector:
+            return {
+                "ok": False,
+                "message": (
+                    "Не удалось найти поле пароля на странице логина. "
+                    "Возможно, у challenge.place сейчас email-only/кодовый вход (без пароля)."
+                ),
             }
 
         clicked_submit = await self._click_first_available(driver, submit_selectors, timeout=5000)
