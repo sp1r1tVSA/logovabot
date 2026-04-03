@@ -7,6 +7,7 @@ import base64
 import unicodedata
 import urllib.parse
 import urllib.request
+from pathlib import Path
 from difflib import SequenceMatcher
 from datetime import datetime
 from typing import Dict, List, Optional
@@ -25,6 +26,14 @@ try:
     OCR_AVAILABLE = True
 except Exception:
     OCR_AVAILABLE = False
+
+try:
+    from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+    from playwright.async_api import async_playwright
+
+    PLAYWRIGHT_AVAILABLE = True
+except Exception:
+    PLAYWRIGHT_AVAILABLE = False
 
 
 class LeagueRepositorySQLite:
@@ -143,6 +152,22 @@ class LeagueRepositorySQLite:
                 player_name_raw TEXT NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(chat_id, team_name_norm, player_name_norm)
+            )
+            """
+        )
+
+        self.cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS league_ocr_applied (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id INTEGER NOT NULL,
+                ocr_id INTEGER NOT NULL,
+                match_url TEXT,
+                status TEXT NOT NULL,
+                message TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(chat_id, ocr_id)
             )
             """
         )
@@ -343,6 +368,43 @@ class LeagueRepositorySQLite:
             (chat_id, team_name_norm),
         )
         return [{"player_name_norm": r[0], "player_name_raw": r[1]} for r in self.cursor.fetchall()]
+
+    def get_ocr_applied(self, chat_id: int, ocr_id: int) -> Optional[Dict]:
+        self.cursor.execute(
+            """
+            SELECT chat_id, ocr_id, match_url, status, message, created_at, updated_at
+            FROM league_ocr_applied
+            WHERE chat_id = ? AND ocr_id = ?
+            """,
+            (chat_id, ocr_id),
+        )
+        row = self.cursor.fetchone()
+        if not row:
+            return None
+        return {
+            "chat_id": row[0],
+            "ocr_id": row[1],
+            "match_url": row[2],
+            "status": row[3],
+            "message": row[4],
+            "created_at": row[5],
+            "updated_at": row[6],
+        }
+
+    def upsert_ocr_applied(self, chat_id: int, ocr_id: int, match_url: str, status: str, message: str):
+        self.cursor.execute(
+            """
+            INSERT INTO league_ocr_applied (chat_id, ocr_id, match_url, status, message, updated_at)
+            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(chat_id, ocr_id) DO UPDATE SET
+                match_url = excluded.match_url,
+                status = excluded.status,
+                message = excluded.message,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (chat_id, ocr_id, match_url, status, message),
+        )
+        self.conn.commit()
 
     def set_league_challenge_source(self, chat_id: int, stage_url: str, max_round: int):
         self.cursor.execute(
@@ -611,6 +673,22 @@ class LeagueRepositoryPostgres(LeagueRepositorySQLite):
             )
             """
         )
+
+        self.cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS league_ocr_applied (
+                id BIGSERIAL PRIMARY KEY,
+                chat_id BIGINT NOT NULL,
+                ocr_id INTEGER NOT NULL,
+                match_url TEXT,
+                status TEXT NOT NULL,
+                message TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(chat_id, ocr_id)
+            )
+            """
+        )
         self.conn.commit()
 
 
@@ -696,6 +774,7 @@ class LeagueFeature:
         application.add_handler(CommandHandler("league_ocr_show", self._guard(self.cmd_league_ocr_show)))
         application.add_handler(CommandHandler("league_ocr_approve", self._guard(self.cmd_league_ocr_approve)))
         application.add_handler(CommandHandler("league_ocr_reject", self._guard(self.cmd_league_ocr_reject)))
+        application.add_handler(CommandHandler("league_apply_result", self._guard(self.cmd_league_apply_result)))
         application.add_handler(MessageHandler(filters.PHOTO, self._guard(self.on_ocr_photo_message)))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._guard(self.on_ocr_fix_text_message)))
         application.add_handler(CallbackQueryHandler(self._guard(self.on_ocr_callback), pattern=r"^ocr:"))
@@ -981,6 +1060,215 @@ class LeagueFeature:
         else:
             lines.extend([it["raw_line"] for it in uniq_entries])
         return "\n".join(lines)
+
+    def _find_match_candidates_by_teams(self, chat_id: int, home_team: str, away_team: str) -> List[Dict]:
+        source = self.db.get_league_challenge_source(chat_id)
+        if not source or not source.get("enabled"):
+            return []
+
+        stage_url = source.get("stage_url")
+        max_round = int(source.get("max_round") or 0)
+        if not stage_url:
+            return []
+
+        html_text = self.fetch_text_url(stage_url)
+        state = self.parse_initial_state(html_text)
+        if not state:
+            return []
+
+        rooms = state.get("rooms", {})
+        stage_room = None
+        for room in rooms.values():
+            if isinstance(room, dict) and "rounds" in room and "competitors" in room:
+                stage_room = room
+                break
+        if not stage_room:
+            return []
+
+        rounds_map = stage_room.get("rounds", {})
+        target_set = {self.normalize_team_name(home_team), self.normalize_team_name(away_team)}
+        candidates = []
+
+        sorted_rounds = sorted(rounds_map.values(), key=lambda x: x.get("order", 10**9))
+        for round_item in sorted_rounds:
+            round_num = int(round_item.get("order") or 0)
+            if max_round and round_num > max_round:
+                continue
+            for series_id in round_item.get("seriesIds", []):
+                match_id = self._object_id_add(series_id, 1)
+                match_url = re.sub(r"/stage/.*$", f"/match/{match_id}", stage_url)
+                try:
+                    match_html = self.fetch_text_url(match_url)
+                    match_state = self.parse_initial_state(match_html)
+                    if not match_state:
+                        continue
+                    match_rooms = match_state.get("rooms", {})
+                    match_room = None
+                    for room in match_rooms.values():
+                        if isinstance(room, dict) and "homeCompetitorId" in room and "awayCompetitorId" in room:
+                            match_room = room
+                            break
+                    if not match_room:
+                        continue
+                    home_id = match_room.get("homeCompetitorId")
+                    away_id = match_room.get("awayCompetitorId")
+                    comps = match_room.get("competitors", {})
+                    home_name = (comps.get(home_id) or {}).get("name")
+                    away_name = (comps.get(away_id) or {}).get("name")
+                    if not home_name or not away_name:
+                        continue
+                    found_set = {self.normalize_team_name(home_name), self.normalize_team_name(away_name)}
+                    if found_set != target_set:
+                        continue
+                    candidates.append(
+                        {
+                            "round_num": round_num,
+                            "match_url": match_url,
+                            "home_team": home_name,
+                            "away_team": away_name,
+                        }
+                    )
+                except Exception:
+                    continue
+
+        return candidates
+
+    def _select_candidate_min_round(self, candidates: List[Dict]) -> Optional[Dict]:
+        if not candidates:
+            return None
+        return sorted(candidates, key=lambda x: (x.get("round_num") or 10**9, x.get("match_url") or ""))[0]
+
+    def _map_payload_to_site_sides(self, payload: Dict, site_home: str, site_away: str) -> Dict:
+        payload_home_norm = self.normalize_team_name(payload.get("home_team") or "")
+        payload_away_norm = self.normalize_team_name(payload.get("away_team") or "")
+        site_home_norm = self.normalize_team_name(site_home or "")
+        site_away_norm = self.normalize_team_name(site_away or "")
+
+        swapped = payload_home_norm == site_away_norm and payload_away_norm == site_home_norm
+        if not swapped:
+            return {
+                "swapped": False,
+                "home_team": payload.get("home_team"),
+                "away_team": payload.get("away_team"),
+                "score_home": payload.get("score_home"),
+                "score_away": payload.get("score_away"),
+                "home_goals": list(payload.get("home_goals") or []),
+                "away_goals": list(payload.get("away_goals") or []),
+                "home_assists": list(payload.get("home_assists") or []),
+                "away_assists": list(payload.get("away_assists") or []),
+            }
+
+        return {
+            "swapped": True,
+            "home_team": payload.get("away_team"),
+            "away_team": payload.get("home_team"),
+            "score_home": payload.get("score_away"),
+            "score_away": payload.get("score_home"),
+            "home_goals": list(payload.get("away_goals") or []),
+            "away_goals": list(payload.get("home_goals") or []),
+            "home_assists": list(payload.get("away_assists") or []),
+            "away_assists": list(payload.get("home_assists") or []),
+        }
+
+    async def _open_match_and_fill_result(self, match_url: str, payload: Dict, dry_run: bool = False) -> Dict:
+        if not PLAYWRIGHT_AVAILABLE:
+            return {"ok": False, "message": "Playwright недоступен в окружении."}
+
+        state_path = Path(os.getenv("CHALLENGE_STORAGE_STATE", "state/challenge_storage_state.json"))
+        if not state_path.exists():
+            return {"ok": False, "message": f"Файл сессии не найден: {state_path}"}
+
+        msk_now = datetime.now(ZoneInfo("Europe/Moscow"))
+        date_value = msk_now.strftime("%Y-%m-%d")
+
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            context = await browser.new_context(storage_state=str(state_path))
+            page = await context.new_page()
+            try:
+                await page.goto(match_url, wait_until="domcontentloaded", timeout=30000)
+                sign_in = page.locator("a[href='/login'], a:has-text('Sign in'), button:has-text('Sign in')")
+                if await sign_in.count() > 0:
+                    await browser.close()
+                    return {"ok": False, "message": "Сессия не авторизована. Перезапустите cp_auth_session.py"}
+
+                if dry_run:
+                    await browser.close()
+                    return {"ok": True, "message": f"Dry-run ok: матч открыт, дата к установке {date_value}"}
+
+                # Try to open editing mode.
+                edit_selectors = [
+                    "button:has-text('Edit')",
+                    "button:has-text('Редактировать')",
+                    "button:has-text('Set result')",
+                    "button:has-text('Результат')",
+                ]
+                for sel in edit_selectors:
+                    loc = page.locator(sel)
+                    if await loc.count() > 0:
+                        try:
+                            await loc.first.click(timeout=3000)
+                            break
+                        except Exception:
+                            continue
+
+                # Set date to current moment (date input expected by UI).
+                date_inputs = [
+                    "input[type='date']",
+                    "input[name*='date']",
+                    "input[placeholder*='Date']",
+                    "input[placeholder*='Дата']",
+                ]
+                for sel in date_inputs:
+                    loc = page.locator(sel)
+                    if await loc.count() > 0:
+                        try:
+                            await loc.first.fill(date_value)
+                            break
+                        except Exception:
+                            continue
+
+                # Generic score fallback in UI if available.
+                if payload.get("score_home") is not None and payload.get("score_away") is not None:
+                    home_score_inputs = page.locator("input[name*='home'][name*='score'], input[placeholder*='Home']")
+                    away_score_inputs = page.locator("input[name*='away'][name*='score'], input[placeholder*='Away']")
+                    try:
+                        if await home_score_inputs.count() > 0:
+                            await home_score_inputs.first.fill(str(payload.get("score_home")))
+                        if await away_score_inputs.count() > 0:
+                            await away_score_inputs.first.fill(str(payload.get("score_away")))
+                    except Exception:
+                        pass
+
+                # Save.
+                save_buttons = [
+                    "button:has-text('Save')",
+                    "button:has-text('Сохранить')",
+                    "button:has-text('Confirm')",
+                    "button:has-text('Подтвердить')",
+                ]
+                saved = False
+                for sel in save_buttons:
+                    loc = page.locator(sel)
+                    if await loc.count() > 0:
+                        try:
+                            await loc.first.click(timeout=3000)
+                            saved = True
+                            break
+                        except Exception:
+                            continue
+
+                await page.wait_for_timeout(1200)
+                await browser.close()
+                if not saved:
+                    return {"ok": False, "message": "Не найдено кнопки сохранения результата."}
+                return {"ok": True, "message": "Результат отправлен на сохранение."}
+            except PlaywrightTimeoutError:
+                await browser.close()
+                return {"ok": False, "message": "Таймаут при открытии страницы матча."}
+            except Exception as e:
+                await browser.close()
+                return {"ok": False, "message": f"Ошибка Playwright: {e}"}
 
     def build_league_summary_text(self, chat_id: int, threshold: int = 2) -> str:
         summary = self.db.get_league_debt_summary(chat_id)
@@ -2210,6 +2498,7 @@ class LeagueFeature:
                     "/league_ocr_show [id] - показать OCR-черновик",
                     "/league_ocr_approve [id] - подтвердить OCR-черновик",
                     "/league_ocr_reject [id] [причина] - отклонить OCR-черновик",
+                    "/league_apply_result [id] [--dry-run] [--force] - внести подтвержденный результат на сайт",
                 ]
             )
         )
@@ -2420,6 +2709,70 @@ class LeagueFeature:
         await update.message.reply_text(f"🛑 Черновик #{draft_id} отклонен. Причина: {reason}")
         if draft:
             await update.message.reply_text(self._format_ocr_draft_text(draft))
+
+    async def cmd_league_apply_result(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not self._is_admin(update.effective_user.id):
+            await update.message.reply_text("❌ Команда доступна только админам.")
+            return
+
+        args = list(context.args or [])
+        dry_run = "--dry-run" in args
+        force = "--force" in args
+        clean_args = [x for x in args if x not in {"--dry-run", "--force"}]
+        draft_id = self._resolve_draft_id(update, clean_args)
+        if draft_id is None:
+            await update.message.reply_text("Использование: /league_apply_result [id] [--dry-run] [--force]")
+            return
+
+        chat_id = update.effective_chat.id
+        draft = self.db.get_ocr_draft(chat_id, draft_id)
+        if not draft:
+            await update.message.reply_text(f"❌ Черновик #{draft_id} не найден.")
+            return
+        if draft.get("status") != "approved":
+            await update.message.reply_text(f"❌ Черновик #{draft_id} не подтвержден админом.")
+            return
+
+        already = self.db.get_ocr_applied(chat_id, draft_id)
+        if already and already.get("status") == "success" and not force and not dry_run:
+            await update.message.reply_text(
+                f"⚠️ Черновик #{draft_id} уже был применен. Используйте --force для повторного применения."
+            )
+            return
+
+        payload = draft.get("payload", {})
+        home_team = payload.get("home_team")
+        away_team = payload.get("away_team")
+        if not home_team or not away_team:
+            await update.message.reply_text("❌ В черновике отсутствуют команды.")
+            return
+
+        await update.message.reply_text("⏳ Ищу матч по командам...")
+        candidates = self._find_match_candidates_by_teams(chat_id, home_team, away_team)
+        selected = self._select_candidate_min_round(candidates)
+        if not selected:
+            self.db.upsert_ocr_applied(chat_id, draft_id, "", "failed", "Матч не найден по паре команд")
+            await update.message.reply_text("❌ Не удалось найти матч по паре команд в источнике лиги.")
+            return
+
+        mapped = self._map_payload_to_site_sides(payload, selected.get("home_team", ""), selected.get("away_team", ""))
+        await update.message.reply_text(
+            f"🔎 Выбран матч: тур {selected.get('round_num')}\n{selected.get('match_url')}\n"
+            + ("↔️ Стороны переставлены под сайт." if mapped.get("swapped") else "✅ Стороны совпали.")
+        )
+
+        result = await self._open_match_and_fill_result(selected.get("match_url", ""), mapped, dry_run=dry_run)
+        status = "success" if result.get("ok") else "failed"
+        status = "dry_run" if dry_run and result.get("ok") else status
+        self.db.upsert_ocr_applied(chat_id, draft_id, selected.get("match_url", ""), status, result.get("message", ""))
+
+        if result.get("ok"):
+            await update.message.reply_text(
+                f"✅ {'Dry-run завершен' if dry_run else 'Результат отправлен на сайт'} для черновика #{draft_id}.\n"
+                f"{result.get('message', '')}"
+            )
+        else:
+            await update.message.reply_text(f"❌ Не удалось применить черновик #{draft_id}: {result.get('message', 'неизвестная ошибка')}")
 
     async def cmd_league_reminder_on(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not self._is_admin(update.effective_user.id):
