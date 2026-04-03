@@ -4,6 +4,7 @@ import os
 import re
 import sqlite3
 import base64
+import unicodedata
 import urllib.parse
 import urllib.request
 from difflib import SequenceMatcher
@@ -489,8 +490,151 @@ class LeagueRepositorySQLite:
 
 
 class LeagueRepositoryPostgres(LeagueRepositorySQLite):
-    # Inherit command-side logic; override SQL placeholders where needed in your project.
-    pass
+    def create_tables(self):
+        self.cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS league_debt_entries (
+                id BIGSERIAL PRIMARY KEY,
+                chat_id BIGINT NOT NULL,
+                round_label TEXT,
+                debtor_username TEXT NOT NULL,
+                opponent_username TEXT,
+                raw_line TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+
+        self.cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS league_reminder_settings (
+                chat_id BIGINT PRIMARY KEY,
+                enabled INTEGER DEFAULT 0,
+                timezone TEXT DEFAULT 'Europe/Moscow',
+                threshold INTEGER DEFAULT 2,
+                hourly_enabled INTEGER DEFAULT 0,
+                hourly_text TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+
+        self.cursor.execute(
+            """
+            ALTER TABLE league_reminder_settings
+            ADD COLUMN IF NOT EXISTS hourly_enabled INTEGER DEFAULT 0
+            """
+        )
+        self.cursor.execute(
+            """
+            ALTER TABLE league_reminder_settings
+            ADD COLUMN IF NOT EXISTS hourly_text TEXT
+            """
+        )
+
+        self.cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS league_reminder_runs (
+                id BIGSERIAL PRIMARY KEY,
+                chat_id BIGINT NOT NULL,
+                slot_key TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(chat_id, slot_key)
+            )
+            """
+        )
+
+        self.cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS league_team_map (
+                id BIGSERIAL PRIMARY KEY,
+                chat_id BIGINT NOT NULL,
+                team_name_norm TEXT NOT NULL,
+                team_name_raw TEXT NOT NULL,
+                telegram_username TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(chat_id, team_name_norm)
+            )
+            """
+        )
+
+        self.cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS league_challenge_sources (
+                chat_id BIGINT PRIMARY KEY,
+                stage_url TEXT NOT NULL,
+                max_round INTEGER NOT NULL,
+                enabled INTEGER DEFAULT 1,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+
+        self.cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS league_ocr_drafts (
+                id BIGSERIAL PRIMARY KEY,
+                chat_id BIGINT NOT NULL,
+                ocr_id INTEGER NOT NULL,
+                source_message_id BIGINT,
+                author_user_id BIGINT,
+                status TEXT NOT NULL DEFAULT 'pending_admin_review',
+                payload_json TEXT NOT NULL,
+                warnings_json TEXT,
+                last_editor_user_id BIGINT,
+                reviewed_by_user_id BIGINT,
+                review_note TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(chat_id, ocr_id)
+            )
+            """
+        )
+
+        self.cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS league_team_players (
+                id BIGSERIAL PRIMARY KEY,
+                chat_id BIGINT NOT NULL,
+                team_name_norm TEXT NOT NULL,
+                team_name_raw TEXT NOT NULL,
+                player_name_norm TEXT NOT NULL,
+                player_name_raw TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(chat_id, team_name_norm, player_name_norm)
+            )
+            """
+        )
+        self.conn.commit()
+
+
+class PostgresCursorAdapter:
+    def __init__(self, raw_cursor):
+        self._cursor = raw_cursor
+
+    @staticmethod
+    def _convert_sql(sql: str) -> str:
+        return sql.replace("?", "%s")
+
+    def execute(self, sql, params=None):
+        converted = self._convert_sql(sql)
+        if params is None:
+            return self._cursor.execute(converted)
+        return self._cursor.execute(converted, params)
+
+    def executemany(self, sql, seq_of_params):
+        converted = self._convert_sql(sql)
+        return self._cursor.executemany(converted, seq_of_params)
+
+    def fetchone(self):
+        return self._cursor.fetchone()
+
+    def fetchall(self):
+        return self._cursor.fetchall()
+
+    @property
+    def rowcount(self):
+        return self._cursor.rowcount
 
 
 class LeagueFeature:
@@ -1200,6 +1344,8 @@ class LeagueFeature:
 
     def _normalize_player_name(self, name: str) -> str:
         value = (name or "").strip().lower()
+        value = unicodedata.normalize("NFKD", value)
+        value = "".join(ch for ch in value if not unicodedata.combining(ch))
         value = value.replace("ё", "е")
         value = re.sub(r"[^a-zа-я0-9\s\-]", " ", value, flags=re.IGNORECASE)
         value = re.sub(r"\s+", " ", value).strip()
@@ -1245,6 +1391,15 @@ class LeagueFeature:
         norm = self._normalize_player_name(name)
         return [t for t in re.split(r"[\s\-]+", norm) if t]
 
+    def _simplify_name_for_match(self, name: str) -> str:
+        value = self._transliterate_ru_to_en(self._normalize_player_name(name))
+        value = value.replace("ph", "f").replace("ck", "k").replace("qu", "k")
+        value = value.replace("zh", "j").replace("kh", "h").replace("ch", "c").replace("sh", "s")
+        value = value.replace("ts", "s")
+        value = re.sub(r"[^a-z0-9]", "", value)
+        value = re.sub(r"(.)\1+", r"\1", value)
+        return value
+
     def _score_name_match(self, source: str, target: str) -> float:
         a = self._normalize_player_name(source)
         b = self._normalize_player_name(target)
@@ -1259,6 +1414,18 @@ class LeagueFeature:
         b_lat = self._transliterate_ru_to_en(b)
         translit_score = SequenceMatcher(None, a_lat, b_lat).ratio()
 
+        simple_a = self._simplify_name_for_match(source)
+        simple_b = self._simplify_name_for_match(target)
+        simple_score = SequenceMatcher(None, simple_a, simple_b).ratio() if simple_a and simple_b else 0.0
+
+        cons_a = re.sub(r"[aeiouy]", "", simple_a)
+        cons_b = re.sub(r"[aeiouy]", "", simple_b)
+        consonant_score = SequenceMatcher(None, cons_a, cons_b).ratio() if cons_a and cons_b else 0.0
+
+        contain_score = 0.0
+        if simple_a and simple_b and (simple_a in simple_b or simple_b in simple_a):
+            contain_score = 0.93
+
         token_score = 0.0
         tokens_a = self._tokenize_player_name(source)
         tokens_b = self._tokenize_player_name(target)
@@ -1272,7 +1439,7 @@ class LeagueFeature:
                     else:
                         token_score = max(token_score, SequenceMatcher(None, ta, tb).ratio() * 0.9)
 
-        return max(base_score, translit_score, token_score)
+        return max(base_score, translit_score, token_score, simple_score, consonant_score * 0.95, contain_score)
 
     def _resolve_assists_by_goals(
         self,
@@ -2283,11 +2450,28 @@ def run_bot():
         raise RuntimeError("Set BOT_TOKEN or TELEGRAM_BOT_TOKEN")
 
     admin_ids = _parse_admin_ids(os.getenv("ADMIN_IDS", ""))
-    db_path = os.getenv("LEAGUE_SQLITE_PATH", "league.db")
-    connection = sqlite3.connect(db_path, check_same_thread=False)
-    cursor = connection.cursor()
+    database_url = (os.getenv("DATABASE_URL") or os.getenv("POSTGRES_URL") or "").strip()
+    if database_url:
+        try:
+            import psycopg2
 
-    repo = LeagueRepositorySQLite(connection, cursor)
+            connection = psycopg2.connect(database_url)
+            raw_cursor = connection.cursor()
+            cursor = PostgresCursorAdapter(raw_cursor)
+            repo = LeagueRepositoryPostgres(connection, cursor)
+            print("Using PostgreSQL storage")
+        except Exception as e:
+            print(f"PostgreSQL unavailable, fallback to SQLite: {e}")
+            db_path = os.getenv("LEAGUE_SQLITE_PATH", "league.db")
+            connection = sqlite3.connect(db_path, check_same_thread=False)
+            cursor = connection.cursor()
+            repo = LeagueRepositorySQLite(connection, cursor)
+    else:
+        db_path = os.getenv("LEAGUE_SQLITE_PATH", "league.db")
+        connection = sqlite3.connect(db_path, check_same_thread=False)
+        cursor = connection.cursor()
+        repo = LeagueRepositorySQLite(connection, cursor)
+
     repo.create_tables()
 
     application = ApplicationBuilder().token(token).build()

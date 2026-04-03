@@ -24,6 +24,12 @@ BOT_TOKEN=your_telegram_bot_token_here
 TELEGRAM_BOT_TOKEN=your_telegram_bot_token_here
 ADMIN_IDS=123456789,987654321
 LEAGUE_SQLITE_PATH=league.db
+# optional: if set, PostgreSQL is used instead of SQLite
+DATABASE_URL=postgresql://...
+# OCR provider settings
+OCR_PROVIDER=ocrspace
+OCRSPACE_API_KEY=your_ocrspace_key
+OCR_TIMEOUT_SEC=20
 ```
 
 ## Railway
