@@ -1219,7 +1219,7 @@ class LeagueFeature:
             lines.append("")
         return "\n".join(lines).strip()
 
-    def _format_challenge_sync_user_message(result: Dict, headline: str) -> str:
+    def _format_challenge_sync_user_message(self, result: Dict, headline: str) -> str:
         lines = [
             headline,
             "Старые долги очищены, записаны актуальные данные после синка.",
