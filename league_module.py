@@ -774,6 +774,67 @@ class LeagueRepositoryPostgres(LeagueRepositorySQLite):
             pass
         return "1" if enabled else "0"
 
+    def _column_meta(self, table_name: str, column_name: str) -> Dict:
+        try:
+            self.cursor.execute(
+                """
+                SELECT data_type, is_nullable
+                FROM information_schema.columns
+                WHERE table_schema = current_schema()
+                  AND table_name = ?
+                  AND column_name = ?
+                """,
+                (table_name, column_name),
+            )
+            row = self.cursor.fetchone()
+            if not row:
+                return {"exists": False, "data_type": "", "not_null": False}
+            return {
+                "exists": True,
+                "data_type": (row[0] or "").lower(),
+                "not_null": str(row[1] or "").upper() == "NO",
+            }
+        except Exception:
+            return {"exists": False, "data_type": "", "not_null": False}
+
+    def replace_league_debts(self, chat_id: int, entries: List[Dict]):
+        self.cursor.execute("DELETE FROM league_debt_entries WHERE chat_id = ?", (chat_id,))
+
+        round_no_meta = self._column_meta("league_debt_entries", "round_no")
+        need_round_no = bool(round_no_meta.get("exists") and round_no_meta.get("not_null"))
+
+        for e in entries:
+            round_label = e.get("round_label")
+            debtor = e.get("debtor_username")
+            opponent = e.get("opponent_username")
+            raw_line = e.get("raw_line")
+
+            if need_round_no:
+                round_no = 0
+                m = re.search(r"(\d+)", str(round_label or ""))
+                if m:
+                    try:
+                        round_no = int(m.group(1))
+                    except Exception:
+                        round_no = 0
+                self.cursor.execute(
+                    """
+                    INSERT INTO league_debt_entries
+                        (chat_id, round_no, round_label, debtor_username, opponent_username, raw_line)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (chat_id, round_no, round_label, debtor, opponent, raw_line),
+                )
+            else:
+                self.cursor.execute(
+                    """
+                    INSERT INTO league_debt_entries (chat_id, round_label, debtor_username, opponent_username, raw_line)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (chat_id, round_label, debtor, opponent, raw_line),
+                )
+        self.conn.commit()
+
     def _reminder_enabled_literal(self, column_name: str, enabled: bool) -> str:
         try:
             self.cursor.execute(
