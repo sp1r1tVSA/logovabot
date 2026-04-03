@@ -599,6 +599,24 @@ class LeagueRepositoryPostgres(LeagueRepositorySQLite):
         self.cursor.execute(
             """
             ALTER TABLE league_reminder_settings
+            ADD COLUMN IF NOT EXISTS enabled INTEGER DEFAULT 0
+            """
+        )
+        self.cursor.execute(
+            """
+            ALTER TABLE league_reminder_settings
+            ADD COLUMN IF NOT EXISTS timezone TEXT DEFAULT 'Europe/Moscow'
+            """
+        )
+        self.cursor.execute(
+            """
+            ALTER TABLE league_reminder_settings
+            ADD COLUMN IF NOT EXISTS threshold INTEGER DEFAULT 2
+            """
+        )
+        self.cursor.execute(
+            """
+            ALTER TABLE league_reminder_settings
             ADD COLUMN IF NOT EXISTS hourly_enabled INTEGER DEFAULT 0
             """
         )
@@ -1667,10 +1685,19 @@ class LeagueFeature:
         if context.error is None:
             self.logger.error("Unhandled update error without exception object")
             return
+        self._rollback_db_safely()
         self.logger.error(
             "Unhandled update error",
             exc_info=(type(context.error), context.error, context.error.__traceback__),
         )
+
+    def _rollback_db_safely(self):
+        try:
+            rollback = getattr(self.db.conn, "rollback", None)
+            if callable(rollback):
+                rollback()
+        except Exception:
+            pass
 
     def build_league_summary_text(self, chat_id: int, threshold: int = 2) -> str:
         summary = self.db.get_league_debt_summary(chat_id)
@@ -1716,7 +1743,13 @@ class LeagueFeature:
         is_hourly_slot = now_msk.minute == 0
         if not is_daily_slot and not is_hourly_slot:
             return
-        for cfg in self.db.get_enabled_league_reminder_chats():
+        try:
+            configs = self.db.get_enabled_league_reminder_chats()
+        except Exception:
+            self._rollback_db_safely()
+            self.logger.exception("Failed to fetch reminder configs")
+            return
+        for cfg in configs:
             chat_id = cfg["chat_id"]
             threshold = cfg.get("threshold", 2)
             if is_daily_slot and bool(cfg.get("enabled")):
