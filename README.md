@@ -93,6 +93,12 @@ For Railway/cloud deploys without local file upload, you can pass session via en
 - `CHALLENGE_STORAGE_STATE_JSON` - raw JSON from Playwright storage state
 - or `CHALLENGE_STORAGE_STATE_B64` - base64 encoded JSON
 
+If Railway length limit is hit, split into parts:
+
+- `CHALLENGE_STORAGE_STATE_B64_PART1`
+- `CHALLENGE_STORAGE_STATE_B64_PART2`
+- `CHALLENGE_STORAGE_STATE_B64_PART3` (and so on)
+
 Bot will create `CHALLENGE_STORAGE_STATE` file automatically on startup of apply flow.
 
 Optional selector tuning (if Challenge UI changes):

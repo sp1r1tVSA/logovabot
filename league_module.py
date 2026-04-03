@@ -1354,6 +1354,24 @@ class LeagueFeature:
 
         state_json = (os.getenv("CHALLENGE_STORAGE_STATE_JSON") or "").strip()
         state_b64 = (os.getenv("CHALLENGE_STORAGE_STATE_B64") or "").strip()
+        if not state_json:
+            json_parts = []
+            for key in sorted(os.environ.keys()):
+                m = re.match(r"^CHALLENGE_STORAGE_STATE_JSON_PART(\d+)$", key)
+                if m:
+                    json_parts.append((int(m.group(1)), os.getenv(key) or ""))
+            if json_parts:
+                state_json = "".join([part for _, part in sorted(json_parts, key=lambda x: x[0])]).strip()
+
+        if not state_b64:
+            b64_parts = []
+            for key in sorted(os.environ.keys()):
+                m = re.match(r"^CHALLENGE_STORAGE_STATE_B64_PART(\d+)$", key)
+                if m:
+                    b64_parts.append((int(m.group(1)), os.getenv(key) or ""))
+            if b64_parts:
+                state_b64 = "".join([part for _, part in sorted(b64_parts, key=lambda x: x[0])]).strip()
+
         if not state_json and not state_b64:
             return {"ok": False, "message": f"Файл сессии не найден: {configured}"}
 
