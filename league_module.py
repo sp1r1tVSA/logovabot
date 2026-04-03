@@ -1375,7 +1375,11 @@ class LeagueFeature:
         return any(isinstance(item, str) and item.strip() for item in candidates)
 
     async def _has_visible_sign_in(self, page) -> bool:
-        locator = page.locator("a[href='/login'], a:has-text('Sign in'), button:has-text('Sign in')")
+        locator = page.locator(
+            "a[href='/login'], a:has-text('Sign in'), button:has-text('Sign in'), "
+            "a:has-text('Log in'), button:has-text('Log in'), a:has-text('Login'), button:has-text('Login'), "
+            "a:has-text('Войти'), button:has-text('Войти')"
+        )
         count = await locator.count()
         for index in range(min(count, 10)):
             try:

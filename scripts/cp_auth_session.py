@@ -43,7 +43,11 @@ def parse_args() -> argparse.Namespace:
 
 
 async def has_visible_sign_in(page) -> bool:
-    locator = page.locator("a[href='/login'], a:has-text('Sign in'), button:has-text('Sign in')")
+    locator = page.locator(
+        "a[href='/login'], a:has-text('Sign in'), button:has-text('Sign in'), "
+        "a:has-text('Log in'), button:has-text('Log in'), a:has-text('Login'), button:has-text('Login'), "
+        "a:has-text('Войти'), button:has-text('Войти')"
+    )
     count = await locator.count()
     for index in range(min(count, 10)):
         try:
@@ -132,7 +136,7 @@ async def is_logged_in(page) -> bool:
     current_url = page.url.lower()
     if "challenge.place" not in current_url:
         return False
-    if "/login" in current_url:
+    if "/login" in current_url or "/signin" in current_url:
         return False
     if await has_visible_sign_in(page):
         return False
@@ -140,7 +144,7 @@ async def is_logged_in(page) -> bool:
         return True
     if await has_auth_cookie(page.context):
         return True
-    return False
+    return True
 
 
 async def run() -> int:
