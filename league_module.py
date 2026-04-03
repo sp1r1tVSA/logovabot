@@ -1387,6 +1387,28 @@ class LeagueFeature:
             out.append(mapping.get(ch, ch))
         return "".join(out)
 
+    def _transliterate_en_to_ru(self, text: str) -> str:
+        value = (text or "").lower()
+        # Order matters for multi-char combinations.
+        pairs = [
+            ("sch", "щ"), ("sh", "ш"), ("ch", "ч"), ("zh", "ж"), ("kh", "х"),
+            ("yu", "ю"), ("ya", "я"), ("yo", "е"), ("ts", "ц"), ("th", "т"),
+            ("ph", "ф"), ("qu", "к"), ("ck", "к"),
+        ]
+        for src, dst in pairs:
+            value = value.replace(src, dst)
+
+        single = {
+            "a": "а", "b": "б", "c": "к", "d": "д", "e": "е", "f": "ф", "g": "г", "h": "х",
+            "i": "и", "j": "й", "k": "к", "l": "л", "m": "м", "n": "н", "o": "о", "p": "п",
+            "q": "к", "r": "р", "s": "с", "t": "т", "u": "у", "v": "в", "w": "в", "x": "кс",
+            "y": "и", "z": "з",
+        }
+        out = []
+        for ch in value:
+            out.append(single.get(ch, ch))
+        return "".join(out)
+
     def _tokenize_player_name(self, name: str) -> List[str]:
         norm = self._normalize_player_name(name)
         return [t for t in re.split(r"[\s\-]+", norm) if t]
@@ -1414,6 +1436,10 @@ class LeagueFeature:
         b_lat = self._transliterate_ru_to_en(b)
         translit_score = SequenceMatcher(None, a_lat, b_lat).ratio()
 
+        a_ru = self._transliterate_en_to_ru(a)
+        b_ru = self._transliterate_en_to_ru(b)
+        translit_ru_score = SequenceMatcher(None, a_ru, b_ru).ratio()
+
         simple_a = self._simplify_name_for_match(source)
         simple_b = self._simplify_name_for_match(target)
         simple_score = SequenceMatcher(None, simple_a, simple_b).ratio() if simple_a and simple_b else 0.0
@@ -1438,8 +1464,14 @@ class LeagueFeature:
                         token_score = max(token_score, 0.9)
                     else:
                         token_score = max(token_score, SequenceMatcher(None, ta, tb).ratio() * 0.9)
+                    ta_lat = self._transliterate_ru_to_en(ta)
+                    tb_lat = self._transliterate_ru_to_en(tb)
+                    token_score = max(token_score, SequenceMatcher(None, ta_lat, tb_lat).ratio() * 0.92)
+                    ta_ru = self._transliterate_en_to_ru(ta)
+                    tb_ru = self._transliterate_en_to_ru(tb)
+                    token_score = max(token_score, SequenceMatcher(None, ta_ru, tb_ru).ratio() * 0.9)
 
-        return max(base_score, translit_score, token_score, simple_score, consonant_score * 0.95, contain_score)
+        return max(base_score, translit_score, translit_ru_score, token_score, simple_score, consonant_score * 0.95, contain_score)
 
     def _resolve_assists_by_goals(
         self,
