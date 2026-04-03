@@ -1765,6 +1765,23 @@ class LeagueFeature:
             return True
         return True
 
+    async def _open_email_login_method(self, driver) -> bool:
+        selectors = self._selectors_from_env(
+            "CHALLENGE_LOGIN_METHOD_SELECTORS",
+            [
+                "text=Use your email",
+                "button:has-text('Use your email')",
+                "div:has-text('Use your email')",
+                "text=Use email",
+                "text=Использовать email",
+            ],
+        )
+        clicked = await self._click_first_available(driver, selectors, timeout=5000)
+        if clicked:
+            time.sleep(1.0)
+            return True
+        return False
+
     async def _attempt_challenge_login_with_credentials(self, driver, match_url: str) -> Dict:
         login_email_raw = self._get_env_loose("CHALLENGE_LOGIN_EMAIL")
         login_password_raw = self._get_env_loose("CHALLENGE_LOGIN_PASSWORD")
@@ -1804,14 +1821,13 @@ class LeagueFeature:
 
         login_urls = []
         current_url = (driver.current_url or "").strip()
-        if current_url.startswith("http"):
+        if current_url.startswith("http") and ("/login" in current_url or "/signin" in current_url):
             login_urls.append(current_url)
         login_urls.extend(
             [
                 login_url,
                 "https://challenge.place/login",
                 "https://challenge.place/signin",
-                "https://challenge.place/auth/login",
             ]
         )
         seen = set()
@@ -1824,11 +1840,15 @@ class LeagueFeature:
             normalized_urls.append(url)
 
         loaded = False
+        login_page_with_email = False
+        tried_urls = []
         for url in normalized_urls:
             try:
                 driver.get(url)
                 time.sleep(1.0)
                 loaded = True
+                tried_urls.append(url)
+                await self._open_email_login_method(driver)
                 email_found = False
                 for _ in range(24):
                     if self._has_login_email_any_context(driver):
@@ -1836,11 +1856,28 @@ class LeagueFeature:
                         break
                     time.sleep(0.5)
                 if email_found:
+                    login_page_with_email = True
                     break
             except Exception:
                 continue
         if not loaded:
             return {"ok": False, "message": "Не удалось открыть страницу логина."}
+        if not login_page_with_email:
+            try:
+                title = driver.title or ""
+            except Exception:
+                title = ""
+            try:
+                current = driver.current_url or ""
+            except Exception:
+                current = ""
+            return {
+                "ok": False,
+                "message": (
+                    "Не удалось открыть форму логина по email. "
+                    f"url={current}; title={title}; tried={','.join(tried_urls)}"
+                ),
+            }
 
         email_selectors = self._selectors_from_env(
             "CHALLENGE_LOGIN_EMAIL_SELECTORS",
