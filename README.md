@@ -53,9 +53,6 @@ OCR_TIMEOUT_SEC=20
 - `/league_map_bulk [list]`
 - `/league_map_show`
 - `/league_map_clear`
-- `/league_sync_challenge [url] [N]`
-- `/league_sync_now [N]`
-- `/league_sync_off`
 - `/league_reminder_on`
 - `/league_reminder_off`
 - `/league_reminder_now`
@@ -65,46 +62,10 @@ OCR_TIMEOUT_SEC=20
 - `/league_ocr_show [id]` (admins)
 - `/league_ocr_approve [id]` (admins)
 - `/league_ocr_reject [id] [reason]` (admins)
-- `/league_apply_result [id] [match_url] [--dry-run] [--force]` (admins)
 
 Text command for players:
 
 - `исправь [id]` (or reply to draft)
-
-## Challenge automation (Selenium)
-
-One-time setup:
-
-```bash
-pip install -r requirements.txt
-```
-
-Если матч требует логин, бот пробует войти через env-креды:
-
-- `CHALLENGE_LOGIN_EMAIL`
-- `CHALLENGE_LOGIN_PASSWORD`
-- `CHALLENGE_LOGIN_URL` (опционально, по умолчанию `https://challenge.place/login`)
-- `CHALLENGE_LOGIN_DEBUG` (опционально; `1/true/on` включает подробные debug-логи процесса логина)
-
-Если на сайте включены captcha/2FA, автоматический логин может не пройти.
-
-Optional selector tuning (if Challenge UI changes):
-
-- `CHALLENGE_EDIT_SELECTORS`
-- `CHALLENGE_DATE_SELECTORS`
-- `CHALLENGE_HOME_SCORE_SELECTORS`
-- `CHALLENGE_AWAY_SCORE_SELECTORS`
-- `CHALLENGE_HOME_GOAL_SELECTORS`
-- `CHALLENGE_AWAY_GOAL_SELECTORS`
-- `CHALLENGE_HOME_ASSIST_SELECTORS`
-- `CHALLENGE_AWAY_ASSIST_SELECTORS`
-- `CHALLENGE_SAVE_SELECTORS`
-- `CHALLENGE_SUCCESS_SELECTORS`
-- `CHALLENGE_LOGIN_EMAIL_SELECTORS`
-- `CHALLENGE_LOGIN_PASSWORD_SELECTORS`
-- `CHALLENGE_LOGIN_SUBMIT_SELECTORS`
-
-Use `|` between selectors in env values.
 
 ## OCR drafts from screenshots
 

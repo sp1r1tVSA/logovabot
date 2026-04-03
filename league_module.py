@@ -1217,9 +1217,6 @@ class LeagueFeature:
         application.add_handler(CommandHandler("league_map_show", self._guard(self.cmd_league_map_show)))
         application.add_handler(CommandHandler("league_map_clear", self._guard(self.cmd_league_map_clear)))
         application.add_handler(CommandHandler("league_players_seed", self._guard(self.cmd_league_players_seed)))
-        application.add_handler(CommandHandler("league_sync_challenge", self._guard(self.cmd_league_sync_challenge)))
-        application.add_handler(CommandHandler("league_sync_now", self._guard(self.cmd_league_sync_now)))
-        application.add_handler(CommandHandler("league_sync_off", self._guard(self.cmd_league_sync_off)))
         application.add_handler(CommandHandler("league_reminder_on", self._guard(self.cmd_league_reminder_on)))
         application.add_handler(CommandHandler("league_reminder_off", self._guard(self.cmd_league_reminder_off)))
         application.add_handler(CommandHandler("league_reminder_now", self._guard(self.cmd_league_reminder_now)))
@@ -1229,7 +1226,6 @@ class LeagueFeature:
         application.add_handler(CommandHandler("league_ocr_show", self._guard(self.cmd_league_ocr_show)))
         application.add_handler(CommandHandler("league_ocr_approve", self._guard(self.cmd_league_ocr_approve)))
         application.add_handler(CommandHandler("league_ocr_reject", self._guard(self.cmd_league_ocr_reject)))
-        application.add_handler(CommandHandler("league_apply_result", self._guard(self.cmd_league_apply_result)))
         application.add_handler(MessageHandler(filters.PHOTO, self._guard(self.on_ocr_photo_message)))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._guard(self.on_ocr_fix_text_message)))
         application.add_handler(CallbackQueryHandler(self._guard(self.on_ocr_callback), pattern=r"^ocr:"))
@@ -4203,9 +4199,6 @@ class LeagueFeature:
                     "/league_map_show - показать текущие привязки команд",
                     "/league_map_clear - очистить все привязки команд",
                     "/league_players_seed - загрузить базу футболистов для этой лиги",
-                    "/league_sync_challenge [url] [N] - синк долгов из challenge.place до тура N",
-                    "/league_sync_now [N] - повторить синк из сохраненного источника",
-                    "/league_sync_off - отключить сохраненный источник синка",
                     "/league_reminder_on - включить напоминания каждые 4 часа (00:00, 04:00, 08:00, 12:00, 16:00, 20:00 МСК)",
                     "/league_reminder_off - выключить ежедневные напоминания",
                     "/league_reminder_now - отправить напоминание сразу",
@@ -4215,7 +4208,6 @@ class LeagueFeature:
                     "/league_ocr_show [id] - показать OCR-черновик",
                     "/league_ocr_approve [id] - подтвердить OCR-черновик",
                     "/league_ocr_reject [id] [причина] - отклонить OCR-черновик",
-                    "/league_apply_result [id] [match_url] [--dry-run] [--force] - внести подтвержденный результат на сайт",
                 ]
             )
         )
@@ -4309,69 +4301,6 @@ class LeagueFeature:
             f"✅ База футболистов загружена для этой лиги. Команд: {teams_loaded}, игроков: {players_loaded}."
         )
 
-    async def cmd_league_sync_challenge(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not self._is_admin(update.effective_user.id):
-            await update.message.reply_text("❌ Команда доступна только админам.")
-            return
-        if len(context.args) < 2:
-            await update.message.reply_text("Использование: /league_sync_challenge <stage_url> <max_round>")
-            return
-        stage_url = context.args[0].strip()
-        try:
-            max_round = int(context.args[1])
-        except ValueError:
-            await update.message.reply_text("max_round должен быть числом.")
-            return
-        chat_id = update.effective_chat.id
-        try:
-            result = self.sync_challenge_stage_debts(chat_id, stage_url, max_round)
-            await update.message.reply_text(
-                f"✅ Синк выполнен до {max_round} тура включительно.\n"
-                "Старые долги очищены, записаны актуальные данные после синка.\n"
-                f"Записей долгов: {result['entries_count']}\n"
-                f"Неразобранных матчей: {result['unresolved_matches']}"
-            )
-            if result["unresolved_teams"]:
-                unresolved_text = "\n".join([f"- {team}" for team in result["unresolved_teams"]])
-                await update.message.reply_text("⚠️ Команды без привязки к @username:\n" + unresolved_text)
-            await update.message.reply_text(self.format_league_debts_post(chat_id))
-        except Exception as e:
-            await update.message.reply_text(f"❌ Ошибка синка: {e}")
-
-    async def cmd_league_sync_now(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not self._is_admin(update.effective_user.id):
-            await update.message.reply_text("❌ Команда доступна только админам.")
-            return
-        chat_id = update.effective_chat.id
-        source = self.db.get_league_challenge_source(chat_id)
-        if not source or not source.get("enabled"):
-            await update.message.reply_text("Источник не настроен. Используйте /league_sync_challenge <stage_url> <max_round>.")
-            return
-        max_round = source.get("max_round", 0)
-        if context.args:
-            try:
-                max_round = int(context.args[0])
-            except ValueError:
-                await update.message.reply_text("max_round должен быть числом.")
-                return
-        try:
-            result = self.sync_challenge_stage_debts(chat_id, source["stage_url"], max_round)
-            await update.message.reply_text(
-                f"✅ Повторный синк выполнен до {max_round} тура включительно.\n"
-                "Старые долги очищены, записаны актуальные данные после синка.\n"
-                f"Записей долгов: {result['entries_count']}"
-            )
-            await update.message.reply_text(self.format_league_debts_post(chat_id))
-        except Exception as e:
-            await update.message.reply_text(f"❌ Ошибка синка: {e}")
-
-    async def cmd_league_sync_off(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not self._is_admin(update.effective_user.id):
-            await update.message.reply_text("❌ Команда доступна только админам.")
-            return
-        self.db.disable_league_challenge_source(update.effective_chat.id)
-        await update.message.reply_text("✅ Источник синка Challenge отключен.")
-
     async def cmd_league_ocr_fix(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         await self._apply_ocr_fix(update, context, from_text=False)
 
@@ -4426,111 +4355,6 @@ class LeagueFeature:
         await update.message.reply_text(f"🛑 Черновик #{draft_id} отклонен. Причина: {reason}")
         if draft:
             await update.message.reply_text(self._format_ocr_draft_text(draft))
-
-    async def cmd_league_apply_result(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not self._is_admin(update.effective_user.id):
-            await update.message.reply_text("❌ Команда доступна только админам.")
-            return
-
-        args = list(context.args or [])
-        dry_run = "--dry-run" in args
-        force = "--force" in args
-        clean_args = [x for x in args if x not in {"--dry-run", "--force"}]
-        draft_id = self._resolve_draft_id(update, clean_args)
-        if draft_id is None:
-            await update.message.reply_text("Использование: /league_apply_result [id] [match_url] [--dry-run] [--force]")
-            return
-
-        manual_match_url = ""
-        for token in clean_args[1:]:
-            if re.match(r"^https?://", token or "", flags=re.IGNORECASE):
-                manual_match_url = token.strip()
-                break
-
-        self.logger.info(
-            "Command /league_apply_result: chat_id=%s user_id=%s draft_id=%s dry_run=%s force=%s manual_url=%s",
-            update.effective_chat.id if update.effective_chat else None,
-            update.effective_user.id if update.effective_user else None,
-            draft_id,
-            dry_run,
-            force,
-            bool(manual_match_url),
-        )
-
-        chat_id = update.effective_chat.id
-        draft = self.db.get_ocr_draft(chat_id, draft_id)
-        if not draft:
-            await update.message.reply_text(f"❌ Черновик #{draft_id} не найден.")
-            return
-        if draft.get("status") != "approved":
-            await update.message.reply_text(f"❌ Черновик #{draft_id} не подтвержден админом.")
-            return
-
-        already = self.db.get_ocr_applied(chat_id, draft_id)
-        if already and already.get("status") == "success" and not force and not dry_run:
-            await update.message.reply_text(
-                f"⚠️ Черновик #{draft_id} уже был применен. Используйте --force для повторного применения."
-            )
-            return
-
-        payload = draft.get("payload", {})
-        home_team = payload.get("home_team")
-        away_team = payload.get("away_team")
-        if not home_team or not away_team:
-            await update.message.reply_text("❌ В черновике отсутствуют команды.")
-            return
-
-        await update.message.reply_text("⏳ Ищу матч по командам...")
-        selected = None
-        if manual_match_url:
-            selected = self._extract_match_teams_from_url(manual_match_url)
-            if not selected:
-                self.db.upsert_ocr_applied(chat_id, draft_id, manual_match_url, "failed", "Не удалось прочитать данные матча по ссылке")
-                await update.message.reply_text("❌ Не удалось прочитать команды матча по переданной ссылке.")
-                return
-        else:
-            candidates = self._find_match_candidates_by_teams(chat_id, home_team, away_team)
-            selected = self._select_candidate_min_round(candidates)
-        if not selected:
-            self.db.upsert_ocr_applied(chat_id, draft_id, "", "failed", "Матч не найден по паре команд")
-            self.logger.warning(
-                "Match not found for draft_id=%s home=%s away=%s",
-                draft_id,
-                home_team,
-                away_team,
-            )
-            await update.message.reply_text(
-                "❌ Не удалось найти матч по паре команд в источнике лиги. "
-                "Можно указать ссылку вручную: /league_apply_result [id] [match_url]"
-            )
-            return
-
-        mapped = self._map_payload_to_site_sides(payload, selected.get("home_team", ""), selected.get("away_team", ""))
-        round_info = selected.get("round_name") or (f"тур {selected.get('round_num')}" if selected.get("round_num") else "тур не определен")
-        await update.message.reply_text(
-            f"🔎 Выбран матч: {round_info}\n{selected.get('match_url')}\n"
-            + ("↔️ Стороны переставлены под сайт." if mapped.get("swapped") else "✅ Стороны совпали.")
-        )
-
-        result = await self._open_match_and_fill_result(selected.get("match_url", ""), mapped, dry_run=dry_run)
-        status = "success" if result.get("ok") else "failed"
-        status = "dry_run" if dry_run and result.get("ok") else status
-        self.db.upsert_ocr_applied(chat_id, draft_id, selected.get("match_url", ""), status, result.get("message", ""))
-        self.logger.info(
-            "Apply result finished: draft_id=%s status=%s ok=%s message=%s",
-            draft_id,
-            status,
-            result.get("ok"),
-            result.get("message", ""),
-        )
-
-        if result.get("ok"):
-            await update.message.reply_text(
-                f"✅ {'Dry-run завершен' if dry_run else 'Результат отправлен на сайт'} для черновика #{draft_id}.\n"
-                f"{result.get('message', '')}"
-            )
-        else:
-            await update.message.reply_text(f"❌ Не удалось применить черновик #{draft_id}: {result.get('message', 'неизвестная ошибка')}")
 
     async def cmd_league_reminder_on(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not self._is_admin(update.effective_user.id):
