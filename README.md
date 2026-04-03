@@ -65,6 +65,7 @@ OCR_TIMEOUT_SEC=20
 - `/league_ocr_show [id]` (admins)
 - `/league_ocr_approve [id]` (admins)
 - `/league_ocr_reject [id] [reason]` (admins)
+- `/league_session_upload` (admins, upload challenge session JSON)
 - `/league_apply_result [id] [match_url] [--dry-run] [--force]` (admins)
 
 Text command for players:
@@ -88,18 +89,15 @@ python scripts/cp_auth_session.py
 
 Output file: `state/challenge_storage_state.json`
 
-For Railway/cloud deploys without local file upload, you can pass session via env:
+You can upload session file directly from Telegram (no env vars needed):
 
-- `CHALLENGE_STORAGE_STATE_JSON` - raw JSON from Playwright storage state
-- or `CHALLENGE_STORAGE_STATE_B64` - base64 encoded JSON
+- send `challenge_storage_state.json` to group and add caption `/league_session_upload`
+- or reply to the JSON document with command `/league_session_upload`
 
-If Railway length limit is hit, split into parts:
+Bot saves file into `CHALLENGE_STORAGE_STATE` path.
 
-- `CHALLENGE_STORAGE_STATE_B64_PART1`
-- `CHALLENGE_STORAGE_STATE_B64_PART2`
-- `CHALLENGE_STORAGE_STATE_B64_PART3` (and so on)
-
-Bot will create `CHALLENGE_STORAGE_STATE` file automatically on startup of apply flow.
+Alternative (advanced): you can still pass session via env variables,
+but Telegram upload via `/league_session_upload` is the recommended path.
 
 Optional selector tuning (if Challenge UI changes):
 

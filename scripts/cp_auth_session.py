@@ -154,6 +154,16 @@ async def run() -> int:
     print("1) Complete login (including 2FA/captcha) in the opened window.")
     print("2) Keep the browser open. Script will auto-detect authenticated state.")
 
+    async def save_state_snapshot(context, state_path: Path) -> bool:
+        try:
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            temp_path = state_path.with_suffix(state_path.suffix + ".tmp")
+            await context.storage_state(path=str(temp_path))
+            temp_path.replace(state_path)
+            return True
+        except Exception:
+            return False
+
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=False)
         context = await browser.new_context()
@@ -162,30 +172,62 @@ async def run() -> int:
 
         elapsed = 0
         stable_hits = 0
-        while elapsed <= timeout_ms:
-            try:
-                if await is_logged_in(page):
-                    stable_hits += 1
-                    if stable_hits >= stable_required:
-                        state_path.parent.mkdir(parents=True, exist_ok=True)
-                        temp_path = state_path.with_suffix(state_path.suffix + ".tmp")
-                        await context.storage_state(path=str(temp_path))
-                        temp_path.replace(state_path)
-                        print(f"Session saved: {state_path}")
-                        await browser.close()
-                        return 0
-                else:
+        try:
+            while elapsed <= timeout_ms:
+                try:
+                    if await is_logged_in(page):
+                        stable_hits += 1
+                        if stable_hits >= stable_required:
+                            if await save_state_snapshot(context, state_path):
+                                print(f"Session saved: {state_path}")
+                                await browser.close()
+                                return 0
+                            print("Failed to save session state to file.")
+                            await browser.close()
+                            return 1
+                    else:
+                        stable_hits = 0
+                except Exception:
                     stable_hits = 0
+
+                await page.wait_for_timeout(poll_ms)
+                elapsed += poll_ms
+        except asyncio.CancelledError:
+            print("Interrupted. Trying to save current browser state...")
+            if await save_state_snapshot(context, state_path):
+                print(f"Session snapshot saved: {state_path}")
+                print("Note: snapshot may be unauthenticated if login was not completed.")
+                try:
+                    await browser.close()
+                except Exception:
+                    pass
+                return 0
+            print("Failed to save session snapshot on interrupt.")
+            try:
+                await browser.close()
             except Exception:
-                stable_hits = 0
+                pass
+            return 130
 
-            await page.wait_for_timeout(poll_ms)
-            elapsed += poll_ms
-
-        print("Login was not detected before timeout. Session was not saved.")
-        await browser.close()
+        print("Login was not detected before timeout. Trying to save snapshot anyway...")
+        if await save_state_snapshot(context, state_path):
+            print(f"Session snapshot saved: {state_path}")
+            print("Please verify with bot dry-run: if unauthorized, repeat login and save again.")
+            try:
+                await browser.close()
+            except Exception:
+                pass
+            return 0
+        print("Session was not saved.")
+        try:
+            await browser.close()
+        except Exception:
+            pass
         return 1
 
 
 if __name__ == "__main__":
-    raise SystemExit(asyncio.run(run()))
+    try:
+        raise SystemExit(asyncio.run(run()))
+    except KeyboardInterrupt:
+        raise SystemExit(130)

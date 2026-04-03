@@ -808,8 +808,10 @@ class LeagueFeature:
         application.add_handler(CommandHandler("league_ocr_show", self._guard(self.cmd_league_ocr_show)))
         application.add_handler(CommandHandler("league_ocr_approve", self._guard(self.cmd_league_ocr_approve)))
         application.add_handler(CommandHandler("league_ocr_reject", self._guard(self.cmd_league_ocr_reject)))
+        application.add_handler(CommandHandler("league_session_upload", self._guard(self.cmd_league_session_upload)))
         application.add_handler(CommandHandler("league_apply_result", self._guard(self.cmd_league_apply_result)))
         application.add_handler(MessageHandler(filters.PHOTO, self._guard(self.on_ocr_photo_message)))
+        application.add_handler(MessageHandler(filters.Document.ALL, self._guard(self.on_session_document_message)))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._guard(self.on_ocr_fix_text_message)))
         application.add_handler(CallbackQueryHandler(self._guard(self.on_ocr_callback), pattern=r"^ocr:"))
 
@@ -1392,6 +1394,39 @@ class LeagueFeature:
             return {"ok": True, "path": configured}
         except Exception as e:
             return {"ok": False, "message": f"Не удалось создать файл сессии: {e}"}
+
+    async def _save_challenge_session_document(self, document, context: ContextTypes.DEFAULT_TYPE) -> Dict:
+        if not document:
+            return {"ok": False, "message": "Прикрепите JSON-файл сессии."}
+        filename = (document.file_name or "").lower()
+        if filename and not filename.endswith(".json"):
+            return {"ok": False, "message": "Нужен файл .json (Playwright storage_state)."}
+        try:
+            tg_file = await context.bot.get_file(document.file_id)
+            raw_bytes = await tg_file.download_as_bytearray()
+        except Exception as e:
+            return {"ok": False, "message": f"Не удалось скачать файл из Telegram: {e}"}
+
+        try:
+            payload_text = bytes(raw_bytes).decode("utf-8")
+            payload = json.loads(payload_text)
+            if not isinstance(payload, dict):
+                return {"ok": False, "message": "Файл должен содержать JSON-объект storage_state."}
+        except Exception:
+            return {"ok": False, "message": "Невалидный JSON в файле сессии."}
+
+        target_path = Path(os.getenv("CHALLENGE_STORAGE_STATE", "state/challenge_storage_state.json"))
+        try:
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            target_path.write_text(payload_text, encoding="utf-8")
+        except Exception as e:
+            return {"ok": False, "message": f"Не удалось сохранить файл сессии: {e}"}
+
+        cookies_count = len(payload.get("cookies") or []) if isinstance(payload, dict) else 0
+        return {
+            "ok": True,
+            "message": f"Сессия сохранена: {target_path} (cookies: {cookies_count})",
+        }
 
     async def _open_match_and_fill_result(self, match_url: str, payload: Dict, dry_run: bool = False) -> Dict:
         if not PLAYWRIGHT_AVAILABLE:
@@ -2754,10 +2789,43 @@ class LeagueFeature:
                     "/league_ocr_show [id] - показать OCR-черновик",
                     "/league_ocr_approve [id] - подтвердить OCR-черновик",
                     "/league_ocr_reject [id] [причина] - отклонить OCR-черновик",
+                    "/league_session_upload - ответьте этой командой на JSON-файл сессии challenge",
                     "/league_apply_result [id] [match_url] [--dry-run] [--force] - внести подтвержденный результат на сайт",
                 ]
             )
         )
+
+    async def on_session_document_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        message = update.effective_message
+        user = update.effective_user
+        if not message or not user or not message.document:
+            return
+        if not self._is_admin(user.id):
+            return
+        caption = (message.caption or "").strip().lower()
+        if not caption.startswith("/league_session_upload"):
+            return
+        result = await self._save_challenge_session_document(message.document, context)
+        await message.reply_text(("✅ " if result.get("ok") else "❌ ") + result.get("message", ""))
+
+    async def cmd_league_session_upload(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not self._is_admin(update.effective_user.id):
+            await update.message.reply_text("❌ Команда доступна только админам.")
+            return
+        message = update.effective_message
+        document = None
+        if message and message.reply_to_message and message.reply_to_message.document:
+            document = message.reply_to_message.document
+        elif message and message.document:
+            document = message.document
+        if not document:
+            await update.message.reply_text(
+                "Использование: отправьте JSON-файл и ответьте на него командой /league_session_upload "
+                "или отправьте документ с подписью /league_session_upload"
+            )
+            return
+        result = await self._save_challenge_session_document(document, context)
+        await update.message.reply_text(("✅ " if result.get("ok") else "❌ ") + result.get("message", ""))
 
     async def cmd_league_debts_round(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not self._is_admin(update.effective_user.id):
