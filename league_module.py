@@ -797,6 +797,27 @@ class LeagueRepositoryPostgres(LeagueRepositorySQLite):
         except Exception:
             return {"exists": False, "data_type": "", "not_null": False}
 
+    def _table_columns_meta(self, table_name: str) -> Dict[str, Dict]:
+        try:
+            self.cursor.execute(
+                """
+                SELECT column_name, data_type, is_nullable
+                FROM information_schema.columns
+                WHERE table_schema = current_schema()
+                  AND table_name = ?
+                """,
+                (table_name,),
+            )
+            out: Dict[str, Dict] = {}
+            for row in self.cursor.fetchall():
+                out[str(row[0])] = {
+                    "data_type": (row[1] or "").lower(),
+                    "not_null": str(row[2] or "").upper() == "NO",
+                }
+            return out
+        except Exception:
+            return {}
+
     def replace_league_debts(self, chat_id: int, entries: List[Dict]):
         try:
             self.cursor.execute("DELETE FROM league_debt_entries WHERE chat_id = ?", (chat_id,))
@@ -806,6 +827,31 @@ class LeagueRepositoryPostgres(LeagueRepositorySQLite):
 
             pair_key_meta = self._column_meta("league_debt_entries", "pair_key")
             need_pair_key = bool(pair_key_meta.get("exists") and pair_key_meta.get("not_null"))
+
+            team_a_norm_meta = self._column_meta("league_debt_entries", "team_a_norm")
+            team_b_norm_meta = self._column_meta("league_debt_entries", "team_b_norm")
+            team_a_raw_meta = self._column_meta("league_debt_entries", "team_a_raw")
+            team_b_raw_meta = self._column_meta("league_debt_entries", "team_b_raw")
+
+            need_team_a_norm = bool(team_a_norm_meta.get("exists") and team_a_norm_meta.get("not_null"))
+            need_team_b_norm = bool(team_b_norm_meta.get("exists") and team_b_norm_meta.get("not_null"))
+            need_team_a_raw = bool(team_a_raw_meta.get("exists") and team_a_raw_meta.get("not_null"))
+            need_team_b_raw = bool(team_b_raw_meta.get("exists") and team_b_raw_meta.get("not_null"))
+
+            all_meta = self._table_columns_meta("league_debt_entries")
+
+            def _norm_team(value: str) -> str:
+                normalized = (value or "").strip().lower()
+                normalized = normalized.replace("ё", "е").replace("ë", "е")
+                normalized = re.sub(r"\s+", " ", normalized)
+                return normalized
+
+            def _extract_teams_from_raw(raw_line: str) -> tuple[str, str]:
+                text = str(raw_line or "")
+                teams = re.findall(r"\(([^()]+)\)", text)
+                if len(teams) >= 2:
+                    return teams[0].strip(), teams[1].strip()
+                return "", ""
 
             for e in entries:
                 round_label = e.get("round_label")
@@ -836,6 +882,38 @@ class LeagueRepositoryPostgres(LeagueRepositorySQLite):
                         pair_key = (left or right or str(raw_line or "").strip().lower() or "unknown")
                     columns.append("pair_key")
                     values.append(pair_key)
+
+                team_a_raw, team_b_raw = _extract_teams_from_raw(raw_line)
+                if need_team_a_raw:
+                    columns.append("team_a_raw")
+                    values.append(team_a_raw or str(debtor or ""))
+                if need_team_b_raw:
+                    columns.append("team_b_raw")
+                    values.append(team_b_raw or str(opponent or ""))
+                if need_team_a_norm:
+                    columns.append("team_a_norm")
+                    values.append(_norm_team(team_a_raw or str(debtor or "")) or "unknown")
+                if need_team_b_norm:
+                    columns.append("team_b_norm")
+                    values.append(_norm_team(team_b_raw or str(opponent or "")) or "unknown")
+
+                # Catch-all for unknown legacy NOT NULL columns.
+                existing = set(columns)
+                for col_name, meta in all_meta.items():
+                    if not meta.get("not_null"):
+                        continue
+                    if col_name in existing:
+                        continue
+                    if col_name in {"id", "created_at", "updated_at"}:
+                        continue
+                    data_type = str(meta.get("data_type") or "")
+                    columns.append(col_name)
+                    if "bool" in data_type:
+                        values.append(False)
+                    elif any(token in data_type for token in ["int", "numeric", "double", "real"]):
+                        values.append(0)
+                    else:
+                        values.append("")
 
                 placeholders = ", ".join(["?"] * len(values))
                 cols_sql = ", ".join(columns)
