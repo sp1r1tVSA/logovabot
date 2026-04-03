@@ -930,13 +930,36 @@ class LeagueRepositoryPostgres(LeagueRepositorySQLite):
             self.cursor.execute("DELETE FROM league_team_map WHERE chat_id = ?", (chat_id,))
             self._sync_table_id_sequence("league_team_map")
             for item in mappings:
-                self.cursor.execute(
-                    """
-                    INSERT INTO league_team_map (chat_id, team_name_norm, team_name_raw, telegram_username)
-                    VALUES (?, ?, ?, ?)
-                    """,
-                    (chat_id, item["team_name_norm"], item["team_name_raw"], item["telegram_username"]),
-                )
+                team_name_norm = item["team_name_norm"]
+                team_name_raw = item["team_name_raw"]
+                telegram_username = item["telegram_username"]
+
+                # Legacy-safe write path:
+                # some old schemas have unique/PK on team_name_norm only.
+                self.cursor.execute("SAVEPOINT league_map_row_sp")
+                try:
+                    self.cursor.execute(
+                        """
+                        INSERT INTO league_team_map (chat_id, team_name_norm, team_name_raw, telegram_username)
+                        VALUES (?, ?, ?, ?)
+                        """,
+                        (chat_id, team_name_norm, team_name_raw, telegram_username),
+                    )
+                    self.cursor.execute("RELEASE SAVEPOINT league_map_row_sp")
+                except Exception:
+                    self.cursor.execute("ROLLBACK TO SAVEPOINT league_map_row_sp")
+                    self.cursor.execute("RELEASE SAVEPOINT league_map_row_sp")
+                    # Fallback for unique(team_name_norm) legacy schemas.
+                    self.cursor.execute(
+                        """
+                        UPDATE league_team_map
+                        SET chat_id = ?, team_name_raw = ?, telegram_username = ?
+                        WHERE team_name_norm = ?
+                        """,
+                        (chat_id, team_name_raw, telegram_username, team_name_norm),
+                    )
+                    if self.cursor.rowcount <= 0:
+                        raise
             self.conn.commit()
         except Exception:
             self.conn.rollback()
