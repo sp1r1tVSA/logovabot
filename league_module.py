@@ -867,6 +867,10 @@ class LeagueFeature:
                 await self._handle_pinalka_on(update)
                 return
 
+        if cmd == "пиналка?":
+            await self._handle_pinalka_check(update)
+            return
+
         if cmd == "-":
             if len(parts) < 2:
                 return
@@ -937,6 +941,22 @@ class LeagueFeature:
     async def _handle_pinalka_off(self, update: Update):
         self.db.set_league_reminder_enabled(update.effective_chat.id, False)
         await update.message.reply_text("✅ Пиналка выключена.")
+
+    async def _handle_pinalka_check(self, update: Update):
+        chat_id = update.effective_chat.id
+        settings = self.db.get_league_reminder_settings(chat_id)
+        enabled = bool(settings.get("enabled"))
+        hourly = bool(settings.get("hourly_enabled"))
+        now_msk = datetime.now(self.moscow_tz)
+        next_slots = sorted([h for h in [0, 4, 8, 12, 16, 20] if h > now_msk.hour or (h == now_msk.hour)])
+        next_hour = next_slots[0] if next_slots else 0
+        next_time = now_msk.replace(hour=next_hour, minute=0, second=0, microsecond=0)
+        if next_hour <= now_msk.hour:
+            next_time = next_time.replace(day=now_msk.day + 1)
+        status = "✅ ВКЛ" if enabled else "❌ ВЫКЛ"
+        await update.message.reply_text(
+            f"Пиналка: {status}\nСледующий слот: {next_time.strftime('%H:%M')} МСК"
+        )
 
     def register_handlers(self, application):
         application.add_handler(CommandHandler("admin", self._guard(self.cmd_admin)))
@@ -1274,8 +1294,10 @@ class LeagueFeature:
         is_hourly_slot = now_msk.minute == 0
         if not is_daily_slot and not is_hourly_slot:
             return
+        self.logger.info("Reminder scheduler tick: time=%s daily=%s hourly=%s", time_key, is_daily_slot, is_hourly_slot)
         try:
             configs = self.db.get_enabled_league_reminder_chats()
+            self.logger.info("Reminder scheduler: found %d enabled configs", len(configs))
         except Exception:
             self._rollback_db_safely()
             self.logger.exception("Failed to fetch reminder configs")
@@ -1285,8 +1307,10 @@ class LeagueFeature:
             threshold = cfg.get("threshold", 2)
             if is_daily_slot and bool(cfg.get("enabled")):
                 key = f"daily:{now_msk.strftime('%Y-%m-%d %H:%M')}"
+                self.logger.info("Reminder scheduler: daily slot for chat=%s key=%s", chat_id, key)
                 if self.db.try_mark_league_reminder_run(chat_id, key):
                     await self.send_league_reminder_message(chat_id=chat_id, threshold=threshold, bot=context.bot)
+                    self.logger.info("Reminder sent to chat=%s", chat_id)
             if is_hourly_slot and bool(cfg.get("hourly_enabled")):
                 key = f"hourly:{now_msk.strftime('%Y-%m-%d %H:00')}"
                 if self.db.try_mark_league_reminder_run(chat_id, key):
@@ -1307,8 +1331,8 @@ class LeagueFeature:
                     "/admin - список команд",
                     "+ долги <url> <тур> - загрузить долги из challenge.place",
                     "+ команды\nКоманда - @username\n... - задать привязки команд",
-                    "+ пиналка - включить напоминания (каждые 4 часа МСК)",
-                    "- пиналка - выключить напоминания",
+                    "+ пиналка / - пиналка - вкл/выкл напоминания",
+                    "пиналка? - статус пиналки и следующий слот",
                 ]
             )
         )
