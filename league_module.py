@@ -1329,7 +1329,8 @@ class LeagueFeature:
             threshold = cfg.get("threshold", 2)
             now_msk = datetime.now(self.moscow_tz)
             missed = False
-            for slot_hour in sorted(self.league_reminder_times):
+            for slot_str in sorted(self.league_reminder_times):
+                slot_hour = int(slot_str.split(":")[0])
                 slot_time = now_msk.replace(hour=slot_hour, minute=0, second=0, microsecond=0)
                 if slot_time <= now_msk:
                     key = f"daily:{slot_time.strftime('%Y-%m-%d %H:%M')}"
