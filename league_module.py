@@ -3,10 +3,9 @@ import logging
 import os
 import re
 import sqlite3
-import time as time_module
 import unicodedata
 import urllib.request
-from datetime import datetime
+from datetime import datetime, time
 from typing import Dict, List, Optional
 from zoneinfo import ZoneInfo
 
@@ -849,7 +848,7 @@ class LeagueFeature:
         for hour in [8, 12, 18]:
             application.job_queue.run_daily(
                 self._daily_reminder,
-                time=time_module.time(hour=hour, minute=0),
+                time=time(hour=hour, minute=0),
                 name=f"daily_reminder_{hour}"
             )
             logger.info("Scheduled daily reminder at %s:00 Moscow", hour)
