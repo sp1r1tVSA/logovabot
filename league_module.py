@@ -873,6 +873,10 @@ class LeagueFeature:
             await self._handle_pinalka_check(update)
             return
 
+        if cmd == "пиналка_тест":
+            await self._handle_pinalka_test(update, context)
+            return
+
         if cmd == "-":
             if len(parts) < 2:
                 return
@@ -943,6 +947,23 @@ class LeagueFeature:
     async def _handle_pinalka_off(self, update: Update):
         self.db.set_league_reminder_enabled(update.effective_chat.id, False)
         await update.message.reply_text("✅ Пиналка выключена.")
+
+    async def _handle_pinalka_test(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        chat_id = update.effective_chat.id
+        threshold = 2
+        sent = await self.send_league_reminder_message(chat_id=chat_id, threshold=threshold, bot=context.bot)
+        if sent:
+            await update.message.reply_text("✅ Тестовое напоминание отправлено.")
+        else:
+            summary = self.db.get_league_debt_summary(chat_id)
+            debtors = [r for r in summary if r["debts_count"] >= threshold]
+            app_bot_ok = self.application and self.application.bot
+            await update.message.reply_text(
+                f"❌ Не отправлено. "
+                f"Должников с ≥{threshold}: {len(debtors)}. "
+                f"app.bot={'ок' if app_bot_ok else 'None'}. "
+                f"Смотри логи Railway."
+            )
 
     async def _handle_pinalka_check(self, update: Update):
         chat_id = update.effective_chat.id
@@ -1270,6 +1291,7 @@ class LeagueFeature:
         summary = self.db.get_league_debt_summary(chat_id)
         debtors = [r for r in summary if r["debts_count"] >= threshold]
         if not debtors:
+            self.logger.info("send_league_reminder_message: no debtors with threshold=%s for chat=%s", threshold, chat_id)
             return False
         mentions = " ".join([f"@{r['debtor_username']}" for r in debtors])
         lines = [
@@ -1283,11 +1305,14 @@ class LeagueFeature:
         lines.extend([f"- @{r['debtor_username']}: {r['debts_count']}" for r in debtors])
         target_bot = bot or (self.application.bot if self.application else None)
         if target_bot is None:
+            self.logger.error("send_league_reminder_message: no bot instance available for chat=%s", chat_id)
             return False
         try:
             await target_bot.send_message(chat_id=chat_id, text="\n".join(lines))
+            self.logger.info("send_league_reminder_message: sent to chat=%s debtors=%s", chat_id, len(debtors))
             return True
-        except Exception:
+        except Exception as exc:
+            self.logger.error("send_league_reminder_message: failed to send to chat=%s: %s", chat_id, exc)
             return False
 
     async def _catch_up_missed_reminders(self, context: ContextTypes.DEFAULT_TYPE):
@@ -1365,7 +1390,8 @@ class LeagueFeature:
                     "+ долги <url> <тур> - загрузить долги из challenge.place",
                     "+ команды\nКоманда - @username\n... - задать привязки команд",
                     "+ пиналка / - пиналка - вкл/выкл напоминания",
-                    "пиналка? - статус пиналки и следующий слот",
+                    "пиналка? - статус и следующий слот",
+                    "пиналка_тест - отправить напоминание сейчас",
                 ]
             )
         )
