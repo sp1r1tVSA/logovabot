@@ -3,9 +3,10 @@ import logging
 import os
 import re
 import sqlite3
+import time as time_module
 import unicodedata
 import urllib.request
-from datetime import datetime, time as time_module
+from datetime import datetime
 from typing import Dict, List, Optional
 from zoneinfo import ZoneInfo
 
