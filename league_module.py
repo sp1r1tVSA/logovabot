@@ -967,6 +967,7 @@ class LeagueFeature:
             logger.warning("JobQueue unavailable. League reminders disabled.")
             return
         application.job_queue.run_repeating(self.league_reminder_scheduler, interval=60, first=10, name="league_reminder_scheduler")
+        application.job_queue.run_once(self._catch_up_missed_reminders, when=5, name="catch_up_reminders")
 
     def normalize_team_name(self, team_name: str) -> str:
         normalized = (team_name or "").strip().lower()
@@ -1286,6 +1287,36 @@ class LeagueFeature:
             return True
         except Exception:
             return False
+
+    async def _catch_up_missed_reminders(self, context: ContextTypes.DEFAULT_TYPE):
+        self.logger.info("Catch-up: checking missed reminder slots")
+        try:
+            configs = self.db.get_enabled_league_reminder_chats()
+        except Exception:
+            self.logger.exception("Catch-up: failed to fetch configs")
+            return
+        for cfg in configs:
+            if not bool(cfg.get("enabled")):
+                continue
+            chat_id = cfg["chat_id"]
+            threshold = cfg.get("threshold", 2)
+            now_msk = datetime.now(self.moscow_tz)
+            missed = False
+            for slot_hour in sorted(self.league_reminder_times):
+                slot_time = now_msk.replace(hour=slot_hour, minute=0, second=0, microsecond=0)
+                if slot_time <= now_msk:
+                    key = f"daily:{slot_time.strftime('%Y-%m-%d %H:%M')}"
+                    try:
+                        marked = self.db.try_mark_league_reminder_run(chat_id, key)
+                    except Exception:
+                        self._rollback_db_safely()
+                        self.logger.exception("Catch-up: try_mark failed for chat=%s", chat_id)
+                        continue
+                    if marked:
+                        missed = True
+                        self.logger.info("Catch-up: sending missed reminder slot=%s chat=%s", slot_time, chat_id)
+                        await self.send_league_reminder_message(chat_id=chat_id, threshold=threshold, bot=context.bot)
+        self.logger.info("Catch-up: done")
 
     async def league_reminder_scheduler(self, context: ContextTypes.DEFAULT_TYPE):
         now_msk = datetime.now(self.moscow_tz)
