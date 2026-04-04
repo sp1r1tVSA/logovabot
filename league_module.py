@@ -109,6 +109,8 @@ class LeagueRepositorySQLite:
         self.conn.commit()
 
     def replace_league_debts(self, chat_id: int, entries: List[Dict]):
+        if not entries:
+            return
         self.cursor.execute("BEGIN IMMEDIATE")
         try:
             self.cursor.execute("DELETE FROM league_debt_entries WHERE chat_id = ?", (chat_id,))
