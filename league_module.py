@@ -5,7 +5,7 @@ import re
 import sqlite3
 import unicodedata
 import urllib.request
-from datetime import datetime
+from datetime import datetime, time as time_module
 from typing import Dict, List, Optional
 from zoneinfo import ZoneInfo
 
@@ -38,26 +38,22 @@ class LeagueRepositorySQLite:
             CREATE TABLE IF NOT EXISTS league_reminder_settings (
                 chat_id INTEGER PRIMARY KEY,
                 enabled INTEGER DEFAULT 0,
-                timezone TEXT DEFAULT 'Europe/Moscow',
                 threshold INTEGER DEFAULT 2,
-                hourly_enabled INTEGER DEFAULT 0,
-                hourly_text TEXT,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
             """
         )
 
         try:
-            self.cursor.execute(
-                "ALTER TABLE league_reminder_settings ADD COLUMN hourly_enabled INTEGER DEFAULT 0"
-            )
+            self.cursor.execute("ALTER TABLE league_reminder_settings ADD COLUMN threshold INTEGER DEFAULT 2")
         except Exception:
             pass
 
-        try:
-            self.cursor.execute("ALTER TABLE league_reminder_settings ADD COLUMN hourly_text TEXT")
-        except Exception:
-            pass
+        for col in ("timezone", "hourly_enabled", "hourly_text"):
+            try:
+                self.cursor.execute(f"ALTER TABLE league_reminder_settings DROP COLUMN IF EXISTS {col}")
+            except Exception:
+                pass
 
         self.cursor.execute(
             """
@@ -170,32 +166,19 @@ class LeagueRepositorySQLite:
     def set_league_reminder_enabled(self, chat_id: int, enabled: bool):
         self.cursor.execute(
             """
-            INSERT INTO league_reminder_settings (chat_id, enabled, timezone, threshold, hourly_enabled, hourly_text, updated_at)
-            VALUES (?, ?, 'Europe/Moscow', 2, 0, NULL, CURRENT_TIMESTAMP)
+            INSERT INTO league_reminder_settings (chat_id, enabled, threshold, updated_at)
+            VALUES (?, ?, 2, CURRENT_TIMESTAMP)
             ON CONFLICT(chat_id) DO UPDATE SET enabled = excluded.enabled, updated_at = CURRENT_TIMESTAMP
             """,
             (chat_id, 1 if enabled else 0),
         )
         self.conn.commit()
 
-    def set_league_hourly_reminder(self, chat_id: int, enabled: bool, hourly_text: Optional[str]):
-        self.cursor.execute(
-            """
-            INSERT INTO league_reminder_settings (chat_id, enabled, timezone, threshold, hourly_enabled, hourly_text, updated_at)
-            VALUES (?, 0, 'Europe/Moscow', 2, ?, ?, CURRENT_TIMESTAMP)
-            ON CONFLICT(chat_id) DO UPDATE SET
-                hourly_enabled = excluded.hourly_enabled,
-                hourly_text = excluded.hourly_text,
-                updated_at = CURRENT_TIMESTAMP
-            """,
-            (chat_id, 1 if enabled else 0, hourly_text),
-        )
-        self.conn.commit()
 
     def get_league_reminder_settings(self, chat_id: int) -> Dict:
         self.cursor.execute(
             """
-            SELECT chat_id, enabled, timezone, threshold, hourly_enabled, hourly_text
+            SELECT chat_id, enabled, threshold
             FROM league_reminder_settings
             WHERE chat_id = ?
             """,
@@ -206,36 +189,27 @@ class LeagueRepositorySQLite:
             return {
                 "chat_id": chat_id,
                 "enabled": 0,
-                "timezone": "Europe/Moscow",
                 "threshold": 2,
-                "hourly_enabled": 0,
-                "hourly_text": None,
             }
         return {
             "chat_id": row[0],
             "enabled": row[1],
-            "timezone": row[2],
-            "threshold": row[3],
-            "hourly_enabled": row[4],
-            "hourly_text": row[5],
+            "threshold": row[2],
         }
 
     def get_enabled_league_reminder_chats(self) -> List[Dict]:
         self.cursor.execute(
             """
-            SELECT chat_id, enabled, timezone, threshold, hourly_enabled, hourly_text
+            SELECT chat_id, enabled, threshold
             FROM league_reminder_settings
-            WHERE enabled = 1 OR hourly_enabled = 1
+            WHERE enabled = 1
             """
         )
         return [
             {
                 "chat_id": r[0],
                 "enabled": r[1],
-                "timezone": r[2],
-                "threshold": r[3],
-                "hourly_enabled": r[4],
-                "hourly_text": r[5],
+                "threshold": r[2],
             }
             for r in self.cursor.fetchall()
         ]
@@ -341,44 +315,17 @@ class LeagueRepositoryPostgres(LeagueRepositorySQLite):
             CREATE TABLE IF NOT EXISTS league_reminder_settings (
                 chat_id BIGINT PRIMARY KEY,
                 enabled INTEGER DEFAULT 0,
-                timezone TEXT DEFAULT 'Europe/Moscow',
                 threshold INTEGER DEFAULT 2,
-                hourly_enabled INTEGER DEFAULT 0,
-                hourly_text TEXT,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
             """
         )
 
         self.cursor.execute(
-            """
-            ALTER TABLE league_reminder_settings
-            ADD COLUMN IF NOT EXISTS enabled INTEGER DEFAULT 0
-            """
+            "ALTER TABLE league_reminder_settings ADD COLUMN IF NOT EXISTS enabled INTEGER DEFAULT 0"
         )
         self.cursor.execute(
-            """
-            ALTER TABLE league_reminder_settings
-            ADD COLUMN IF NOT EXISTS timezone TEXT DEFAULT 'Europe/Moscow'
-            """
-        )
-        self.cursor.execute(
-            """
-            ALTER TABLE league_reminder_settings
-            ADD COLUMN IF NOT EXISTS threshold INTEGER DEFAULT 2
-            """
-        )
-        self.cursor.execute(
-            """
-            ALTER TABLE league_reminder_settings
-            ADD COLUMN IF NOT EXISTS hourly_enabled INTEGER DEFAULT 0
-            """
-        )
-        self.cursor.execute(
-            """
-            ALTER TABLE league_reminder_settings
-            ADD COLUMN IF NOT EXISTS hourly_text TEXT
-            """
+            "ALTER TABLE league_reminder_settings ADD COLUMN IF NOT EXISTS threshold INTEGER DEFAULT 2"
         )
 
         self.cursor.execute(
@@ -644,7 +591,6 @@ class LeagueRepositoryPostgres(LeagueRepositorySQLite):
 
     def set_league_reminder_enabled(self, chat_id: int, enabled: bool):
         enabled_literal = self._reminder_enabled_literal("enabled", enabled)
-        # Legacy-safe upsert without ON CONFLICT dependency.
         self.cursor.execute(
             f"""
             UPDATE league_reminder_settings
@@ -655,60 +601,30 @@ class LeagueRepositoryPostgres(LeagueRepositorySQLite):
             (chat_id,),
         )
         if self.cursor.rowcount <= 0:
-            hourly_off = self._reminder_enabled_literal("hourly_enabled", False)
             self.cursor.execute(
                 f"""
                 INSERT INTO league_reminder_settings
-                    (chat_id, enabled, timezone, threshold, hourly_enabled, hourly_text, updated_at)
+                    (chat_id, enabled, threshold, updated_at)
                 VALUES
-                    (?, {enabled_literal}, 'Europe/Moscow', 2, {hourly_off}, NULL, CURRENT_TIMESTAMP)
+                    (?, {enabled_literal}, 2, CURRENT_TIMESTAMP)
                 """,
                 (chat_id,),
-            )
-        self.conn.commit()
-
-    def set_league_hourly_reminder(self, chat_id: int, enabled: bool, hourly_text: Optional[str]):
-        hourly_literal = self._reminder_enabled_literal("hourly_enabled", enabled)
-        enabled_off = self._reminder_enabled_literal("enabled", False)
-        self.cursor.execute(
-            f"""
-            UPDATE league_reminder_settings
-            SET hourly_enabled = {hourly_literal},
-                hourly_text = ?,
-                updated_at = CURRENT_TIMESTAMP
-            WHERE chat_id = ?
-            """,
-            (hourly_text, chat_id),
-        )
-        if self.cursor.rowcount <= 0:
-            self.cursor.execute(
-                f"""
-                INSERT INTO league_reminder_settings
-                    (chat_id, enabled, timezone, threshold, hourly_enabled, hourly_text, updated_at)
-                VALUES
-                    (?, {enabled_off}, 'Europe/Moscow', 2, {hourly_literal}, ?, CURRENT_TIMESTAMP)
-                """,
-                (chat_id, hourly_text),
             )
         self.conn.commit()
 
     def get_enabled_league_reminder_chats(self) -> List[Dict]:
         self.cursor.execute(
             """
-            SELECT chat_id, enabled, timezone, threshold, hourly_enabled, hourly_text
+            SELECT chat_id, enabled, threshold
             FROM league_reminder_settings
             WHERE LOWER(COALESCE(enabled::text, '')) IN ('1', 't', 'true')
-               OR LOWER(COALESCE(hourly_enabled::text, '')) IN ('1', 't', 'true')
             """
         )
         return [
             {
                 "chat_id": r[0],
                 "enabled": r[1],
-                "timezone": r[2],
-                "threshold": r[3],
-                "hourly_enabled": r[4],
-                "hourly_text": r[5],
+                "threshold": r[2],
             }
             for r in self.cursor.fetchall()
         ]
@@ -812,7 +728,6 @@ class LeagueFeature:
     def __init__(self, db, moscow_tz, is_admin_callable, application=None):
         self.db = db
         self.moscow_tz = moscow_tz
-        self.league_reminder_times = {"00:00", "04:00", "08:00", "12:00", "16:00", "20:00"}
         self._is_admin = is_admin_callable
         self.application = application
         self.logger = logging.getLogger("league_bot")
@@ -865,25 +780,6 @@ class LeagueFeature:
                     body = "\n".join(text.split("\n", 1)[1:]).strip()
                 await self._handle_commands_command(update, body)
                 return
-            if subcmd == "пиналка":
-                await self._handle_pinalka_on(update)
-                return
-
-        if cmd == "пиналка?":
-            await self._handle_pinalka_check(update)
-            return
-
-        if cmd == "пиналка_тест":
-            await self._handle_pinalka_test(update, context)
-            return
-
-        if cmd == "-":
-            if len(parts) < 2:
-                return
-            subcmd = parts[1].strip().lower()
-            if subcmd == "пиналка":
-                await self._handle_pinalka_off(update)
-                return
 
     async def _handle_debts_command(self, update: Update, body: str):
         url = None
@@ -925,6 +821,7 @@ class LeagueFeature:
                 unresolved_text = "\n".join([f"- {team}" for team in result["unresolved_teams"]])
                 await update.message.reply_text("⚠️ Команды без привязки к @username:\n" + unresolved_text)
             await update.message.reply_text(self.format_league_debts_post(chat_id))
+            self.db.set_league_reminder_enabled(chat_id, True)
         except Exception as e:
             self.logger.exception("handle_debts_command failed")
             await update.message.reply_text(f"❌ Ошибка: {e}")
@@ -940,47 +837,6 @@ class LeagueFeature:
         self.db.replace_league_team_map(update.effective_chat.id, mappings)
         await update.message.reply_text(f"✅ Обновил привязки: {len(mappings)} команд.")
 
-    async def _handle_pinalka_on(self, update: Update):
-        self.db.set_league_reminder_enabled(update.effective_chat.id, True)
-        await update.message.reply_text("✅ Пиналка включена (каждые 4 часа: 00, 04, 08, 12, 16, 20 по Москве).")
-
-    async def _handle_pinalka_off(self, update: Update):
-        self.db.set_league_reminder_enabled(update.effective_chat.id, False)
-        await update.message.reply_text("✅ Пиналка выключена.")
-
-    async def _handle_pinalka_test(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        chat_id = update.effective_chat.id
-        threshold = 2
-        sent = await self.send_league_reminder_message(chat_id=chat_id, threshold=threshold, bot=context.bot)
-        if sent:
-            await update.message.reply_text("✅ Тестовое напоминание отправлено.")
-        else:
-            summary = self.db.get_league_debt_summary(chat_id)
-            debtors = [r for r in summary if r["debts_count"] >= threshold]
-            app_bot_ok = self.application and self.application.bot
-            await update.message.reply_text(
-                f"❌ Не отправлено. "
-                f"Должников с ≥{threshold}: {len(debtors)}. "
-                f"app.bot={'ок' if app_bot_ok else 'None'}. "
-                f"Смотри логи Railway."
-            )
-
-    async def _handle_pinalka_check(self, update: Update):
-        chat_id = update.effective_chat.id
-        settings = self.db.get_league_reminder_settings(chat_id)
-        enabled = bool(settings.get("enabled"))
-        hourly = bool(settings.get("hourly_enabled"))
-        now_msk = datetime.now(self.moscow_tz)
-        next_slots = sorted([h for h in [0, 4, 8, 12, 16, 20] if h > now_msk.hour or (h == now_msk.hour)])
-        next_hour = next_slots[0] if next_slots else 0
-        next_time = now_msk.replace(hour=next_hour, minute=0, second=0, microsecond=0)
-        if next_hour <= now_msk.hour:
-            next_time = next_time.replace(day=now_msk.day + 1)
-        status = "✅ ВКЛ" if enabled else "❌ ВЫКЛ"
-        await update.message.reply_text(
-            f"Пиналка: {status}\nСледующий слот: {next_time.strftime('%H:%M')} МСК"
-        )
-
     def register_handlers(self, application):
         application.add_handler(CommandHandler("admin", self._guard(self.cmd_admin)))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._guard(self._on_text_command)))
@@ -989,8 +845,13 @@ class LeagueFeature:
         if not application.job_queue:
             logger.warning("JobQueue unavailable. League reminders disabled.")
             return
-        application.job_queue.run_repeating(self.league_reminder_scheduler, interval=60, first=10, name="league_reminder_scheduler")
-        application.job_queue.run_once(self._catch_up_missed_reminders, when=5, name="catch_up_reminders")
+        for hour in [8, 12, 18]:
+            application.job_queue.run_daily(
+                self._daily_reminder,
+                time=time_module.time(hour=hour, minute=0),
+                name=f"daily_reminder_{hour}"
+            )
+            logger.info("Scheduled daily reminder at %s:00 Moscow", hour)
 
     def normalize_team_name(self, team_name: str) -> str:
         normalized = (team_name or "").strip().lower()
@@ -1287,25 +1148,25 @@ class LeagueFeature:
         except Exception:
             pass
 
-    async def send_league_reminder_message(self, chat_id: int, threshold: int = 2, bot=None, custom_text: Optional[str] = None) -> bool:
+    async def send_league_reminder_message(self, chat_id: int, threshold: int = 2, bot=None) -> bool:
         summary = self.db.get_league_debt_summary(chat_id)
         debtors = [r for r in summary if r["debts_count"] >= threshold]
         if not debtors:
-            self.logger.info("send_league_reminder_message: no debtors with threshold=%s for chat=%s", threshold, chat_id)
+            self.logger.info("send_league_reminder_message: no debtors for chat=%s", chat_id)
             return False
         mentions = " ".join([f"@{r['debtor_username']}" for r in debtors])
         lines = [
             "🔔 Напоминание по долгам в лиге",
             mentions,
             "",
-            custom_text or f"У вас {threshold} и более долгов. Пожалуйста, сыграйте долги сегодня.",
+            f"У вас {threshold} и более долгов. Пожалуйста, сыграйте долги.",
             "",
             "Текущие долги:",
         ]
         lines.extend([f"- @{r['debtor_username']}: {r['debts_count']}" for r in debtors])
         target_bot = bot or (self.application.bot if self.application else None)
         if target_bot is None:
-            self.logger.error("send_league_reminder_message: no bot instance available for chat=%s", chat_id)
+            self.logger.error("send_league_reminder_message: no bot instance for chat=%s", chat_id)
             return False
         try:
             await target_bot.send_message(chat_id=chat_id, text="\n".join(lines))
@@ -1315,70 +1176,21 @@ class LeagueFeature:
             self.logger.error("send_league_reminder_message: failed to send to chat=%s: %s", chat_id, exc)
             return False
 
-    async def _catch_up_missed_reminders(self, context: ContextTypes.DEFAULT_TYPE):
-        self.logger.info("Catch-up: checking missed reminder slots")
+    async def _daily_reminder(self, context: ContextTypes.DEFAULT_TYPE):
+        self.logger.info("Daily reminder triggered")
         try:
             configs = self.db.get_enabled_league_reminder_chats()
         except Exception:
-            self.logger.exception("Catch-up: failed to fetch configs")
+            self.logger.exception("Daily reminder: failed to fetch configs")
             return
         for cfg in configs:
             if not bool(cfg.get("enabled")):
                 continue
             chat_id = cfg["chat_id"]
             threshold = cfg.get("threshold", 2)
-            now_msk = datetime.now(self.moscow_tz)
-            missed = False
-            for slot_str in sorted(self.league_reminder_times):
-                slot_hour = int(slot_str.split(":")[0])
-                slot_time = now_msk.replace(hour=slot_hour, minute=0, second=0, microsecond=0)
-                if slot_time <= now_msk:
-                    key = f"daily:{slot_time.strftime('%Y-%m-%d %H:%M')}"
-                    try:
-                        marked = self.db.try_mark_league_reminder_run(chat_id, key)
-                    except Exception:
-                        self._rollback_db_safely()
-                        self.logger.exception("Catch-up: try_mark failed for chat=%s", chat_id)
-                        continue
-                    if marked:
-                        missed = True
-                        self.logger.info("Catch-up: sending missed reminder slot=%s chat=%s", slot_time, chat_id)
-                        await self.send_league_reminder_message(chat_id=chat_id, threshold=threshold, bot=context.bot)
-        self.logger.info("Catch-up: done")
-
-    async def league_reminder_scheduler(self, context: ContextTypes.DEFAULT_TYPE):
-        now_msk = datetime.now(self.moscow_tz)
-        time_key = now_msk.strftime("%H:%M")
-        is_daily_slot = time_key in self.league_reminder_times
-        is_hourly_slot = now_msk.minute == 0
-        if not is_daily_slot and not is_hourly_slot:
-            return
-        self.logger.info("Reminder scheduler tick: time=%s daily=%s hourly=%s", time_key, is_daily_slot, is_hourly_slot)
-        try:
-            configs = self.db.get_enabled_league_reminder_chats()
-            self.logger.info("Reminder scheduler: found %d enabled configs", len(configs))
-        except Exception:
-            self._rollback_db_safely()
-            self.logger.exception("Failed to fetch reminder configs")
-            return
-        for cfg in configs:
-            chat_id = cfg["chat_id"]
-            threshold = cfg.get("threshold", 2)
-            if is_daily_slot and bool(cfg.get("enabled")):
-                key = f"daily:{now_msk.strftime('%Y-%m-%d %H:%M')}"
-                self.logger.info("Reminder scheduler: daily slot for chat=%s key=%s", chat_id, key)
-                if self.db.try_mark_league_reminder_run(chat_id, key):
-                    await self.send_league_reminder_message(chat_id=chat_id, threshold=threshold, bot=context.bot)
-                    self.logger.info("Reminder sent to chat=%s", chat_id)
-            if is_hourly_slot and bool(cfg.get("hourly_enabled")):
-                key = f"hourly:{now_msk.strftime('%Y-%m-%d %H:00')}"
-                if self.db.try_mark_league_reminder_run(chat_id, key):
-                    await self.send_league_reminder_message(
-                        chat_id=chat_id,
-                        threshold=threshold,
-                        bot=context.bot,
-                        custom_text=cfg.get("hourly_text") or "Напоминание: сыграйте долги в лиге.",
-                    )
+            await self.send_league_reminder_message(
+                chat_id=chat_id, threshold=threshold, bot=context.bot
+            )
 
     async def cmd_admin(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not self._is_admin(update.effective_user.id):
@@ -1388,11 +1200,8 @@ class LeagueFeature:
                 [
                     "Доступные команды:",
                     "/admin - список команд",
-                    "+ долги <url> <тур> - загрузить долги из challenge.place",
+                    "+ долги <url> <тур> - загрузить долги из challenge.place (автонапоминания в 08, 12, 18 МСК)",
                     "+ команды\nКоманда - @username\n... - задать привязки команд",
-                    "+ пиналка / - пиналка - вкл/выкл напоминания",
-                    "пиналка? - статус и следующий слот",
-                    "пиналка_тест - отправить напоминание сейчас",
                 ]
             )
         )
