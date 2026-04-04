@@ -1309,7 +1309,7 @@ class LeagueFeature:
                 key = f"daily:{now_msk.strftime('%Y-%m-%d %H:%M')}"
                 self.logger.info("Reminder scheduler: daily slot for chat=%s key=%s", chat_id, key)
                 if self.db.try_mark_league_reminder_run(chat_id, key):
-                    await self.send_league_reminder_message(chat_id=chat_id, threshold=1, bot=context.bot)
+                    await self.send_league_reminder_message(chat_id=chat_id, threshold=threshold, bot=context.bot)
                     self.logger.info("Reminder sent to chat=%s", chat_id)
             if is_hourly_slot and bool(cfg.get("hourly_enabled")):
                 key = f"hourly:{now_msk.strftime('%Y-%m-%d %H:00')}"
