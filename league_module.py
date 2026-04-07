@@ -1,17 +1,19 @@
 import json
 import logging
 import os
+import random
 import re
 import sqlite3
+import time
 import unicodedata
 import urllib.request
-from datetime import datetime, time
+from datetime import datetime, time as dt_time
 from typing import Dict, List, Optional
 from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.ext import ApplicationBuilder, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
 class LeagueRepositorySQLite:
     def __init__(self, conn, cursor):
@@ -221,6 +223,17 @@ class LeagueRepositorySQLite:
         )
         self.conn.commit()
         return self.cursor.rowcount > 0
+
+    def update_league_reminder_threshold(self, chat_id: int, threshold: int) -> None:
+        self.cursor.execute(
+            """
+            INSERT INTO league_reminder_settings (chat_id, enabled, threshold, updated_at)
+            VALUES (?, 0, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(chat_id) DO UPDATE SET threshold = excluded.threshold, updated_at = CURRENT_TIMESTAMP
+            """,
+            (chat_id, threshold),
+        )
+        self.conn.commit()
 
     def replace_league_team_map(self, chat_id: int, mappings: List[Dict]):
         self.cursor.execute("DELETE FROM league_team_map WHERE chat_id = ?", (chat_id,))
@@ -629,6 +642,29 @@ class LeagueRepositoryPostgres(LeagueRepositorySQLite):
             for r in self.cursor.fetchall()
         ]
 
+    def update_league_reminder_threshold(self, chat_id: int, threshold: int) -> None:
+        enabled_literal = self._reminder_enabled_literal("enabled", False)
+        self.cursor.execute(
+            f"""
+            UPDATE league_reminder_settings
+            SET threshold = %s,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE chat_id = %s
+            """,
+            (threshold, chat_id),
+        )
+        if self.cursor.rowcount <= 0:
+            self.cursor.execute(
+                f"""
+                INSERT INTO league_reminder_settings
+                    (chat_id, enabled, threshold, updated_at)
+                VALUES
+                    (%s, {enabled_literal}, %s, CURRENT_TIMESTAMP)
+                """,
+                (chat_id, threshold),
+            )
+        self.conn.commit()
+
     def _sync_table_id_sequence(self, table_name: str):
         allowed = {
             "league_team_map",
@@ -780,6 +816,12 @@ class LeagueFeature:
                     body = "\n".join(text.split("\n", 1)[1:]).strip()
                 await self._handle_commands_command(update, body)
                 return
+            if subcmd in ("напоминания", "напоминание", " напоминания"):
+                await self.cmd_reminders(update, context)
+                return
+            if subcmd == "статус":
+                await self.cmd_status(update, context)
+                return
 
     async def _handle_debts_command(self, update: Update, body: str):
         url = None
@@ -838,7 +880,13 @@ class LeagueFeature:
         await update.message.reply_text(f"✅ Обновил привязки: {len(mappings)} команд.")
 
     def register_handlers(self, application):
+        application.add_handler(CallbackQueryHandler(self.on_callback_query))
         application.add_handler(CommandHandler("admin", self._guard(self.cmd_admin)))
+        application.add_handler(CommandHandler("status", self._guard(self.cmd_status)))
+        application.add_handler(CommandHandler("debts", self._guard(self.cmd_debts)))
+        application.add_handler(CommandHandler("reminders", self._guard(self.cmd_reminders)))
+        application.add_handler(CommandHandler("threshold", self._guard(self.cmd_threshold)))
+        application.add_handler(CommandHandler("sync", self._guard(self.cmd_sync)))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._guard(self._on_text_command)))
 
     def setup_jobs(self, application, logger):
@@ -848,8 +896,9 @@ class LeagueFeature:
         for hour in [8, 12, 18]:
             application.job_queue.run_daily(
                 self._daily_reminder,
-                time=time(hour=hour, minute=0),
-                name=f"daily_reminder_{hour}"
+                time=dt_time(hour=hour, minute=0),
+                name=f"daily_reminder_{hour}",
+                data=hour,
             )
             logger.info("Scheduled daily reminder at %s:00 Moscow", hour)
 
@@ -901,10 +950,48 @@ class LeagueFeature:
         except Exception:
             return None
 
-    def fetch_text_url(self, url: str, timeout: int = 30) -> str:
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (compatible; LeagueFeature/1.0)"})
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.read().decode("utf-8", errors="ignore")
+    def fetch_text_url(
+        self,
+        url: str,
+        timeout: int = 20,
+        max_retries: int = 3,
+        base_delay: float = 2.0,
+        max_delay: float = 30.0,
+    ) -> str:
+        last_exc: Exception | None = None
+        for attempt in range(max_retries):
+            try:
+                req = urllib.request.Request(
+                    url,
+                    headers={"User-Agent": "Mozilla/5.0 (compatible; LeagueFeature/1.0)"},
+                )
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    return resp.read().decode("utf-8", errors="ignore")
+            except urllib.error.HTTPError as exc:
+                if 400 <= exc.code < 500:
+                    self.logger.warning(
+                        "fetch_text_url: HTTP %s for %s — non-retryable, re-raising",
+                        exc.code, url,
+                    )
+                    raise
+                last_exc = exc
+                delay = min(base_delay * (2 ** attempt), max_delay)
+                if attempt < max_retries - 1:
+                    self.logger.warning(
+                        "fetch_text_url: HTTP %s for %s (attempt %s/%s), retry in %.1fs",
+                        exc.code, url, attempt + 1, max_retries, delay,
+                    )
+                    time.sleep(delay)
+            except (urllib.error.URLError, OSError, TimeoutError) as exc:
+                last_exc = exc
+                delay = min(base_delay * (2 ** attempt), max_delay)
+                if attempt < max_retries - 1:
+                    self.logger.warning(
+                        "fetch_text_url: %s for %s (attempt %s/%s), retry in %.1fs",
+                        type(exc).__name__, url, attempt + 1, max_retries, delay,
+                    )
+                    time.sleep(delay)
+        raise last_exc or RuntimeError(f"fetch_text_url: all {max_retries} attempts failed for {url}")
 
     def _object_id_add(self, object_id: str, delta: int) -> str:
         return f"{int(object_id, 16) + delta:024x}"
@@ -930,7 +1017,7 @@ class LeagueFeature:
         unresolved = set()
 
         try:
-            html_text = self.fetch_text_url(stage_url)
+            html_text = self.fetch_text_url(stage_url, max_retries=3)
             state = self.parse_initial_state(html_text)
             if not state:
                 raise ValueError("Не удалось прочитать данные stage (INITIAL_STATE). URL=%s" % stage_url)
@@ -959,7 +1046,7 @@ class LeagueFeature:
                     match_id = self._object_id_add(series_id, 1)
                     match_url = re.sub(r"/stage/.*$", f"/match/{match_id}", stage_url)
                     try:
-                        match_html = self.fetch_text_url(match_url)
+                        match_html = self.fetch_text_url(match_url, max_retries=3)
                         match_state = self.parse_initial_state(match_html)
                         if not match_state:
                             fetch_errors += 1
@@ -1148,11 +1235,15 @@ class LeagueFeature:
         except Exception:
             pass
 
-    async def send_league_reminder_message(self, chat_id: int, threshold: int = 2, bot=None) -> bool:
+    async def send_league_reminder_message(
+        self, chat_id: int, threshold: int = 2, bot=None, slot_key: str = ""
+    ) -> bool:
         summary = self.db.get_league_debt_summary(chat_id)
         debtors = [r for r in summary if r["debts_count"] >= threshold]
         if not debtors:
-            self.logger.info("send_league_reminder_message: no debtors for chat=%s", chat_id)
+            self.logger.info(
+                "send_league_reminder_message: no debtors for chat=%s slot=%s", chat_id, slot_key
+            )
             return False
         mentions = " ".join([f"@{r['debtor_username']}" for r in debtors])
         lines = [
@@ -1166,18 +1257,31 @@ class LeagueFeature:
         lines.extend([f"- @{r['debtor_username']}: {r['debts_count']}" for r in debtors])
         target_bot = bot or (self.application.bot if self.application else None)
         if target_bot is None:
-            self.logger.error("send_league_reminder_message: no bot instance for chat=%s", chat_id)
+            self.logger.error(
+                "send_league_reminder_message: no bot instance for chat=%s slot=%s", chat_id, slot_key
+            )
             return False
         try:
             await target_bot.send_message(chat_id=chat_id, text="\n".join(lines))
-            self.logger.info("send_league_reminder_message: sent to chat=%s debtors=%s", chat_id, len(debtors))
+            self.logger.info(
+                "metric_reminder sent=1 chat=%s slot=%s debtors=%s",
+                chat_id, slot_key, len(debtors),
+            )
             return True
         except Exception as exc:
-            self.logger.error("send_league_reminder_message: failed to send to chat=%s: %s", chat_id, exc)
+            self.logger.error(
+                "metric_reminder_error chat=%s slot=%s error=%s", chat_id, slot_key, exc
+            )
             return False
+
+    def _build_reminder_slot_key(self, chat_id: int, hour: int, date_str: str) -> str:
+        return f"{chat_id}:{hour}:{date_str}"
 
     async def _daily_reminder(self, context: ContextTypes.DEFAULT_TYPE):
         self.logger.info("Daily reminder triggered")
+        hour = context.job.data if context.job and context.job.data else 12
+        today = datetime.now(self.moscow_tz).strftime("%Y-%m-%d")
+
         try:
             configs = self.db.get_enabled_league_reminder_chats()
         except Exception:
@@ -1188,8 +1292,14 @@ class LeagueFeature:
                 continue
             chat_id = cfg["chat_id"]
             threshold = cfg.get("threshold", 2)
+            slot_key = self._build_reminder_slot_key(chat_id, hour, today)
+            if not self.db.try_mark_league_reminder_run(chat_id, slot_key):
+                self.logger.info(
+                    "Daily reminder: slot %s already processed, skipping", slot_key
+                )
+                continue
             await self.send_league_reminder_message(
-                chat_id=chat_id, threshold=threshold, bot=context.bot
+                chat_id=chat_id, threshold=threshold, bot=context.bot, slot_key=slot_key
             )
 
     async def cmd_admin(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1199,12 +1309,197 @@ class LeagueFeature:
             "\n".join(
                 [
                     "Доступные команды:",
-                    "/admin - список команд",
-                    "+ долги <url> <тур> - загрузить долги из challenge.place (автонапоминания в 08, 12, 18 МСК)",
-                    "+ команды\nКоманда - @username\n... - задать привязки команд",
+                    "/admin — список команд",
+                    "/status — статус бота для чата",
+                    "/debts — просмотр текущих долгов",
+                    "/reminders — управление напоминаниями (on/off)",
+                    "/threshold N — задать порог напоминаний (1-10)",
+                    "/sync <url> <тур> — синхронизация с challenge.place",
+                    "/sync dry <url> <тур> — preview без сохранения",
+                    "+ долги <url> <тур> — загрузить долги",
+                    "+ команды\nКоманда - @username\n... — задать привязки команд",
+                    "+ напоминания — управление напоминаниями",
+                    "+ статус — статус бота",
                 ]
             )
         )
+
+    async def cmd_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not self._is_allowed_chat(update):
+            return
+        chat_id = update.effective_chat.id
+        settings = self.db.get_league_reminder_settings(chat_id)
+        debt_count = self.db.get_league_debts_count(chat_id)
+        team_map = self.db.get_league_team_map(chat_id)
+        enabled = bool(settings.get("enabled"))
+        threshold = settings.get("threshold", 2)
+        lines = [
+            f"Чат: <code>{chat_id}</code>",
+            f"Напоминания: <b>{'✅ Включены' if enabled else '❌ Выключены'}</b>",
+            f"Порог: {threshold} долга (>= N → напоминание)",
+            f"Всего долгов: {debt_count}",
+            f"Команд в маппинге: {len(team_map)}",
+        ]
+        await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+
+    async def cmd_debts(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not self._is_allowed_chat(update):
+            return
+        await update.message.reply_text(self.format_league_debts_post(update.effective_chat.id))
+
+    async def cmd_reminders(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not self._is_allowed_chat(update):
+            return
+        chat_id = update.effective_chat.id
+        settings = self.db.get_league_reminder_settings(chat_id)
+        enabled = bool(settings.get("enabled"))
+        threshold = settings.get("threshold", 2)
+        status_line = "✅ Включены" if enabled else "❌ Выключены"
+        keyboard = []
+        if enabled:
+            keyboard.append([InlineKeyboardButton("🔕 Выключить напоминания", callback_data="reminders_off")])
+        else:
+            keyboard.append([InlineKeyboardButton("🔔 Включить напоминания", callback_data="reminders_on")])
+        keyboard.append([
+            InlineKeyboardButton("⬆️ Порог +1", callback_data="threshold_up"),
+            InlineKeyboardButton("⬇️ Порог -1", callback_data="threshold_down"),
+        ])
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text(
+            f"Напоминания: <b>{status_line}</b>\nПорог: {threshold} долга\n\nИспользуйте кнопки ниже:",
+            reply_markup=reply_markup,
+            parse_mode="HTML",
+        )
+
+    async def cmd_threshold(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not self._is_allowed_chat(update):
+            return
+        chat_id = update.effective_chat.id
+        if not context.args:
+            settings = self.db.get_league_reminder_settings(chat_id)
+            current = settings.get("threshold", 2)
+            await update.message.reply_text(
+                f"Текущий порог: <b>{current}</b>\n\nИспользование: /threshold <число 1-10>"
+            )
+            return
+        try:
+            n = int(context.args[0])
+            if not (1 <= n <= 10):
+                await update.message.reply_text("Порог должен быть числом от 1 до 10.")
+                return
+            self.db.update_league_reminder_threshold(chat_id, n)
+            await update.message.reply_text(f"✅ Порог изменён на <b>{n}</b>", parse_mode="HTML")
+        except ValueError:
+            await update.message.reply_text("Неверный формат. Пример: /threshold 3")
+
+    async def cmd_sync(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not self._is_allowed_chat(update):
+            return
+        args = context.args or []
+        dry_mode = False
+        if args and args[0].lower() == "dry":
+            dry_mode = True
+            args = args[1:]
+        if len(args) < 2:
+            await update.message.reply_text(
+                "Использование:\n"
+                "/sync <url> <тур>\n"
+                "/sync dry <url> <тур>  — preview без сохранения"
+            )
+            return
+        url = None
+        max_round = None
+        for arg in args:
+            if arg.startswith("http://") or arg.startswith("https://"):
+                if url is None:
+                    url = arg
+            else:
+                try:
+                    n = int(arg)
+                    if n > 0:
+                        max_round = n
+                except ValueError:
+                    pass
+        if not url:
+            await update.message.reply_text("Не указан URL challenge.place")
+            return
+        if not max_round:
+            await update.message.reply_text("Не указан номер тура")
+            return
+        chat_id = update.effective_chat.id
+        try:
+            if dry_mode:
+                team_map = self.db.get_league_team_map(chat_id)
+                team_to_user = {item["team_name_norm"]: item["telegram_username"] for item in team_map}
+                summary = self.db.get_league_debt_summary(chat_id)
+                await update.message.reply_text(
+                    f"🔍 Dry-run для {max_round} тура (данные не сохранены)\n\n"
+                    f"Команды в маппинге: {len(team_to_user)}\n"
+                    f"Текущих долгов в БД: {len(summary)}\n\n"
+                    f"Для синка используйте: /sync {url} {max_round}"
+                )
+                return
+            result = self.sync_challenge_stage_debts(chat_id, url, max_round)
+            await update.message.reply_text(
+                self._format_challenge_sync_user_message(
+                    result,
+                    f"✅ Синк выполнен до {max_round} тура.",
+                )
+            )
+            if result["unresolved_teams"]:
+                unresolved_text = "\n".join([f"- {team}" for team in result["unresolved_teams"]])
+                await update.message.reply_text("⚠️ Команды без привязки к @username:\n" + unresolved_text)
+            await update.message.reply_text(self.format_league_debts_post(chat_id))
+            self.db.set_league_reminder_enabled(chat_id, True)
+        except Exception as e:
+            self.logger.exception("cmd_sync failed")
+            await update.message.reply_text(f"❌ Ошибка: {e}")
+
+    async def on_callback_query(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        if not query:
+            return
+        chat = query.message.chat if query.message else None
+        user = query.from_user
+        if not chat:
+            await query.answer("❌ Нет информации о чате")
+            return
+        if chat.type in ("group", "supergroup"):
+            pass
+        elif not self._is_admin(user.id):
+            await query.answer("⛔ Недостаточно прав")
+            return
+        else:
+            pass
+
+        chat_id = chat.id
+        data = query.data or ""
+
+        if data == "reminders_on":
+            self.db.set_league_reminder_enabled(chat_id, True)
+            await query.answer("✅ Напоминания включены")
+            await query.edit_message_text("✅ Напоминания включены.")
+            return
+        if data == "reminders_off":
+            self.db.set_league_reminder_enabled(chat_id, False)
+            await query.answer("🔕 Напоминания выключены")
+            await query.edit_message_text("🔕 Напоминания выключены.")
+            return
+        if data == "threshold_up":
+            settings = self.db.get_league_reminder_settings(chat_id)
+            new_val = min((settings.get("threshold", 2) or 2) + 1, 10)
+            self.db.update_league_reminder_threshold(chat_id, new_val)
+            await query.answer(f"⬆️ Порог: {new_val}")
+            await query.edit_message_text(f"✅ Порог изменён на <b>{new_val}</b>", parse_mode="HTML")
+            return
+        if data == "threshold_down":
+            settings = self.db.get_league_reminder_settings(chat_id)
+            new_val = max((settings.get("threshold", 2) or 2) - 1, 1)
+            self.db.update_league_reminder_threshold(chat_id, new_val)
+            await query.answer(f"⬇️ Порог: {new_val}")
+            await query.edit_message_text(f"✅ Порог изменён на <b>{new_val}</b>", parse_mode="HTML")
+            return
+        await query.answer("Неизвестное действие")
 
 def _parse_admin_ids(raw: str) -> set[str]:
     return {value.strip() for value in str(raw or "").split(",") if value.strip()}
