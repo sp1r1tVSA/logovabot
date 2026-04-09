@@ -1400,15 +1400,31 @@ class LeagueFeature:
         if not self._is_admin(update.effective_user.id):
             return
         chat_id = update.effective_chat.id
+        is_private = update.effective_chat.type == "private"
+
+        if is_private:
+            if context.args:
+                try:
+                    chat_id = int(context.args[0])
+                except ValueError:
+                    await update.message.reply_text("Неверный chat_id. Пример: /test_reminder -1003896063490")
+                    return
+            else:
+                settings = self.db.get_league_reminder_settings(update.effective_user.id)
+                await update.message.reply_text(
+                    "⚠️ В личном чате нельзя протестировать напоминание — "
+                    "бот не может писать вам без вашего сообщения.\n\n"
+                    "Используйте в группе, где есть бот, "
+                    "или укажите chat_id группы:\n"
+                    "<code>/test_reminder &lt;chat_id&gt;</code>\n\n"
+                    f"Ваш user_id: <code>{update.effective_user.id}</code>",
+                    parse_mode="HTML",
+                )
+                return
+
         settings = self.db.get_league_reminder_settings(chat_id)
         threshold = settings.get("threshold", 2)
         slot_key = f"test:{chat_id}:{datetime.now(self.moscow_tz).strftime('%Y-%m-%d-%H%M%S')}"
-        await update.message.reply_text(
-            f"🧪 Тестовое напоминание для чата <code>{chat_id}</code>\n"
-            f"Порог: {threshold}\n"
-            f"Slot: {slot_key}",
-            parse_mode="HTML",
-        )
         sent = await self.send_league_reminder_message(
             chat_id=chat_id,
             threshold=threshold,
@@ -1416,12 +1432,20 @@ class LeagueFeature:
             slot_key=slot_key,
         )
         if sent:
-            await update.message.reply_text("✅ Напоминание отправлено.")
+            await update.message.reply_text(
+                f"✅ Напоминание отправлено в чат <code>{chat_id}</code>\n"
+                f"Порог: {threshold}",
+                parse_mode="HTML",
+            )
         else:
             await update.message.reply_text(
-                "⚠️ Напоминание не отправлено (нет должников с порогом "
-                f"{threshold} или напоминания выключены).\n"
-                f"Включены: {bool(settings.get('enabled'))}"
+                f"⚠️ Напоминание не отправлено в чат <code>{chat_id}</code>\n"
+                f"Причина: нет должников с порогом {threshold} "
+                f"или напоминания выключены.\n"
+                f"Включены: {bool(settings.get('enabled'))}\n"
+                f"Должников с ≥{threshold} долгами: "
+                f"{len([r for r in self.db.get_league_debt_summary(chat_id) if r['debts_count'] >= threshold])}",
+                parse_mode="HTML",
             )
 
     async def cmd_sync(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
