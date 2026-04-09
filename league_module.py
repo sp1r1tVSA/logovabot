@@ -887,6 +887,7 @@ class LeagueFeature:
         application.add_handler(CommandHandler("reminders", self._guard(self.cmd_reminders)))
         application.add_handler(CommandHandler("threshold", self._guard(self.cmd_threshold)))
         application.add_handler(CommandHandler("sync", self._guard(self.cmd_sync)))
+        application.add_handler(CommandHandler("test_reminder", self._guard(self.cmd_test_reminder)))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._guard(self._on_text_command)))
 
     def setup_jobs(self, application, logger):
@@ -894,9 +895,11 @@ class LeagueFeature:
             logger.warning("JobQueue unavailable. League reminders disabled.")
             return
         for hour in [8, 12, 18]:
+            schedule_dt = datetime(2000, 1, 1, hour=hour, minute=0, tzinfo=self.moscow_tz)
+            schedule_time = schedule_dt.time()
             application.job_queue.run_daily(
                 self._daily_reminder,
-                time=dt_time(hour=hour, minute=0),
+                time=schedule_time,
                 name=f"daily_reminder_{hour}",
                 data=hour,
             )
@@ -1316,6 +1319,7 @@ class LeagueFeature:
                     "/threshold N — задать порог напоминаний (1-10)",
                     "/sync <url> <тур> — синхронизация с challenge.place",
                     "/sync dry <url> <тур> — preview без сохранения",
+                    "/test_reminder — тестовая отправка напоминания",
                     "+ долги <url> <тур> — загрузить долги",
                     "+ команды\nКоманда - @username\n... — задать привязки команд",
                     "+ напоминания — управление напоминаниями",
@@ -1391,6 +1395,34 @@ class LeagueFeature:
             await update.message.reply_text(f"✅ Порог изменён на <b>{n}</b>", parse_mode="HTML")
         except ValueError:
             await update.message.reply_text("Неверный формат. Пример: /threshold 3")
+
+    async def cmd_test_reminder(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not self._is_admin(update.effective_user.id):
+            return
+        chat_id = update.effective_chat.id
+        settings = self.db.get_league_reminder_settings(chat_id)
+        threshold = settings.get("threshold", 2)
+        slot_key = f"test:{chat_id}:{datetime.now(self.moscow_tz).strftime('%Y-%m-%d-%H%M%S')}"
+        await update.message.reply_text(
+            f"🧪 Тестовое напоминание для чата <code>{chat_id}</code>\n"
+            f"Порог: {threshold}\n"
+            f"Slot: {slot_key}",
+            parse_mode="HTML",
+        )
+        sent = await self.send_league_reminder_message(
+            chat_id=chat_id,
+            threshold=threshold,
+            bot=update.effective_message.bot,
+            slot_key=slot_key,
+        )
+        if sent:
+            await update.message.reply_text("✅ Напоминание отправлено.")
+        else:
+            await update.message.reply_text(
+                "⚠️ Напоминание не отправлено (нет должников с порогом "
+                f"{threshold} или напоминания выключены).\n"
+                f"Включены: {bool(settings.get('enabled'))}"
+            )
 
     async def cmd_sync(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not self._is_allowed_chat(update):
@@ -1567,10 +1599,15 @@ def run_bot():
 
     repo.create_tables()
 
-    application = ApplicationBuilder().token(token).build()
+    application = (
+        ApplicationBuilder()
+        .token(token)
+        .build()
+    )
+    moscow_tz = ZoneInfo("Europe/Moscow")
     feature = LeagueFeature(
         db=repo,
-        moscow_tz=ZoneInfo("Europe/Moscow"),
+        moscow_tz=moscow_tz,
         is_admin_callable=lambda user_id: str(user_id) in admin_ids,
         application=application,
     )
