@@ -1428,7 +1428,7 @@ class LeagueFeature:
         sent = await self.send_league_reminder_message(
             chat_id=chat_id,
             threshold=threshold,
-            bot=update.effective_message.bot,
+            bot=context.bot,
             slot_key=slot_key,
         )
         if sent:
