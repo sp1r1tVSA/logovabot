@@ -779,15 +779,11 @@ class LeagueFeature:
             return bool(self._is_admin(user.id))
         return False
 
-    def _guard(self, handler):
-        async def guarded(update: Update, context: ContextTypes.DEFAULT_TYPE):
-            if not self._is_allowed_chat(update):
-                return
-            await handler(update, context)
-
         return guarded
 
     async def _on_text_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not update.message:
+            return
         text = (update.message.text or "").strip()
         if not text:
             return
@@ -882,13 +878,6 @@ class LeagueFeature:
     def register_handlers(self, application):
         application.add_handler(CallbackQueryHandler(self.on_callback_query))
         application.add_handler(CommandHandler("admin", self._guard(self.cmd_admin)))
-        application.add_handler(CommandHandler("status", self._guard(self.cmd_status)))
-        application.add_handler(CommandHandler("next_reminder", self._guard(self.cmd_next_reminder)))
-        application.add_handler(CommandHandler("debts", self._guard(self.cmd_debts)))
-        application.add_handler(CommandHandler("reminders", self._guard(self.cmd_reminders)))
-        application.add_handler(CommandHandler("threshold", self._guard(self.cmd_threshold)))
-        application.add_handler(CommandHandler("sync", self._guard(self.cmd_sync)))
-        application.add_handler(CommandHandler("test_reminder", self._guard(self.cmd_test_reminder)))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._guard(self._on_text_command)))
 
     def setup_jobs(self, application, logger):
@@ -1314,18 +1303,10 @@ class LeagueFeature:
                 [
                     "Доступные команды:",
                     "/admin — список команд",
-                    "/status — статус бота для чата",
-                    "/next_reminder — ближайшие автопиналки (МСК)",
-                    "/debts — просмотр текущих долгов",
-                    "/reminders — управление напоминаниями (on/off)",
-                    "/threshold N — задать порог напоминаний (1-10)",
-                    "/sync <url> <тур> — синхронизация с challenge.place",
-                    "/sync dry <url> <тур> — preview без сохранения",
-                    "/test_reminder — тестовая отправка напоминания",
-                    "+ долги <url> <тур> — загрузить долги",
+                    "+ долги <url> <тур> — загрузить долги из challenge.place",
                     "+ команды\nКоманда - @username\n... — задать привязки команд",
-                    "+ напоминания — управление напоминаниями",
-                    "+ статус — статус бота",
+                    "+ напоминания — управление напоминаниями (on/off)",
+                    "+ статус — статус бота для чата",
                 ]
             )
         )
@@ -1348,59 +1329,6 @@ class LeagueFeature:
         ]
         await update.message.reply_text("\n".join(lines), parse_mode="HTML")
 
-    async def cmd_next_reminder(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not self._is_allowed_chat(update):
-            return
-        chat_id = update.effective_chat.id
-        settings = self.db.get_league_reminder_settings(chat_id)
-        enabled = bool(settings.get("enabled"))
-        threshold = int(settings.get("threshold", 2) or 2)
-        debtors = [
-            r for r in self.db.get_league_debt_summary(chat_id)
-            if int(r.get("debts_count", 0) or 0) >= threshold
-        ]
-
-        if not self.application or not self.application.job_queue:
-            await update.message.reply_text(
-                "⚠️ JobQueue недоступен: автопиналки сейчас отключены на уровне процесса."
-            )
-            return
-
-        def _next_time_for_job(name: str) -> str:
-            jobs = self.application.job_queue.get_jobs_by_name(name) or []
-            if not jobs:
-                return "не найден"
-            next_t = getattr(jobs[0], "next_t", None)
-            if next_t is None:
-                return "не запланирован"
-            try:
-                return next_t.astimezone(self.moscow_tz).strftime("%Y-%m-%d %H:%M:%S %Z")
-            except Exception:
-                return str(next_t)
-
-        now_msk = datetime.now(self.moscow_tz).strftime("%Y-%m-%d %H:%M:%S %Z")
-        lines = [
-            f"Сейчас (МСК): <b>{now_msk}</b>",
-            f"Напоминания: <b>{'✅ Включены' if enabled else '❌ Выключены'}</b>",
-            f"Порог: <b>{threshold}</b>",
-            f"Должников с порогом: <b>{len(debtors)}</b>",
-            "",
-            f"08:00 → {_next_time_for_job('daily_reminder_8')}",
-            f"12:00 → {_next_time_for_job('daily_reminder_12')}",
-            f"18:00 → {_next_time_for_job('daily_reminder_18')}",
-        ]
-        if not enabled:
-            lines.append("")
-            lines.append("Причина неотправки: напоминания выключены для этого чата.")
-        elif not debtors:
-            lines.append("")
-            lines.append("Причина неотправки: нет должников с количеством долгов >= порога.")
-        await update.message.reply_text("\n".join(lines), parse_mode="HTML")
-
-    async def cmd_debts(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not self._is_allowed_chat(update):
-            return
-        await update.message.reply_text(self.format_league_debts_post(update.effective_chat.id))
 
     async def cmd_reminders(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not self._is_allowed_chat(update):
@@ -1425,142 +1353,6 @@ class LeagueFeature:
             reply_markup=reply_markup,
             parse_mode="HTML",
         )
-
-    async def cmd_threshold(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not self._is_allowed_chat(update):
-            return
-        chat_id = update.effective_chat.id
-        if not context.args:
-            settings = self.db.get_league_reminder_settings(chat_id)
-            current = settings.get("threshold", 2)
-            await update.message.reply_text(
-                f"Текущий порог: <b>{current}</b>\n\nИспользование: /threshold <число 1-10>"
-            )
-            return
-        try:
-            n = int(context.args[0])
-            if not (1 <= n <= 10):
-                await update.message.reply_text("Порог должен быть числом от 1 до 10.")
-                return
-            self.db.update_league_reminder_threshold(chat_id, n)
-            await update.message.reply_text(f"✅ Порог изменён на <b>{n}</b>", parse_mode="HTML")
-        except ValueError:
-            await update.message.reply_text("Неверный формат. Пример: /threshold 3")
-
-    async def cmd_test_reminder(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not self._is_admin(update.effective_user.id):
-            return
-        chat_id = update.effective_chat.id
-        is_private = update.effective_chat.type == "private"
-
-        if is_private:
-            if context.args:
-                try:
-                    chat_id = int(context.args[0])
-                except ValueError:
-                    await update.message.reply_text("Неверный chat_id. Пример: /test_reminder -1003896063490")
-                    return
-            else:
-                settings = self.db.get_league_reminder_settings(update.effective_user.id)
-                await update.message.reply_text(
-                    "⚠️ В личном чате нельзя протестировать напоминание — "
-                    "бот не может писать вам без вашего сообщения.\n\n"
-                    "Используйте в группе, где есть бот, "
-                    "или укажите chat_id группы:\n"
-                    "<code>/test_reminder &lt;chat_id&gt;</code>\n\n"
-                    f"Ваш user_id: <code>{update.effective_user.id}</code>",
-                    parse_mode="HTML",
-                )
-                return
-
-        settings = self.db.get_league_reminder_settings(chat_id)
-        threshold = settings.get("threshold", 2)
-        slot_key = f"test:{chat_id}:{datetime.now(self.moscow_tz).strftime('%Y-%m-%d-%H%M%S')}"
-        sent = await self.send_league_reminder_message(
-            chat_id=chat_id,
-            threshold=threshold,
-            bot=context.bot,
-            slot_key=slot_key,
-        )
-        if sent:
-            await update.message.reply_text(
-                f"✅ Напоминание отправлено в чат <code>{chat_id}</code>\n"
-                f"Порог: {threshold}",
-                parse_mode="HTML",
-            )
-        else:
-            await update.message.reply_text(
-                f"⚠️ Напоминание не отправлено в чат <code>{chat_id}</code>\n"
-                f"Причина: нет должников с порогом {threshold} "
-                f"или напоминания выключены.\n"
-                f"Включены: {bool(settings.get('enabled'))}\n"
-                f"Должников с ≥{threshold} долгами: "
-                f"{len([r for r in self.db.get_league_debt_summary(chat_id) if r['debts_count'] >= threshold])}",
-                parse_mode="HTML",
-            )
-
-    async def cmd_sync(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not self._is_allowed_chat(update):
-            return
-        args = context.args or []
-        dry_mode = False
-        if args and args[0].lower() == "dry":
-            dry_mode = True
-            args = args[1:]
-        if len(args) < 2:
-            await update.message.reply_text(
-                "Использование:\n"
-                "/sync <url> <тур>\n"
-                "/sync dry <url> <тур>  — preview без сохранения"
-            )
-            return
-        url = None
-        max_round = None
-        for arg in args:
-            if arg.startswith("http://") or arg.startswith("https://"):
-                if url is None:
-                    url = arg
-            else:
-                try:
-                    n = int(arg)
-                    if n > 0:
-                        max_round = n
-                except ValueError:
-                    pass
-        if not url:
-            await update.message.reply_text("Не указан URL challenge.place")
-            return
-        if not max_round:
-            await update.message.reply_text("Не указан номер тура")
-            return
-        chat_id = update.effective_chat.id
-        try:
-            if dry_mode:
-                team_map = self.db.get_league_team_map(chat_id)
-                team_to_user = {item["team_name_norm"]: item["telegram_username"] for item in team_map}
-                summary = self.db.get_league_debt_summary(chat_id)
-                await update.message.reply_text(
-                    f"🔍 Dry-run для {max_round} тура (данные не сохранены)\n\n"
-                    f"Команды в маппинге: {len(team_to_user)}\n"
-                    f"Текущих долгов в БД: {len(summary)}\n\n"
-                    f"Для синка используйте: /sync {url} {max_round}"
-                )
-                return
-            result = self.sync_challenge_stage_debts(chat_id, url, max_round)
-            await update.message.reply_text(
-                self._format_challenge_sync_user_message(
-                    result,
-                    f"✅ Синк выполнен до {max_round} тура.",
-                )
-            )
-            if result["unresolved_teams"]:
-                unresolved_text = "\n".join([f"- {team}" for team in result["unresolved_teams"]])
-                await update.message.reply_text("⚠️ Команды без привязки к @username:\n" + unresolved_text)
-            await update.message.reply_text(self.format_league_debts_post(chat_id))
-            self.db.set_league_reminder_enabled(chat_id, True)
-        except Exception as e:
-            self.logger.exception("cmd_sync failed")
-            await update.message.reply_text(f"❌ Ошибка: {e}")
 
     async def on_callback_query(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
