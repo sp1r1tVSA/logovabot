@@ -883,6 +883,7 @@ class LeagueFeature:
         application.add_handler(CallbackQueryHandler(self.on_callback_query))
         application.add_handler(CommandHandler("admin", self._guard(self.cmd_admin)))
         application.add_handler(CommandHandler("status", self._guard(self.cmd_status)))
+        application.add_handler(CommandHandler("next_reminder", self._guard(self.cmd_next_reminder)))
         application.add_handler(CommandHandler("debts", self._guard(self.cmd_debts)))
         application.add_handler(CommandHandler("reminders", self._guard(self.cmd_reminders)))
         application.add_handler(CommandHandler("threshold", self._guard(self.cmd_threshold)))
@@ -1314,6 +1315,7 @@ class LeagueFeature:
                     "Доступные команды:",
                     "/admin — список команд",
                     "/status — статус бота для чата",
+                    "/next_reminder — ближайшие автопиналки (МСК)",
                     "/debts — просмотр текущих долгов",
                     "/reminders — управление напоминаниями (on/off)",
                     "/threshold N — задать порог напоминаний (1-10)",
@@ -1344,6 +1346,55 @@ class LeagueFeature:
             f"Всего долгов: {debt_count}",
             f"Команд в маппинге: {len(team_map)}",
         ]
+        await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+
+    async def cmd_next_reminder(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not self._is_allowed_chat(update):
+            return
+        chat_id = update.effective_chat.id
+        settings = self.db.get_league_reminder_settings(chat_id)
+        enabled = bool(settings.get("enabled"))
+        threshold = int(settings.get("threshold", 2) or 2)
+        debtors = [
+            r for r in self.db.get_league_debt_summary(chat_id)
+            if int(r.get("debts_count", 0) or 0) >= threshold
+        ]
+
+        if not self.application or not self.application.job_queue:
+            await update.message.reply_text(
+                "⚠️ JobQueue недоступен: автопиналки сейчас отключены на уровне процесса."
+            )
+            return
+
+        def _next_time_for_job(name: str) -> str:
+            jobs = self.application.job_queue.get_jobs_by_name(name) or []
+            if not jobs:
+                return "не найден"
+            next_t = getattr(jobs[0], "next_t", None)
+            if next_t is None:
+                return "не запланирован"
+            try:
+                return next_t.astimezone(self.moscow_tz).strftime("%Y-%m-%d %H:%M:%S %Z")
+            except Exception:
+                return str(next_t)
+
+        now_msk = datetime.now(self.moscow_tz).strftime("%Y-%m-%d %H:%M:%S %Z")
+        lines = [
+            f"Сейчас (МСК): <b>{now_msk}</b>",
+            f"Напоминания: <b>{'✅ Включены' if enabled else '❌ Выключены'}</b>",
+            f"Порог: <b>{threshold}</b>",
+            f"Должников с порогом: <b>{len(debtors)}</b>",
+            "",
+            f"08:00 → {_next_time_for_job('daily_reminder_8')}",
+            f"12:00 → {_next_time_for_job('daily_reminder_12')}",
+            f"18:00 → {_next_time_for_job('daily_reminder_18')}",
+        ]
+        if not enabled:
+            lines.append("")
+            lines.append("Причина неотправки: напоминания выключены для этого чата.")
+        elif not debtors:
+            lines.append("")
+            lines.append("Причина неотправки: нет должников с количеством долгов >= порога.")
         await update.message.reply_text("\n".join(lines), parse_mode="HTML")
 
     async def cmd_debts(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
