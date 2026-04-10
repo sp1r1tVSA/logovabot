@@ -779,6 +779,12 @@ class LeagueFeature:
             return bool(self._is_admin(user.id))
         return False
 
+    def _guard(self, handler):
+        async def guarded(update: Update, context: ContextTypes.DEFAULT_TYPE):
+            if not self._is_allowed_chat(update):
+                return
+            await handler(update, context)
+
         return guarded
 
     async def _on_text_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
