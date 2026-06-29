@@ -1,35 +1,44 @@
 # League Bot (Python)
 
-## Run locally
+A Telegram Bot for tournament league management, rewritten from scratch.
+
+## Project Structure
+
+- `main.py` — Telegram Bot entry point and handler registration.
+- `database.py` — Database connection initialization and transactional scope helpers.
+- `requirements.txt` — Project dependencies.
+
+## Local Development
+
+### 1. Installation
+
+Create a virtual environment and install the required dependencies:
 
 ```bash
+python -m venv venv
+venv\Scripts\activate   # Windows
+source venv/bin/activate # Unix/macOS
 pip install -r requirements.txt
-python league_module.py
 ```
 
-## Environment
+### 2. Environment Configuration
 
-Create `.env` with:
+Create a `.env` file in the root directory (see `.env.example`):
 
 ```env
-BOT_TOKEN=your_telegram_bot_token_here
-# or
-TELEGRAM_BOT_TOKEN=your_telegram_bot_token_here
+TELEGRAM_BOT_TOKEN=your_telegram_bot_token
 ADMIN_IDS=123456789,987654321
 LEAGUE_SQLITE_PATH=league.db
-# optional: use PostgreSQL instead of SQLite
-# DATABASE_URL=postgresql://...
 ```
 
-## Railway
+### 3. Run
 
-- `Procfile` is set to run: `worker: python league_module.py`
-- In Railway, use Dockerfile builder (or let Railway auto-detect Dockerfile).
+Start the bot locally:
 
-## Commands
+```bash
+python main.py
+```
 
-- `/admin` — список команд (только для админов)
-- `+ долги <url> <тур>` — загрузить долги из challenge.place (автоматически включает напоминания в 08, 12, 18 МСК)
-- `+ команды\nКоманда - @username\n...` — задать привязки команд
-- `+ напоминания` — управление напоминаниями (on/off, порог)
-- `+ статус` — статус бота для чата
+## Production Deployment
+
+This project contains a `Dockerfile` and `Procfile` configured for easy deployment to container hosting platforms (e.g. Railway).
