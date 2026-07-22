@@ -1,13 +1,9 @@
-import os
 import logging
-from dotenv import load_dotenv
-from telegram import Update
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    ContextTypes,
-)
+from telegram.ext import ApplicationBuilder, Application
+from telegram import BotCommand
+from config import TOKEN
 from database import init_db
+from handlers import register_all_handlers, job_check_deadlines_and_remind
 
 # Configure logging
 logging.basicConfig(
@@ -16,30 +12,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Load environment variables
-load_dotenv()
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("BOT_TOKEN")
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Send a friendly welcome message when /start is invoked."""
-    user = update.effective_user
-    welcome_text = (
-        f"Привет, {user.first_name if user else 'друг'}!\n\n"
-        "Я новый League Bot, переписанный с нуля.\n"
-        "Используйте /help, чтобы увидеть список доступных команд."
-    )
-    if update.message:
-        await update.message.reply_text(welcome_text)
-
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Send a list of available commands when /help is invoked."""
-    help_text = (
-        "Доступные команды:\n"
-        "/start - Запуск бота и приветствие\n"
-        "/help - Справка по командам"
-    )
-    if update.message:
-        await update.message.reply_text(help_text)
+async def post_init(application: Application) -> None:
+    await application.bot.set_my_commands([
+        BotCommand("start", "Открыть главное меню")
+    ])
 
 def main() -> None:
     """Initialize and run the Telegram bot application."""
@@ -55,16 +31,22 @@ def main() -> None:
         logger.critical(f"Failed to initialize database: {e}")
         return
 
-    # Build the Application
-    application = ApplicationBuilder().token(TOKEN).build()
+    # Build the Telegram Application
+    application = ApplicationBuilder().token(TOKEN).post_init(post_init).build()
 
-    # Register command handlers
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("help", help_command))
+    # Register all handlers (modular registration)
+    register_all_handlers(application)
+
+    # Setup periodic background reminders (check every 30 mins)
+    if application.job_queue:
+        application.job_queue.run_repeating(job_check_deadlines_and_remind, interval=1800, first=10)
 
     # Start the bot
     logger.info("Starting Telegram bot...")
-    application.run_polling()
+    try:
+        application.run_polling()
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("Bot stopped by user.")
 
 if __name__ == "__main__":
     main()
