@@ -797,17 +797,19 @@ async def admin_view_match(update: Update, context: ContextTypes.DEFAULT_TYPE, m
         "disputed": "⚠️ Оспорен (Спор)"
     }
     
-    club1 = f" [{match['player1_team']}]" if match['player1_team'] else ""
-    club2 = f" [{match['player2_team']}]" if match['player2_team'] else ""
-    score_str = f"`{match['player1_score']} : {match['player2_score']}`" if match['player1_score'] is not None else "Не сыгран"
+    club1 = f" [{html.escape(match['player1_team'])}]" if match['player1_team'] else ""
+    club2 = f" [{html.escape(match['player2_team'])}]" if match['player2_team'] else ""
+    p1_name = html.escape(str(match['player1_nickname'] or ""))
+    p2_name = html.escape(str(match['player2_nickname'] or ""))
+    score_str = f"<code>{match['player1_score']} : {match['player2_score']}</code>" if match['player1_score'] is not None else "Не сыгран"
     
     text = (
-        f"⚽️ **Карточка матча #{match['id']} (Тур {match['round_number']})**\n\n"
-        f"⚔️ **{match['player1_nickname']}**{club1}\n"
-        f" 🆚 **{match['player2_nickname']}**{club2}\n\n"
-        f"• **Текущий счет:** {score_str}\n"
-        f"• **Статус:** {status_map.get(match['status'], match['status'])}\n"
-        f"📜 [Правила турнира](https://t.me/fifulatyrniru/3405)"
+        f"⚽️ <b>Карточка матча #{match['id']} (Тур {match['round_number']})</b>\n\n"
+        f"⚔️ <b>{p1_name}</b>{club1}\n"
+        f" 🆚 <b>{p2_name}</b>{club2}\n\n"
+        f"• <b>Текущий счет:</b> {score_str}\n"
+        f"• <b>Статус:</b> {html.escape(status_map.get(match['status'], match['status']))}\n"
+        f"📜 <a href=\"https://t.me/fifulatyrniru/3405\">Правила турнира</a>"
     )
     
     keyboard = [
@@ -818,7 +820,21 @@ async def admin_view_match(update: Update, context: ContextTypes.DEFAULT_TYPE, m
         [InlineKeyboardButton("🤝 ТН 0:0 (Ничья)", callback_data=f"admin_tp_draw_{match_id}"), InlineKeyboardButton("🔄 Сбросить результат", callback_data=f"admin_reset_match_execute_{match_id}")],
         [InlineKeyboardButton("« Назад к туру", callback_data=f"admin_round_matches_{match['round_number']}")]
     ]
-    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    if query.message and query.message.photo:
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
+        await context.bot.send_message(chat_id=query.from_user.id, text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+    else:
+        try:
+            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+        except Exception:
+            try:
+                await query.message.delete()
+            except Exception:
+                pass
+            await context.bot.send_message(chat_id=query.from_user.id, text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
 async def admin_report_score_auto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Start AI Vision photo recognition flow for Admin."""
