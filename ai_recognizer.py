@@ -24,8 +24,8 @@ def recognize_match_screenshots_bytes(images_bytes_list: list[bytes], mime_type:
     if not images_bytes_list:
         return None
 
-    model_name = GEMINI_MODEL or "gemini-1.5-flash-lite"
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
+    model_name = model_setting or "gemini-1.5-flash-lite"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
 
     prompt_text = (
         "Ты — эксперт по распознаванию футбольных матчей из симуляторов (FIFA / EA FC / eFootball).\n"
