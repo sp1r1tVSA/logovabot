@@ -24,9 +24,6 @@ def recognize_match_screenshots_bytes(images_bytes_list: list[bytes], mime_type:
     if not images_bytes_list:
         return None
 
-    model_name = model_setting or "gemini-1.5-flash-lite"
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
-
     prompt_text = (
         "Ты — эксперт по распознаванию футбольных матчей из симуляторов (FIFA / EA FC / eFootball).\n"
         "Внимательно изучи прикрепленный скриншот (или 2 скриншота) результатов и статистики сыгранного матча.\n"
@@ -69,6 +66,8 @@ def recognize_match_screenshots_bytes(images_bytes_list: list[bytes], mime_type:
             "temperature": 0.1
         }
     }
+
+    req_data = json.dumps(payload).encode("utf-8")
 
     candidate_models = list(dict.fromkeys([
         model_setting,
