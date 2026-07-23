@@ -387,6 +387,28 @@ async def cancel_registration(update: Update, context: ContextTypes.DEFAULT_TYPE
         
     return ConversationHandler.END
 
+async def safe_edit_or_reply(query: CallbackQuery, context: ContextTypes.DEFAULT_TYPE, text: str, reply_markup=None, parse_mode: str = "Markdown") -> None:
+    """Safely edit a message whether it's a text message or photo message, preventing BadRequest errors."""
+    if not query:
+        return
+    user_id = query.from_user.id
+    if query.message and query.message.photo:
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
+        await context.bot.send_message(chat_id=user_id, text=text, parse_mode=parse_mode, reply_markup=reply_markup)
+    else:
+        try:
+            await query.edit_message_text(text, parse_mode=parse_mode, reply_markup=reply_markup)
+        except Exception as e:
+            logger.warning(f"edit_message_text failed ({e}). Falling back to delete & send_message...")
+            try:
+                await query.message.delete()
+            except Exception:
+                pass
+            await context.bot.send_message(chat_id=user_id, text=text, parse_mode=parse_mode, reply_markup=reply_markup)
+
 # --- Placeholders ---
 
 async def show_my_matches(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -411,7 +433,7 @@ async def show_my_matches(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             
     keyboard.append([InlineKeyboardButton("« Назад в кабинет", callback_data="menu_cabinet")])
     markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text(text, parse_mode="Markdown", reply_markup=markup)
+    await safe_edit_or_reply(query, context, text, parse_mode="Markdown", reply_markup=markup)
 
 async def cabinet_view_match(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
@@ -424,7 +446,7 @@ async def cabinet_view_match(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     m = database.get_match(match_id)
     if not m:
-        await query.edit_message_text("Матч не найден.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Назад", callback_data="cabinet_my_matches")]]))
+        await safe_edit_or_reply(query, context, "Матч не найден.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Назад", callback_data="cabinet_my_matches")]]))
         return
         
     round_info = database.get_round_info(m['round_number'])
@@ -537,7 +559,7 @@ async def cabinet_view_match(update: Update, context: ContextTypes.DEFAULT_TYPE)
     keyboard.append([InlineKeyboardButton("📜 Правила турнира", url="https://t.me/fifulatyrniru/3405")])
     keyboard.append([InlineKeyboardButton("🔙 К списку матчей", callback_data="cabinet_my_matches")])
     
-    await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+    await safe_edit_or_reply(query, context, text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
 async def cb_propose_time_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Prompt user with quick time choices or custom text entry."""
