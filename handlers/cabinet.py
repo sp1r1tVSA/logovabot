@@ -525,33 +525,40 @@ async def cabinet_view_match(update: Update, context: ContextTypes.DEFAULT_TYPE)
     else:
         time_info_text = "⏰ **Время матча:** не согласовано\n"
 
-    text = f"🏟 **МАТЧ #{m['id']} | Тур {m['round_number']}**\n"
+    text = f"🏟 <b>МАТЧ #{m['id']} | Тур {m['round_number']}</b>\n"
     text += f"Статус: {status_text}\n"
     if deadline_text:
-        text += f"⏳ Дедлайн: {deadline_text}\n"
+        text += f"⏳ Дедлайн: {html.escape(deadline_text)}\n"
     text += time_info_text
-    text += "📜 [Правила турнира](https://t.me/fifulatyrniru/3405)\n"
         
-    text += f"\n🏠 **Вы** {score_str} **{opp_team}** ✈️\n"
+    text += f"\n🏠 <b>Вы</b> {score_str} <b>{html.escape(opp_team)}</b> ✈️\n"
     text += "────────────────────────\n\n"
     
     if m['status'] == 'pending':
         if is_overdue and not m.get('is_extended'):
-            text += "⏳ **Дедлайн истек.** Результат принимает администратор."
+            text += "⏳ <b>Дедлайн истек.</b> Результат принимает администратор."
         else:
             if m['player1_id'] == user_id:
-                text += "🏠 **Вы играете Дома.**"
+                text += "🏠 <b>Вы играете Дома.</b>\n\n"
             else:
-                text += "✈️ **Вы играете в Гостях.**"
+                text += "✈️ <b>Вы играете в Гостях.</b>\n\n"
+            text += (
+                "📌 <b>Инструкция по внесению результата:</b>\n"
+                "1. Нажмите кнопку <b>📝 Ввести результат</b>.\n"
+                "2. Выберите <b>⚡ Автоматический ввод (по фото)</b>.\n"
+                "3. Отправьте боту 1 или 2 скриншота статистики из игры.\n"
+                "4. ИИ автоматически распознает счёт, авторов голов и ассистов.\n"
+                "5. Проверьте данные и нажмите <b>✅ Всё верно</b> — результат сразу автоматически подтверждается и заносится в турнирную таблицу лиги!"
+            )
     elif m['status'] == 'reported':
         if m.get('reported_by') == user_id:
             text += "⏳ Результат отправлен сопернику. Ожидайте подтверждения."
         else:
-            text += "🔔 **Соперник ввёл результат.** Проверьте сообщения от бота для подтверждения."
+            text += "🔔 <b>Соперник ввёл результат.</b> Проверьте сообщения от бота для подтверждения."
     elif m['status'] == 'disputed':
-        text += "⚠️ **Матч оспорен.** Ожидайте решения администратора."
+        text += "⚠️ <b>Матч оспорен.</b> Ожидайте решения администратора."
     elif m['status'] == 'confirmed':
-        text += "✅ **Матч сыгран и результат подтвержден.**"
+        text += "✅ <b>Матч сыгран и результат подтвержден.</b>"
         
     keyboard = []
     
@@ -588,7 +595,7 @@ async def cabinet_view_match(update: Update, context: ContextTypes.DEFAULT_TYPE)
     keyboard.append([InlineKeyboardButton("📜 Правила турнира", url="https://t.me/fifulatyrniru/3405")])
     keyboard.append([InlineKeyboardButton("🔙 К списку матчей", callback_data="cabinet_my_matches")])
     
-    await safe_edit_or_reply(query, context, text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    await safe_edit_or_reply(query, context, text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
 async def cb_propose_time_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Prompt user with quick time choices or custom text entry."""
