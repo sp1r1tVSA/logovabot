@@ -540,14 +540,14 @@ async def cabinet_view_match(update: Update, context: ContextTypes.DEFAULT_TYPE)
             text += "⏳ **Дедлайн истек.** Результат принимает администратор."
         else:
             if m['player1_id'] == user_id:
-                text += "🏠 **Вы играете Дома.** Пожалуйста, введите результат матча."
+                text += "🏠 **Вы играете Дома.**"
             else:
-                text += "✈️ **Вы играете в Гостях.** Ожидайте, пока хозяева поля введут результат матча."
+                text += "✈️ **Вы играете в Гостях.**"
     elif m['status'] == 'reported':
         if m.get('reported_by') == user_id:
             text += "⏳ Результат отправлен сопернику. Ожидайте подтверждения."
         else:
-            text += "🔔 **Хозяева ввели результат.** Проверьте сообщения от бота для подтверждения."
+            text += "🔔 **Соперник ввёл результат.** Проверьте сообщения от бота для подтверждения."
     elif m['status'] == 'disputed':
         text += "⚠️ **Матч оспорен.** Ожидайте решения администратора."
     elif m['status'] == 'confirmed':
@@ -579,7 +579,7 @@ async def cabinet_view_match(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 InlineKeyboardButton("⏰ Предложить время матча", callback_data=f"cb_propose_time_prompt_{match_id}")
             ])
     
-    if m['status'] == 'pending' and m['player1_id'] == user_id and (not is_overdue or m.get('is_extended')):
+    if m['status'] == 'pending' and user_id in (m['player1_id'], m['player2_id']) and (not is_overdue or m.get('is_extended')):
         keyboard.append([InlineKeyboardButton("📝 Ввести результат", callback_data=f"cabinet_report_score_{match_id}")])
         
     if m['status'] == 'reported' and m.get('reported_by') == user_id:
@@ -819,8 +819,13 @@ async def show_game_history(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 # ВВОД И ПОДТВЕРЖДЕНИЕ РЕЗУЛЬТАТОВ МАТЧА
 # ==========================================
 
-async def start_score_reporting(update: Update, context: ContextTypes.DEFAULT_TYPE, match_id: int) -> None:
+async def start_score_reporting(update: Update, context: ContextTypes.DEFAULT_TYPE, match_id: int | None = None) -> None:
     query = update.callback_query
+    if query:
+        await query.answer()
+        if match_id is None:
+            match_id = int(query.data.replace("cabinet_report_score_", ""))
+
     context.user_data["reporting_match_id"] = match_id
 
     match = database.get_match(match_id)
