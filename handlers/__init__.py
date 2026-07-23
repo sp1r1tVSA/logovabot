@@ -520,7 +520,10 @@ def register_all_handlers(application: Application) -> None:
     # Register global error handler
     application.add_error_handler(error_handler)
 
+import logging
 import telegram.error
+
+logger = logging.getLogger(__name__)
 
 async def error_handler(update: object, context) -> None:
     """Log the error that occurred during update handling."""
