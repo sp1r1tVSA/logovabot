@@ -1335,7 +1335,7 @@ async def submit_report_to_guest(update: Update, context: ContextTypes.DEFAULT_T
     # Save to database
     database.report_match_score(match_id, hg, ag, home_user_id, photo_id)
     if events:
-        database.save_match_events(match_id, events)
+        database.save_match_events(match_id, events, team_name=home_team)
 
     # Notify Guest
     guest_id = match['player2_id']
@@ -1606,7 +1606,7 @@ async def finalize_guest_confirmation(update: Update, context: ContextTypes.DEFA
         events.append((away_team, p, "assist", c))
 
     if events:
-        database.save_match_events(match_id, events)
+        database.save_match_events(match_id, events, team_name=away_team)
 
     database.confirm_match(match_id)
     await notify_match_confirmed(context, match_id)

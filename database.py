@@ -434,11 +434,19 @@ def confirm_and_finalize_match(match_id: int, p1_score: int, p2_score: int, even
     with transaction() as conn:
         cursor = conn.cursor()
         cursor.execute("DELETE FROM match_events WHERE match_id = ?", (match_id,))
+        aggregated = {}
         for item in events:
-            team_name, player_name, event_type, count = item[0], item[1], item[2], item[3] if len(item) > 3 else 1
+            t_name = item[0].strip()
+            p_name = item[1].strip()
+            e_type = item[2]
+            cnt = item[3] if len(item) > 3 else 1
+            key = (t_name, p_name, e_type)
+            aggregated[key] = aggregated.get(key, 0) + cnt
+
+        for (t_name, p_name, e_type), cnt in aggregated.items():
             cursor.execute(
                 "INSERT INTO match_events (match_id, team_name, player_name, event_type, count) VALUES (?, ?, ?, ?, ?)",
-                (match_id, team_name.strip(), player_name.strip(), event_type, count)
+                (match_id, t_name, p_name, e_type, cnt)
             )
         cursor.execute(
             "UPDATE matches SET player1_score = ?, player2_score = ?, reported_by = ?, photo_id = ?, status = 'confirmed', played_at = CURRENT_TIMESTAMP WHERE id = ?",
@@ -482,24 +490,40 @@ def accept_match_time(match_id: int) -> None:
             (match_id,)
         )
 
-def save_match_events(match_id: int, events: list[tuple[str, str, int]]) -> None:
-    """Insert match events: list of (team_name, player_name, event_type, count)."""
+def save_match_events(match_id: int, events: list[tuple[str, str, int]], team_name: str = None) -> None:
+    """Insert match events cleanly, aggregating counts and deleting previous events for specified team or match."""
+    if not events:
+        return
     with transaction() as conn:
         cursor = conn.cursor()
+        if team_name:
+            cursor.execute("DELETE FROM match_events WHERE match_id = ? AND LOWER(team_name) = LOWER(?)", (match_id, team_name.strip()))
+        else:
+            t_names = set(item[0].strip() for item in events)
+            for tn in t_names:
+                cursor.execute("DELETE FROM match_events WHERE match_id = ? AND LOWER(team_name) = LOWER(?)", (match_id, tn.lower()))
+
+        aggregated = {}
         for item in events:
-            # item: (team_name, player_name, event_type, count)
-            team_name, player_name, event_type, count = item[0], item[1], item[2], item[3] if len(item) > 3 else 1
+            t_name = item[0].strip()
+            p_name = item[1].strip()
+            e_type = item[2]
+            cnt = item[3] if len(item) > 3 else 1
+            key = (t_name, p_name, e_type)
+            aggregated[key] = aggregated.get(key, 0) + cnt
+
+        for (t_name, p_name, e_type), cnt in aggregated.items():
             cursor.execute(
                 "INSERT INTO match_events (match_id, team_name, player_name, event_type, count) VALUES (?, ?, ?, ?, ?)",
-                (match_id, team_name.strip(), player_name.strip(), event_type, count)
+                (match_id, t_name, p_name, e_type, cnt)
             )
 
 def get_match_events(match_id: int) -> list[dict]:
-    """Retrieve all events (goals/assists) for a match."""
+    """Retrieve all events (goals/assists) for a match, aggregated by team, player, and event_type."""
     with transaction() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT team_name, player_name, event_type, count FROM match_events WHERE match_id = ?",
+            "SELECT team_name, player_name, event_type, SUM(count) AS count FROM match_events WHERE match_id = ? GROUP BY team_name, player_name, event_type",
             (match_id,)
         )
         return [dict(row) for row in cursor.fetchall()]
