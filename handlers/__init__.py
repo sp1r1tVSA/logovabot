@@ -93,6 +93,9 @@ from handlers.admin import (
     admin_round_matches,
     admin_view_match,
     admin_reset_match_execute,
+    admin_set_tp_home_execute,
+    admin_set_tp_away_execute,
+    admin_set_tp_draw_execute,
     admin_add_player_start,
     admin_add_player_username,
     admin_add_player_club_callback,
@@ -462,6 +465,9 @@ def register_all_handlers(application: Application) -> None:
     application.add_handler(CallbackQueryHandler(admin_round_matches, pattern="^admin_round_matches_\\d+$"))
     application.add_handler(CallbackQueryHandler(admin_view_match, pattern="^admin_view_match_\\d+$"))
     application.add_handler(CallbackQueryHandler(admin_reset_match_execute, pattern="^admin_reset_match_execute_\\d+$"))
+    application.add_handler(CallbackQueryHandler(admin_set_tp_home_execute, pattern="^admin_tp_home_\\d+$"))
+    application.add_handler(CallbackQueryHandler(admin_set_tp_away_execute, pattern="^admin_tp_away_\\d+$"))
+    application.add_handler(CallbackQueryHandler(admin_set_tp_draw_execute, pattern="^admin_tp_draw_\\d+$"))
     application.add_handler(CallbackQueryHandler(admin_list_overdue, pattern="^admin_list_overdue$"))
     application.add_handler(CallbackQueryHandler(admin_extend_match_execute, pattern="^admin_extend_match_\\d+$"))
     application.add_handler(CallbackQueryHandler(admin_toggle_role, pattern="^admin_toggle_role_-?\\d+_(player|admin)$"))

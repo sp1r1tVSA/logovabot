@@ -812,11 +812,39 @@ async def admin_view_match(update: Update, context: ContextTypes.DEFAULT_TYPE, m
     
     keyboard = [
         [InlineKeyboardButton("📜 Правила турнира", url="https://t.me/fifulatyrniru/3405")],
-        [InlineKeyboardButton("✏️ Установить счет", callback_data=f"admin_set_score_start_{match_id}")],
-        [InlineKeyboardButton("🔄 Сбросить результат", callback_data=f"admin_reset_match_execute_{match_id}")],
+        [InlineKeyboardButton("✏️ Установить счет вручную", callback_data=f"admin_set_score_start_{match_id}")],
+        [InlineKeyboardButton("🚫 ТП 3:0 (Хозяева)", callback_data=f"admin_tp_home_{match_id}"), InlineKeyboardButton("🚫 ТП 0:3 (Гости)", callback_data=f"admin_tp_away_{match_id}")],
+        [InlineKeyboardButton("🤝 ТН 0:0 (Ничья)", callback_data=f"admin_tp_draw_{match_id}"), InlineKeyboardButton("🔄 Сбросить результат", callback_data=f"admin_reset_match_execute_{match_id}")],
         [InlineKeyboardButton("« Назад к туру", callback_data=f"admin_round_matches_{match['round_number']}")]
     ]
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+async def admin_set_tp_home_execute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query or not is_admin(query.from_user.id): return
+    await query.answer()
+    match_id = int(query.data.replace("admin_tp_home_", ""))
+    database.set_technical_result(match_id, 3, 0)
+    await query.answer("✅ Назначено ТП 3:0 (Победа Хозяев)", show_alert=True)
+    await admin_view_match(update, context, match_id=match_id)
+
+async def admin_set_tp_away_execute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query or not is_admin(query.from_user.id): return
+    await query.answer()
+    match_id = int(query.data.replace("admin_tp_away_", ""))
+    database.set_technical_result(match_id, 0, 3)
+    await query.answer("✅ Назначено ТП 0:3 (Победа Гостей)", show_alert=True)
+    await admin_view_match(update, context, match_id=match_id)
+
+async def admin_set_tp_draw_execute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query or not is_admin(query.from_user.id): return
+    await query.answer()
+    match_id = int(query.data.replace("admin_tp_draw_", ""))
+    database.set_technical_result(match_id, 0, 0)
+    await query.answer("✅ Назначена Техническая ничья 0:0", show_alert=True)
+    await admin_view_match(update, context, match_id=match_id)
 
 async def admin_reset_match_execute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Execute match reset via inline callback button click."""

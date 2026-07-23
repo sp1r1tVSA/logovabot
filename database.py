@@ -1112,3 +1112,45 @@ def get_club_top_assisters(team_name: str) -> list[dict]:
             ORDER BY total DESC, player_name ASC
         """, (team_name.strip(),))
         return [{"player_name": row["player_name"], "total": row["total"]} for row in cursor.fetchall()]
+
+
+def reset_match(match_id: int) -> bool:
+    """Reset a match status back to pending and clear scores/events."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM match_events WHERE match_id = ?", (match_id,))
+        cursor.execute(
+            "UPDATE matches SET status = 'pending', player1_score = NULL, player2_score = NULL, played_at = NULL WHERE id = ?",
+            (match_id,)
+        )
+        return cursor.rowcount > 0
+
+
+def set_technical_result(match_id: int, p1_score: int, p2_score: int) -> bool:
+    """Set technical result for a match without detailed player events."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM match_events WHERE match_id = ?", (match_id,))
+        cursor.execute(
+            "UPDATE matches SET status = 'completed', player1_score = ?, player2_score = ?, played_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (p1_score, p2_score, match_id)
+        )
+        return cursor.rowcount > 0
+
+
+def get_unplayed_matches_in_round(round_number: int) -> list[dict]:
+    """Get all unplayed (pending) matches for a specific round with user details."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT m.id, m.round_number,
+                   m.player1_id, u1.username as p1_username, u1.team_name as p1_team,
+                   m.player2_id, u2.username as p2_username, u2.team_name as p2_team
+            FROM matches m
+            LEFT JOIN users u1 ON m.player1_id = u1.telegram_id
+            LEFT JOIN users u2 ON m.player2_id = u2.telegram_id
+            WHERE m.round_number = ? AND m.status != 'completed'
+            ORDER BY m.id ASC
+        """, (round_number,))
+        return [dict(row) for row in cursor.fetchall()]
+
