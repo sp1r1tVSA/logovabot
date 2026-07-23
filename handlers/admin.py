@@ -2034,14 +2034,23 @@ async def notify_players_rounds_opened(context: ContextTypes.DEFAULT_TYPE, round
             p1_user = f"@{m['player1_username']}" if m['player1_username'] else p1_team
             p2_user = f"@{m['player2_username']}" if m['player2_username'] else p2_team
 
+            instruction_text = (
+                f"\n\n📌 <b>Как внести результат:</b>\n"
+                f"1. Нажмите кнопку <b>📝 Ввести результат</b>.\n"
+                f"2. Выберите <b>⚡ Автоматический ввод (по фото)</b>.\n"
+                f"3. Отправьте боту 1 или 2 скриншота статистики из игры.\n"
+                f"4. ИИ автоматически распознает счёт, авторов голов и ассистов.\n"
+                f"5. Проверьте данные и нажмите <b>✅ Всё верно</b> — результат сразу автоматически подтверждается и заносится в турнирную таблицу лиги!"
+            )
+
             # Home player card
             if p1_id:
                 text_h = (
                     f"🏟 <b>ВАШ МАТЧ | Тур {r_num}</b>\n\n"
                     f"🏠 <b>Вы ({html.escape(p1_team)})</b> -:- <b>{html.escape(p2_team)} ({html.escape(p2_user)})</b> ✈️\n\n"
                     f"⏳ <b>Дедлайн:</b> {deadline_text}\n"
-                    f"📌 <b>Статус:</b> Вы играете Дома.\n\n"
-                    f"<i>Пожалуйста, сыграйте матч и введите результат с авторами голов и скриншотом.</i>"
+                    f"📌 <b>Статус:</b> Вы играете Дома."
+                    f"{instruction_text}"
                 )
                 kb_h = [
                     [InlineKeyboardButton("📝 Ввести результат", callback_data=f"cabinet_report_score_{m['id']}")],
@@ -2055,11 +2064,11 @@ async def notify_players_rounds_opened(context: ContextTypes.DEFAULT_TYPE, round
                     f"🏟 <b>ВАШ МАТЧ | Тур {r_num}</b>\n\n"
                     f"🏠 <b>{html.escape(p1_team)} ({html.escape(p1_user)})</b> -:- <b>Вы ({html.escape(p2_team)})</b> ✈️\n\n"
                     f"⏳ <b>Дедлайн:</b> {deadline_text}\n"
-                    f"📌 <b>Статус:</b> Вы играете в Гостях.\n\n"
-                    f"<i>Ожидайте, пока хозяева поля введут результат матча и отправят его вам на подтверждение.</i>"
+                    f"📌 <b>Статус:</b> Вы играете в Гостях."
+                    f"{instruction_text}"
                 )
                 kb_a = [
-                    [InlineKeyboardButton("📋 Мои матчи", callback_data="cabinet_my_matches")],
+                    [InlineKeyboardButton("📝 Ввести результат", callback_data=f"cabinet_report_score_{m['id']}")],
                     [InlineKeyboardButton("👀 Состав соперника", callback_data=f"cabinet_view_squad_{p1_id}")]
                 ]
                 await safe_send_notification(context.bot, p2_id, text_a, InlineKeyboardMarkup(kb_a))
@@ -2134,12 +2143,21 @@ async def send_round_reminders(context: ContextTypes.DEFAULT_TYPE, round_number:
         p1_user = f"@{m['player1_username']}" if m['player1_username'] else p1_team
         p2_user = f"@{m['player2_username']}" if m['player2_username'] else p2_team
 
+        instruction_text = (
+            f"\n\n📌 <b>Инструкция по внесению результата:</b>\n"
+            f"1. Нажмите кнопку <b>📝 Ввести результат</b>.\n"
+            f"2. Выберите <b>⚡ Автоматический ввод (по фото)</b>.\n"
+            f"3. Отправьте боту 1 или 2 скриншота статистики из игры.\n"
+            f"4. ИИ автоматически распознает счёт, авторов голов и ассистов.\n"
+            f"5. Проверьте данные и нажмите <b>✅ Всё верно</b> — результат сразу автоматически подтверждается и заносится в турнирную таблицу лиги!"
+        )
+
         if p1_id:
             text_h = (
                 f"⏰ <b>НАПОМИНАНИЕ О МАТЧЕ | Тур {round_number}</b>{time_hdr}\n\n"
                 f"🏠 <b>Вы ({html.escape(p1_team)})</b> -:- <b>{html.escape(p2_team)} ({html.escape(p2_user)})</b> ✈️\n\n"
-                f"⏳ <b>Дедлайн:</b> {deadline_text}\n"
-                f"⚠️ <i>Пожалуйста, договоритесь о матче и внесите результат в бота!</i>"
+                f"⏳ <b>Дедлайн:</b> {deadline_text}"
+                f"{instruction_text}"
             )
             kb_h = [
                 [InlineKeyboardButton("📝 Ввести результат", callback_data=f"cabinet_report_score_{m['id']}")],
@@ -2152,10 +2170,11 @@ async def send_round_reminders(context: ContextTypes.DEFAULT_TYPE, round_number:
             text_a = (
                 f"⏰ <b>НАПОМИНАНИЕ О МАТЧЕ | Тур {round_number}</b>{time_hdr}\n\n"
                 f"🏠 <b>{html.escape(p1_team)} ({html.escape(p1_user)})</b> -:- <b>Вы ({html.escape(p2_team)})</b> ✈️\n\n"
-                f"⏳ <b>Дедлайн:</b> {deadline_text}\n"
-                f"⚠️ <i>Пожалуйста, сыграйте матч! Хозяева поля должны внести результат.</i>"
+                f"⏳ <b>Дедлайн:</b> {deadline_text}"
+                f"{instruction_text}"
             )
             kb_a = [
+                [InlineKeyboardButton("📝 Ввести результат", callback_data=f"cabinet_report_score_{m['id']}")],
                 [InlineKeyboardButton("📋 Мои матчи", callback_data="cabinet_my_matches")]
             ]
             if await safe_send_notification(context.bot, p2_id, text_a, InlineKeyboardMarkup(kb_a)):
