@@ -1308,6 +1308,84 @@ async def save_report_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     await context.bot.send_photo(chat_id=update.effective_user.id, photo=photo_id, caption=text, parse_mode="HTML", reply_markup=markup)
     return ConversationHandler.END
 
+def build_formatted_match_post(
+    round_number: int | str,
+    home_team: str,
+    away_team: str,
+    h_score: int,
+    a_score: int,
+    p1_username: str | None = None,
+    p2_username: str | None = None,
+    h_goals: dict | list | None = None,
+    a_goals: dict | list | None = None,
+    h_assists: dict | list | None = None,
+    a_assists: dict | list | None = None,
+    is_single_timeline: bool = False,
+    is_pm: bool = False,
+    pm_title: str = "🎉 <b>Результат успешно занесен в лигу!</b>",
+    match_id: int | None = None
+) -> str:
+    """
+    Constructs a unified match result text block with goals and assists for PM notifications and group posts.
+    """
+    home_team_esc = safe_escape(home_team)
+    away_team_esc = safe_escape(away_team)
+
+    def _format_events(data) -> str:
+        if not data:
+            return ""
+        if isinstance(data, dict):
+            items = [f"{p} ({c})" if c > 1 else f"{p} (1)" for p, c in data.items() if c > 0]
+            return ", ".join(items)
+        if isinstance(data, list):
+            return ", ".join(data)
+        return str(data)
+
+    h_goals_str = _format_events(h_goals)
+    a_goals_str = _format_events(a_goals)
+    h_assists_str = _format_events(h_assists)
+    a_assists_str = _format_events(a_assists)
+
+    lines = []
+    # Home Team Stats
+    if h_score > 0:
+        lines.append(f"⚽ <b>Голы ({home_team_esc}):</b> {safe_escape(h_goals_str) if h_goals_str else 'не указаны'}")
+        if is_single_timeline:
+            lines.append(f"🎯 <b>Ассисты ({home_team_esc}):</b> <i>не отображаются в данном формате скриншота</i>")
+        else:
+            lines.append(f"🎯 <b>Ассисты ({home_team_esc}):</b> {safe_escape(h_assists_str) if h_assists_str else 'Нет'}")
+
+    # Away Team Stats
+    if a_score > 0:
+        lines.append(f"⚽ <b>Голы ({away_team_esc}):</b> {safe_escape(a_goals_str) if a_goals_str else 'не указаны'}")
+        if is_single_timeline:
+            lines.append(f"🎯 <b>Ассисты ({away_team_esc}):</b> <i>не отображаются в данном формате скриншота</i>")
+        else:
+            lines.append(f"🎯 <b>Ассисты ({away_team_esc}):</b> {safe_escape(a_assists_str) if a_assists_str else 'Нет'}")
+
+    events_block = ("\n\n" + "\n".join(lines)) if lines else ""
+
+    if is_pm:
+        match_id_str = f" #{match_id}" if match_id else ""
+        header = (
+            f"{pm_title}\n\n"
+            f"🏟 <b>Матч{match_id_str} (Тур {round_number})</b>\n"
+            f"🏠 <b>{home_team_esc}</b> <b>{h_score} : {a_score}</b> <b>{away_team_esc}</b> ✈️"
+        )
+        footer = "\n\n📊 <i>Турнирная таблица и статистика игроков обновлены.</i>"
+    else:
+        p1_clean = safe_escape(p1_username.lstrip('@')) if p1_username else ""
+        p2_clean = safe_escape(p2_username.lstrip('@')) if p2_username else ""
+        p1_str = f" (@{p1_clean})" if p1_clean else ""
+        p2_str = f" (@{p2_clean})" if p2_clean else ""
+        header = (
+            f"🏆 <b>РЕЗУЛЬТАТ МАТЧА | Тур {round_number}</b>\n\n"
+            f"🏠 <b>{home_team_esc}</b>{p1_str} <b>{h_score} : {a_score}</b> <b>{away_team_esc}</b>{p2_str} ✈️"
+        )
+        footer = "\n\n📸 <i>Результат официально занесен в турнирную таблицу.</i>"
+
+    return f"{header}{events_block}{footer}"
+
 async def cb_confirm_ai_final(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Instantly save and finalize match score in database from AI Vision result."""
     query = update.callback_query
@@ -1329,6 +1407,7 @@ async def cb_confirm_ai_final(update: Update, context: ContextTypes.DEFAULT_TYPE
     h_assists = context.user_data.get("home_assists_count", {})
     a_assists = context.user_data.get("away_assists_count", {})
     photo_id = context.user_data.get("report_photo_id")
+    is_single_tl = bool(context.user_data.get("is_single_timeline", False))
 
     home_team = match['player1_team'] or match['player1_nickname']
     away_team = match['player2_team'] or match['player2_nickname']
@@ -1346,11 +1425,20 @@ async def cb_confirm_ai_final(update: Update, context: ContextTypes.DEFAULT_TYPE
     database.confirm_and_finalize_match(match_id, h_score, a_score, events, reporter_id=user_id, photo_id=photo_id)
 
     # 1. PM to reporter
-    reporter_text = (
-        f"🎉 <b>Результат успешно занесен в лигу!</b>\n\n"
-        f"🏟 <b>Матч #{match_id} (Тур {match['round_number']})</b>\n"
-        f"🏠 <b>{safe_escape(home_team)}</b> {h_score} : {a_score} <b>{safe_escape(away_team)}</b> ✈️\n\n"
-        f"📊 Турнирная таблица и статистика игроков обновлены."
+    reporter_text = build_formatted_match_post(
+        round_number=match['round_number'],
+        home_team=home_team,
+        away_team=away_team,
+        h_score=h_score,
+        a_score=a_score,
+        h_goals=h_goals,
+        a_goals=a_goals,
+        h_assists=h_assists,
+        a_assists=a_assists,
+        is_single_timeline=is_single_tl,
+        is_pm=True,
+        pm_title="🎉 <b>Результат успешно занесен в лигу!</b>",
+        match_id=match_id
     )
 
     is_admin_user = is_admin(user_id) or context.user_data.get("is_admin_reporting", False)
@@ -1377,30 +1465,44 @@ async def cb_confirm_ai_final(update: Update, context: ContextTypes.DEFAULT_TYPE
         if match['player1_id']: players_to_notify.append(match['player1_id'])
         if match['player2_id']: players_to_notify.append(match['player2_id'])
 
+    opp_text = build_formatted_match_post(
+        round_number=match['round_number'],
+        home_team=home_team,
+        away_team=away_team,
+        h_score=h_score,
+        a_score=a_score,
+        h_goals=h_goals,
+        a_goals=a_goals,
+        h_assists=h_assists,
+        a_assists=a_assists,
+        is_single_timeline=is_single_tl,
+        is_pm=True,
+        pm_title="🔔 <b>Результат вашего матча занесен в лигу!</b>",
+        match_id=match_id
+    )
+
     for p_id in set(players_to_notify):
-        opp_text = (
-            f"🔔 <b>Результат вашего матча занесен в лигу!</b>\n\n"
-            f"🏟 <b>Матч #{match_id} (Тур {match['round_number']})</b>\n"
-            f"🏠 <b>{safe_escape(home_team)}</b> {h_score} : {a_score} <b>{safe_escape(away_team)}</b> ✈️\n\n"
-            f"📸 <i>Результат внесен и верифицирован по скриншоту статистики.</i>"
-        )
         await safe_send_notification(context.bot, p_id, opp_text)
 
     # 3. Post to Group
     main_group_id = database.get_group_id()
     results_topic_id = database.get_config("results_topic_id") or database.get_config("reports_topic_id")
     if main_group_id:
-        p1_user = f"@{match['player1_username']}" if match['player1_username'] else home_team
-        p2_user = f"@{match['player2_username']}" if match['player2_username'] else away_team
-        h_goals_summary = ", ".join([f"{p} ({c})" for p, c in h_goals.items()]) if h_goals else "Нет"
-        a_goals_summary = ", ".join([f"{p} ({c})" for p, c in a_goals.items()]) if a_goals else "Нет"
-
-        group_text = (
-            f"🏆 <b>РЕЗУЛЬТАТ МАТЧА | Тур {match['round_number']}</b>\n\n"
-            f"🏠 <b>{safe_escape(home_team)}</b> ({safe_escape(p1_user)}) <b>{h_score} : {a_score}</b> <b>{safe_escape(away_team)}</b> ({safe_escape(p2_user)}) ✈️\n\n"
-            f"⚽ <b>Голы ({safe_escape(home_team)}):</b> {safe_escape(h_goals_summary)}\n"
-            f"⚽ <b>Голы ({safe_escape(away_team)}):</b> {safe_escape(a_goals_summary)}\n\n"
-            f"📸 <i>Результат официально занесен в турнирную таблицу.</i>"
+        group_text = build_formatted_match_post(
+            round_number=match['round_number'],
+            home_team=home_team,
+            away_team=away_team,
+            h_score=h_score,
+            a_score=a_score,
+            p1_username=match['player1_username'],
+            p2_username=match['player2_username'],
+            h_goals=h_goals,
+            a_goals=a_goals,
+            h_assists=h_assists,
+            a_assists=a_assists,
+            is_single_timeline=is_single_tl,
+            is_pm=False,
+            match_id=match_id
         )
         try:
             kwargs = {"chat_id": main_group_id, "caption": group_text, "parse_mode": "HTML"}
@@ -1740,41 +1842,54 @@ async def notify_match_confirmed(context: ContextTypes.DEFAULT_TYPE, match_id: i
     p1_score = match['player1_score']
     p2_score = match['player2_score']
 
-    text = (
-        f"✅ **Матч #{match_id} успешно подтвержден и сыгран!**\n\n"
-        f"🏠 **{html.escape(home_team)}** {p1_score} : {p2_score} **{html.escape(away_team)}** ✈️\n\n"
-        f"Результат внесен в турнирную таблицу и статистику лиги."
+    events = database.get_match_events(match_id)
+
+    home_goals = [f"{e['player_name']} ({e['count']})" if e['count'] > 1 else f"{e['player_name']} (1)" for e in events if e['event_type'] == 'goal' and e['team_name'].lower() == home_team.lower()]
+    away_goals = [f"{e['player_name']} ({e['count']})" if e['count'] > 1 else f"{e['player_name']} (1)" for e in events if e['event_type'] == 'goal' and e['team_name'].lower() == away_team.lower()]
+
+    home_assists = [f"{e['player_name']} ({e['count']})" if e['count'] > 1 else f"{e['player_name']} (1)" for e in events if e['event_type'] == 'assist' and e['team_name'].lower() == home_team.lower()]
+    away_assists = [f"{e['player_name']} ({e['count']})" if e['count'] > 1 else f"{e['player_name']} (1)" for e in events if e['event_type'] == 'assist' and e['team_name'].lower() == away_team.lower()]
+
+    pm_text = build_formatted_match_post(
+        round_number=match['round_number'],
+        home_team=home_team,
+        away_team=away_team,
+        h_score=p1_score,
+        a_score=p2_score,
+        h_goals=home_goals,
+        a_goals=away_goals,
+        h_assists=home_assists,
+        a_assists=away_assists,
+        is_pm=True,
+        pm_title="✅ <b>Матч успешно подтвержден и сыгран!</b>",
+        match_id=match_id
     )
 
     for p_id in (match['player1_id'], match['player2_id']):
-        try:
-            await context.bot.send_message(chat_id=p_id, text=text, parse_mode="HTML")
-        except Exception as e:
-            logger.error(f"Failed to send confirmation to player {p_id}: {e}")
+        if p_id:
+            try:
+                await context.bot.send_message(chat_id=p_id, text=pm_text, parse_mode="HTML")
+            except Exception as e:
+                logger.error(f"Failed to send confirmation to player {p_id}: {e}")
 
     results_topic_id = database.get_config("results_topic_id")
     group_id = database.get_group_id()
     if group_id:
-        events = database.get_match_events(match_id)
-        
-        home_goals = [f"{e['player_name']} ({e['count']})" if e['count'] > 1 else e['player_name'] for e in events if e['event_type'] == 'goal' and e['team_name'].lower() == home_team.lower()]
-        away_goals = [f"{e['player_name']} ({e['count']})" if e['count'] > 1 else e['player_name'] for e in events if e['event_type'] == 'goal' and e['team_name'].lower() == away_team.lower()]
-        
-        home_assists = [f"{e['player_name']} ({e['count']})" if e['count'] > 1 else e['player_name'] for e in events if e['event_type'] == 'assist' and e['team_name'].lower() == home_team.lower()]
-        away_assists = [f"{e['player_name']} ({e['count']})" if e['count'] > 1 else e['player_name'] for e in events if e['event_type'] == 'assist' and e['team_name'].lower() == away_team.lower()]
-
-        group_text = (
-            f"⚽ <b>РЕЗУЛЬТАТ МАТЧА | Тур {match['round_number']}</b>\n\n"
-            f"🏠 <b>{html.escape(home_team)}</b> {p1_score} : {p2_score} <b>{html.escape(away_team)}</b> ✈️\n\n"
+        group_text = build_formatted_match_post(
+            round_number=match['round_number'],
+            home_team=home_team,
+            away_team=away_team,
+            h_score=p1_score,
+            a_score=p2_score,
+            p1_username=match['player1_username'],
+            p2_username=match['player2_username'],
+            h_goals=home_goals,
+            a_goals=away_goals,
+            h_assists=home_assists,
+            a_assists=away_assists,
+            is_pm=False,
+            match_id=match_id
         )
-        if home_goals:
-            group_text += f"⚽ <b>Голы ({html.escape(home_team)}):</b> {html.escape(', '.join(home_goals))}\n"
-        if home_assists:
-            group_text += f"🎯 <b>Ассисты ({html.escape(home_team)}):</b> {html.escape(', '.join(home_assists))}\n"
-        if away_goals:
-            group_text += f"⚽ <b>Голы ({html.escape(away_team)}):</b> {html.escape(', '.join(away_goals))}\n"
-        if away_assists:
-            group_text += f"🎯 <b>Ассисты ({html.escape(away_team)}):</b> {html.escape(', '.join(away_assists))}\n"
 
         photo_id = match.get("photo_id")
         try:
