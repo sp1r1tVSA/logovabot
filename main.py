@@ -37,10 +37,6 @@ def main() -> None:
     # Register all handlers (modular registration)
     register_all_handlers(application)
 
-    # Setup periodic background reminders (check every 30 mins)
-    if application.job_queue:
-        application.job_queue.run_repeating(job_check_deadlines_and_remind, interval=1800, first=10)
-
     # Start the bot
     logger.info("Starting Telegram bot...")
     try:
