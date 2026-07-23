@@ -1144,6 +1144,16 @@ async def save_report_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await update.message.reply_text("❌ Пожалуйста, отправьте фото скриншота результата.")
         return REPORT_SCORE_PHOTO
 
+    media_group_id = update.message.media_group_id
+    if media_group_id:
+        processed_groups = context.user_data.setdefault("processed_media_groups", set())
+        if media_group_id in processed_groups:
+            photos_list = context.user_data.get("ai_photos_list", [])
+            if photo_id not in photos_list:
+                photos_list.append(photo_id)
+            return REPORT_SCORE_PHOTO
+        processed_groups.add(media_group_id)
+
     match_id = context.user_data.get("reporting_match_id")
     match = database.get_match(match_id) if match_id else None
     home_team = context.user_data.get("report_home_team") or (match.get("player1_team") if match else "Хозяева")
@@ -1153,7 +1163,8 @@ async def save_report_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     if reporting_mode == "auto" and GEMINI_API_KEY:
         photos_list = context.user_data.get("ai_photos_list", [])
-        photos_list.append(photo_id)
+        if photo_id not in photos_list:
+            photos_list.append(photo_id)
         context.user_data["ai_photos_list"] = photos_list
         context.user_data["report_photo_id"] = photos_list[0]
 
@@ -1230,6 +1241,19 @@ async def save_report_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) 
                 markup = InlineKeyboardMarkup(keyboard)
 
                 await context.bot.send_photo(chat_id=update.effective_user.id, photo=photo_id, caption=text, parse_mode="HTML", reply_markup=markup)
+                return ConversationHandler.END
+            else:
+                user_id = update.effective_user.id
+                cancel_cb = get_match_cancel_cb(context, user_id, match_id)
+                fail_text = (
+                    "⚠️ <b>Не удалось автоматически распознать результат со скриншота.</b>\n\n"
+                    "Пожалуйста, выберите способ внесения результата вручную:"
+                )
+                keyboard = [
+                    [InlineKeyboardButton("✍️ Ввести результат вручную", callback_data=f"cb_report_choice_manual_{match_id}")],
+                    [InlineKeyboardButton("❌ Отмена", callback_data=cancel_cb)]
+                ]
+                await update.message.reply_text(fail_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
                 return ConversationHandler.END
         except Exception as e:
             logger.error(f"AI Vision processing error: {e}")
