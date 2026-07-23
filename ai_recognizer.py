@@ -67,10 +67,19 @@ def recognize_match_screenshots_bytes(images_bytes_list: list[bytes], mime_type:
         }
     }
 
-    req_data = json.dumps(payload).encode("utf-8")
+    candidate_models = list(dict.fromkeys([
+        GEMINI_MODEL,
+        "gemini-1.5-flash-lite",
+        "gemini-2.0-flash-lite",
+        "gemini-1.5-flash",
+        "gemini-2.0-flash"
+    ]))
 
-    max_retries = 3
-    for attempt in range(1, max_retries + 1):
+    for m_name in candidate_models:
+        if not m_name:
+            continue
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{m_name}:generateContent?key={GEMINI_API_KEY}"
+        
         req = urllib.request.Request(
             url,
             data=req_data,
@@ -85,27 +94,24 @@ def recognize_match_screenshots_bytes(images_bytes_list: list[bytes], mime_type:
                 if candidates:
                     text_content = candidates[0]["content"]["parts"][0]["text"]
                     parsed_data = json.loads(text_content)
-                    logger.info(f"AI Vision recognized match: {parsed_data.get('home_score')} - {parsed_data.get('away_score')} (is_single_timeline={parsed_data.get('is_single_timeline')})")
+                    logger.info(f"AI Vision ({m_name}) recognized match: {parsed_data.get('home_score')} - {parsed_data.get('away_score')} (is_single_timeline={parsed_data.get('is_single_timeline')})")
                     return parsed_data
                 else:
-                    logger.warning(f"Gemini API returned no candidates: {res_json}")
-                    return None
+                    logger.warning(f"Gemini model '{m_name}' returned no candidates: {res_json}")
         except urllib.error.HTTPError as e:
             if e.code == 429:
-                logger.warning(f"Gemini API rate limited (HTTP 429). Retrying attempt {attempt}/{max_retries} in 2.5 seconds...")
-                if attempt < max_retries:
-                    import time
-                    time.sleep(2.5)
-                    continue
-            logger.error(f"Gemini Vision HTTP Error {e.code}: {e}")
-            return None
-        except Exception as e:
-            logger.error(f"Gemini Vision recognition failed (attempt {attempt}/{max_retries}): {e}")
-            if attempt < max_retries:
+                logger.warning(f"Gemini model '{m_name}' rate-limited (HTTP 429). Trying next fallback model...")
                 import time
-                time.sleep(2)
+                time.sleep(1)
                 continue
-            return None
+            else:
+                logger.error(f"Gemini model '{m_name}' HTTP Error {e.code}: {e}")
+        except Exception as e:
+            logger.error(f"Gemini model '{m_name}' recognition error: {e}")
+            continue
+
+    logger.error("All Gemini Vision fallback models failed or were rate-limited.")
+    return None
 
 def recognize_match_screenshot_bytes(image_bytes: bytes, mime_type: str = "image/jpeg") -> dict | None:
     """Wrapper for backward compatibility."""
