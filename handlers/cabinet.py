@@ -11,7 +11,6 @@ logger = logging.getLogger(__name__)
 import asyncio
 import telegram.error
 import ai_recognizer
-from config import GEMINI_API_KEY
 
 def match_squad_player_names(raw_players: list[str], squad_list: list[str]) -> dict[str, int]:
     counts = {}
