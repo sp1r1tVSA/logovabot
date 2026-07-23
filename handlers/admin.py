@@ -2118,7 +2118,12 @@ async def notify_players_rounds_opened(context: ContextTypes.DEFAULT_TYPE, round
             except Exception as e:
                 logger.error(f"Failed to send multi-match card to player {pid}: {e}")
 
-async def send_round_reminders(context: ContextTypes.DEFAULT_TYPE, round_number: int, time_left_str: str | None = None) -> tuple[int, int]:
+async def send_round_reminders(
+    context: ContextTypes.DEFAULT_TYPE, 
+    round_number: int, 
+    time_left_str: str | None = None,
+    target_match_ids: set[int] | list[int] | None = None
+) -> tuple[int, int]:
     """
     Send match reminders for unplayed matches in a round.
     Sends PM to unplayed match participants and a summary to Reports topic.
@@ -2127,6 +2132,10 @@ async def send_round_reminders(context: ContextTypes.DEFAULT_TYPE, round_number:
     unplayed = database.get_unplayed_matches_by_round(round_number)
     round_info = database.get_round_info(round_number)
     deadline_text = round_info["deadline"] if round_info and round_info.get("deadline") else "не указан"
+
+    if target_match_ids is not None:
+        target_set = set(target_match_ids)
+        unplayed = [m for m in unplayed if m['id'] in target_set]
 
     if not unplayed:
         return (0, 0)
@@ -2208,20 +2217,161 @@ async def send_round_reminders(context: ContextTypes.DEFAULT_TYPE, round_number:
 
     return (pm_sent, len(unplayed))
 
-async def admin_remind_round(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Manually send reminders for unplayed matches in a round."""
+async def admin_remind_round(update: Update, context: ContextTypes.DEFAULT_TYPE, round_number: int | None = None) -> None:
+    """Display match selection UI for sending round reminders."""
     query = update.callback_query
     if not query or not is_admin(query.from_user.id):
         return
-    await query.answer()
+    try:
+        await query.answer()
+    except Exception:
+        pass
 
-    round_number = int(query.data.replace("admin_remind_round_", ""))
-    pm_sent, unplayed_count = await send_round_reminders(context, round_number)
+    if round_number is None:
+        round_number = int(query.data.replace("admin_remind_round_", ""))
 
-    if unplayed_count == 0:
+    unplayed = database.get_unplayed_matches_by_round(round_number)
+    if not unplayed:
         await query.answer("🎉 В этом туре нет несыгранных матчей!", show_alert=True)
+        return
+
+    selected_key = f"remind_selected_{round_number}"
+    if selected_key not in context.user_data:
+        context.user_data[selected_key] = {m['id'] for m in unplayed}
+
+    selected_ids = context.user_data[selected_key]
+
+    text = (
+        f"🔔 <b>Выбор матчей для отправки напоминаний (Тур {round_number})</b>\n\n"
+        f"Отметьте матчи участников, которым нужно отправить напоминание о дедлайне:"
+    )
+
+    keyboard = []
+    for m in unplayed:
+        m_id = m['id']
+        is_checked = m_id in selected_ids
+        icon = "✅" if is_checked else "⬜️"
+        p1 = html.escape(m['player1_team'] or m['player1_nickname'] or "Хозяева")
+        p2 = html.escape(m['player2_team'] or m['player2_nickname'] or "Гости")
+        btn_text = f"{icon} {p1} vs {p2}"
+        keyboard.append([InlineKeyboardButton(btn_text, callback_data=f"admin_toggle_remind_match_{round_number}_{m_id}")])
+
+    all_checked = (len(selected_ids) == len(unplayed))
+    toggle_all_btn = "⏹ Снять все" if all_checked else "☑️ Выбрать все"
+    keyboard.append([InlineKeyboardButton(toggle_all_btn, callback_data=f"admin_toggle_remind_all_{round_number}")])
+
+    count_selected = len(selected_ids)
+    if count_selected > 0:
+        keyboard.append([InlineKeyboardButton(f"🚀 Отправить напоминания ({count_selected})", callback_data=f"admin_send_selected_reminders_{round_number}")])
+
+    keyboard.append([InlineKeyboardButton("« Назад к туру", callback_data=f"admin_manage_round_{round_number}")])
+    markup = InlineKeyboardMarkup(keyboard)
+
+    if query.message and query.message.photo:
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
+        await context.bot.send_message(chat_id=query.from_user.id, text=text, reply_markup=markup, parse_mode="HTML")
     else:
-        await query.answer(f"✅ Напоминания отправлены! Игроков оповещено: {pm_sent}", show_alert=True)
+        try:
+            await query.edit_message_text(text, reply_markup=markup, parse_mode="HTML")
+        except Exception:
+            try:
+                await query.message.delete()
+            except Exception:
+                pass
+            await context.bot.send_message(chat_id=query.from_user.id, text=text, reply_markup=markup, parse_mode="HTML")
+
+async def admin_toggle_remind_match(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Toggle a single match selection for reminder dispatch."""
+    query = update.callback_query
+    if not query or not is_admin(query.from_user.id):
+        return
+    try:
+        await query.answer()
+    except Exception:
+        pass
+
+    parts = query.data.replace("admin_toggle_remind_match_", "").split("_")
+    if len(parts) != 2:
+        return
+    round_number = int(parts[0])
+    match_id = int(parts[1])
+
+    selected_key = f"remind_selected_{round_number}"
+    unplayed = database.get_unplayed_matches_by_round(round_number)
+    unplayed_ids = {m['id'] for m in unplayed}
+
+    selected_ids = context.user_data.setdefault(selected_key, set(unplayed_ids))
+
+    if match_id in selected_ids:
+        selected_ids.remove(match_id)
+    else:
+        selected_ids.add(match_id)
+
+    context.user_data[selected_key] = selected_ids
+    await admin_remind_round(update, context, round_number=round_number)
+
+async def admin_toggle_remind_all(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Toggle select all / deselect all matches for reminder dispatch."""
+    query = update.callback_query
+    if not query or not is_admin(query.from_user.id):
+        return
+    try:
+        await query.answer()
+    except Exception:
+        pass
+
+    round_number = int(query.data.replace("admin_toggle_remind_all_", ""))
+    unplayed = database.get_unplayed_matches_by_round(round_number)
+    unplayed_ids = {m['id'] for m in unplayed}
+
+    selected_key = f"remind_selected_{round_number}"
+    selected_ids = context.user_data.get(selected_key, set())
+
+    if len(selected_ids) == len(unplayed_ids):
+        context.user_data[selected_key] = set()
+    else:
+        context.user_data[selected_key] = set(unplayed_ids)
+
+    await admin_remind_round(update, context, round_number=round_number)
+
+async def admin_send_selected_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Send reminders to only the selected matches."""
+    query = update.callback_query
+    if not query or not is_admin(query.from_user.id):
+        return
+    try:
+        await query.answer()
+    except Exception:
+        pass
+
+    round_number = int(query.data.replace("admin_send_selected_reminders_", ""))
+    selected_key = f"remind_selected_{round_number}"
+    selected_ids = context.user_data.get(selected_key, set())
+
+    if not selected_ids:
+        await query.answer("⚠️ Не выбрано ни одного матча!", show_alert=True)
+        return
+
+    pm_sent, count_matches = await send_round_reminders(context, round_number, target_match_ids=selected_ids)
+
+    context.user_data.pop(selected_key, None)
+
+    text = (
+        f"✅ <b>Напоминания успешно отправлены!</b>\n\n"
+        f"🏟 Выбранных матчей: {count_matches}\n"
+        f"📨 Игроков оповещено в ЛС: {pm_sent}"
+    )
+
+    keyboard = [[InlineKeyboardButton("« Вернуться к туру", callback_data=f"admin_manage_round_{round_number}")]]
+    markup = InlineKeyboardMarkup(keyboard)
+
+    try:
+        await query.edit_message_text(text, reply_markup=markup, parse_mode="HTML")
+    except Exception:
+        await context.bot.send_message(chat_id=query.from_user.id, text=text, reply_markup=markup, parse_mode="HTML")
 
 async def job_check_deadlines_and_remind(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Periodic job checking open rounds for approaching deadlines and sending automated reminders."""

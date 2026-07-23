@@ -137,6 +137,9 @@ from handlers.admin import (
     admin_open_round_save,
     admin_close_round,
     admin_remind_round,
+    admin_toggle_remind_match,
+    admin_toggle_remind_all,
+    admin_send_selected_reminders,
     job_check_deadlines_and_remind,
     admin_open_batch_prompt,
     admin_open_batch_rounds,
@@ -475,6 +478,9 @@ def register_all_handlers(application: Application) -> None:
     application.add_handler(CallbackQueryHandler(admin_manage_round, pattern="^admin_manage_round_\\d+$"))
     application.add_handler(CallbackQueryHandler(admin_close_round, pattern="^admin_close_round_\\d+$"))
     application.add_handler(CallbackQueryHandler(admin_remind_round, pattern="^admin_remind_round_\\d+$"))
+    application.add_handler(CallbackQueryHandler(admin_toggle_remind_match, pattern="^admin_toggle_remind_match_\\d+_\\d+$"))
+    application.add_handler(CallbackQueryHandler(admin_toggle_remind_all, pattern="^admin_toggle_remind_all_\\d+$"))
+    application.add_handler(CallbackQueryHandler(admin_send_selected_reminders, pattern="^admin_send_selected_reminders_\\d+$"))
     application.add_handler(CallbackQueryHandler(admin_round_matches, pattern="^admin_round_matches_\\d+$"))
     application.add_handler(CallbackQueryHandler(admin_view_match, pattern="^admin_view_match_\\d+$"))
     application.add_handler(CallbackQueryHandler(admin_reset_match_execute, pattern="^admin_reset_match_execute_\\d+$"))
