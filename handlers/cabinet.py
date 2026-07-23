@@ -819,50 +819,40 @@ async def show_game_history(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 # ВВОД И ПОДТВЕРЖДЕНИЕ РЕЗУЛЬТАТОВ МАТЧА
 # ==========================================
 
-async def start_score_reporting(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Start score reporting for Home OR Away player."""
+async def start_score_reporting(update: Update, context: ContextTypes.DEFAULT_TYPE, match_id: int) -> None:
     query = update.callback_query
-    if not query:
-        return
-    await query.answer()
+    context.user_data["reporting_match_id"] = match_id
 
-    match_id = int(query.data.replace("cabinet_report_score_", ""))
     match = database.get_match(match_id)
     if not match:
-        await query.edit_message_text("❌ Матч не найден.")
+        if query:
+            await query.answer("❌ Матч не найден.", show_alert=True)
         return
 
-    user_id = query.from_user.id
-    if user_id not in (match['player1_id'], match['player2_id']):
-        await query.answer("⛔ Вы не являетесь участником этого матча.", show_alert=True)
-        return
+    home_team = match['player1_team'] or match['player1_nickname']
+    away_team = match['player2_team'] or match['player2_nickname']
 
-    if match['status'] == 'completed':
-        await query.answer("⏳ Результат этого матча уже внесен и занесен в лигу.", show_alert=True)
-        return
+    context.user_data["report_home_team"] = home_team
+    context.user_data["report_away_team"] = away_team
 
-    context.user_data["reporting_match_id"] = match_id
-    context.user_data["report_home_team"] = match['player1_team'] or match['player1_nickname']
-    context.user_data["report_away_team"] = match['player2_team'] or match['player2_nickname']
-    context.user_data["reporter_id"] = user_id
-
-    home_team = context.user_data["report_home_team"]
-    away_team = context.user_data["report_away_team"]
+    user_id = query.from_user.id if query else update.effective_user.id
+    cancel_cb = get_match_cancel_cb(context, user_id, match_id)
 
     text = (
-        f"⚽ <b>Ввод результата матча #{match_id}</b>\n"
-        f"🏟 <b>Тур {match['round_number']}</b>\n"
-        f"🏠 <b>{safe_escape(home_team)}</b> vs <b>{safe_escape(away_team)}</b> ✈️\n\n"
-        f"Выберите удобный способ внесения результата:"
+        f"📝 <b>Ввод результата матча #{match_id}</b>\n\n"
+        f"⚔️ <b>{safe_escape(home_team)}</b> 🆚 <b>{safe_escape(away_team)}</b>\n\n"
+        f"Выберите способ ввода результата:"
     )
 
     keyboard = [
         [InlineKeyboardButton("⚡ Автоматический ввод (по фото)", callback_data=f"cb_report_choice_auto_{match_id}")],
         [InlineKeyboardButton("✍️ Ручной ввод", callback_data=f"cb_report_choice_manual_{match_id}")],
-        [InlineKeyboardButton("❌ Отмена", callback_data=f"cabinet_view_match_{match_id}")]
+        [InlineKeyboardButton("❌ Отмена", callback_data=cancel_cb)]
     ]
+    markup = InlineKeyboardMarkup(keyboard)
 
-    await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+    if query:
+        await safe_edit_or_reply(query, context, text, parse_mode="HTML", reply_markup=markup)
 
 async def cb_report_choice_auto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
@@ -1002,7 +992,9 @@ async def render_squad_goals_picker(update: Update, context: ContextTypes.DEFAUL
         keyboard.append([InlineKeyboardButton("⏩ Пропустить", callback_data="cb_skip_goals")])
 
     match_id = context.user_data.get("reporting_match_id")
-    keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data=f"cabinet_view_match_{match_id}")])
+    user_id = query.from_user.id if query else update.effective_user.id
+    cancel_cb = get_match_cancel_cb(context, user_id, match_id)
+    keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data=cancel_cb)])
 
     markup = InlineKeyboardMarkup(keyboard)
     if query:
@@ -1075,7 +1067,9 @@ async def render_squad_assists_picker(update: Update, context: ContextTypes.DEFA
 
     keyboard.append([InlineKeyboardButton("⏩ Пропустить ассисты", callback_data="cb_skip_assists")])
     match_id = context.user_data.get("reporting_match_id")
-    keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data=f"cabinet_view_match_{match_id}")])
+    user_id = query.from_user.id if query else update.effective_user.id
+    cancel_cb = get_match_cancel_cb(context, user_id, match_id)
+    keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data=cancel_cb)])
 
     markup = InlineKeyboardMarkup(keyboard)
     if query:
@@ -1113,11 +1107,15 @@ async def cb_skip_assists(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 async def prompt_photo_upload(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     context.user_data["awaiting_report_photo"] = True
+    match_id = context.user_data.get('reporting_match_id')
+    user_id = query.from_user.id if query else update.effective_user.id
+    cancel_cb = get_match_cancel_cb(context, user_id, match_id)
+
     text = (
         "📸 **Прикрепление скриншота результата**\n\n"
         "Пожалуйста, отправьте **1 скриншот/фотография** результата сыгранной игры."
     )
-    keyboard = [[InlineKeyboardButton("❌ Отмена", callback_data=f"cabinet_view_match_{context.user_data.get('reporting_match_id')}")]]
+    keyboard = [[InlineKeyboardButton("❌ Отмена", callback_data=cancel_cb)]]
     markup = InlineKeyboardMarkup(keyboard)
 
     if query:

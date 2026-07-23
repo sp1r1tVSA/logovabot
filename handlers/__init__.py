@@ -513,8 +513,6 @@ def register_all_handlers(application: Application) -> None:
     application.add_handler(CallbackQueryHandler(show_club_stats, pattern="^cabinet_club_stats$"))
     application.add_handler(CallbackQueryHandler(show_my_squad, pattern="^cabinet_my_squad$"))
     application.add_handler(CallbackQueryHandler(show_game_history, pattern="^cabinet_game_history$"))
-    application.add_handler(CallbackQueryHandler(show_my_matches_stub, pattern="^cabinet_my_matches$"))
-    application.add_handler(CallbackQueryHandler(show_game_history_stub, pattern="^cabinet_game_history$"))
     
     # Final catch-all for inline button clicks in development
     application.add_handler(CallbackQueryHandler(handle_placeholders, pattern=".*"))
