@@ -4,7 +4,7 @@ import json
 import logging
 import urllib.request
 import urllib.error
-from config import GEMINI_API_KEY, GEMINI_MODEL
+import config
 
 logger = logging.getLogger(__name__)
 
@@ -14,7 +14,10 @@ def recognize_match_screenshots_bytes(images_bytes_list: list[bytes], mime_type:
     Supports both 2-column match stats screenshots and single vertical timeline goal list screenshots.
     Returns structured dict with match scores, goals, assists, and is_single_timeline flag.
     """
-    if not GEMINI_API_KEY:
+    api_key = getattr(config, "GEMINI_API_KEY", "")
+    model_setting = getattr(config, "GEMINI_MODEL", "gemini-1.5-flash-lite")
+
+    if not api_key:
         logger.warning("GEMINI_API_KEY is not set.")
         return None
 
@@ -68,7 +71,7 @@ def recognize_match_screenshots_bytes(images_bytes_list: list[bytes], mime_type:
     }
 
     candidate_models = list(dict.fromkeys([
-        GEMINI_MODEL,
+        model_setting,
         "gemini-1.5-flash-lite",
         "gemini-2.0-flash-lite",
         "gemini-1.5-flash",
@@ -78,7 +81,7 @@ def recognize_match_screenshots_bytes(images_bytes_list: list[bytes], mime_type:
     for m_name in candidate_models:
         if not m_name:
             continue
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{m_name}:generateContent?key={GEMINI_API_KEY}"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{m_name}:generateContent?key={api_key}"
         
         req = urllib.request.Request(
             url,
