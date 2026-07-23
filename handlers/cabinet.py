@@ -1248,16 +1248,24 @@ async def cb_confirm_ai_final(update: Update, context: ContextTypes.DEFAULT_TYPE
     except Exception:
         await context.bot.send_message(chat_id=user_id, text=reporter_text, parse_mode="HTML")
 
-    # 2. PM to opponent
-    opponent_id = match['player2_id'] if user_id == match['player1_id'] else match['player1_id']
-    if opponent_id:
+    # 2. PM to players
+    players_to_notify = []
+    if user_id == match['player1_id']:
+        if match['player2_id']: players_to_notify.append(match['player2_id'])
+    elif user_id == match['player2_id']:
+        if match['player1_id']: players_to_notify.append(match['player1_id'])
+    else:
+        if match['player1_id']: players_to_notify.append(match['player1_id'])
+        if match['player2_id']: players_to_notify.append(match['player2_id'])
+
+    for p_id in set(players_to_notify):
         opp_text = (
             f"🔔 <b>Результат вашего матча занесен в лигу!</b>\n\n"
             f"🏟 <b>Матч #{match_id} (Тур {match['round_number']})</b>\n"
             f"🏠 <b>{safe_escape(home_team)}</b> {h_score} : {a_score} <b>{safe_escape(away_team)}</b> ✈️\n\n"
             f"📸 <i>Результат внесен и верифицирован по скриншоту статистики.</i>"
         )
-        await safe_send_notification(context.bot, opponent_id, opp_text)
+        await safe_send_notification(context.bot, p_id, opp_text)
 
     # 3. Post to Group
     main_group_id = database.get_group_id()

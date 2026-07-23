@@ -812,12 +812,41 @@ async def admin_view_match(update: Update, context: ContextTypes.DEFAULT_TYPE, m
     
     keyboard = [
         [InlineKeyboardButton("📜 Правила турнира", url="https://t.me/fifulatyrniru/3405")],
+        [InlineKeyboardButton("⚡ Внести результат по фото (ИИ)", callback_data=f"admin_report_score_auto_{match_id}")],
         [InlineKeyboardButton("✏️ Установить счет вручную", callback_data=f"admin_set_score_start_{match_id}")],
         [InlineKeyboardButton("🚫 ТП 3:0 (Хозяева)", callback_data=f"admin_tp_home_{match_id}"), InlineKeyboardButton("🚫 ТП 0:3 (Гости)", callback_data=f"admin_tp_away_{match_id}")],
         [InlineKeyboardButton("🤝 ТН 0:0 (Ничья)", callback_data=f"admin_tp_draw_{match_id}"), InlineKeyboardButton("🔄 Сбросить результат", callback_data=f"admin_reset_match_execute_{match_id}")],
         [InlineKeyboardButton("« Назад к туру", callback_data=f"admin_round_matches_{match['round_number']}")]
     ]
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+async def admin_report_score_auto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Start AI Vision photo recognition flow for Admin."""
+    query = update.callback_query
+    if not query or not is_admin(query.from_user.id): return
+    await query.answer()
+
+    match_id = int(query.data.replace("admin_report_score_auto_", ""))
+    match = database.get_match(match_id)
+    if not match:
+        await query.edit_message_text("❌ Матч не найден.")
+        return
+
+    context.user_data["reporting_match_id"] = match_id
+    context.user_data["report_home_team"] = match['player1_team'] or match['player1_nickname']
+    context.user_data["report_away_team"] = match['player2_team'] or match['player2_nickname']
+    context.user_data["reporter_id"] = query.from_user.id
+    context.user_data["reporting_mode"] = "auto"
+    context.user_data["awaiting_report_photo"] = True
+    context.user_data["ai_photos_list"] = []
+
+    text = (
+        f"🤖 <b>Автоматический ввод по фото (Администратор)</b>\n\n"
+        f"Пожалуйста, отправьте <b>1 или 2 скриншота</b> матча #{match_id} строго с статистикой (голы и ассисты).\n\n"
+        f"💡 <i>ИИ мгновенно распознает счет, составы и предложит занести результат в лигу.</i>"
+    )
+    keyboard = [[InlineKeyboardButton("« Назад к карточке матча", callback_data=f"admin_view_match_{match_id}")]]
+    await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def admin_set_tp_home_execute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
