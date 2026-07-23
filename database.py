@@ -1194,3 +1194,31 @@ def get_unplayed_matches_in_round(round_number: int) -> list[dict]:
         """, (round_number,))
         return [dict(row) for row in cursor.fetchall()]
 
+def get_top_scorers(limit: int = 20) -> list[dict]:
+    """Get top goalscorers in the league aggregated from match_events."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT player_name, team_name, SUM(count) AS total_goals
+            FROM match_events
+            WHERE event_type = 'goal'
+            GROUP BY player_name, team_name
+            ORDER BY total_goals DESC, player_name ASC
+            LIMIT ?
+        """, (limit,))
+        return [dict(row) for row in cursor.fetchall()]
+
+def get_top_assists(limit: int = 20) -> list[dict]:
+    """Get top assist providers in the league aggregated from match_events."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT player_name, team_name, SUM(count) AS total_assists
+            FROM match_events
+            WHERE event_type = 'assist'
+            GROUP BY player_name, team_name
+            ORDER BY total_assists DESC, player_name ASC
+            LIMIT ?
+        """, (limit,))
+        return [dict(row) for row in cursor.fetchall()]
+

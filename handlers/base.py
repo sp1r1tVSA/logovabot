@@ -23,7 +23,7 @@ def get_main_inline_keyboard(telegram_id: int) -> InlineKeyboardMarkup:
         keyboard.append([InlineKeyboardButton("👑 Админ-панель", callback_data="admin_main_menu")])
         
     keyboard.extend([
-        [InlineKeyboardButton("📊 Таблица лиги", callback_data="menu_ratings")],
+        [InlineKeyboardButton("🏆 Лига", callback_data="menu_league")],
         [InlineKeyboardButton("🆘 Поддержка", callback_data="menu_support")]
     ])
     return InlineKeyboardMarkup(keyboard)
@@ -79,7 +79,10 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     query = update.callback_query
     if not query:
         return
-    await query.answer()
+    try:
+        await query.answer()
+    except Exception:
+        pass
 
     # Clear lingering FSM temporary data when returning to main menu
     context.user_data.clear()
@@ -90,23 +93,158 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         f"🏆 Здесь вы можете управлять своей карьерой, следить за турнирной таблицей и статистикой клубов.\n\n"
         f"👇 Выберите нужный раздел в меню ниже:"
     )
-    try:
-        await query.edit_message_text(
-            welcome_text,
-            reply_markup=get_main_inline_keyboard(user.id),
-            parse_mode="HTML"
-        )
-    except Exception:
+    if query.message and query.message.photo:
         try:
             await query.message.delete()
         except Exception:
             pass
-        await context.bot.send_message(
-            chat_id=query.from_user.id,
-            text=welcome_text,
-            reply_markup=get_main_inline_keyboard(user.id),
-            parse_mode="HTML"
-        )
+        await context.bot.send_message(chat_id=user.id, text=welcome_text, reply_markup=get_main_inline_keyboard(user.id), parse_mode="HTML")
+    else:
+        try:
+            await query.edit_message_text(welcome_text, reply_markup=get_main_inline_keyboard(user.id), parse_mode="HTML")
+        except Exception:
+            try:
+                await query.message.delete()
+            except Exception:
+                pass
+            await context.bot.send_message(chat_id=user.id, text=welcome_text, reply_markup=get_main_inline_keyboard(user.id), parse_mode="HTML")
+
+async def show_league_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Sub-menu for League section: Table, Top Scorers, Top Assists."""
+    query = update.callback_query
+    if query:
+        try:
+            await query.answer()
+        except Exception:
+            pass
+
+    text = (
+        "🏆 <b>Раздел «Лига»</b>\n\n"
+        "Выберите интересующий вас раздел:"
+    )
+
+    keyboard = [
+        [InlineKeyboardButton("📊 Таблица лиги", callback_data="league_table")],
+        [InlineKeyboardButton("⚽ Бомбардиры", callback_data="league_scorers")],
+        [InlineKeyboardButton("🎯 Ассисты", callback_data="league_assists")],
+        [InlineKeyboardButton("« Назад в меню", callback_data="main_menu")]
+    ]
+    markup = InlineKeyboardMarkup(keyboard)
+
+    if query:
+        if query.message and query.message.photo:
+            try:
+                await query.message.delete()
+            except Exception:
+                pass
+            await context.bot.send_message(chat_id=query.from_user.id, text=text, reply_markup=markup, parse_mode="HTML")
+        else:
+            try:
+                await query.edit_message_text(text, reply_markup=markup, parse_mode="HTML")
+            except Exception:
+                try:
+                    await query.message.delete()
+                except Exception:
+                    pass
+                await context.bot.send_message(chat_id=query.from_user.id, text=text, reply_markup=markup, parse_mode="HTML")
+    elif update.message:
+        await update.message.reply_text(text, reply_markup=markup, parse_mode="HTML")
+
+async def show_top_scorers(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show Top 20 goalscorers leaderboard."""
+    query = update.callback_query
+    if query:
+        try:
+            await query.answer()
+        except Exception:
+            pass
+
+    scorers = database.get_top_scorers(limit=20)
+    
+    text = "⚽ <b>ТОП БОМБАРДИРОВ ЛИГИ</b>\n\n"
+    if not scorers:
+        text += "<i>Пока нет забитых голов в турнире.</i>"
+    else:
+        medals = ["🥇", "🥈", "🥉"]
+        for idx, row in enumerate(scorers, 1):
+            rank = medals[idx - 1] if idx <= 3 else f"<b>{idx}.</b>"
+            p_name = html.escape(str(row['player_name']))
+            t_name = html.escape(str(row['team_name']))
+            goals = row['total_goals']
+            text += f"{rank} <b>{p_name}</b> ({t_name}) — <b>{goals}</b> ⚽\n"
+
+    keyboard = [
+        [InlineKeyboardButton("🎯 Перейти к Ассистам", callback_data="league_assists")],
+        [InlineKeyboardButton("« Назад в раздел «Лига»", callback_data="menu_league")]
+    ]
+    markup = InlineKeyboardMarkup(keyboard)
+
+    if query:
+        if query.message and query.message.photo:
+            try:
+                await query.message.delete()
+            except Exception:
+                pass
+            await context.bot.send_message(chat_id=query.from_user.id, text=text, reply_markup=markup, parse_mode="HTML")
+        else:
+            try:
+                await query.edit_message_text(text, reply_markup=markup, parse_mode="HTML")
+            except Exception:
+                try:
+                    await query.message.delete()
+                except Exception:
+                    pass
+                await context.bot.send_message(chat_id=query.from_user.id, text=text, reply_markup=markup, parse_mode="HTML")
+    elif update.message:
+        await update.message.reply_text(text, reply_markup=markup, parse_mode="HTML")
+
+async def show_top_assists(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show Top 20 assist providers leaderboard."""
+    query = update.callback_query
+    if query:
+        try:
+            await query.answer()
+        except Exception:
+            pass
+
+    assists = database.get_top_assists(limit=20)
+    
+    text = "🎯 <b>ТОП АССИСТЕНТОВ ЛИГИ</b>\n\n"
+    if not assists:
+        text += "<i>Пока нет голевых передач в турнире.</i>"
+    else:
+        medals = ["🥇", "🥈", "🥉"]
+        for idx, row in enumerate(assists, 1):
+            rank = medals[idx - 1] if idx <= 3 else f"<b>{idx}.</b>"
+            p_name = html.escape(str(row['player_name']))
+            t_name = html.escape(str(row['team_name']))
+            ast = row['total_assists']
+            text += f"{rank} <b>{p_name}</b> ({t_name}) — <b>{ast}</b> 🎯\n"
+
+    keyboard = [
+        [InlineKeyboardButton("⚽ Перейти к Бомбардирам", callback_data="league_scorers")],
+        [InlineKeyboardButton("« Назад в раздел «Лига»", callback_data="menu_league")]
+    ]
+    markup = InlineKeyboardMarkup(keyboard)
+
+    if query:
+        if query.message and query.message.photo:
+            try:
+                await query.message.delete()
+            except Exception:
+                pass
+            await context.bot.send_message(chat_id=query.from_user.id, text=text, reply_markup=markup, parse_mode="HTML")
+        else:
+            try:
+                await query.edit_message_text(text, reply_markup=markup, parse_mode="HTML")
+            except Exception:
+                try:
+                    await query.message.delete()
+                except Exception:
+                    pass
+                await context.bot.send_message(chat_id=query.from_user.id, text=text, reply_markup=markup, parse_mode="HTML")
+    elif update.message:
+        await update.message.reply_text(text, reply_markup=markup, parse_mode="HTML")
 
 async def show_tournaments(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query

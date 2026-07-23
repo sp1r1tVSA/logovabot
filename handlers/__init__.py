@@ -15,6 +15,9 @@ from handlers.base import (
     show_main_menu,
     show_tournaments,
     show_league_table,
+    show_league_menu,
+    show_top_scorers,
+    show_top_assists,
     show_support,
     group_table_command,
     show_round_matches,
@@ -404,7 +407,10 @@ def register_all_handlers(application: Application) -> None:
     application.add_handler(CallbackQueryHandler(cb_refresh_league_table_topic, pattern="^refresh_league_table_topic$"))
     application.add_handler(CallbackQueryHandler(show_cabinet, pattern="^menu_cabinet$"))
     application.add_handler(CallbackQueryHandler(show_tournaments, pattern="^menu_tournaments$"))
-    application.add_handler(CallbackQueryHandler(show_league_table, pattern="^menu_ratings$"))
+    application.add_handler(CallbackQueryHandler(show_league_menu, pattern="^menu_league$"))
+    application.add_handler(CallbackQueryHandler(show_league_table, pattern="^(league_table|menu_ratings)$"))
+    application.add_handler(CallbackQueryHandler(show_top_scorers, pattern="^league_scorers$"))
+    application.add_handler(CallbackQueryHandler(show_top_assists, pattern="^league_assists$"))
     application.add_handler(CallbackQueryHandler(show_support, pattern="^menu_support$"))
     application.add_handler(CallbackQueryHandler(show_main_menu, pattern="^main_menu$"))
     application.add_handler(CallbackQueryHandler(show_round_matches, pattern="^show_round_matches_\\d+$"))
