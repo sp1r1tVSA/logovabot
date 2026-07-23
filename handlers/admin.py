@@ -747,7 +747,10 @@ async def admin_round_matches(update: Update, context: ContextTypes.DEFAULT_TYPE
     query = update.callback_query
     if not query or not is_admin(query.from_user.id):
         return
-    await query.answer()
+    try:
+        await query.answer()
+    except Exception:
+        pass
     
     round_number = int(query.data.replace("admin_round_matches_", ""))
     matches = database.get_matches_by_round(round_number)

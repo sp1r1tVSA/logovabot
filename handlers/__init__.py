@@ -520,9 +520,14 @@ def register_all_handlers(application: Application) -> None:
     # Register global error handler
     application.add_error_handler(error_handler)
 
-import logging
-logger = logging.getLogger(__name__)
+import telegram.error
 
 async def error_handler(update: object, context) -> None:
     """Log the error that occurred during update handling."""
+    if isinstance(context.error, (telegram.error.TimedOut, telegram.error.NetworkError)):
+        logger.warning(f"Сетевая задержка Telegram (TimedOut/NetworkError): {context.error}")
+        return
+    if isinstance(context.error, telegram.error.BadRequest) and "query is too old" in str(context.error).lower():
+        logger.warning(f"Устаревший запрос кнопки (Query is too old): {context.error}")
+        return
     logger.error("Исключение при обработке обновления:", exc_info=context.error)
