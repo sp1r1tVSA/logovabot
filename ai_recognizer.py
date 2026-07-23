@@ -21,7 +21,7 @@ def recognize_match_screenshots_bytes(images_bytes_list: list[bytes], mime_type:
     if not images_bytes_list:
         return None
 
-    model_name = GEMINI_MODEL or "gemini-1.5-flash-lite"
+    model_name = GEMINI_MODEL or "gemini-3.1-flash-lite"
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
 
     prompt_text = (
