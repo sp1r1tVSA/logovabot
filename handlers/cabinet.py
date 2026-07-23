@@ -1192,7 +1192,7 @@ async def save_report_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) 
                 img_b = await f_obj.download_as_bytearray()
                 downloaded_bytes.append(bytes(img_b))
 
-            ai_res = ai_recognizer.recognize_match_screenshots_bytes(downloaded_bytes)
+            ai_res = await asyncio.to_thread(ai_recognizer.recognize_match_screenshots_bytes, downloaded_bytes)
 
             if ai_res and ("home_score" in ai_res) and ("away_score" in ai_res):
                 s1_goals = ai_res.get("side1_goals") or ai_res.get("home_goals") or []
