@@ -28,15 +28,13 @@ def match_squad_player_names(raw_players: list[str], squad_list: list[str]) -> d
 
 def match_and_enrich_squad(raw_side1_goals: list[str], raw_side2_goals: list[str], raw_side1_assists: list[str], raw_side2_assists: list[str], home_team: str, away_team: str):
     """
-    Determines Home vs Away side, matches extracted player names against DB squad for home_team and away_team,
-    accurately assigns goals/assists to the correct club based on squad roster,
-    prevents duplicate players, and auto-adds new squad players to DB if missing.
+    Determines Home vs Away side, strictly preserves side1 (left) vs side2 (right) goal assignments from screenshot,
+    matches player names against DB squad, and auto-adds new squad players to DB if missing.
     Returns: (home_goals_dict, away_goals_dict, home_assists_dict, away_assists_dict, is_side1_home)
     """
     home_squad = database.get_squad(home_team) or []
     away_squad = database.get_squad(away_team) or []
 
-    # 1. Determine whether side1 is Home or Away
     side1_all = [p.lower().strip() for p in raw_side1_goals + raw_side1_assists]
     side2_all = [p.lower().strip() for p in raw_side2_goals + raw_side2_assists]
 
@@ -48,69 +46,52 @@ def match_and_enrich_squad(raw_side1_goals: list[str], raw_side2_goals: list[str
 
     if side1_away_matches > side1_home_matches:
         is_side1_home = False
+        side1_team, side2_team = away_team, home_team
+        side1_squad, side2_squad = away_squad, home_squad
     else:
         is_side1_home = True
+        side1_team, side2_team = home_team, away_team
+        side1_squad, side2_squad = home_squad, away_squad
 
-    # 2. Helper to match a raw player name against home_squad vs away_squad
-    def find_squad_match(raw_name, squad_list):
-        if not raw_name:
-            return None
-        raw_lower = raw_name.lower().strip()
-        for squad_p in squad_list:
-            sp_lower = squad_p.lower().strip()
-            if raw_lower == sp_lower or raw_lower in sp_lower or sp_lower in raw_lower:
-                return squad_p
-            raw_parts = raw_lower.split()
-            sp_parts = sp_lower.split()
-            if any(p in sp_parts for p in raw_parts if len(p) > 2):
-                return squad_p
-        return None
-
-    def process_all_events(side1_events, side2_events, event_type):
-        home_counts = {}
-        away_counts = {}
-
-        tagged_events = []
-        for p in side1_events:
-            tagged_events.append((p, 1 if is_side1_home else 2))
-        for p in side2_events:
-            tagged_events.append((p, 2 if is_side1_home else 1))
-
-        for raw_name, side_hint in tagged_events:
-            raw_clean = raw_name.strip()
+    def process_side_events(raw_list, team_name, squad_list):
+        counts = {}
+        for raw in raw_list:
+            raw_clean = raw.strip()
             if not raw_clean:
                 continue
+            raw_lower = raw_clean.lower()
+            matched_name = None
 
-            h_match = find_squad_match(raw_clean, home_squad)
-            a_match = find_squad_match(raw_clean, away_squad)
+            for squad_p in squad_list:
+                sp_lower = squad_p.lower().strip()
+                if raw_lower == sp_lower or raw_lower in sp_lower or sp_lower in raw_lower:
+                    matched_name = squad_p
+                    break
+                raw_parts = raw_lower.split()
+                sp_parts = sp_lower.split()
+                if any(p in sp_parts for p in raw_parts if len(p) > 2):
+                    matched_name = squad_p
+                    break
 
-            if h_match and not a_match:
-                home_counts[h_match] = home_counts.get(h_match, 0) + 1
-            elif a_match and not h_match:
-                away_counts[a_match] = away_counts.get(a_match, 0) + 1
-            elif h_match and a_match:
-                if side_hint == 1:
-                    home_counts[h_match] = home_counts.get(h_match, 0) + 1
-                else:
-                    away_counts[a_match] = away_counts.get(a_match, 0) + 1
+            if matched_name:
+                use_name = matched_name
             else:
-                if side_hint == 1:
-                    use_name = raw_clean
-                    database.add_squad(home_team, [use_name])
-                    home_squad.append(use_name)
-                    home_counts[use_name] = home_counts.get(use_name, 0) + 1
-                else:
-                    use_name = raw_clean
-                    database.add_squad(away_team, [use_name])
-                    away_squad.append(use_name)
-                    away_counts[use_name] = away_counts.get(use_name, 0) + 1
+                use_name = raw_clean
+                database.add_squad(team_name, [use_name])
+                squad_list.append(use_name)
 
-        return home_counts, away_counts
+            counts[use_name] = counts.get(use_name, 0) + 1
+        return counts
 
-    home_goals, away_goals = process_all_events(raw_side1_goals, raw_side2_goals, "goal")
-    home_assists, away_assists = process_all_events(raw_side1_assists, raw_side2_assists, "assist")
+    side1_goals = process_side_events(raw_side1_goals, side1_team, side1_squad)
+    side2_goals = process_side_events(raw_side2_goals, side2_team, side2_squad)
+    side1_assists = process_side_events(raw_side1_assists, side1_team, side1_squad)
+    side2_assists = process_side_events(raw_side2_assists, side2_team, side2_squad)
 
-    return home_goals, away_goals, home_assists, away_assists, is_side1_home
+    if is_side1_home:
+        return side1_goals, side2_goals, side1_assists, side2_assists, True
+    else:
+        return side2_goals, side1_goals, side2_assists, side1_assists, False
 
 def safe_escape(val: str | None, default: str = "") -> str:
     """Safe HTML escaping for strings that may be None."""
@@ -1169,11 +1150,12 @@ async def save_report_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) 
                     s1_goals, s2_goals, s1_assists, s2_assists, home_team, away_team
                 )
 
-                calc_h_score = sum(h_goals.values())
-                calc_a_score = sum(a_goals.values())
-
-                h_score = max(int(ai_res.get("home_score", 0)), calc_h_score)
-                a_score = max(int(ai_res.get("away_score", 0)), calc_a_score)
+                if is_side1_home:
+                    h_score = int(ai_res.get("home_score", sum(h_goals.values())))
+                    a_score = int(ai_res.get("away_score", sum(a_goals.values())))
+                else:
+                    h_score = int(ai_res.get("away_score", sum(h_goals.values())))
+                    a_score = int(ai_res.get("home_score", sum(a_goals.values())))
 
                 context.user_data["report_home_goals"] = h_score
                 context.user_data["report_away_goals"] = a_score
