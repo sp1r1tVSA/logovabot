@@ -11,6 +11,7 @@ logger = logging.getLogger(__name__)
 import asyncio
 import telegram.error
 import ai_recognizer
+import config
 
 def match_squad_player_names(raw_players: list[str], squad_list: list[str]) -> dict[str, int]:
     counts = {}
@@ -1174,7 +1175,7 @@ async def save_report_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     reporting_mode = context.user_data.get("reporting_mode", "auto")
 
-    if reporting_mode == "auto" and GEMINI_API_KEY:
+    if reporting_mode == "auto" and config.GEMINI_API_KEY:
         photos_list = context.user_data.get("ai_photos_list", [])
         if photo_id not in photos_list:
             photos_list.append(photo_id)
