@@ -10,6 +10,21 @@ logger = logging.getLogger(__name__)
 
 import asyncio
 import telegram.error
+import ai_recognizer
+from config import GEMINI_API_KEY
+
+def match_squad_player_names(raw_players: list[str], squad_list: list[str]) -> dict[str, int]:
+    counts = {}
+    for raw in raw_players:
+        matched_name = raw
+        raw_lower = raw.lower().strip()
+        for squad_player in squad_list:
+            sp_lower = squad_player.lower().strip()
+            if raw_lower in sp_lower or sp_lower in raw_lower:
+                matched_name = squad_player
+                break
+        counts[matched_name] = counts.get(matched_name, 0) + 1
+    return counts
 
 def safe_escape(val: str | None, default: str = "") -> str:
     """Safe HTML escaping for strings that may be None."""
@@ -973,6 +988,35 @@ async def save_report_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     home_team = home_team or 'Хозяева'
     away_team = away_team or 'Гости'
 
+    # Try AI Vision Recognition if GEMINI_API_KEY is available and user hasn't selected goals manually
+    ai_recognized = False
+    if GEMINI_API_KEY and "report_home_goals" not in context.user_data:
+        status_msg = None
+        try:
+            status_msg = await update.message.reply_text("🤖 <i>ИИ распознаёт результат со скриншота...</i>", parse_mode="HTML")
+            file_obj = await context.bot.get_file(photo_id)
+            img_bytes = await file_obj.download_as_bytearray()
+            ai_res = ai_recognizer.recognize_match_screenshot_bytes(bytes(img_bytes))
+            if ai_res and ("home_score" in ai_res) and ("away_score" in ai_res):
+                context.user_data["report_home_goals"] = int(ai_res.get("home_score", 0))
+                context.user_data["report_away_goals"] = int(ai_res.get("away_score", 0))
+
+                squad = database.get_squad(home_team) or []
+                raw_goals = ai_res.get("home_goals", [])
+                raw_assists = ai_res.get("home_assists", [])
+
+                context.user_data["home_goals_count"] = match_squad_player_names(raw_goals, squad)
+                context.user_data["home_assists_count"] = match_squad_player_names(raw_assists, squad)
+                ai_recognized = True
+        except Exception as e:
+            logger.error(f"Error during AI vision processing: {e}")
+        finally:
+            if status_msg:
+                try:
+                    await status_msg.delete()
+                except Exception:
+                    pass
+
     hg = context.user_data.get("report_home_goals", 0)
     ag = context.user_data.get("report_away_goals", 0)
 
@@ -982,8 +1026,10 @@ async def save_report_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     goals_summary = ", ".join([f"{p} ({c})" for p, c in goals_dict.items()]) if goals_dict else "Не указано"
     assists_summary = ", ".join([f"{p} ({c})" for p, c in assists_dict.items()]) if assists_dict else "Нет"
 
+    ai_badge = "🤖 <b>ИИ автоматически распознал результат со скриншота:</b>\n\n" if ai_recognized else "📊 <b>Проверьте данные перед отправкой:</b>\n\n"
+
     text = (
-        f"📊 <b>Проверьте данные перед отправкой:</b>\n\n"
+        f"{ai_badge}"
         f"🏟 <b>Матч #{match_id}</b>\n"
         f"🏠 <b>{safe_escape(home_team)}</b> {hg} : {ag} <b>{safe_escape(away_team)}</b> ✈️\n\n"
         f"⚽ <b>Голы ({safe_escape(home_team)}):</b> {safe_escape(goals_summary)}\n"

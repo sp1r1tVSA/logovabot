@@ -17,6 +17,7 @@ def _get_admin_ids() -> list[int]:
 
 ADMIN_IDS = _get_admin_ids()
 DB_PATH = os.getenv("LEAGUE_SQLITE_PATH", "league.db")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 
 def _get_group_id() -> int | None:
     group_raw = os.getenv("TELEGRAM_GROUP_ID", "").strip()
