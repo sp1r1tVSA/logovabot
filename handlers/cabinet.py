@@ -826,6 +826,13 @@ async def show_game_history(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 # ВВОД И ПОДТВЕРЖДЕНИЕ РЕЗУЛЬТАТОВ МАТЧА
 # ==========================================
 
+def get_match_cancel_cb(context: ContextTypes.DEFAULT_TYPE, user_id: int, match_id: int) -> str:
+    """Return appropriate cancel callback data depending on whether user is admin or player."""
+    is_admin_user = is_admin(user_id) or context.user_data.get("is_admin_reporting", False)
+    if is_admin_user:
+        return f"admin_view_match_{match_id}"
+    return f"cabinet_view_match_{match_id}"
+
 async def start_score_reporting(update: Update, context: ContextTypes.DEFAULT_TYPE, match_id: int | None = None) -> None:
     query = update.callback_query
     if query:
