@@ -71,11 +71,12 @@ def recognize_match_screenshots_bytes(images_bytes_list: list[bytes], mime_type:
 
     candidate_models = list(dict.fromkeys(filter(None, [
         model_setting,
-        "gemini-2.0-flash-lite",   # 429 значит модель есть, ждём паузы
-        "gemini-2.5-flash-lite",   # 500 RPD — приоритетная
-        "gemini-1.5-flash-8b",     # правильное API-имя lite 1.5
+        "gemini-3.1-flash-lite",   # 500 RPD, 15 RPM — приоритет
+        "gemini-3.5-flash-lite",   # 500 RPD, 15 RPM — фоллбек
+        "gemini-2.5-flash-lite",   # 20 RPD
         "gemini-2.5-flash",        # 20 RPD
-        "gemini-2.0-flash",        # фоллбек
+        "gemini-2.0-flash-lite",   # 429, но работает
+        "gemini-2.0-flash",        # 429, последний фоллбек
     ])))
 
     import time
