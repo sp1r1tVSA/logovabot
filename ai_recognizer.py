@@ -11,8 +11,8 @@ logger = logging.getLogger(__name__)
 def recognize_match_screenshots_bytes(images_bytes_list: list[bytes], mime_type: str = "image/jpeg") -> dict | None:
     """
     Sends 1 or 2 match screenshot image bytes to Google Gemini API (gemini-flash-latest).
-    Combines stats from both screenshots if 2 photos are provided.
-    Returns structured dict with match scores, goals, and assists.
+    Supports both 2-column match stats screenshots and single vertical timeline goal list screenshots.
+    Returns structured dict with match scores, goals, assists, and is_single_timeline flag.
     """
     if not GEMINI_API_KEY:
         logger.warning("GEMINI_API_KEY is not set.")
@@ -26,20 +26,25 @@ def recognize_match_screenshots_bytes(images_bytes_list: list[bytes], mime_type:
     prompt_text = (
         "Ты — эксперт по распознаванию футбольных матчей из симуляторов (FIFA / EA FC / eFootball).\n"
         "Внимательно изучи прикрепленный скриншот (или 2 скриншота) результатов и статистики сыгранного матча.\n"
-        "Объедини данные со всех прикрепленных фото (если их 2, просуммируй все голы и ассисты с обоих фото).\n"
+        "Обрати внимание, скриншот может быть двух типов:\n"
+        "Тип 1 (Стандартная статистика): 2 отдельные колонки статистики слева и справа с голами и ассистами.\n"
+        "Тип 2 (Единая вертикальная колонка таймлайна): сбоку отображается одна общая вертикальная колонка с хронологическим списком всех голов матча (например, 15' GOAL, 24' GOAL, 32' GOAL...). В этом типе ассисты не отображаются.\n\n"
         "Верни ответ СТРОГО в виде одного валидного JSON объекта без разметки markdown со следующими полями:\n"
         "{\n"
         '  "home_team": "Название левой (домашней) команды или null",\n'
         '  "away_team": "Название правой (гостевой) команды или null",\n'
         '  "home_score": 4,\n'
         '  "away_score": 2,\n'
+        '  "is_single_timeline": false,\n'
         '  "side1_goals": ["Player1", "Player2"],\n'
         '  "side2_goals": ["Player3"],\n'
         '  "side1_assists": ["Player4"],\n'
         '  "side2_assists": []\n'
         "}\n"
-        "Где side1 — левая команда на экране (Хозяева), side2 — правая команда на экране (Гости).\n"
-        "Если ассисты не указаны на экране, верни пустой список []."
+        "Где:\n"
+        "- is_single_timeline: true если голы выведены в одну общую вертикальную колонку таймлайна (Тип 2), иначе false.\n"
+        "- side1_goals и side2_goals: списки распознанных авторов голов.\n"
+        "- Если ассисты не указаны на экране (или Тип 2), верни пустые списки []."
     )
 
     parts = [{"text": prompt_text}]
@@ -77,7 +82,7 @@ def recognize_match_screenshots_bytes(images_bytes_list: list[bytes], mime_type:
             if candidates:
                 text_content = candidates[0]["content"]["parts"][0]["text"]
                 parsed_data = json.loads(text_content)
-                logger.info(f"AI Vision recognized match: {parsed_data.get('home_score')} - {parsed_data.get('away_score')}")
+                logger.info(f"AI Vision recognized match: {parsed_data.get('home_score')} - {parsed_data.get('away_score')} (is_single_timeline={parsed_data.get('is_single_timeline')})")
                 return parsed_data
             else:
                 logger.warning(f"Gemini API returned no candidates: {res_json}")
