@@ -1215,10 +1215,14 @@ async def save_report_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) 
                     f"📸 <i>Скриншот(ы) прикреплены.</i>"
                 )
 
+                is_admin_user = is_admin(update.effective_user.id) or context.user_data.get("is_admin_reporting", False)
+                cancel_cb = f"admin_view_match_{match_id}" if is_admin_user else f"cabinet_view_match_{match_id}"
+                manual_cb = f"admin_set_score_start_{match_id}" if is_admin_user else f"cb_report_choice_manual_{match_id}"
+
                 keyboard = [
                     [InlineKeyboardButton("✅ Всё верно (Сохранить и занести результат)", callback_data=f"cb_confirm_ai_final_{match_id}")],
-                    [InlineKeyboardButton("✏️ Изменить вручную", callback_data=f"cb_report_choice_manual_{match_id}")],
-                    [InlineKeyboardButton("❌ Отмена", callback_data=f"cabinet_view_match_{match_id}")]
+                    [InlineKeyboardButton("✏️ Изменить вручную", callback_data=manual_cb)],
+                    [InlineKeyboardButton("❌ Отмена", callback_data=cancel_cb)]
                 ]
                 markup = InlineKeyboardMarkup(keyboard)
 
@@ -1307,10 +1311,20 @@ async def cb_confirm_ai_final(update: Update, context: ContextTypes.DEFAULT_TYPE
         f"🏠 <b>{safe_escape(home_team)}</b> {h_score} : {a_score} <b>{safe_escape(away_team)}</b> ✈️\n\n"
         f"📊 Турнирная таблица и статистика игроков обновлены."
     )
+
+    is_admin_user = is_admin(user_id) or context.user_data.get("is_admin_reporting", False)
+    if is_admin_user:
+        back_buttons = [
+            [InlineKeyboardButton("« Назад к матчу", callback_data=f"admin_view_match_{match_id}")],
+            [InlineKeyboardButton("« Назад к туру", callback_data=f"admin_round_matches_{match['round_number']}")]
+        ]
+    else:
+        back_buttons = [[InlineKeyboardButton("« К своим матчам", callback_data="cabinet_my_matches")]]
+
     try:
-        await query.edit_message_caption(caption=reporter_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« К своим матчам", callback_data="cabinet_my_matches")]]))
+        await query.edit_message_caption(caption=reporter_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(back_buttons))
     except Exception:
-        await context.bot.send_message(chat_id=user_id, text=reporter_text, parse_mode="HTML")
+        await context.bot.send_message(chat_id=user_id, text=reporter_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(back_buttons))
 
     # 2. PM to players
     players_to_notify = []

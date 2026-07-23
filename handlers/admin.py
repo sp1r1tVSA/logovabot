@@ -853,6 +853,7 @@ async def admin_report_score_auto(update: Update, context: ContextTypes.DEFAULT_
     context.user_data["report_away_team"] = match['player2_team'] or match['player2_nickname']
     context.user_data["reporter_id"] = query.from_user.id
     context.user_data["reporting_mode"] = "auto"
+    context.user_data["is_admin_reporting"] = True
     context.user_data["awaiting_report_photo"] = True
     context.user_data["ai_photos_list"] = []
 
