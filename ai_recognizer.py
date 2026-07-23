@@ -67,29 +67,44 @@ def recognize_match_screenshots_bytes(images_bytes_list: list[bytes], mime_type:
     }
 
     req_data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(
-        url,
-        data=req_data,
-        headers={"Content-Type": "application/json"}
-    )
 
-    try:
-        with urllib.request.urlopen(req, timeout=20) as response:
-            res_body = response.read().decode("utf-8")
-            res_json = json.loads(res_body)
-            
-            candidates = res_json.get("candidates", [])
-            if candidates:
-                text_content = candidates[0]["content"]["parts"][0]["text"]
-                parsed_data = json.loads(text_content)
-                logger.info(f"AI Vision recognized match: {parsed_data.get('home_score')} - {parsed_data.get('away_score')} (is_single_timeline={parsed_data.get('is_single_timeline')})")
-                return parsed_data
-            else:
-                logger.warning(f"Gemini API returned no candidates: {res_json}")
-                return None
-    except Exception as e:
-        logger.error(f"Gemini Vision recognition failed: {e}")
-        return None
+    max_retries = 3
+    for attempt in range(1, max_retries + 1):
+        req = urllib.request.Request(
+            url,
+            data=req_data,
+            headers={"Content-Type": "application/json"}
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=20) as response:
+                res_body = response.read().decode("utf-8")
+                res_json = json.loads(res_body)
+                
+                candidates = res_json.get("candidates", [])
+                if candidates:
+                    text_content = candidates[0]["content"]["parts"][0]["text"]
+                    parsed_data = json.loads(text_content)
+                    logger.info(f"AI Vision recognized match: {parsed_data.get('home_score')} - {parsed_data.get('away_score')} (is_single_timeline={parsed_data.get('is_single_timeline')})")
+                    return parsed_data
+                else:
+                    logger.warning(f"Gemini API returned no candidates: {res_json}")
+                    return None
+        except urllib.error.HTTPError as e:
+            if e.code == 429:
+                logger.warning(f"Gemini API rate limited (HTTP 429). Retrying attempt {attempt}/{max_retries} in 2.5 seconds...")
+                if attempt < max_retries:
+                    import time
+                    time.sleep(2.5)
+                    continue
+            logger.error(f"Gemini Vision HTTP Error {e.code}: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Gemini Vision recognition failed (attempt {attempt}/{max_retries}): {e}")
+            if attempt < max_retries:
+                import time
+                time.sleep(2)
+                continue
+            return None
 
 def recognize_match_screenshot_bytes(image_bytes: bytes, mime_type: str = "image/jpeg") -> dict | None:
     """Wrapper for backward compatibility."""
