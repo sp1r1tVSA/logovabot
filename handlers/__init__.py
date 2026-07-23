@@ -39,6 +39,9 @@ from handlers.cabinet import (
     TEAM_NAME,
     EDITING_FIELD,
     start_score_reporting,
+    cb_report_choice_auto,
+    cb_report_choice_manual,
+    cb_confirm_ai_final,
     cb_report_home_goals,
     cb_report_away_goals,
     cb_pick_goal,
@@ -418,6 +421,9 @@ def register_all_handlers(application: Application) -> None:
     application.add_handler(CallbackQueryHandler(cb_accept_time, pattern="^cb_accept_time_\\d+$"))
     
     # Score Reporting & Stats Callbacks
+    application.add_handler(CallbackQueryHandler(cb_report_choice_auto, pattern="^cb_report_choice_auto_\\d+$"))
+    application.add_handler(CallbackQueryHandler(cb_report_choice_manual, pattern="^cb_report_choice_manual_\\d+$"))
+    application.add_handler(CallbackQueryHandler(cb_confirm_ai_final, pattern="^cb_confirm_ai_final_\\d+$"))
     application.add_handler(CallbackQueryHandler(cb_report_home_goals, pattern="^cb_report_hg_\\d+$"))
     application.add_handler(CallbackQueryHandler(cb_report_away_goals, pattern="^cb_report_ag_\\d+$"))
     application.add_handler(CallbackQueryHandler(cb_pick_goal, pattern="^cb_pick_goal_.*$"))

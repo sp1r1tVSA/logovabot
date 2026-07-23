@@ -429,6 +429,22 @@ def confirm_match(match_id: int) -> None:
             (match_id,)
         )
 
+def confirm_and_finalize_match(match_id: int, p1_score: int, p2_score: int, events: list, reporter_id: int = None, photo_id: str = None) -> None:
+    """Instantly save and confirm a match with events in database."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM match_events WHERE match_id = ?", (match_id,))
+        for item in events:
+            team_name, player_name, event_type, count = item[0], item[1], item[2], item[3] if len(item) > 3 else 1
+            cursor.execute(
+                "INSERT INTO match_events (match_id, team_name, player_name, event_type, count) VALUES (?, ?, ?, ?, ?)",
+                (match_id, team_name.strip(), player_name.strip(), event_type, count)
+            )
+        cursor.execute(
+            "UPDATE matches SET player1_score = ?, player2_score = ?, reported_by = ?, photo_id = ?, status = 'confirmed', played_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (p1_score, p2_score, reporter_id, photo_id, match_id)
+        )
+
 def dispute_match(match_id: int) -> None:
     """Set match status to 'disputed'."""
     with transaction() as conn:

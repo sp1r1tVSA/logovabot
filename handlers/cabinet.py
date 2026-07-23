@@ -26,6 +26,70 @@ def match_squad_player_names(raw_players: list[str], squad_list: list[str]) -> d
         counts[matched_name] = counts.get(matched_name, 0) + 1
     return counts
 
+def match_and_enrich_squad(raw_side1_goals: list[str], raw_side2_goals: list[str], raw_side1_assists: list[str], raw_side2_assists: list[str], home_team: str, away_team: str):
+    """
+    Determines Home vs Away side, matches partial names against DB squad,
+    prevents player duplicates, and auto-adds new squad players to DB if missing.
+    Returns: (home_goals_dict, away_goals_dict, home_assists_dict, away_assists_dict, is_side1_home)
+    """
+    home_squad = database.get_squad(home_team) or []
+    away_squad = database.get_squad(away_team) or []
+
+    side1_all = [p.lower().strip() for p in raw_side1_goals + raw_side1_assists]
+    side2_all = [p.lower().strip() for p in raw_side2_goals + raw_side2_assists]
+
+    home_squad_lower = [p.lower().strip() for p in home_squad]
+    away_squad_lower = [p.lower().strip() for p in away_squad]
+
+    side1_home_matches = sum(1 for p in side1_all if any(p in sp or sp in p for sp in home_squad_lower))
+    side1_away_matches = sum(1 for p in side1_all if any(p in sp or sp in p for sp in away_squad_lower))
+
+    if side1_away_matches > side1_home_matches:
+        is_side1_home = False
+        raw_home_goals, raw_away_goals = raw_side2_goals, raw_side1_goals
+        raw_home_assists, raw_away_assists = raw_side2_assists, raw_side1_assists
+    else:
+        is_side1_home = True
+        raw_home_goals, raw_away_goals = raw_side1_goals, raw_side2_goals
+        raw_home_assists, raw_away_assists = raw_side1_assists, raw_side2_assists
+
+    def process_player_list(raw_list, team_name, squad_list):
+        counts = {}
+        for raw in raw_list:
+            raw_clean = raw.strip()
+            if not raw_clean:
+                continue
+            raw_lower = raw_clean.lower()
+            matched_name = None
+
+            for squad_p in squad_list:
+                sp_lower = squad_p.lower().strip()
+                if raw_lower == sp_lower or raw_lower in sp_lower or sp_lower in raw_lower:
+                    matched_name = squad_p
+                    break
+                raw_parts = raw_lower.split()
+                sp_parts = sp_lower.split()
+                if any(p in sp_parts for p in raw_parts if len(p) > 2):
+                    matched_name = squad_p
+                    break
+
+            if matched_name:
+                use_name = matched_name
+            else:
+                use_name = raw_clean
+                database.add_squad(team_name, [use_name])
+                squad_list.append(use_name)
+
+            counts[use_name] = counts.get(use_name, 0) + 1
+        return counts
+
+    home_goals = process_player_list(raw_home_goals, home_team, home_squad)
+    away_goals = process_player_list(raw_away_goals, away_team, away_squad)
+    home_assists = process_player_list(raw_home_assists, home_team, home_squad)
+    away_assists = process_player_list(raw_away_assists, away_team, away_squad)
+
+    return home_goals, away_goals, home_assists, away_assists, is_side1_home
+
 def safe_escape(val: str | None, default: str = "") -> str:
     """Safe HTML escaping for strings that may be None."""
     if val is None:
@@ -705,7 +769,7 @@ async def show_game_history(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 # ==========================================
 
 async def start_score_reporting(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Start score reporting for Home player (player1_id)."""
+    """Start score reporting for Home OR Away player."""
     query = update.callback_query
     if not query:
         return
@@ -718,20 +782,74 @@ async def start_score_reporting(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     user_id = query.from_user.id
-    if match['player1_id'] != user_id:
-        await query.answer("⛔ Только хозяева поля могут ввести результат матча.", show_alert=True)
+    if user_id not in (match['player1_id'], match['player2_id']):
+        await query.answer("⛔ Вы не являетесь участником этого матча.", show_alert=True)
+        return
+
+    if match['status'] == 'completed':
+        await query.answer("⏳ Результат этого матча уже внесен и занесен в лигу.", show_alert=True)
         return
 
     context.user_data["reporting_match_id"] = match_id
     context.user_data["report_home_team"] = match['player1_team'] or match['player1_nickname']
     context.user_data["report_away_team"] = match['player2_team'] or match['player2_nickname']
-    context.user_data["home_events"] = []
+    context.user_data["reporter_id"] = user_id
 
-    # Prompt Home Goals
+    home_team = context.user_data["report_home_team"]
+    away_team = context.user_data["report_away_team"]
+
     text = (
-        f"⚽ **Ввод результата матча #{match_id}**\n"
-        f"🏠 **{context.user_data['report_home_team']}** vs **{context.user_data['report_away_team']}** ✈️\n\n"
-        f"Выберите, сколько забила ваша команда (**{context.user_data['report_home_team']}**):"
+        f"⚽ <b>Ввод результата матча #{match_id}</b>\n"
+        f"🏟 <b>Тур {match['round_number']}</b>\n"
+        f"🏠 <b>{safe_escape(home_team)}</b> vs <b>{safe_escape(away_team)}</b> ✈️\n\n"
+        f"Выберите удобный способ внесения результата:"
+    )
+
+    keyboard = [
+        [InlineKeyboardButton("⚡ Автоматический ввод (по фото)", callback_data=f"cb_report_choice_auto_{match_id}")],
+        [InlineKeyboardButton("✍️ Ручной ввод", callback_data=f"cb_report_choice_manual_{match_id}")],
+        [InlineKeyboardButton("❌ Отмена", callback_data=f"cabinet_view_match_{match_id}")]
+    ]
+
+    await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def cb_report_choice_auto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+
+    match_id = int(query.data.replace("cb_report_choice_auto_", ""))
+    context.user_data["reporting_match_id"] = match_id
+    context.user_data["reporting_mode"] = "auto"
+    context.user_data["awaiting_report_photo"] = True
+    context.user_data["ai_photos_list"] = []
+
+    text = (
+        "📸 <b>Автоматический ввод по фото</b>\n\n"
+        "Пожалуйста, отправьте <b>1 или 2 скриншота</b> матча строго с статистикой(голы и ассисты).\n\n"
+        "💡 <i>Вы можете отправить 1 фото или сразу 2 фото альбомом.</i>"
+    )
+    keyboard = [[InlineKeyboardButton("❌ Отмена", callback_data=f"cabinet_view_match_{match_id}")]]
+    await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def cb_report_choice_manual(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+
+    match_id = int(query.data.replace("cb_report_choice_manual_", ""))
+    context.user_data["reporting_match_id"] = match_id
+    context.user_data["reporting_mode"] = "manual"
+
+    home_team = context.user_data.get("report_home_team", "Хозяева")
+    away_team = context.user_data.get("report_away_team", "Гости")
+
+    text = (
+        f"⚽ <b>Ввод результата матча #{match_id}</b>\n"
+        f"🏠 <b>{safe_escape(home_team)}</b> vs <b>{safe_escape(away_team)}</b> ✈️\n\n"
+        f"Выберите, сколько забила домашняя команда (<b>{safe_escape(home_team)}</b>):"
     )
 
     keyboard = []
@@ -745,7 +863,7 @@ async def start_score_reporting(update: Update, context: ContextTypes.DEFAULT_TY
         keyboard.append(row)
     keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data=f"cabinet_view_match_{match_id}")])
 
-    await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+    await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def cb_report_home_goals(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
@@ -972,50 +1090,87 @@ async def save_report_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await update.message.reply_text("❌ Пожалуйста, отправьте фото скриншота результата.")
         return REPORT_SCORE_PHOTO
 
-    context.user_data["report_photo_id"] = photo_id
-    context.user_data.pop("awaiting_report_photo", None)
-
     match_id = context.user_data.get("reporting_match_id")
-    home_team = context.user_data.get("report_home_team")
-    away_team = context.user_data.get("report_away_team")
+    match = database.get_match(match_id) if match_id else None
+    home_team = context.user_data.get("report_home_team") or (match.get("player1_team") if match else "Хозяева")
+    away_team = context.user_data.get("report_away_team") or (match.get("player2_team") if match else "Гости")
 
-    if not home_team or not away_team:
-        if match_id:
-            m = database.get_match(match_id)
-            if m:
-                home_team = home_team or m.get('player1_team') or m.get('player1_nickname') or 'Хозяева'
-                away_team = away_team or m.get('player2_team') or m.get('player2_nickname') or 'Гости'
-    home_team = home_team or 'Хозяева'
-    away_team = away_team or 'Гости'
+    reporting_mode = context.user_data.get("reporting_mode", "auto")
 
-    # Try AI Vision Recognition if GEMINI_API_KEY is available and user hasn't selected goals manually
-    ai_recognized = False
-    if GEMINI_API_KEY and "report_home_goals" not in context.user_data:
+    if reporting_mode == "auto" and GEMINI_API_KEY:
+        photos_list = context.user_data.get("ai_photos_list", [])
+        photos_list.append(photo_id)
+        context.user_data["ai_photos_list"] = photos_list
+        context.user_data["report_photo_id"] = photos_list[0]
+
         status_msg = None
         try:
-            status_msg = await update.message.reply_text("🤖 <i>ИИ распознаёт результат со скриншота...</i>", parse_mode="HTML")
-            file_obj = await context.bot.get_file(photo_id)
-            img_bytes = await file_obj.download_as_bytearray()
-            ai_res = ai_recognizer.recognize_match_screenshot_bytes(bytes(img_bytes))
+            status_msg = await update.message.reply_text("🤖 <i>ИИ распознаёт результат со скриншота(ов)...</i>", parse_mode="HTML")
+
+            downloaded_bytes = []
+            for p_id in photos_list[:2]:
+                f_obj = await context.bot.get_file(p_id)
+                img_b = await f_obj.download_as_bytearray()
+                downloaded_bytes.append(bytes(img_b))
+
+            ai_res = ai_recognizer.recognize_match_screenshots_bytes(downloaded_bytes)
+
             if ai_res and ("home_score" in ai_res) and ("away_score" in ai_res):
-                context.user_data["report_home_goals"] = int(ai_res.get("home_score", 0))
-                context.user_data["report_away_goals"] = int(ai_res.get("away_score", 0))
+                s1_goals = ai_res.get("side1_goals") or ai_res.get("home_goals") or []
+                s2_goals = ai_res.get("side2_goals") or ai_res.get("away_goals") or []
+                s1_assists = ai_res.get("side1_assists") or ai_res.get("home_assists") or []
+                s2_assists = ai_res.get("side2_assists") or ai_res.get("away_assists") or []
 
-                squad = database.get_squad(home_team) or []
-                raw_goals = ai_res.get("home_goals", [])
-                raw_assists = ai_res.get("home_assists", [])
+                h_goals, a_goals, h_assists, a_assists, is_side1_home = match_and_enrich_squad(
+                    s1_goals, s2_goals, s1_assists, s2_assists, home_team, away_team
+                )
 
-                context.user_data["home_goals_count"] = match_squad_player_names(raw_goals, squad)
-                context.user_data["home_assists_count"] = match_squad_player_names(raw_assists, squad)
-                ai_recognized = True
+                h_score = int(ai_res.get("home_score", 0))
+                a_score = int(ai_res.get("away_score", 0))
+
+                context.user_data["report_home_goals"] = h_score
+                context.user_data["report_away_goals"] = a_score
+                context.user_data["home_goals_count"] = h_goals
+                context.user_data["away_goals_count"] = a_goals
+                context.user_data["home_assists_count"] = h_assists
+                context.user_data["away_assists_count"] = a_assists
+
+                h_goals_summary = ", ".join([f"{p} ({c})" for p, c in h_goals.items()]) if h_goals else "Не указано"
+                a_goals_summary = ", ".join([f"{p} ({c})" for p, c in a_goals.items()]) if a_goals else "Не указано"
+                h_assists_summary = ", ".join([f"{p} ({c})" for p, c in h_assists.items()]) if h_assists else "Нет"
+                a_assists_summary = ", ".join([f"{p} ({c})" for p, c in a_assists.items()]) if a_assists else "Нет"
+
+                text = (
+                    f"🤖 <b>ИИ автоматически распознал результат со скриншота:</b>\n\n"
+                    f"🏟 <b>Матч #{match_id}</b>\n"
+                    f"🏠 <b>{safe_escape(home_team)}</b> {h_score} : {a_score} <b>{safe_escape(away_team)}</b> ✈️\n\n"
+                    f"⚽ <b>Голы ({safe_escape(home_team)}):</b> {safe_escape(h_goals_summary)}\n"
+                    f"🎯 <b>Ассисты ({safe_escape(home_team)}):</b> {safe_escape(h_assists_summary)}\n\n"
+                    f"⚽ <b>Голы ({safe_escape(away_team)}):</b> {safe_escape(a_goals_summary)}\n"
+                    f"🎯 <b>Ассисты ({safe_escape(away_team)}):</b> {safe_escape(a_assists_summary)}\n\n"
+                    f"📸 <i>Скриншот(ы) прикреплены.</i>"
+                )
+
+                keyboard = [
+                    [InlineKeyboardButton("✅ Всё верно (Сохранить и занести результат)", callback_data=f"cb_confirm_ai_final_{match_id}")],
+                    [InlineKeyboardButton("✏️ Изменить вручную", callback_data=f"cb_report_choice_manual_{match_id}")],
+                    [InlineKeyboardButton("❌ Отмена", callback_data=f"cabinet_view_match_{match_id}")]
+                ]
+                markup = InlineKeyboardMarkup(keyboard)
+
+                await context.bot.send_photo(chat_id=update.effective_user.id, photo=photo_id, caption=text, parse_mode="HTML", reply_markup=markup)
+                return ConversationHandler.END
         except Exception as e:
-            logger.error(f"Error during AI vision processing: {e}")
+            logger.error(f"AI Vision processing error: {e}")
         finally:
             if status_msg:
                 try:
                     await status_msg.delete()
                 except Exception:
                     pass
+
+    context.user_data["report_photo_id"] = photo_id
+    context.user_data.pop("awaiting_report_photo", None)
 
     hg = context.user_data.get("report_home_goals", 0)
     ag = context.user_data.get("report_away_goals", 0)
@@ -1026,10 +1181,8 @@ async def save_report_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     goals_summary = ", ".join([f"{p} ({c})" for p, c in goals_dict.items()]) if goals_dict else "Не указано"
     assists_summary = ", ".join([f"{p} ({c})" for p, c in assists_dict.items()]) if assists_dict else "Нет"
 
-    ai_badge = "🤖 <b>ИИ автоматически распознал результат со скриншота:</b>\n\n" if ai_recognized else "📊 <b>Проверьте данные перед отправкой:</b>\n\n"
-
     text = (
-        f"{ai_badge}"
+        f"📊 <b>Проверьте данные перед отправкой:</b>\n\n"
         f"🏟 <b>Матч #{match_id}</b>\n"
         f"🏠 <b>{safe_escape(home_team)}</b> {hg} : {ag} <b>{safe_escape(away_team)}</b> ✈️\n\n"
         f"⚽ <b>Голы ({safe_escape(home_team)}):</b> {safe_escape(goals_summary)}\n"
@@ -1045,6 +1198,95 @@ async def save_report_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     await context.bot.send_photo(chat_id=update.effective_user.id, photo=photo_id, caption=text, parse_mode="HTML", reply_markup=markup)
     return ConversationHandler.END
+
+async def cb_confirm_ai_final(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Instantly save and finalize match score in database from AI Vision result."""
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+
+    match_id = int(query.data.replace("cb_confirm_ai_final_", ""))
+    match = database.get_match(match_id)
+    if not match:
+        await query.answer("❌ Матч не найден.", show_alert=True)
+        return
+
+    user_id = query.from_user.id
+    h_score = context.user_data.get("report_home_goals", 0)
+    a_score = context.user_data.get("report_away_goals", 0)
+    h_goals = context.user_data.get("home_goals_count", {})
+    a_goals = context.user_data.get("away_goals_count", {})
+    h_assists = context.user_data.get("home_assists_count", {})
+    a_assists = context.user_data.get("away_assists_count", {})
+    photo_id = context.user_data.get("report_photo_id")
+
+    home_team = match['player1_team'] or match['player1_nickname']
+    away_team = match['player2_team'] or match['player2_nickname']
+
+    events = []
+    for p, c in h_goals.items():
+        events.append((home_team, p, "goal", c))
+    for p, c in a_goals.items():
+        events.append((away_team, p, "goal", c))
+    for p, c in h_assists.items():
+        events.append((home_team, p, "assist", c))
+    for p, c in a_assists.items():
+        events.append((away_team, p, "assist", c))
+
+    database.confirm_and_finalize_match(match_id, h_score, a_score, events, reporter_id=user_id, photo_id=photo_id)
+
+    # 1. PM to reporter
+    reporter_text = (
+        f"🎉 <b>Результат успешно занесен в лигу!</b>\n\n"
+        f"🏟 <b>Матч #{match_id} (Тур {match['round_number']})</b>\n"
+        f"🏠 <b>{safe_escape(home_team)}</b> {h_score} : {a_score} <b>{safe_escape(away_team)}</b> ✈️\n\n"
+        f"📊 Турнирная таблица и статистика игроков обновлены."
+    )
+    try:
+        await query.edit_message_caption(caption=reporter_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« К своим матчам", callback_data="cabinet_my_matches")]]))
+    except Exception:
+        await context.bot.send_message(chat_id=user_id, text=reporter_text, parse_mode="HTML")
+
+    # 2. PM to opponent
+    opponent_id = match['player2_id'] if user_id == match['player1_id'] else match['player1_id']
+    if opponent_id:
+        opp_text = (
+            f"🔔 <b>Результат вашего матча занесен в лигу!</b>\n\n"
+            f"🏟 <b>Матч #{match_id} (Тур {match['round_number']})</b>\n"
+            f"🏠 <b>{safe_escape(home_team)}</b> {h_score} : {a_score} <b>{safe_escape(away_team)}</b> ✈️\n\n"
+            f"📸 <i>Результат внесен и верифицирован по скриншоту статистики.</i>"
+        )
+        await safe_send_notification(context.bot, opponent_id, opp_text)
+
+    # 3. Post to Group
+    main_group_id = database.get_group_id()
+    results_topic_id = database.get_config("results_topic_id") or database.get_config("reports_topic_id")
+    if main_group_id:
+        p1_user = f"@{match['player1_username']}" if match['player1_username'] else home_team
+        p2_user = f"@{match['player2_username']}" if match['player2_username'] else away_team
+        h_goals_summary = ", ".join([f"{p} ({c})" for p, c in h_goals.items()]) if h_goals else "Нет"
+        a_goals_summary = ", ".join([f"{p} ({c})" for p, c in a_goals.items()]) if a_goals else "Нет"
+
+        group_text = (
+            f"🏆 <b>РЕЗУЛЬТАТ МАТЧА | Тур {match['round_number']}</b>\n\n"
+            f"🏠 <b>{safe_escape(home_team)}</b> ({safe_escape(p1_user)}) <b>{h_score} : {a_score}</b> <b>{safe_escape(away_team)}</b> ({safe_escape(p2_user)}) ✈️\n\n"
+            f"⚽ <b>Голы ({safe_escape(home_team)}):</b> {safe_escape(h_goals_summary)}\n"
+            f"⚽ <b>Голы ({safe_escape(away_team)}):</b> {safe_escape(a_goals_summary)}\n\n"
+            f"📸 <i>Результат официально занесен в турнирную таблицу.</i>"
+        )
+        try:
+            kwargs = {"chat_id": main_group_id, "caption": group_text, "parse_mode": "HTML"}
+            if results_topic_id:
+                kwargs["message_thread_id"] = int(results_topic_id)
+            if photo_id:
+                await context.bot.send_photo(photo=photo_id, **kwargs)
+            else:
+                kwargs["text"] = group_text
+                kwargs.pop("caption", None)
+                await context.bot.send_message(**kwargs)
+        except Exception as e:
+            logger.error(f"Failed to post result to group: {e}")
 
 async def submit_report_to_guest(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
