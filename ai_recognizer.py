@@ -69,14 +69,16 @@ def recognize_match_screenshots_bytes(images_bytes_list: list[bytes], mime_type:
 
     req_data = json.dumps(payload).encode("utf-8")
 
-    candidate_models = list(dict.fromkeys([
+    candidate_models = list(dict.fromkeys(filter(None, [
         model_setting,
-        "gemini-1.5-flash-lite",
-        "gemini-2.0-flash-lite",
-        "gemini-1.5-flash",
-        "gemini-2.0-flash"
-    ]))
+        "gemini-2.0-flash-lite",   # 429 значит модель есть, ждём паузы
+        "gemini-2.5-flash-lite",   # 500 RPD — приоритетная
+        "gemini-1.5-flash-8b",     # правильное API-имя lite 1.5
+        "gemini-2.5-flash",        # 20 RPD
+        "gemini-2.0-flash",        # фоллбек
+    ])))
 
+    import time
     for m_name in candidate_models:
         if not m_name:
             continue
@@ -100,14 +102,16 @@ def recognize_match_screenshots_bytes(images_bytes_list: list[bytes], mime_type:
                     return parsed_data
                 else:
                     logger.warning(f"Gemini model '{m_name}' returned no candidates: {res_json}")
+                    continue
         except urllib.error.HTTPError as e:
             if e.code == 429:
-                logger.warning(f"Gemini model '{m_name}' rate-limited (HTTP 429). Trying next fallback model...")
-                import time
+                logger.warning(f"Gemini model '{m_name}' rate-limited (429). Trying next fallback model...")
                 time.sleep(1)
-                continue
+            elif e.code == 404:
+                logger.warning(f"Gemini model '{m_name}' not found (404). Trying next fallback model...")
             else:
                 logger.error(f"Gemini model '{m_name}' HTTP Error {e.code}: {e}")
+            continue
         except Exception as e:
             logger.error(f"Gemini model '{m_name}' recognition error: {e}")
             continue
