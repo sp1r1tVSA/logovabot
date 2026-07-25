@@ -1611,17 +1611,39 @@ async def submit_report_to_guest(update: Update, context: ContextTypes.DEFAULT_T
             logger.error(f"Plain text fallback failed for guest {guest_id}: {e3}")
             err_reason = str(e3)
 
-    if sent_success:
-        await safe_query_answer(query, "✅ Результат успешно отправлен гостям на подтверждение!", show_alert=True)
+    is_admin_user = is_admin(home_user_id) or context.user_data.get("is_admin_reporting", False)
+
+    if is_admin_user or not sent_success:
+        # Auto-confirm and finalize if admin or if guest cannot be reached in PM
+        database.confirm_and_finalize_match(match_id, hg, ag, events, reporter_id=home_user_id, photo_id=photo_id)
+        
+        reason_msg = "✅ КАК АДМИНИСТРАТОР: Результат сразу занесен в таблицу!" if is_admin_user else "⚠️ У соперника закрыто ЛС бота. Результат автоматически занесен в таблицу!"
+        await safe_query_answer(query, reason_msg, show_alert=True)
+        
         try:
             await query.edit_message_caption(
-                caption=f"✅ <b>Результат матча #{match_id} успешно отправлен на подтверждение гостям!</b>",
+                caption=f"🎉 <b>Результат матча #{match_id} успешно занесен в турнирную таблицу!</b>",
                 parse_mode="HTML"
             )
         except Exception:
             try:
                 await query.edit_message_text(
-                    text=f"✅ <b>Результат матча #{match_id} успешно отправлен на подтверждение гостям!</b>",
+                    text=f"🎉 <b>Результат матча #{match_id} успешно занесен в турнирную таблицу!</b>",
+                    parse_mode="HTML"
+                )
+            except Exception:
+                pass
+    elif sent_success:
+        await safe_query_answer(query, "✅ Результат успешно отправлен гостям на подтверждение!", show_alert=True)
+        try:
+            await query.edit_message_caption(
+                caption=f"✅ <b>Результат матча #{match_id} отправлен гостю! Таблица обновится после его подтверждения.</b>",
+                parse_mode="HTML"
+            )
+        except Exception:
+            try:
+                await query.edit_message_text(
+                    text=f"✅ <b>Результат матча #{match_id} отправлен гостю! Таблица обновится после его подтверждения.</b>",
                     parse_mode="HTML"
                 )
             except Exception:
@@ -1630,17 +1652,11 @@ async def submit_report_to_guest(update: Update, context: ContextTypes.DEFAULT_T
         try:
             await context.bot.send_message(
                 chat_id=query.from_user.id,
-                text=f"✅ <b>Результат матча #{match_id} успешно отправлен!</b>\n\nОжидаем подтверждения от соперника (<b>{html.escape(away_team)}</b>).",
+                text=f"✅ <b>Результат матча #{match_id} отправлен!</b>\n\nОжидаем подтверждения от соперника (<b>{html.escape(away_team)}</b>). Как только он нажмет 'Подтвердить', результат занесется в таблицу.",
                 parse_mode="HTML"
             )
         except Exception as e:
             logger.error(f"Failed to send confirmation message to home player: {e}")
-    else:
-        await safe_query_answer(
-            query,
-            f"⚠️ Не удалось доставить результат гостю (ID: {guest_id}). Возможно, у гостя заблокирован бот или закрыто ЛС. Ошибка: {err_reason[:50]}",
-            show_alert=True
-        )
 
 async def handle_confirm_score(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
