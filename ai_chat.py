@@ -40,7 +40,9 @@ def generate_chat_reply(user_id: int, user_text: str, chat_history: list[dict], 
                 "и НАЗВАТЬ ЧЁТКУЮ ВЕРОЯТНОСТЬ В ПРОЦЕНТАХ (например: 'Шансы на чемпионство: ~12%', 'Шансы победить в матче: 60% на 40%'). "
                 "Всегда обосновывай цифры процента фактами: сколько туров осталось, сколько очков разыгрывается и какое отставание от лидера.\n\n"
                 f"=== ДАННЫЕ ЛИГИ И ИГРОКА ===\n{context_data}\n===========================\n\n"
-                "Отвечай коротко, аналитично, дружелюбно, используй эмодзи и всегда называй вероятности в процентах, если спрашивают про шансы!"
+                "СТРОГОЕ ПРАВИЛО ОФОРМЛЕНИЯ: НИКОГДА не используй звёздочки (*) и двойные звёздочки (**) для оформления! "
+                "Не используй markdown-выделение со звёздочками. Для списков и выделения используй эмодзи или просто чистый текст без символов '*'. "
+                "Отвечай коротко, аналитично, дружелюбно, всегда называй вероятности в процентах, если спрашивают про шансы!"
             )
         }]
     }
@@ -83,7 +85,10 @@ def generate_chat_reply(user_id: int, user_text: str, chat_history: list[dict], 
                     continue
                 
                 text_response = result["candidates"][0]["content"]["parts"][0]["text"]
-                return text_response.strip()
+                # Clean any asterisks from markdown
+                clean_text = text_response.replace("**", "").replace("*", "")
+                cleaned_lines = [line.strip() for line in clean_text.split("\n")]
+                return "\n".join(cleaned_lines).strip()
                 
         except urllib.error.HTTPError as e:
             logger.warning(f"AI Chat: Model {model_name} HTTP Error {e.code}: {e.reason}")
