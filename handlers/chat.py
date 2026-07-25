@@ -36,15 +36,55 @@ async def handle_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_team = user_data["team_name"] if user_data else "Не зарегистрирован"
     username = user_data["username"] if user_data else update.effective_user.username or str(user_id)
     
+    # Standings
     standings = database.get_standings()
-    standings_text = "Турнирная таблица:\n"
+    standings_text = "🏆 ТУРНИРНАЯ ТАБЛИЦА:\n"
     for i, st in enumerate(standings, 1):
-        standings_text += f"{i}. {st['team_name']} | И:{st['played']} В:{st['wins']} Н:{st['draws']} П:{st['losses']} | З-П:{st['goals_scored']}-{st['goals_conceded']} | Очки: {st['points']}\n"
+        standings_text += f"{i}. {st['team_name']} (@{st['username'] or '—'}) — Очки: {st['points']} (И:{st['played']} В:{st['wins']} Н:{st['draws']} П:{st['losses']}, Г:{st['goals_scored']}-{st['goals_conceded']})\n"
 
-    # Minimal context string
+    # Top Scorers
+    top_scorers = database.get_top_scorers(limit=15)
+    scorers_text = "⚽ ТОП БОМБАРДИРОВ:\n"
+    if top_scorers:
+        for i, sc in enumerate(top_scorers, 1):
+            scorers_text += f"{i}. {sc['player_name']} ({sc['team_name']}) — {sc['total_goals']} голов\n"
+    else:
+        scorers_text += "Пока нет зарегистрированных голов.\n"
+
+    # Top Assists
+    top_assists = database.get_top_assists(limit=15)
+    assists_text = "🎯 ТОП АССИСТЕНТОВ:\n"
+    if top_assists:
+        for i, asst in enumerate(top_assists, 1):
+            assists_text += f"{i}. {asst['player_name']} ({asst['team_name']}) — {asst['total_assists']} ассистов\n"
+    else:
+        assists_text += "Пока нет зарегистрированных ассистов.\n"
+
+    # Recent Matches
+    recent_matches = database.get_recent_confirmed_matches(limit=10)
+    matches_text = "📊 ПОСЛЕДНИЕ СЫГРАННЫЕ МАТЧИ:\n"
+    if recent_matches:
+        for m in recent_matches:
+            matches_text += f"Тур {m['round_number']}: {m['team1']} {m['player1_score']} : {m['player2_score']} {m['team2']}\n"
+    else:
+        matches_text += "Сыгранных матчей пока нет.\n"
+
+    # Squads Summary
+    all_squads = database.get_all_squads()
+    squads_text = "👥 СОСТАВЫ КЛУБОВ (ИГРОКИ ИХ КЛУБОВ):\n"
+    if all_squads:
+        for team, players in all_squads.items():
+            squads_text += f"• {team}: {', '.join(players)}\n"
+    else:
+        squads_text += "Составы пока не занесены.\n"
+
     context_data = (
-        f"Текущий пользователь (кто с тобой говорит): {username}, Команда: {user_team}.\n\n"
-        f"{standings_text}"
+        f"Пользователь, который с тобой говорит: {username} (тренер команды '{user_team}').\n\n"
+        f"{standings_text}\n"
+        f"{scorers_text}\n"
+        f"{assists_text}\n"
+        f"{matches_text}\n"
+        f"{squads_text}"
     )
 
     # 2. History Management

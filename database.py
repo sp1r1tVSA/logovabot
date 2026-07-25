@@ -1222,3 +1222,35 @@ def get_top_assists(limit: int = 20) -> list[dict]:
         """, (limit,))
         return [dict(row) for row in cursor.fetchall()]
 
+def get_recent_confirmed_matches(limit: int = 15) -> list[dict]:
+    """Retrieve recent confirmed matches across the league."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT 
+                m.id, m.round_number, m.player1_score, m.player2_score,
+                u1.team_name AS team1, u1.username AS user1,
+                u2.team_name AS team2, u2.username AS user2
+            FROM matches m
+            LEFT JOIN users u1 ON m.player1_id = u1.telegram_id
+            LEFT JOIN users u2 ON m.player2_id = u2.telegram_id
+            WHERE m.status = 'confirmed'
+            ORDER BY m.id DESC
+            LIMIT ?
+        """, (limit,))
+        return [dict(row) for row in cursor.fetchall()]
+
+def get_all_squads() -> dict[str, list[str]]:
+    """Retrieve all player squads grouped by team_name."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT team_name, player_name FROM squad_players ORDER BY team_name, id ASC")
+        squads = {}
+        for row in cursor.fetchall():
+            team = row["team_name"]
+            if team not in squads:
+                squads[team] = []
+            squads[team].append(row["player_name"])
+        return squads
+
+
