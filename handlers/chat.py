@@ -78,9 +78,24 @@ async def handle_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         squads_text += "Составы пока не занесены.\n"
 
+    # Tournament rounds info
+    all_rounds = database.get_all_rounds() or [30]
+    total_rounds = max(all_rounds) if all_rounds else 30
+    
+    # Team Recent Form
+    recent_form_map = database.get_teams_recent_form(5)
+    form_text = "📈 ФОРМА КОМАНД (последние игры: W=Победа, D=Ничья, L=Поражение):\n"
+    for st in standings:
+        uid = st.get("telegram_id")
+        form_list = recent_form_map.get(uid, [])
+        form_str = "-".join(form_list) if form_list else "нет игр"
+        form_text += f"• {st['team_name']}: {form_str}\n"
+
     context_data = (
-        f"Пользователь, который с тобой говорит: {username} (тренер команды '{user_team}').\n\n"
+        f"Пользователь, который с тобой говорит: {username} (тренер команды '{user_team}').\n"
+        f"Всего туров в турнире: {total_rounds}.\n\n"
         f"{standings_text}\n"
+        f"{form_text}\n"
         f"{scorers_text}\n"
         f"{assists_text}\n"
         f"{matches_text}\n"
