@@ -91,6 +91,32 @@ async def handle_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         form_str = "-".join(form_list) if form_list else "нет игр"
         form_text += f"• {st['team_name']}: {form_str}\n"
 
+    # History of past seasons
+    past_seasons_text = (
+        "📜 ИСТОРИЯ ПРОШЛЫХ СЕЗОНОВ ЛИГИ (КПЛ):\n\n"
+        "=== ИТОГИ ПРОШЛОГО СЕЗОНА (СЕЗОН 2) ===\n"
+        "• Чемпион: Расинг (@Vazya4mo666) — 74 очка, 108 голов (забрал золото и +7 тренировок). Двукратный чемпион!\n"
+        "• 2 место: Брага (@Saharokk8830) — 67 очков (серебро).\n"
+        "• 3 место: АЕК (@Snikers2121) — 62 очка (бронза).\n"
+        "• 4 место: Порту (@lvckri) — 58 очков.\n"
+        "• 5 место: Бенфика (@vtrrgyg) — 57 очков. Выиграла Кубок КПЛ (3:1 vs Расинг) и 🏆Лигу Конференций (vs Аль-Наср).\n"
+        "• 6 место: Фейеноорд (@GeorgiyKostenko) — 54 очка.\n"
+        "• 7 место: Аякс (@LachesisQQQ) — 50 очков.\n"
+        "• 8-9 места: Копенгаген (@crcsss) и Бока Хуниорс (@k1nkyua) — по 45 очков.\n"
+        "• 10-13 места: Ривер Плейт (31), Селтик (28), Спортинг (27), Будё-Глимт (25).\n"
+        "• 14-16 места (аутсайдеры): ПСВ (22), Рейнджерс (16), Брюгге (@malenkihyi) (14).\n"
+        "• Герои Сезона 2: Igor Paixao (Бенфика, 50 голов), Gittens (44 гола). Ассистенты: Bardghji, Ndoye, Rafa (по 24).\n\n"
+        "=== ИТОГИ ПОЗАПРОШЛОГО СЕЗОНА (СЕЗОН 1) ===\n"
+        "• Чемпион: Расинг (@Vazya4mo666) — вырвал золото у Браги в 1 очко!\n"
+        "• 2 место: Брага (@Saharokk8830) — 71 очко.\n"
+        "• 3 место: АЕК (@Snikers2121) — 63 очка. Победитель Кубка КПЛ.\n"
+        "• 4 место: Порту (@lvckri) — 55 очков.\n"
+        "• 5-6 места: Копенгаген (50) и ПСВ (50).\n"
+        "• Победитель Лиги Европы: Аякс (@LachesisQQQ).\n"
+        "• 15-16 места: Рейнджерс и Брюгге.\n"
+        "• Герои Сезона 1: Pineda (АЕК, 44 гола), Perisic (21 ассист).\n"
+    )
+
     context_data = (
         f"Пользователь, который с тобой говорит: {username} (тренер команды '{user_team}').\n"
         f"Всего туров в турнире: {total_rounds}.\n\n"
@@ -99,7 +125,8 @@ async def handle_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"{scorers_text}\n"
         f"{assists_text}\n"
         f"{matches_text}\n"
-        f"{squads_text}"
+        f"{squads_text}\n"
+        f"{past_seasons_text}"
     )
 
     # 2. History Management
