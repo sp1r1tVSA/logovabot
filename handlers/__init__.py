@@ -408,7 +408,7 @@ def register_all_handlers(application: Application) -> None:
     
     # AI Chat fallback handler
     from handlers.chat import handle_ai_chat
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_ai_chat))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_ai_chat))
 
     # Inline Button Callback handlers
     application.add_handler(CallbackQueryHandler(cb_refresh_league_table_topic, pattern="^refresh_league_table_topic$"))

@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from telegram import Update
 from telegram.constants import ChatAction
@@ -12,18 +13,23 @@ async def handle_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     Обработчик свободных сообщений. Реагирует, если сообщение начинается со слова "темшик".
     Подтягивает турнирную таблицу и информацию об игроке в качестве контекста.
     """
-    user_text = update.message.text
-    if not user_text:
+    if not update.message or not update.message.text:
         return
 
-    # Trigger word check
+    user_text = update.message.text.strip()
+
+    # Trigger word check (case-insensitive)
     if not user_text.lower().startswith("темшик"):
         return
 
     user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
     
     # Notify user that bot is "typing..."
-    await context.bot.send_chat_action(chat_id=user_id, action=ChatAction.TYPING)
+    try:
+        await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+    except Exception as e:
+        logger.warning(f"Failed to send typing action: {e}")
 
     # 1. Gather Context
     user_data = database.get_user(user_id)
@@ -47,8 +53,8 @@ async def handle_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     chat_history = context.user_data["chat_history"]
 
-    # 3. Call AI
-    reply_text = ai_chat.generate_chat_reply(user_id, user_text, chat_history, context_data)
+    # 3. Call AI non-blocking via thread
+    reply_text = await asyncio.to_thread(ai_chat.generate_chat_reply, user_id, user_text, chat_history, context_data)
 
     # 4. Save to history
     chat_history.append({"role": "user", "text": user_text})
