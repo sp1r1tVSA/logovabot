@@ -184,7 +184,7 @@ async def show_cabinet(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     # Check if user has a club assigned
-    team = database.get_user_team(user.id)
+    team = await asyncio.to_thread(database.get_user_team, user.id)
 
     if not team:
         if is_admin(user.id):
@@ -201,7 +201,7 @@ async def show_cabinet(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             return
 
     # Get stats
-    stats = database.get_player_stats(user.id)
+    stats = await asyncio.to_thread(database.get_player_stats, user.id)
     username_display = f"@{html.escape(user.username)}" if user.username else html.escape(user.first_name)
 
     text = (
@@ -248,7 +248,7 @@ async def show_club_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if not user:
         return
 
-    team = database.get_user_team(user.id)
+    team = await asyncio.to_thread(database.get_user_team, user.id)
     keyboard = [[InlineKeyboardButton("« Назад в кабинет", callback_data="menu_cabinet")]]
     markup = InlineKeyboardMarkup(keyboard)
 
@@ -258,8 +258,8 @@ async def show_club_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await query.edit_message_text(text, reply_markup=markup)
         return
 
-    scorers = database.get_club_top_scorers(team)
-    assisters = database.get_club_top_assisters(team)
+    scorers = await asyncio.to_thread(database.get_club_top_scorers, team)
+    assisters = await asyncio.to_thread(database.get_club_top_assisters, team)
 
     text = f"⚽ <b>Статистика игроков клуба {html.escape(team)}:</b>\n"
 
@@ -352,7 +352,7 @@ async def reg_team_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         return ConversationHandler.END
 
     # Update DB profile
-    database.update_profile(user.id, text, "Основная")
+    await asyncio.to_thread(database.update_profile, user.id, text, "Основная")
 
     await update.message.reply_text(
         "🎉 **Регистрация успешно завершена!**",
@@ -392,7 +392,7 @@ async def save_selective_edit(update: Update, context: ContextTypes.DEFAULT_TYPE
         return EDITING_FIELD
 
     # Update DB
-    database.update_single_field(user.id, "team_name", text)
+    await asyncio.to_thread(database.update_single_field, user.id, "team_name", text)
     context.user_data.pop("edit_field", None)
 
     await update.message.reply_text("✅ Клуб успешно изменен!")
@@ -446,7 +446,7 @@ async def show_my_matches(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
     await query.answer()
     user_id = query.from_user.id
-    matches = database.get_pending_matches(user_id)
+    matches = await asyncio.to_thread(database.get_pending_matches, user_id)
     
     text = "📋 **Ваши матчи в открытых турах:**\n\n"
     keyboard = []
@@ -473,12 +473,12 @@ async def cabinet_view_match(update: Update, context: ContextTypes.DEFAULT_TYPE)
     match_id = int(query.data.replace("cabinet_view_match_", ""))
     user_id = query.from_user.id
     
-    m = database.get_match(match_id)
+    m = await asyncio.to_thread(database.get_match, match_id)
     if not m:
         await safe_edit_or_reply(query, context, "Матч не найден.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Назад", callback_data="cabinet_my_matches")]]))
         return
         
-    round_info = database.get_round_info(m['round_number'])
+    round_info = await asyncio.to_thread(database.get_round_info, m['round_number'])
     deadline_text = round_info.get("deadline") if round_info else None
     
     is_overdue = False
@@ -610,7 +610,7 @@ async def cb_request_admin_result(update: Update, context: ContextTypes.DEFAULT_
 
     match_id = int(query.data.replace("cb_request_admin_result_", ""))
     user_id = query.from_user.id
-    m = database.get_match(match_id)
+    m = await asyncio.to_thread(database.get_match, match_id)
     if not m:
         await query.answer("Матч не найден.", show_alert=True)
         return
@@ -687,7 +687,7 @@ async def cb_admin_approve_result(update: Update, context: ContextTypes.DEFAULT_
     match_id = int(parts[0])
     player_id = int(parts[1])
 
-    m = database.get_match(match_id)
+    m = await asyncio.to_thread(database.get_match, match_id)
     if not m:
         await query.answer("Матч не найден.", show_alert=True)
         return
@@ -697,7 +697,7 @@ async def cb_admin_approve_result(update: Update, context: ContextTypes.DEFAULT_
         return
 
     # Unlock the match — set is_extended = 1 so overdue check is bypassed for the player
-    database.extend_match_deadline(match_id)
+    await asyncio.to_thread(database.extend_match_deadline, match_id)
 
     team1 = m.get('player1_team') or m.get('player1_nickname') or '?'
     team2 = m.get('player2_team') or m.get('player2_nickname') or '?'
@@ -747,7 +747,7 @@ async def cb_propose_time_prompt(update: Update, context: ContextTypes.DEFAULT_T
     await query.answer()
 
     match_id = int(query.data.replace("cb_propose_time_prompt_", ""))
-    match = database.get_match(match_id)
+    match = await asyncio.to_thread(database.get_match, match_id)
     if not match:
         return
 
@@ -797,8 +797,8 @@ async def cb_quick_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     time_str = parts[1]
     user_id = query.from_user.id
 
-    database.propose_match_time(match_id, user_id, time_str)
-    match = database.get_match(match_id)
+    await asyncio.to_thread(database.propose_match_time, match_id, user_id, time_str)
+    match = await asyncio.to_thread(database.get_match, match_id)
 
     # Notify opponent
     if match:
@@ -829,8 +829,8 @@ async def cb_accept_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     match_id = int(query.data.replace("cb_accept_time_", ""))
     user_id = query.from_user.id
 
-    database.accept_match_time(match_id)
-    match = database.get_match(match_id)
+    await asyncio.to_thread(database.accept_match_time, match_id)
+    match = await asyncio.to_thread(database.get_match, match_id)
 
     if match:
         proposer_id = match.get("proposed_by")
@@ -886,8 +886,8 @@ async def save_custom_match_time(update: Update, context: ContextTypes.DEFAULT_T
         await update.message.reply_text("❌ Ошибка: матч не найден.")
         return ConversationHandler.END
 
-    database.propose_match_time(match_id, user_id, time_str)
-    match = database.get_match(match_id)
+    await asyncio.to_thread(database.propose_match_time, match_id, user_id, time_str)
+    match = await asyncio.to_thread(database.get_match, match_id)
 
     if match:
         opp_id = match['player2_id'] if match['player1_id'] == user_id else match['player1_id']
@@ -907,9 +907,9 @@ async def save_custom_match_time(update: Update, context: ContextTypes.DEFAULT_T
     await update.message.reply_text(f"✅ Время матча #{match_id} успешно предложено: **{time_str}**", parse_mode="Markdown")
     
     # Render updated match card
-    m_info = database.get_match(match_id)
+    m_info = await asyncio.to_thread(database.get_match, match_id)
     if m_info:
-        round_info = database.get_round_info(m_info['round_number'])
+        round_info = await asyncio.to_thread(database.get_round_info, m_info['round_number'])
         deadline_text = round_info.get("deadline") if round_info else None
         
         if m_info['player1_id'] == user_id:
@@ -948,7 +948,7 @@ async def show_game_history(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     await query.answer()
     
     user_id = query.from_user.id
-    matches = database.get_match_history(user_id)
+    matches = await asyncio.to_thread(database.get_match_history, user_id)
     
     text = "📜 **Ваша история игр:**\n\n"
     if not matches:
@@ -984,7 +984,7 @@ async def start_score_reporting(update: Update, context: ContextTypes.DEFAULT_TY
 
     context.user_data["reporting_match_id"] = match_id
 
-    match = database.get_match(match_id)
+    match = await asyncio.to_thread(database.get_match, match_id)
     if not match:
         if query:
             await query.answer("❌ Матч не найден.", show_alert=True)
@@ -1125,7 +1125,7 @@ async def render_squad_goals_picker(update: Update, context: ContextTypes.DEFAUL
     left = context.user_data.get("goals_to_pick", 0)
     picked_dict = context.user_data.get("home_goals_count", {})
 
-    squad = database.get_squad(team_name)
+    squad = await asyncio.to_thread(database.get_squad, team_name)
 
     summary_str = ""
     if picked_dict:
@@ -1203,7 +1203,7 @@ async def render_squad_assists_picker(update: Update, context: ContextTypes.DEFA
     left = context.user_data.get("assists_to_pick", 0)
     picked_dict = context.user_data.get("home_assists_count", {})
 
-    squad = database.get_squad(team_name)
+    squad = await asyncio.to_thread(database.get_squad, team_name)
 
     summary_str = ""
     if picked_dict:
@@ -1311,7 +1311,7 @@ async def save_report_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         processed_groups.add(media_group_id)
 
     match_id = context.user_data.get("reporting_match_id")
-    match = database.get_match(match_id) if match_id else None
+    match = await asyncio.to_thread(database.get_match, match_id) if match_id else None
     home_team = context.user_data.get("report_home_team") or (match.get("player1_team") if match else "Хозяева")
     away_team = context.user_data.get("report_away_team") or (match.get("player2_team") if match else "Гости")
 
@@ -1344,7 +1344,7 @@ async def save_report_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
                 is_single_timeline = bool(ai_res.get("is_single_timeline", False))
 
-                h_goals, a_goals, h_assists, a_assists, is_side1_home = match_and_enrich_squad(
+                h_goals, a_goals, h_assists, a_assists, is_side1_home = await asyncio.to_thread(match_and_enrich_squad, 
                     s1_goals, s2_goals, s1_assists, s2_assists, home_team, away_team, is_single_timeline=is_single_timeline
                 )
 
@@ -1536,7 +1536,7 @@ async def cb_confirm_ai_final(update: Update, context: ContextTypes.DEFAULT_TYPE
     await query.answer()
 
     match_id = int(query.data.replace("cb_confirm_ai_final_", ""))
-    match = database.get_match(match_id)
+    match = await asyncio.to_thread(database.get_match, match_id)
     if not match:
         await query.answer("❌ Матч не найден.", show_alert=True)
         return
@@ -1564,7 +1564,7 @@ async def cb_confirm_ai_final(update: Update, context: ContextTypes.DEFAULT_TYPE
     for p, c in a_assists.items():
         events.append((away_team, p, "assist", c))
 
-    database.confirm_and_finalize_match(match_id, h_score, a_score, events, reporter_id=user_id, photo_id=photo_id)
+    await asyncio.to_thread(database.confirm_and_finalize_match, match_id, h_score, a_score, events, reporter_id=user_id, photo_id=photo_id)
 
     # 1. PM to reporter
     reporter_text = build_formatted_match_post(
@@ -1627,8 +1627,8 @@ async def cb_confirm_ai_final(update: Update, context: ContextTypes.DEFAULT_TYPE
         await safe_send_notification(context.bot, p_id, opp_text)
 
     # 3. Post to Group
-    main_group_id = database.get_group_id()
-    results_topic_id = database.get_config("results_topic_id") or database.get_config("reports_topic_id")
+    main_group_id = await asyncio.to_thread(database.get_group_id)
+    results_topic_id = (await asyncio.to_thread(database.get_config, "results_topic_id")) or (await asyncio.to_thread(database.get_config, "reports_topic_id"))
     if main_group_id:
         group_text = build_formatted_match_post(
             round_number=match['round_number'],
@@ -1674,7 +1674,7 @@ async def submit_report_to_guest(update: Update, context: ContextTypes.DEFAULT_T
     if not match_id:
         match_id = context.user_data.get("reporting_match_id")
 
-    match = database.get_match(match_id) if match_id else None
+    match = await asyncio.to_thread(database.get_match, match_id) if match_id else None
     if not match:
         await query.answer("❌ Ошибка: матч не найден.", show_alert=True)
         return
@@ -1696,9 +1696,9 @@ async def submit_report_to_guest(update: Update, context: ContextTypes.DEFAULT_T
         events.append((home_team, p, "assist", c))
 
     # Save to database
-    database.report_match_score(match_id, hg, ag, home_user_id, photo_id)
+    await asyncio.to_thread(database.report_match_score, match_id, hg, ag, home_user_id, photo_id)
     if events:
-        database.save_match_events(match_id, events, team_name=home_team)
+        await asyncio.to_thread(database.save_match_events, match_id, events, team_name=home_team)
 
     # Notify Guest
     guest_id = match['player2_id']
@@ -1757,7 +1757,7 @@ async def submit_report_to_guest(update: Update, context: ContextTypes.DEFAULT_T
 
     if is_admin_user or not sent_success:
         # Auto-confirm and finalize if admin or if guest cannot be reached in PM
-        database.confirm_and_finalize_match(match_id, hg, ag, events, reporter_id=home_user_id, photo_id=photo_id)
+        await asyncio.to_thread(database.confirm_and_finalize_match, match_id, hg, ag, events, reporter_id=home_user_id, photo_id=photo_id)
         
         reason_msg = "✅ КАК АДМИНИСТРАТОР: Результат сразу занесен в таблицу!" if is_admin_user else "⚠️ У соперника закрыто ЛС бота. Результат автоматически занесен в таблицу!"
         await safe_query_answer(query, reason_msg, show_alert=True)
@@ -1807,7 +1807,7 @@ async def handle_confirm_score(update: Update, context: ContextTypes.DEFAULT_TYP
     await query.answer()
 
     match_id = int(query.data.replace("confirm_score_", ""))
-    match = database.get_match(match_id)
+    match = await asyncio.to_thread(database.get_match, match_id)
     if not match:
         await query.edit_message_text("❌ Матч не найден.")
         return
@@ -1829,7 +1829,7 @@ async def handle_confirm_score(update: Update, context: ContextTypes.DEFAULT_TYP
         await render_guest_goals_picker(update, context, away_team)
     else:
         # 0 away goals -> confirm immediately
-        database.confirm_match(match_id)
+        await asyncio.to_thread(database.confirm_match, match_id)
         await notify_match_confirmed(context, match_id)
 
 async def render_guest_goals_picker(update: Update, context: ContextTypes.DEFAULT_TYPE, team_name: str) -> None:
@@ -1837,7 +1837,7 @@ async def render_guest_goals_picker(update: Update, context: ContextTypes.DEFAUL
     left = context.user_data.get("guest_goals_to_pick", 0)
     picked_dict = context.user_data.get("guest_goals_count", {})
 
-    squad = database.get_squad(team_name)
+    squad = await asyncio.to_thread(database.get_squad, team_name)
     summary_str = ""
     if picked_dict:
         summary_str = "\n\n⚽ **Уже выбрано:**\n" + "\n".join([f"• {p}: {c}" for p, c in picked_dict.items()])
@@ -1901,7 +1901,7 @@ async def guest_skip_goals(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 async def start_guest_assists_picker(update: Update, context: ContextTypes.DEFAULT_TYPE, team_name: str) -> None:
     match_id = context.user_data.get("guest_confirm_match_id")
-    match = database.get_match(match_id)
+    match = await asyncio.to_thread(database.get_match, match_id)
     ag = match['player2_score'] if match else 1
     context.user_data["guest_assists_to_pick"] = ag
     context.user_data["guest_assists_count"] = {}
@@ -1912,7 +1912,7 @@ async def render_guest_assists_picker(update: Update, context: ContextTypes.DEFA
     left = context.user_data.get("guest_assists_to_pick", 0)
     picked_dict = context.user_data.get("guest_assists_count", {})
 
-    squad = database.get_squad(team_name)
+    squad = await asyncio.to_thread(database.get_squad, team_name)
     summary_str = ""
     if picked_dict:
         summary_str = "\n\n🎯 **Уже выбрано:**\n" + "\n".join([f"• {p}: {c}" for p, c in picked_dict.items()])
@@ -1985,13 +1985,13 @@ async def finalize_guest_confirmation(update: Update, context: ContextTypes.DEFA
         events.append((away_team, p, "assist", c))
 
     if events:
-        database.save_match_events(match_id, events, team_name=away_team)
+        await asyncio.to_thread(database.save_match_events, match_id, events, team_name=away_team)
 
-    database.confirm_match(match_id)
+    await asyncio.to_thread(database.confirm_match, match_id)
     await notify_match_confirmed(context, match_id)
 
 async def notify_match_confirmed(context: ContextTypes.DEFAULT_TYPE, match_id: int) -> None:
-    match = database.get_match(match_id)
+    match = await asyncio.to_thread(database.get_match, match_id)
     if not match:
         return
 
@@ -2000,7 +2000,7 @@ async def notify_match_confirmed(context: ContextTypes.DEFAULT_TYPE, match_id: i
     p1_score = match['player1_score']
     p2_score = match['player2_score']
 
-    events = database.get_match_events(match_id)
+    events = await asyncio.to_thread(database.get_match_events, match_id)
 
     home_goals = [f"{e['player_name']} ({e['count']})" if e['count'] > 1 else f"{e['player_name']} (1)" for e in events if e['event_type'] == 'goal' and e['team_name'].lower() == home_team.lower()]
     away_goals = [f"{e['player_name']} ({e['count']})" if e['count'] > 1 else f"{e['player_name']} (1)" for e in events if e['event_type'] == 'goal' and e['team_name'].lower() == away_team.lower()]
@@ -2030,8 +2030,8 @@ async def notify_match_confirmed(context: ContextTypes.DEFAULT_TYPE, match_id: i
             except Exception as e:
                 logger.error(f"Failed to send confirmation to player {p_id}: {e}")
 
-    results_topic_id = database.get_config("results_topic_id")
-    group_id = database.get_group_id()
+    results_topic_id = await asyncio.to_thread(database.get_config, "results_topic_id")
+    group_id = await asyncio.to_thread(database.get_group_id)
     if group_id:
         group_text = build_formatted_match_post(
             round_number=match['round_number'],
@@ -2075,7 +2075,7 @@ async def handle_dispute_score(update: Update, context: ContextTypes.DEFAULT_TYP
     await query.answer()
 
     match_id = int(query.data.replace("dispute_score_", ""))
-    match = database.get_match(match_id)
+    match = await asyncio.to_thread(database.get_match, match_id)
     if not match:
         await query.edit_message_text("❌ Матч не найден.")
         return ConversationHandler.END
@@ -2137,7 +2137,7 @@ async def cb_finish_dispute_photos(update: Update, context: ContextTypes.DEFAULT
     photos = context.user_data.get("dispute_photos", [])
 
     photos_json = json.dumps(photos)
-    database.save_dispute_evidence(match_id, photos_json)
+    await asyncio.to_thread(database.save_dispute_evidence, match_id, photos_json)
 
     text = "❌ **Результат матча оспорен.** Спорное досье передано администраторам для проверки."
     if query:
@@ -2148,7 +2148,7 @@ async def cb_finish_dispute_photos(update: Update, context: ContextTypes.DEFAULT
     else:
         await update.message.reply_text(text, parse_mode="Markdown")
 
-    match = database.get_match(match_id)
+    match = await asyncio.to_thread(database.get_match, match_id)
     if match:
         try:
             await context.bot.send_message(
@@ -2171,7 +2171,7 @@ async def show_my_squad(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     else:
         user = update.effective_user
 
-    db_user = database.get_user(user.id)
+    db_user = await asyncio.to_thread(database.get_user, user.id)
     if not db_user:
         return ConversationHandler.END
 
@@ -2226,16 +2226,16 @@ async def save_squad_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     photo_id = update.message.photo[-1].file_id
     user_id = update.effective_user.id
     
-    database.update_single_field(user_id, "squad_photo_id", photo_id)
+    await asyncio.to_thread(database.update_single_field, user_id, "squad_photo_id", photo_id)
     
     await update.message.reply_text("✅ Состав успешно сохранен!")
     await show_my_squad(update, context)
 
-    group_id = database.get_group_id()
-    squad_topic_id = database.get_config("squad_topic_id")
+    group_id = await asyncio.to_thread(database.get_group_id)
+    squad_topic_id = await asyncio.to_thread(database.get_config, "squad_topic_id")
     if group_id and squad_topic_id:
         try:
-            db_user = database.get_user(user_id)
+            db_user = await asyncio.to_thread(database.get_user, user_id)
             team_name = db_user['team_name'] if db_user and db_user['team_name'] else "Неизвестный клуб"
             username = update.effective_user.username
             username_str = f"@{username}" if username else update.effective_user.first_name
@@ -2264,7 +2264,7 @@ async def cabinet_view_squad(update: Update, context: ContextTypes.DEFAULT_TYPE)
         
     await safe_query_answer(query)
     opp_id = int(query.data.replace("cabinet_view_squad_", ""))
-    opp_user = database.get_user(opp_id)
+    opp_user = await asyncio.to_thread(database.get_user, opp_id)
     
     if not opp_user:
         await safe_query_answer(query, "Игрок не найден.", show_alert=True)

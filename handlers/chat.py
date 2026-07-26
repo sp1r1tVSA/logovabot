@@ -31,19 +31,38 @@ async def handle_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.warning(f"Failed to send typing action: {e}")
 
-    # 1. Gather Context
-    user_data = database.get_user(user_id)
+    # 1. Gather Context concurrently
+    (
+        user_data,
+        standings,
+        top_scorers,
+        top_assists,
+        recent_matches,
+        all_squads,
+        all_rounds,
+        recent_form_map,
+        pending_matches
+    ) = await asyncio.gather(
+        asyncio.to_thread(database.get_user, user_id),
+        asyncio.to_thread(database.get_standings),
+        asyncio.to_thread(database.get_top_scorers, limit=15),
+        asyncio.to_thread(database.get_top_assists, limit=15),
+        asyncio.to_thread(database.get_recent_confirmed_matches, limit=10),
+        asyncio.to_thread(database.get_all_squads),
+        asyncio.to_thread(database.get_all_rounds),
+        asyncio.to_thread(database.get_teams_recent_form, 5),
+        asyncio.to_thread(database.get_open_pending_matches)
+    )
+
     user_team = user_data["team_name"] if user_data else "Не зарегистрирован"
     username = user_data["username"] if user_data else update.effective_user.username or str(user_id)
     
     # Standings
-    standings = database.get_standings()
     standings_text = "🏆 ТУРНИРНАЯ ТАБЛИЦА:\n"
     for i, st in enumerate(standings, 1):
         standings_text += f"{i}. {st['team_name']} (@{st['username'] or '—'}) — Очки: {st['points']} (И:{st['played']} В:{st['wins']} Н:{st['draws']} П:{st['losses']}, Г:{st['goals_scored']}-{st['goals_conceded']})\n"
 
     # Top Scorers
-    top_scorers = database.get_top_scorers(limit=15)
     scorers_text = "⚽ ТОП БОМБАРДИРОВ:\n"
     if top_scorers:
         for i, sc in enumerate(top_scorers, 1):
@@ -52,7 +71,6 @@ async def handle_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         scorers_text += "Пока нет зарегистрированных голов.\n"
 
     # Top Assists
-    top_assists = database.get_top_assists(limit=15)
     assists_text = "🎯 ТОП АССИСТЕНТОВ:\n"
     if top_assists:
         for i, asst in enumerate(top_assists, 1):
@@ -61,7 +79,6 @@ async def handle_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         assists_text += "Пока нет зарегистрированных ассистов.\n"
 
     # Recent Matches
-    recent_matches = database.get_recent_confirmed_matches(limit=10)
     matches_text = "📊 ПОСЛЕДНИЕ СЫГРАННЫЕ МАТЧИ:\n"
     if recent_matches:
         for m in recent_matches:
@@ -70,7 +87,6 @@ async def handle_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         matches_text += "Сыгранных матчей пока нет.\n"
 
     # Squads Summary
-    all_squads = database.get_all_squads()
     squads_text = "👥 СОСТАВЫ КЛУБОВ (ИГРОКИ ИХ КЛУБОВ):\n"
     if all_squads:
         for team, players in all_squads.items():
@@ -79,11 +95,10 @@ async def handle_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         squads_text += "Составы пока не занесены.\n"
 
     # Tournament rounds info
-    all_rounds = database.get_all_rounds() or [30]
-    total_rounds = max(all_rounds) if all_rounds else 30
+    all_rounds_list = all_rounds or [30]
+    total_rounds = max(all_rounds_list) if all_rounds_list else 30
     
     # Team Recent Form
-    recent_form_map = database.get_teams_recent_form(5)
     form_text = "📈 ФОРМА КОМАНД (последние игры: W=Победа, D=Ничья, L=Поражение):\n"
     for st in standings:
         uid = st.get("telegram_id")
@@ -92,7 +107,6 @@ async def handle_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         form_text += f"• {st['team_name']}: {form_str}\n"
 
     # Full upcoming schedule (all pending/unplayed matches)
-    pending_matches = database.get_open_pending_matches()
     schedule_by_round: dict[int, list[str]] = {}
     for pm in pending_matches:
         rnd = pm.get("round_number", "?")

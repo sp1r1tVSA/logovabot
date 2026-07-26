@@ -1,3 +1,4 @@
+import asyncio
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes, ConversationHandler
 import html
@@ -95,7 +96,7 @@ async def admin_list_players(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await query.edit_message_text("❌ У вас нет прав.")
         return
 
-    players = database.list_users()
+    players = await asyncio.to_thread(database.list_users)
     keyboard = [[InlineKeyboardButton("« Назад", callback_data="admin_main_menu")]]
     markup = InlineKeyboardMarkup(keyboard)
 
@@ -132,7 +133,7 @@ async def admin_generate_matches_execute(update: Update, context: ContextTypes.D
     await query.answer()
 
     # Get players with team
-    players = [p['telegram_id'] for p in database.list_users() if p['team_name']]
+    players = [p['telegram_id'] for p in (await asyncio.to_thread(database.list_users)) if p['team_name']]
     
     if len(players) < 2:
         keyboard = [[InlineKeyboardButton("« Назад в админку", callback_data="admin_main_menu")]]
@@ -147,8 +148,8 @@ async def admin_generate_matches_execute(update: Update, context: ContextTypes.D
     fixtures = generate_round_robin_fixtures(players)
     
     # Clear and insert
-    database.clear_all_matches()
-    database.batch_insert_matches(fixtures)
+    await asyncio.to_thread(database.clear_all_matches)
+    await asyncio.to_thread(database.batch_insert_matches, fixtures)
 
     total_rounds = max(f[0] for f in fixtures) if fixtures else 0
     
@@ -164,7 +165,7 @@ async def admin_generate_matches_execute(update: Update, context: ContextTypes.D
     )
 
     # Notify group
-    group_id = database.get_group_id()
+    group_id = await asyncio.to_thread(database.get_group_id)
     if group_id:
         group_text = (
             f"📅 **Старт новой лиги!**\n\n"
@@ -186,7 +187,7 @@ async def admin_list_disputed(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
     await query.answer()
     
-    matches = database.get_disputed_matches()
+    matches = await asyncio.to_thread(database.get_disputed_matches)
     if not matches:
         text = "⚖️ **Спорные матчи**\n\nВ данный момент нет нерассмотренных спорных матчей."
         keyboard = [[InlineKeyboardButton("« Назад в админку", callback_data="admin_main_menu")]]
@@ -213,7 +214,7 @@ async def admin_reset_dispute(update: Update, context: ContextTypes.DEFAULT_TYPE
     await query.answer()
 
     match_id = int(query.data.replace("admin_reset_dispute_", ""))
-    database.reset_match_report(match_id)
+    await asyncio.to_thread(database.reset_match_report, match_id)
 
     await query.edit_message_text(f"✅ Результат матча #{match_id} сброшен. Хозяева поля могут ввести его заново.")
 
@@ -226,7 +227,7 @@ async def admin_start_resolve_dispute(update: Update, context: ContextTypes.DEFA
     match_id = int(query.data.replace("admin_resolve_dispute_", ""))
     context.user_data["admin_resolve_match_id"] = match_id
 
-    match = database.get_match(match_id)
+    match = await asyncio.to_thread(database.get_match, match_id)
     if not match:
         await query.edit_message_text("Матч не найден.")
         return ConversationHandler.END
@@ -249,7 +250,7 @@ async def admin_save_dispute_score(update: Update, context: ContextTypes.DEFAULT
         await update.message.reply_text("Ошибка доступа или сессии.")
         return ConversationHandler.END
 
-    match = database.get_match(match_id)
+    match = await asyncio.to_thread(database.get_match, match_id)
     if not match:
         await update.message.reply_text("Матч не найден.")
         return ConversationHandler.END
@@ -267,7 +268,7 @@ async def admin_save_dispute_score(update: Update, context: ContextTypes.DEFAULT
     p2_score = int(m.group(2))
 
     # Save to database (confirms match)
-    database.admin_set_match_score(match_id, p1_score, p2_score)
+    await asyncio.to_thread(database.admin_set_match_score, match_id, p1_score, p2_score)
     context.user_data.pop("admin_resolve_match_id", None)
 
     await update.message.reply_text(
@@ -331,7 +332,7 @@ async def admin_list_players_page(update: Update, context: ContextTypes.DEFAULT_
     if query.data.startswith("admin_list_players_page_"):
         page = int(query.data.replace("admin_list_players_page_", ""))
         
-    players = database.list_users()
+    players = await asyncio.to_thread(database.list_users)
     if not players:
         keyboard = [[InlineKeyboardButton("« Назад", callback_data="admin_manage_players_info")]]
         await query.edit_message_text("👥 Нет зарегистрированных игроков.", reply_markup=InlineKeyboardMarkup(keyboard))
@@ -377,7 +378,7 @@ async def admin_view_player(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     await query.answer()
     
     player_id = int(query.data.replace("admin_view_player_", ""))
-    player = database.get_user(player_id)
+    player = await asyncio.to_thread(database.get_user, player_id)
     
     if not player:
         keyboard = [[InlineKeyboardButton("« Назад к списку", callback_data="admin_list_players_page_0")]]
@@ -419,7 +420,7 @@ async def admin_confirm_delete_player(update: Update, context: ContextTypes.DEFA
     await query.answer()
     
     player_id = int(query.data.replace("admin_confirm_delete_player_", ""))
-    player = database.get_user(player_id)
+    player = await asyncio.to_thread(database.get_user, player_id)
     
     if not player:
         keyboard = [[InlineKeyboardButton("« Назад к списку", callback_data="admin_list_players_page_0")]]
@@ -446,20 +447,20 @@ async def admin_delete_player_execute(update: Update, context: ContextTypes.DEFA
     await query.answer()
     
     player_id = int(query.data.replace("admin_delete_player_execute_", ""))
-    player = database.get_user(player_id)
+    player = await asyncio.to_thread(database.get_user, player_id)
     
     if not player:
         keyboard = [[InlineKeyboardButton("« Назад к списку", callback_data="admin_list_players_page_0")]]
         await query.edit_message_text("❌ Игрок не найден.", reply_markup=InlineKeyboardMarkup(keyboard))
         return
         
-    success, msg = database.remove_player(str(player_id))
+    success, msg = await asyncio.to_thread(database.remove_player, str(player_id))
     keyboard = [[InlineKeyboardButton("« Назад к списку", callback_data="admin_list_players_page_0")]]
     
     if success:
         await query.edit_message_text(f"✅ {msg}", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
         
-        group_id = database.get_group_id()
+        group_id = await asyncio.to_thread(database.get_group_id)
         if group_id:
             try:
                 await context.bot.send_message(chat_id=group_id, text=f"📢 **Изменение состава лиги!**\n\n{msg}", parse_mode="Markdown")
@@ -482,10 +483,10 @@ async def admin_manage_matches_info(update: Update, context: ContextTypes.DEFAUL
          InlineKeyboardButton("⏰ Просроченные", callback_data="admin_list_overdue")]
     ]
     
-    rounds = database.get_all_rounds()
+    rounds = await asyncio.to_thread(database.get_all_rounds)
     row = []
     for r in rounds:
-        info = database.get_round_info(r)
+        info = await asyncio.to_thread(database.get_round_info, r)
         status_icon = "🟢" if info and info.get("is_open") else "🔴"
         row.append(InlineKeyboardButton(f"{status_icon} Тур {r}", callback_data=f"admin_manage_round_{r}"))
         if len(row) == 2:
@@ -509,7 +510,7 @@ async def admin_manage_round(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await query.answer()
     
     round_number = int(query.data.replace("admin_manage_round_", ""))
-    info = database.get_round_info(round_number)
+    info = await asyncio.to_thread(database.get_round_info, round_number)
     
     if not info:
         return
@@ -541,7 +542,7 @@ async def admin_extend_match_execute(update: Update, context: ContextTypes.DEFAU
     await query.answer()
     
     match_id = int(query.data.replace("admin_extend_match_", ""))
-    database.extend_match_deadline(match_id)
+    await asyncio.to_thread(database.extend_match_deadline, match_id)
     
     keyboard = [[InlineKeyboardButton("« Вернуться к матчу", callback_data=f"admin_view_match_{match_id}")]]
     await query.edit_message_text(
@@ -555,7 +556,7 @@ async def admin_list_overdue(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not query or not is_admin(query.from_user.id): return
     await query.answer()
     
-    matches = database.get_open_pending_matches()
+    matches = await asyncio.to_thread(database.get_open_pending_matches)
     now = datetime.datetime.now()
     overdue_matches = []
     
@@ -621,7 +622,7 @@ async def admin_open_round_save(update: Update, context: ContextTypes.DEFAULT_TY
     if not round_number:
         return ConversationHandler.END
         
-    database.update_round_status(round_number, is_open=True, deadline=deadline_text)
+    await asyncio.to_thread(database.update_round_status, round_number, is_open=True, deadline=deadline_text)
     
     keyboard = [[InlineKeyboardButton("« К управлению турами", callback_data="admin_manage_matches_info")]]
     await update.message.reply_text(
@@ -630,8 +631,8 @@ async def admin_open_round_save(update: Update, context: ContextTypes.DEFAULT_TY
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
     
-    main_group_id = database.get_group_id()
-    reports_topic_id = database.get_config("reports_topic_id")
+    main_group_id = await asyncio.to_thread(database.get_group_id)
+    reports_topic_id = await asyncio.to_thread(database.get_config, "reports_topic_id")
     if main_group_id:
         try:
             kwargs = {"chat_id": main_group_id, "text": f"🟢 **Открыт {round_number}-й Тур!**\n\n🕒 Дедлайн: {deadline_text}\n\nПожалуйста, сыграйте свои матчи и внесите результаты до истечения срока.", "parse_mode": "Markdown"}
@@ -702,7 +703,7 @@ async def admin_open_batch_deadline(update: Update, context: ContextTypes.DEFAUL
     start_r = context.user_data.get("batch_start")
     end_r = context.user_data.get("batch_end")
     
-    database.open_rounds_batch(start_r, end_r, deadline_text)
+    await asyncio.to_thread(database.open_rounds_batch, start_r, end_r, deadline_text)
     
     keyboard = [[InlineKeyboardButton("« К управлению турами", callback_data="admin_manage_matches_info")]]
     await update.message.reply_text(
@@ -711,8 +712,8 @@ async def admin_open_batch_deadline(update: Update, context: ContextTypes.DEFAUL
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
     
-    main_group_id = database.get_group_id()
-    reports_topic_id = database.get_config("reports_topic_id")
+    main_group_id = await asyncio.to_thread(database.get_group_id)
+    reports_topic_id = await asyncio.to_thread(database.get_config, "reports_topic_id")
     if main_group_id:
         try:
             kwargs = {"chat_id": main_group_id, "text": f"🟢 **Открыты туры с {start_r} по {end_r}!**\n\n🕒 Дедлайн: {deadline_text}\n\nПожалуйста, сыграйте свои матчи и внесите результаты до истечения срока.", "parse_mode": "Markdown"}
@@ -734,7 +735,7 @@ async def admin_close_round(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     await query.answer()
     
     round_number = int(query.data.replace("admin_close_round_", ""))
-    database.update_round_status(round_number, is_open=False, deadline=None)
+    await asyncio.to_thread(database.update_round_status, round_number, is_open=False, deadline=None)
     
     keyboard = [[InlineKeyboardButton("« Вернуться", callback_data=f"admin_manage_round_{round_number}")]]
     await query.edit_message_text(
@@ -753,7 +754,7 @@ async def admin_round_matches(update: Update, context: ContextTypes.DEFAULT_TYPE
         pass
     
     round_number = int(query.data.replace("admin_round_matches_", ""))
-    matches = database.get_matches_by_round(round_number)
+    matches = await asyncio.to_thread(database.get_matches_by_round, round_number)
     
     keyboard = []
     for m in matches:
@@ -800,7 +801,7 @@ async def admin_view_match(update: Update, context: ContextTypes.DEFAULT_TYPE, m
     
     if match_id is None:
         match_id = int(query.data.replace("admin_view_match_", ""))
-    match = database.get_match(match_id)
+    match = await asyncio.to_thread(database.get_match, match_id)
     
     if not match:
         keyboard = [[InlineKeyboardButton("« Назад", callback_data="admin_manage_matches_info")]]
@@ -860,7 +861,7 @@ async def admin_report_score_auto(update: Update, context: ContextTypes.DEFAULT_
     await query.answer()
 
     match_id = int(query.data.replace("admin_report_score_auto_", ""))
-    match = database.get_match(match_id)
+    match = await asyncio.to_thread(database.get_match, match_id)
     if not match:
         await query.edit_message_text("❌ Матч не найден.")
         return
@@ -887,7 +888,7 @@ async def admin_set_tp_home_execute(update: Update, context: ContextTypes.DEFAUL
     if not query or not is_admin(query.from_user.id): return
     await query.answer()
     match_id = int(query.data.replace("admin_tp_home_", ""))
-    database.set_technical_result(match_id, 3, 0)
+    await asyncio.to_thread(database.set_technical_result, match_id, 3, 0)
     await query.answer("✅ Назначено ТП 3:0 (Победа Хозяев)", show_alert=True)
     await admin_view_match(update, context, match_id=match_id)
 
@@ -896,7 +897,7 @@ async def admin_set_tp_away_execute(update: Update, context: ContextTypes.DEFAUL
     if not query or not is_admin(query.from_user.id): return
     await query.answer()
     match_id = int(query.data.replace("admin_tp_away_", ""))
-    database.set_technical_result(match_id, 0, 3)
+    await asyncio.to_thread(database.set_technical_result, match_id, 0, 3)
     await query.answer("✅ Назначено ТП 0:3 (Победа Гостей)", show_alert=True)
     await admin_view_match(update, context, match_id=match_id)
 
@@ -905,7 +906,7 @@ async def admin_set_tp_draw_execute(update: Update, context: ContextTypes.DEFAUL
     if not query or not is_admin(query.from_user.id): return
     await query.answer()
     match_id = int(query.data.replace("admin_tp_draw_", ""))
-    database.set_technical_result(match_id, 0, 0)
+    await asyncio.to_thread(database.set_technical_result, match_id, 0, 0)
     await query.answer("✅ Назначена Техническая ничья 0:0", show_alert=True)
     await admin_view_match(update, context, match_id=match_id)
 
@@ -917,14 +918,14 @@ async def admin_reset_match_execute(update: Update, context: ContextTypes.DEFAUL
     await query.answer()
     
     match_id = int(query.data.replace("admin_reset_match_execute_", ""))
-    match = database.get_match(match_id)
+    match = await asyncio.to_thread(database.get_match, match_id)
     
     if not match:
         keyboard = [[InlineKeyboardButton("« Назад", callback_data="admin_manage_matches_info")]]
         await query.edit_message_text("❌ Матч не найден.", reply_markup=InlineKeyboardMarkup(keyboard))
         return
         
-    database.reset_match(match_id)
+    await asyncio.to_thread(database.reset_match, match_id)
     
     player_text = (
         f"🔄 **Результат вашего матча в Туре {match['round_number']} был сброшен администратором!**\n\n"
@@ -1003,7 +1004,7 @@ async def admin_show_free_clubs(update: Update, context: ContextTypes.DEFAULT_TY
         return ConversationHandler.END
 
     # Get active mapping of club to player username
-    club_to_player = {u["team_name"].lower(): u["username"] for u in database.list_users() if u["team_name"]}
+    club_to_player = {u["team_name"].lower(): u["username"] for u in (await asyncio.to_thread(database.list_users)) if u["team_name"]}
     
     keyboard = []
     row = []
@@ -1050,7 +1051,7 @@ async def admin_add_player_club_callback(update: Update, context: ContextTypes.D
         return ConversationHandler.END
         
     # Assign new player to the club (will automatically handle unlinking the old one)
-    temp_id, old_username = database.assign_player_to_club(username, club)
+    temp_id, old_username = await asyncio.to_thread(database.assign_player_to_club, username, club)
     
     text = (
         f"✅ <b>Игрок успешно добавлен!</b>\n\n"
@@ -1123,7 +1124,7 @@ async def admin_import_players_text(update: Update, context: ContextTypes.DEFAUL
             continue
             
         try:
-            temp_id, old_username = database.assign_player_to_club(username, team_name)
+            temp_id, old_username = await asyncio.to_thread(database.assign_player_to_club, username, team_name)
             added.append(f"• @{username} — {team_name} (ID: `{temp_id}`)")
         except Exception as e:
             errors.append(f"Ошибка при добавлении @{username}: {e}")
@@ -1151,7 +1152,7 @@ async def admin_edit_club_start(update: Update, context: ContextTypes.DEFAULT_TY
     await query.answer()
     
     player_id = int(query.data.replace("admin_edit_club_start_", ""))
-    player = database.get_user(player_id)
+    player = await asyncio.to_thread(database.get_user, player_id)
     
     if not player:
         await query.edit_message_text("❌ Игрок не найден.")
@@ -1178,7 +1179,7 @@ async def admin_edit_club_text(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text("Произошла ошибка (не найден ID игрока). Сброс.")
         return ConversationHandler.END
         
-    success, msg = database.set_player_club(str(player_id), new_club)
+    success, msg = await asyncio.to_thread(database.set_player_club, str(player_id), new_club)
     await update.message.reply_text(
             "✅ {msg}",
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« К карточке игрока", callback_data=f"admin_view_player_{player_id}")]])
@@ -1262,7 +1263,7 @@ async def admin_set_score_start(update: Update, context: ContextTypes.DEFAULT_TY
     await query.answer()
     
     match_id = int(query.data.replace("admin_set_score_start_", ""))
-    match = database.get_match(match_id)
+    match = await asyncio.to_thread(database.get_match, match_id)
     
     if not match:
         await query.edit_message_text("❌ Матч не найден.")
@@ -1305,12 +1306,12 @@ async def admin_set_score_text(update: Update, context: ContextTypes.DEFAULT_TYP
         return ADMIN_EXPECT_MATCH_SCORE
         
     context.user_data.pop("admin_set_match_id", None)
-    match = database.get_match(match_id)
+    match = await asyncio.to_thread(database.get_match, match_id)
     if not match:
         await update.message.reply_text("❌ Матч не найден. Сброс.")
         return ConversationHandler.END
         
-    database.admin_set_match_score(match_id, s1, s2)
+    await asyncio.to_thread(database.admin_set_match_score, match_id, s1, s2)
     
     await update.message.reply_text(
         f"✅ Счет матча #{match_id} изменен: **{s1}:{s2}**!",
@@ -1330,7 +1331,7 @@ async def admin_set_score_text(update: Update, context: ContextTypes.DEFAULT_TYP
             logger.error(f"Не удалось отправить уведомление игроку {p_id}: {e}")
 
     # Notify Telegram Group
-    group_id = database.get_group_id()
+    group_id = await asyncio.to_thread(database.get_group_id)
     if group_id:
         group_text = (
             f"⚙️ **Результат матча изменен администратором!**\n"
@@ -1391,7 +1392,7 @@ async def admin_toggle_role(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await query.message.reply_text("❌ Вы не можете снять роль администратора с себя.")
         return
         
-    success, msg = database.update_player_role(player_id, new_role)
+    success, msg = await asyncio.to_thread(database.update_player_role, player_id, new_role)
     if success:
         # Refresh player card
         await admin_view_player(update, context, player_id=player_id)
@@ -1406,7 +1407,7 @@ async def admin_delete_options(update: Update, context: ContextTypes.DEFAULT_TYP
     await query.answer()
     
     player_id = int(query.data.replace("admin_delete_options_", ""))
-    player = database.get_user(player_id)
+    player = await asyncio.to_thread(database.get_user, player_id)
     
     if not player:
         keyboard = [[InlineKeyboardButton("« Назад к списку", callback_data="admin_list_players_page_0")]]
@@ -1437,7 +1438,7 @@ async def admin_confirm_wipe_player(update: Update, context: ContextTypes.DEFAUL
     await query.answer()
     
     player_id = int(query.data.replace("admin_confirm_wipe_player_", ""))
-    player = database.get_user(player_id)
+    player = await asyncio.to_thread(database.get_user, player_id)
     
     if not player:
         keyboard = [[InlineKeyboardButton("« Назад к списку", callback_data="admin_list_players_page_0")]]
@@ -1465,13 +1466,13 @@ async def admin_wipe_player_execute(update: Update, context: ContextTypes.DEFAUL
     await query.answer()
     
     player_id = int(query.data.replace("admin_wipe_player_execute_", ""))
-    success, msg = database.delete_player_completely(player_id)
+    success, msg = await asyncio.to_thread(database.delete_player_completely, player_id)
     
     keyboard = [[InlineKeyboardButton("« Назад к списку", callback_data="admin_list_players_page_0")]]
     if success:
         await query.edit_message_text(f"✅ {msg}", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
         
-        group_id = database.get_group_id()
+        group_id = await asyncio.to_thread(database.get_group_id)
         if group_id:
             try:
                 await context.bot.send_message(chat_id=group_id, text=f"📢 **Полное удаление участника!**\n\n{msg}", parse_mode="Markdown")
@@ -1492,7 +1493,7 @@ async def admin_edit_username_start(update: Update, context: ContextTypes.DEFAUL
     await query.answer()
     
     player_id = int(query.data.replace("admin_edit_username_start_", ""))
-    player = database.get_user(player_id)
+    player = await asyncio.to_thread(database.get_user, player_id)
     
     if not player:
         await query.edit_message_text("❌ Игрок не найден.")
@@ -1519,7 +1520,7 @@ async def admin_edit_username_text(update: Update, context: ContextTypes.DEFAULT
         await update.message.reply_text("Произошла ошибка (не найден ID игрока). Сброс.")
         return ConversationHandler.END
         
-    success, msg = database.update_player_username(player_id, new_username)
+    success, msg = await asyncio.to_thread(database.update_player_username, player_id, new_username)
     await update.message.reply_text(
         f"✅ {msg}",
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« К карточке игрока", callback_data=f"admin_view_player_{player_id}")]])
@@ -1557,7 +1558,7 @@ async def admin_clear_league_text(update: Update, context: ContextTypes.DEFAULT_
         )
         return ConversationHandler.END
         
-    database.clear_entire_league()
+    await asyncio.to_thread(database.clear_entire_league)
     
     await update.message.reply_text(
         "✅ **Все матчи и игроки успешно удалены!**\n\nБаза данных очищена (за исключением администраторов). Вы можете добавлять новый список участников и генерировать расписание заново.",
@@ -1566,7 +1567,7 @@ async def admin_clear_league_text(update: Update, context: ContextTypes.DEFAULT_
     )
     
     # Notify group if configured
-    group_id = database.get_group_id()
+    group_id = await asyncio.to_thread(database.get_group_id)
     if group_id:
         try:
             await context.bot.send_message(
@@ -1592,7 +1593,7 @@ async def admin_remove_player_command(update: Update, context: ContextTypes.DEFA
         return
         
     target = args[0].strip()
-    success, msg = database.remove_player(target)
+    success, msg = await asyncio.to_thread(database.remove_player, target)
     if success:
         await update.message.reply_text(f"✅ {msg}", parse_mode="Markdown")
     else:
@@ -1606,7 +1607,7 @@ async def admin_list_players_command(update: Update, context: ContextTypes.DEFAU
         return
         
     # Get active mapping of club to player row
-    club_to_player = {u["team_name"].lower(): u for u in database.list_users() if u["team_name"]}
+    club_to_player = {u["team_name"].lower(): u for u in (await asyncio.to_thread(database.list_users)) if u["team_name"]}
     
     lines = ["📋 <b>Текущий состав участников и клубов:</b>\n"]
     for club in CLUBS:
@@ -1635,7 +1636,7 @@ async def admin_manage_players_menu(update: Update, context: ContextTypes.DEFAUL
         if query: await query.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
-    users = database.list_users()
+    users = await asyncio.to_thread(database.list_users)
     total_count = len(users)
 
     text = (
@@ -1673,7 +1674,7 @@ async def admin_list_players_page(update: Update, context: ContextTypes.DEFAULT_
             except ValueError:
                 page = 0
 
-    users = database.list_users()
+    users = await asyncio.to_thread(database.list_users)
     if not users:
         keyboard = [
             [InlineKeyboardButton("➕ Добавить игрока", callback_data="admin_add_player_start")],
@@ -1723,7 +1724,7 @@ async def admin_view_player(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         p_id = int(query.data.replace("admin_view_player_", ""))
     else:
         p_id = player_id
-    player = database.get_user(p_id)
+    player = await asyncio.to_thread(database.get_user, p_id)
 
     if not player:
         keyboard = [[InlineKeyboardButton("« К списку участников", callback_data="admin_list_players_page_0")]]
@@ -1758,14 +1759,14 @@ async def admin_edit_club_select(update: Update, context: ContextTypes.DEFAULT_T
     await query.answer()
 
     p_id = int(query.data.replace("admin_edit_club_select_", ""))
-    player = database.get_user(p_id)
+    player = await asyncio.to_thread(database.get_user, p_id)
 
     if not player:
         keyboard = [[InlineKeyboardButton("« К списку", callback_data="admin_list_players_page_0")]]
         await query.edit_message_text("❌ Игрок не найден.", reply_markup=InlineKeyboardMarkup(keyboard))
         return
 
-    club_to_player = {u["team_name"].lower(): u["username"] for u in database.list_users() if u["team_name"]}
+    club_to_player = {u["team_name"].lower(): u["username"] for u in (await asyncio.to_thread(database.list_users)) if u["team_name"]}
 
     keyboard = []
     row = []
@@ -1807,7 +1808,7 @@ async def admin_edit_club_execute(update: Update, context: ContextTypes.DEFAULT_
     p_id = int(data_parts[0])
     new_club = data_parts[1]
 
-    success, msg = database.set_player_club(str(p_id), new_club)
+    success, msg = await asyncio.to_thread(database.set_player_club, str(p_id), new_club)
     await query.answer(f"✅ {msg}", show_alert=True)
 
     await admin_view_player(update, context, player_id=p_id)
@@ -1820,7 +1821,7 @@ async def admin_delete_player_confirm(update: Update, context: ContextTypes.DEFA
     await query.answer()
 
     p_id = int(query.data.replace("admin_delete_player_confirm_", ""))
-    player = database.get_user(p_id)
+    player = await asyncio.to_thread(database.get_user, p_id)
 
     if not player:
         keyboard = [[InlineKeyboardButton("« К списку", callback_data="admin_list_players_page_0")]]
@@ -1850,7 +1851,7 @@ async def admin_delete_player_execute(update: Update, context: ContextTypes.DEFA
     await query.answer()
 
     p_id = int(query.data.replace("admin_delete_player_execute_", ""))
-    player = database.get_user(p_id)
+    player = await asyncio.to_thread(database.get_user, p_id)
 
     if not player:
         await admin_list_players_page(update, context, page=0)
@@ -1859,11 +1860,11 @@ async def admin_delete_player_execute(update: Update, context: ContextTypes.DEFA
     username_str = f"@{player['username']}" if player['username'] else f"ID: {p_id}"
     team_str = player['team_name'] or 'без названия'
 
-    success, msg = database.remove_player(str(p_id))
+    success, msg = await asyncio.to_thread(database.remove_player, str(p_id))
 
     # Send notice to Reports Topic
-    main_group_id = database.get_group_id()
-    reports_topic_id = database.get_config("reports_topic_id")
+    main_group_id = await asyncio.to_thread(database.get_group_id)
+    reports_topic_id = await asyncio.to_thread(database.get_config, "reports_topic_id")
     if main_group_id:
         try:
             notice_text = (
@@ -1918,7 +1919,7 @@ async def admin_view_squad(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
 
     club = query.data.replace("admin_squad_view_", "")
-    squad = database.get_squad(club)
+    squad = await asyncio.to_thread(database.get_squad, club)
 
     if squad:
         lines = [f"👥 <b>Состав команды {html.escape(club)}:</b>\n"]
@@ -1976,7 +1977,7 @@ async def admin_squad_upload_text(update: Update, context: ContextTypes.DEFAULT_
         await update.message.reply_text("❌ Список пуст. Отправьте хотя бы одного игрока.")
         return ADMIN_EXPECT_SQUAD_TEXT
 
-    added = database.add_squad(club, [line.strip() for line in lines if line.strip()])
+    added = await asyncio.to_thread(database.add_squad, club, [line.strip() for line in lines if line.strip()])
 
     text = f"✅ Добавлено <b>{added}</b> футболистов в состав команды <b>{html.escape(club)}</b>."
     keyboard = [[InlineKeyboardButton("👥 Просмотреть состав", callback_data=f"admin_squad_view_{club}")]]
@@ -1995,7 +1996,7 @@ async def admin_squad_clear(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return
 
     club = query.data.replace("admin_squad_clear_", "")
-    deleted = database.clear_squad(club)
+    deleted = await asyncio.to_thread(database.clear_squad, club)
 
     text = f"🗑️ Состав команды <b>{html.escape(club)}</b> очищен. Удалено игроков: <b>{deleted}</b>."
     keyboard = [[InlineKeyboardButton("« Назад к клубам", callback_data="admin_manage_squads")]]
@@ -2018,7 +2019,7 @@ async def admin_stub(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 async def notify_players_rounds_opened(context: ContextTypes.DEFAULT_TYPE, round_numbers: list[int], deadline_text: str) -> None:
     """Send personal match card notifications to players when rounds are opened."""
-    matches = database.get_matches_in_rounds(round_numbers)
+    matches = await asyncio.to_thread(database.get_matches_in_rounds, round_numbers)
     if not matches:
         return
 
@@ -2129,8 +2130,8 @@ async def send_round_reminders(
     Sends PM to unplayed match participants and a summary to Reports topic.
     Returns (sent_pm_count, unplayed_matches_count).
     """
-    unplayed = database.get_unplayed_matches_by_round(round_number)
-    round_info = database.get_round_info(round_number)
+    unplayed = await asyncio.to_thread(database.get_unplayed_matches_by_round, round_number)
+    round_info = await asyncio.to_thread(database.get_round_info, round_number)
     deadline_text = round_info["deadline"] if round_info and round_info.get("deadline") else "не указан"
 
     if target_match_ids is not None:
@@ -2190,8 +2191,8 @@ async def send_round_reminders(
                 pm_sent += 1
 
     # 2. Public summary to Reports Topic
-    main_group_id = database.get_group_id()
-    reports_topic_id = database.get_config("reports_topic_id")
+    main_group_id = await asyncio.to_thread(database.get_group_id)
+    reports_topic_id = await asyncio.to_thread(database.get_config, "reports_topic_id")
     if main_group_id:
         lines = [
             f"⏰ <b>НАПОМИНАНИЕ! Тур {round_number}</b>{time_hdr}\n",
@@ -2230,7 +2231,7 @@ async def admin_remind_round(update: Update, context: ContextTypes.DEFAULT_TYPE,
     if round_number is None:
         round_number = int(query.data.replace("admin_remind_round_", ""))
 
-    unplayed = database.get_unplayed_matches_by_round(round_number)
+    unplayed = await asyncio.to_thread(database.get_unplayed_matches_by_round, round_number)
     if not unplayed:
         await query.answer("🎉 В этом туре нет несыгранных матчей!", show_alert=True)
         return
@@ -2300,7 +2301,7 @@ async def admin_toggle_remind_match(update: Update, context: ContextTypes.DEFAUL
     match_id = int(parts[1])
 
     selected_key = f"remind_selected_{round_number}"
-    unplayed = database.get_unplayed_matches_by_round(round_number)
+    unplayed = await asyncio.to_thread(database.get_unplayed_matches_by_round, round_number)
     unplayed_ids = {m['id'] for m in unplayed}
 
     selected_ids = context.user_data.setdefault(selected_key, set(unplayed_ids))
@@ -2324,7 +2325,7 @@ async def admin_toggle_remind_all(update: Update, context: ContextTypes.DEFAULT_
         pass
 
     round_number = int(query.data.replace("admin_toggle_remind_all_", ""))
-    unplayed = database.get_unplayed_matches_by_round(round_number)
+    unplayed = await asyncio.to_thread(database.get_unplayed_matches_by_round, round_number)
     unplayed_ids = {m['id'] for m in unplayed}
 
     selected_key = f"remind_selected_{round_number}"
@@ -2375,7 +2376,7 @@ async def admin_send_selected_reminders(update: Update, context: ContextTypes.DE
 
 async def job_check_deadlines_and_remind(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Periodic job checking open rounds for approaching deadlines and sending automated reminders."""
-    open_rounds = database.get_open_rounds_with_deadlines()
+    open_rounds = await asyncio.to_thread(database.get_open_rounds_with_deadlines)
     if not open_rounds:
         return
 
@@ -2399,21 +2400,21 @@ async def job_check_deadlines_and_remind(context: ContextTypes.DEFAULT_TYPE) -> 
 
         # 24h reminder (between 23h and 25h left)
         if 23.0 <= hours_left <= 25.0:
-            if not database.has_reminder_been_sent(r_num, "24h"):
+            if not (await asyncio.to_thread(database.has_reminder_been_sent, r_num, "24h")):
                 await send_round_reminders(context, r_num, time_left_str="24 часа")
-                database.record_reminder_sent(r_num, "24h")
+                await asyncio.to_thread(database.record_reminder_sent, r_num, "24h")
 
         # 6h reminder (between 5h and 7h left)
         elif 5.0 <= hours_left <= 7.0:
-            if not database.has_reminder_been_sent(r_num, "6h"):
+            if not (await asyncio.to_thread(database.has_reminder_been_sent, r_num, "6h")):
                 await send_round_reminders(context, r_num, time_left_str="6 часов")
-                database.record_reminder_sent(r_num, "6h")
+                await asyncio.to_thread(database.record_reminder_sent, r_num, "6h")
 
         # 1h reminder (between 0.5h and 1.5h left)
         elif 0.5 <= hours_left <= 1.5:
-            if not database.has_reminder_been_sent(r_num, "1h"):
+            if not (await asyncio.to_thread(database.has_reminder_been_sent, r_num, "1h")):
                 await send_round_reminders(context, r_num, time_left_str="1 час! 🚨")
-                database.record_reminder_sent(r_num, "1h")
+                await asyncio.to_thread(database.record_reminder_sent, r_num, "1h")
 
 async def admin_set_squad_topic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Set the topic where squads will be sent."""
@@ -2427,7 +2428,7 @@ async def admin_set_squad_topic(update: Update, context: ContextTypes.DEFAULT_TY
         await update.message.reply_text("⚠️ Вызовите команду внутри топика (ветки), куда хотите получать составы.")
         return
         
-    database.set_config("squad_topic_id", str(thread_id))
+    await asyncio.to_thread(database.set_config, "squad_topic_id", str(thread_id))
     await update.message.reply_text(f"✅ Топик для составов успешно установлен (ID: {thread_id}). Теперь составы будут присылаться сюда.")
 
 async def admin_set_reports_topic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -2442,7 +2443,7 @@ async def admin_set_reports_topic(update: Update, context: ContextTypes.DEFAULT_
         await update.message.reply_text("⚠️ Вызовите команду внутри топика «Отчёты», куда хотите получать важные уведомления.")
         return
         
-    database.set_config("reports_topic_id", str(thread_id))
+    await asyncio.to_thread(database.set_config, "reports_topic_id", str(thread_id))
     await update.message.reply_text(f"✅ Тема «Отчёты» успешно установлена (ID: {thread_id}). Анонсы туров и важные новости будут присылаться сюда!")
 
 async def admin_set_results_topic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -2457,5 +2458,5 @@ async def admin_set_results_topic(update: Update, context: ContextTypes.DEFAULT_
         await update.message.reply_text("⚠️ Вызовите команду внутри топика «Результаты», куда хотите получать результаты матчей.")
         return
         
-    database.set_config("results_topic_id", str(thread_id))
+    await asyncio.to_thread(database.set_config, "results_topic_id", str(thread_id))
     await update.message.reply_text(f"✅ Тема «Результаты» успешно установлена (ID: {thread_id}). Все результаты матчей с авторами голов и ассистов будут публиковаться сюда!")

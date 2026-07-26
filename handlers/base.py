@@ -46,11 +46,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     # Determine role and upsert/match user
     role = "admin" if is_admin(user.id) else "user"
-    database.handle_user_startup(user.id, user.username, role)
+    await asyncio.to_thread(database.handle_user_startup, user.id, user.username, role)
 
     # Deliver pending notification if exists
-    if database.get_pending_notification(user.id):
-        team = database.get_user_team(user.id)
+    if await asyncio.to_thread(database.get_pending_notification, user.id):
+        team = await asyncio.to_thread(database.get_user_team, user.id)
         if team:
             try:
                 await update.message.reply_text(
@@ -60,7 +60,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 )
             except Exception:
                 pass
-            database.set_pending_notification(user.id, 0)
+            await asyncio.to_thread(database.set_pending_notification, user.id, 0)
 
     welcome_text = (
         f"⚽️ <b>Добро пожаловать в систему Лиги, {user.first_name}!</b>\n\n"
@@ -159,7 +159,7 @@ async def show_top_scorers(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         except Exception:
             pass
 
-    scorers = database.get_top_scorers(limit=20)
+    scorers = await asyncio.to_thread(database.get_top_scorers, limit=20)
     
     text = "⚽ <b>ТОП БОМБАРДИРОВ ЛИГИ</b>\n\n"
     if not scorers:
@@ -207,7 +207,7 @@ async def show_top_assists(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         except Exception:
             pass
 
-    assists = database.get_top_assists(limit=20)
+    assists = await asyncio.to_thread(database.get_top_assists, limit=20)
     
     text = "🎯 <b>ТОП АССИСТЕНТОВ ЛИГИ</b>\n\n"
     if not assists:
@@ -251,7 +251,7 @@ async def show_tournaments(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if query:
         await query.answer()
 
-    rounds = database.get_all_rounds()
+    rounds = await asyncio.to_thread(database.get_all_rounds)
     
     keyboard = []
     if not rounds:
@@ -289,8 +289,10 @@ async def show_round_matches(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await query.answer()
     
     round_number = int(query.data.replace("show_round_matches_", ""))
-    matches = database.get_matches_by_round(round_number)
-    info = database.get_round_info(round_number)
+    matches, info = await asyncio.gather(
+        asyncio.to_thread(database.get_matches_by_round, round_number),
+        asyncio.to_thread(database.get_round_info, round_number)
+    )
     
     text = f"📅 **Расписание: {round_number}-й Тур**\n"
     if info:
@@ -354,8 +356,8 @@ async def show_league_table(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     elif update.message:
         await update.message.reply_photo(photo=img_buf, caption=caption, parse_mode="HTML", reply_markup=markup)
 
-def format_league_table_text() -> str:
-    standings = database.get_standings()
+async def format_league_table_text() -> str:
+    standings = await asyncio.to_thread(database.get_standings)
     if not standings:
         return "📊 <b>Таблица лиги пуста — ещё нет данных.</b>"
 
@@ -374,8 +376,10 @@ def format_league_table_text() -> str:
     return "\n".join(lines)
 
 async def post_league_table_to_reports(context: ContextTypes.DEFAULT_TYPE) -> None:
-    reports_topic_id = database.get_config("reports_topic_id")
-    group_id = database.get_group_id()
+    reports_topic_id, group_id = await asyncio.gather(
+        asyncio.to_thread(database.get_config, "reports_topic_id"),
+        asyncio.to_thread(database.get_group_id)
+    )
     if not group_id:
         return
 

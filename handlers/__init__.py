@@ -181,7 +181,7 @@ async def track_group_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     """Track the ID of the Telegram group the bot is in."""
     if update.effective_chat and update.effective_chat.type in ("group", "supergroup"):
         import database
-        database.set_config("group_id", str(update.effective_chat.id))
+        await asyncio.to_thread(database.set_config, "group_id", str(update.effective_chat.id))
 
 def register_all_handlers(application: Application) -> None:
     """Register all command, message, and callback handlers to the application."""
