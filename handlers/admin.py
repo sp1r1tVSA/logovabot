@@ -3,7 +3,7 @@ from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes, ConversationHandler
 import html
 import database
-from handlers.base import is_admin, post_league_table_to_reports
+from handlers.base import is_admin, admin_only, post_league_table_to_reports
 from handlers.cabinet import notify_match_confirmed, safe_send_notification
 from config import CLUBS
 from schedule_parser import parse_schedule_text, create_matches_from_parsed_schedule
@@ -53,6 +53,7 @@ def generate_round_robin_fixtures(player_ids: list[int]) -> list[tuple[int, int,
     double_fixtures.sort(key=lambda x: x[0])
     return double_fixtures
 
+@admin_only
 async def show_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     if not user or not is_admin(user.id):
@@ -86,6 +87,7 @@ async def show_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 pass
             await context.bot.send_message(chat_id=query.from_user.id, text=text, parse_mode="HTML", reply_markup=markup)
 
+@admin_only
 async def admin_list_players(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     if not query:
@@ -114,6 +116,7 @@ async def admin_list_players(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 # --- Match Generation Handlers ---
 
+@admin_only
 async def admin_generate_matches_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     if not query or not is_admin(query.from_user.id):
@@ -126,6 +129,7 @@ async def admin_generate_matches_confirm(update: Update, context: ContextTypes.D
         parse_mode="Markdown"
     )
 
+@admin_only
 async def admin_generate_matches_execute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     if not query or not is_admin(query.from_user.id):
@@ -181,6 +185,7 @@ async def admin_generate_matches_execute(update: Update, context: ContextTypes.D
 
 # --- Disputed Matches & Resolution Flow ---
 
+@admin_only
 async def admin_list_disputed(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     if not query or not is_admin(query.from_user.id):
@@ -207,6 +212,7 @@ async def admin_list_disputed(update: Update, context: ContextTypes.DEFAULT_TYPE
     keyboard.append([InlineKeyboardButton("« Назад в админку", callback_data="admin_main_menu")])
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
+@admin_only
 async def admin_reset_dispute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     if not query or not is_admin(query.from_user.id):
@@ -218,6 +224,7 @@ async def admin_reset_dispute(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     await query.edit_message_text(f"✅ Результат матча #{match_id} сброшен. Хозяева поля могут ввести его заново.")
 
+@admin_only
 async def admin_start_resolve_dispute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     if not query or not is_admin(query.from_user.id):
@@ -241,6 +248,7 @@ async def admin_start_resolve_dispute(update: Update, context: ContextTypes.DEFA
     )
     return ADMIN_WAITING_FOR_DISPUTE_SCORE
 
+@admin_only
 async def admin_save_dispute_score(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     text = update.message.text.strip()
     match_id = context.user_data.get("admin_resolve_match_id")
@@ -279,6 +287,7 @@ async def admin_save_dispute_score(update: Update, context: ContextTypes.DEFAULT
     await show_admin_panel(update, context)
     return ConversationHandler.END
 
+@admin_only
 async def admin_cancel_dispute_resolve(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.pop("admin_resolve_match_id", None)
     await update.message.reply_text("Разрешение спора отменено.")
@@ -301,6 +310,7 @@ ADMIN_WAITING_FOR_BATCH_ROUNDS = 210
 ADMIN_WAITING_FOR_BATCH_DEADLINE = 211
 ADMIN_EXPECT_MATCH_SCHEDULE_INPUT = 212
 
+@admin_only
 async def admin_manage_players_info(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show participant management hub menu."""
     query = update.callback_query
@@ -321,6 +331,7 @@ async def admin_manage_players_info(update: Update, context: ContextTypes.DEFAUL
     ]
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
+@admin_only
 async def admin_list_players_page(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show a paginated list of all players (8 per page)."""
     query = update.callback_query
@@ -370,6 +381,7 @@ async def admin_list_players_page(update: Update, context: ContextTypes.DEFAULT_
     text = f"📋 **Список участников лиги** (Всего: {len(players)}):\n\nВыберите игрока для редактирования или удаления:"
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
+@admin_only
 async def admin_view_player(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """View details of a single player with actions."""
     query = update.callback_query
@@ -412,6 +424,7 @@ async def admin_view_player(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     ]
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
+@admin_only
 async def admin_confirm_delete_player(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Ask admin for confirmation to delete the player."""
     query = update.callback_query
@@ -439,6 +452,7 @@ async def admin_confirm_delete_player(update: Update, context: ContextTypes.DEFA
     ]
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
+@admin_only
 async def admin_delete_player_execute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Execute player deletion and tech loss confirmation."""
     query = update.callback_query
@@ -469,6 +483,7 @@ async def admin_delete_player_execute(update: Update, context: ContextTypes.DEFA
     else:
         await query.edit_message_text(f"❌ {msg}", reply_markup=InlineKeyboardMarkup(keyboard))
 
+@admin_only
 async def admin_manage_matches_info(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Display list of rounds for match management."""
     query = update.callback_query
@@ -503,6 +518,7 @@ async def admin_manage_matches_info(update: Update, context: ContextTypes.DEFAUL
         parse_mode="Markdown"
     )
 
+@admin_only
 async def admin_manage_round(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Display round details and open/close options."""
     query = update.callback_query
@@ -535,6 +551,7 @@ async def admin_manage_round(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
+@admin_only
 async def admin_extend_match_execute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Allow players to submit scores for an overdue match."""
     query = update.callback_query
@@ -550,6 +567,7 @@ async def admin_extend_match_execute(update: Update, context: ContextTypes.DEFAU
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
+@admin_only
 async def admin_list_overdue(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Display all overdue matches."""
     query = update.callback_query
@@ -585,6 +603,7 @@ async def admin_list_overdue(update: Update, context: ContextTypes.DEFAULT_TYPE)
         
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
+@admin_only
 async def admin_open_round_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     if not query or not is_admin(query.from_user.id): return ConversationHandler.END
@@ -605,6 +624,7 @@ async def admin_open_round_prompt(update: Update, context: ContextTypes.DEFAULT_
 
 import datetime
 
+@admin_only
 async def admin_open_round_save(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if not update.message or not update.message.text:
         return ADMIN_WAITING_FOR_DEADLINE
@@ -647,6 +667,7 @@ async def admin_open_round_save(update: Update, context: ContextTypes.DEFAULT_TY
     await notify_players_rounds_opened(context, [round_number], deadline_text)
     return ConversationHandler.END
 
+@admin_only
 async def admin_open_batch_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     if not query or not is_admin(query.from_user.id): return ConversationHandler.END
@@ -662,6 +683,7 @@ async def admin_open_batch_prompt(update: Update, context: ContextTypes.DEFAULT_
     )
     return ADMIN_WAITING_FOR_BATCH_ROUNDS
 
+@admin_only
 async def admin_open_batch_rounds(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if not update.message or not update.message.text:
         return ADMIN_WAITING_FOR_BATCH_ROUNDS
@@ -689,6 +711,7 @@ async def admin_open_batch_rounds(update: Update, context: ContextTypes.DEFAULT_
     )
     return ADMIN_WAITING_FOR_BATCH_DEADLINE
 
+@admin_only
 async def admin_open_batch_deadline(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if not update.message or not update.message.text:
         return ADMIN_WAITING_FOR_BATCH_DEADLINE
@@ -729,6 +752,7 @@ async def admin_open_batch_deadline(update: Update, context: ContextTypes.DEFAUL
     await notify_players_rounds_opened(context, opened_rounds, deadline_text)
     return ConversationHandler.END
 
+@admin_only
 async def admin_close_round(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     if not query or not is_admin(query.from_user.id): return
@@ -743,6 +767,7 @@ async def admin_close_round(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
+@admin_only
 async def admin_round_matches(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Display all matches in a round for admin action."""
     query = update.callback_query
@@ -792,6 +817,7 @@ async def admin_round_matches(update: Update, context: ContextTypes.DEFAULT_TYPE
                 pass
             await context.bot.send_message(chat_id=query.from_user.id, text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
+@admin_only
 async def admin_view_match(update: Update, context: ContextTypes.DEFAULT_TYPE, match_id: int | None = None) -> None:
     """View details of a single match with admin actions."""
     query = update.callback_query
@@ -854,6 +880,7 @@ async def admin_view_match(update: Update, context: ContextTypes.DEFAULT_TYPE, m
                 pass
             await context.bot.send_message(chat_id=query.from_user.id, text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
+@admin_only
 async def admin_report_score_auto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Start AI Vision photo recognition flow for Admin."""
     query = update.callback_query
@@ -883,6 +910,7 @@ async def admin_report_score_auto(update: Update, context: ContextTypes.DEFAULT_
     keyboard = [[InlineKeyboardButton("« Назад к карточке матча", callback_data=f"admin_view_match_{match_id}")]]
     await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
 
+@admin_only
 async def admin_set_tp_home_execute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     if not query or not is_admin(query.from_user.id): return
@@ -892,6 +920,7 @@ async def admin_set_tp_home_execute(update: Update, context: ContextTypes.DEFAUL
     await query.answer("✅ Назначено ТП 3:0 (Победа Хозяев)", show_alert=True)
     await admin_view_match(update, context, match_id=match_id)
 
+@admin_only
 async def admin_set_tp_away_execute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     if not query or not is_admin(query.from_user.id): return
@@ -901,6 +930,7 @@ async def admin_set_tp_away_execute(update: Update, context: ContextTypes.DEFAUL
     await query.answer("✅ Назначено ТП 0:3 (Победа Гостей)", show_alert=True)
     await admin_view_match(update, context, match_id=match_id)
 
+@admin_only
 async def admin_set_tp_draw_execute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     if not query or not is_admin(query.from_user.id): return
@@ -910,6 +940,7 @@ async def admin_set_tp_draw_execute(update: Update, context: ContextTypes.DEFAUL
     await query.answer("✅ Назначена Техническая ничья 0:0", show_alert=True)
     await admin_view_match(update, context, match_id=match_id)
 
+@admin_only
 async def admin_reset_match_execute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Execute match reset via inline callback button click."""
     query = update.callback_query
@@ -941,6 +972,7 @@ async def admin_reset_match_execute(update: Update, context: ContextTypes.DEFAUL
 
 # --- Conversational Dialogs for Admin ---
 
+@admin_only
 async def admin_add_player_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Start player creation flow."""
     query = update.callback_query
@@ -981,6 +1013,7 @@ async def admin_add_player_start(update: Update, context: ContextTypes.DEFAULT_T
         await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
     return ADMIN_EXPECT_PLAYER_USERNAME
 
+@admin_only
 async def admin_add_player_username(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Capture username and show club selection."""
     username = update.message.text.strip().lstrip("@")
@@ -994,6 +1027,7 @@ async def admin_add_player_username(update: Update, context: ContextTypes.DEFAUL
     context.user_data["admin_add_player_username"] = username
     return await admin_show_free_clubs(update, context)
 
+@admin_only
 async def admin_show_free_clubs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Helper to display clubs list for selection."""
     username = context.user_data.get("admin_add_player_username")
@@ -1036,6 +1070,7 @@ async def admin_show_free_clubs(update: Update, context: ContextTypes.DEFAULT_TY
             
     return ADMIN_EXPECT_PLAYER_CLUB
 
+@admin_only
 async def admin_add_player_club_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handle callback from club selection button."""
     query = update.callback_query
@@ -1067,6 +1102,7 @@ async def admin_add_player_club_callback(update: Update, context: ContextTypes.D
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
     return ConversationHandler.END
 
+@admin_only
 async def admin_import_players_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Start players multiline import flow."""
     query = update.callback_query
@@ -1091,6 +1127,7 @@ async def admin_import_players_start(update: Update, context: ContextTypes.DEFAU
         await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
     return ADMIN_EXPECT_IMPORT_TEXT
 
+@admin_only
 async def admin_import_players_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Parse list input, pre-register users, and display results."""
     payload = update.message.text
@@ -1144,6 +1181,7 @@ async def admin_import_players_text(update: Update, context: ContextTypes.DEFAUL
     )
     return ConversationHandler.END
 
+@admin_only
 async def admin_edit_club_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Start club modification flow."""
     query = update.callback_query
@@ -1170,6 +1208,7 @@ async def admin_edit_club_start(update: Update, context: ContextTypes.DEFAULT_TY
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
     return ADMIN_EXPECT_NEW_CLUB
 
+@admin_only
 async def admin_edit_club_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Save new club name in database."""
     new_club = update.message.text.strip()
@@ -1186,6 +1225,7 @@ async def admin_edit_club_text(update: Update, context: ContextTypes.DEFAULT_TYP
     )
     return ConversationHandler.END
 
+@admin_only
 async def admin_create_matches_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Prompt admin to provide schedule text or .txt file."""
     query = update.callback_query
@@ -1209,6 +1249,7 @@ async def admin_create_matches_start(update: Update, context: ContextTypes.DEFAU
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
     return ADMIN_EXPECT_MATCH_SCHEDULE_INPUT
 
+@admin_only
 async def admin_receive_schedule_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Process incoming text or file with schedule and create matches in DB."""
     user = update.effective_user
@@ -1255,6 +1296,7 @@ async def admin_receive_schedule_input(update: Update, context: ContextTypes.DEF
     await update.message.reply_text(msg, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
     return ConversationHandler.END
 
+@admin_only
 async def admin_set_score_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Start manual match score override flow."""
     query = update.callback_query
@@ -1280,6 +1322,7 @@ async def admin_set_score_start(update: Update, context: ContextTypes.DEFAULT_TY
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
     return ADMIN_EXPECT_MATCH_SCORE
 
+@admin_only
 async def admin_set_score_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Parse score input, save to DB, and notify players."""
     score_text = update.message.text.strip()
@@ -1347,6 +1390,7 @@ async def admin_set_score_text(update: Update, context: ContextTypes.DEFAULT_TYP
             
     return ConversationHandler.END
 
+@admin_only
 async def admin_cancel_player_action(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Abort player edits and return to players hub or admin panel."""
     query = update.callback_query
@@ -1360,6 +1404,7 @@ async def admin_cancel_player_action(update: Update, context: ContextTypes.DEFAU
         await show_admin_panel(update, context)
     return ConversationHandler.END
 
+@admin_only
 async def admin_cancel_match_action(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Abort match edits and return to match card."""
     query = update.callback_query
@@ -1375,6 +1420,7 @@ async def admin_cancel_match_action(update: Update, context: ContextTypes.DEFAUL
         await show_admin_panel(update, context)
     return ConversationHandler.END
 
+@admin_only
 async def admin_toggle_role(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Toggle user system role between player and admin."""
     query = update.callback_query
@@ -1399,6 +1445,7 @@ async def admin_toggle_role(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     else:
         await query.message.reply_text(f"❌ Ошибка: {msg}")
 
+@admin_only
 async def admin_delete_options(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show options screen for player deletion (soft exclusion vs complete wipe)."""
     query = update.callback_query
@@ -1430,6 +1477,7 @@ async def admin_delete_options(update: Update, context: ContextTypes.DEFAULT_TYP
     ]
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
+@admin_only
 async def admin_confirm_wipe_player(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show final warning for complete player wipe."""
     query = update.callback_query
@@ -1458,6 +1506,7 @@ async def admin_confirm_wipe_player(update: Update, context: ContextTypes.DEFAUL
     ]
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
+@admin_only
 async def admin_wipe_player_execute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Execute complete player wipe from database."""
     query = update.callback_query
@@ -1485,6 +1534,7 @@ async def admin_wipe_player_execute(update: Update, context: ContextTypes.DEFAUL
 
 
 
+@admin_only
 async def admin_edit_username_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Start Telegram username edit flow."""
     query = update.callback_query
@@ -1511,6 +1561,7 @@ async def admin_edit_username_start(update: Update, context: ContextTypes.DEFAUL
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
     return ADMIN_EXPECT_NEW_USERNAME
 
+@admin_only
 async def admin_edit_username_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Save new Telegram username in database."""
     new_username = update.message.text.strip().lstrip("@")
@@ -1529,6 +1580,7 @@ async def admin_edit_username_text(update: Update, context: ContextTypes.DEFAULT
 
 # --- Reset League Flow ---
 
+@admin_only
 async def admin_clear_league_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Start full league reset flow."""
     query = update.callback_query
@@ -1547,6 +1599,7 @@ async def admin_clear_league_start(update: Update, context: ContextTypes.DEFAULT
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
     return ADMIN_EXPECT_RESET_CONFIRM
 
+@admin_only
 async def admin_clear_league_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Confirm text word and wipe the database tables."""
     text_input = update.message.text.strip()
@@ -1581,6 +1634,7 @@ async def admin_clear_league_text(update: Update, context: ContextTypes.DEFAULT_
     return ConversationHandler.END
 
 
+@admin_only
 async def admin_remove_player_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Admin command to remove a player by @username."""
     user = update.effective_user
@@ -1600,6 +1654,7 @@ async def admin_remove_player_command(update: Update, context: ContextTypes.DEFA
         await update.message.reply_text(f"❌ Ошибка: {msg}")
 
 
+@admin_only
 async def admin_list_players_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Command to list all 16 clubs and who is assigned to them."""
     user = update.effective_user
@@ -1625,6 +1680,7 @@ async def admin_list_players_command(update: Update, context: ContextTypes.DEFAU
 ADMIN_EXPECT_SQUAD_TEXT = 201
 
 
+@admin_only
 async def admin_manage_players_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show the interactive player management menu."""
     query = update.callback_query
@@ -1659,6 +1715,7 @@ async def admin_manage_players_menu(update: Update, context: ContextTypes.DEFAUL
     elif update.message:
         await update.message.reply_text(text, parse_mode="HTML", reply_markup=markup)
 
+@admin_only
 async def admin_list_players_page(update: Update, context: ContextTypes.DEFAULT_TYPE, page: int | None = None) -> None:
     """Paginated list of players with inline buttons for each player."""
     query = update.callback_query
@@ -1713,6 +1770,7 @@ async def admin_list_players_page(update: Update, context: ContextTypes.DEFAULT_
     text = f"📋 <b>Список участников лиги (Стр. {page + 1}/{total_pages}):</b>\n\nВыберите игрока для управления:"
     await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
 
+@admin_only
 async def admin_view_player(update: Update, context: ContextTypes.DEFAULT_TYPE, player_id: int | None = None) -> None:
     """View detailed player card with inline action buttons."""
     query = update.callback_query
@@ -1751,6 +1809,7 @@ async def admin_view_player(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     ]
     await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
 
+@admin_only
 async def admin_edit_club_select(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show grid of inline buttons for all CLUBS to edit player's club."""
     query = update.callback_query
@@ -1795,6 +1854,7 @@ async def admin_edit_club_select(update: Update, context: ContextTypes.DEFAULT_T
     )
     await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
 
+@admin_only
 async def admin_edit_club_execute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Execute club change via inline button click."""
     query = update.callback_query
@@ -1813,6 +1873,7 @@ async def admin_edit_club_execute(update: Update, context: ContextTypes.DEFAULT_
 
     await admin_view_player(update, context, player_id=p_id)
 
+@admin_only
 async def admin_delete_player_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show confirmation screen before deleting a player."""
     query = update.callback_query
@@ -1843,6 +1904,7 @@ async def admin_delete_player_confirm(update: Update, context: ContextTypes.DEFA
     ]
     await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
 
+@admin_only
 async def admin_delete_player_execute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Execute player deletion and notify reports topic."""
     query = update.callback_query
@@ -1883,6 +1945,7 @@ async def admin_delete_player_execute(update: Update, context: ContextTypes.DEFA
     await admin_list_players_page(update, context, page=0)
 
 
+@admin_only
 async def admin_manage_squads(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show list of 16 clubs for squad management."""
     query = update.callback_query
@@ -1908,6 +1971,7 @@ async def admin_manage_squads(update: Update, context: ContextTypes.DEFAULT_TYPE
     await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
 
 
+@admin_only
 async def admin_view_squad(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """View squad for a specific club."""
     query = update.callback_query
@@ -1937,6 +2001,7 @@ async def admin_view_squad(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
 
 
+@admin_only
 async def admin_squad_upload_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Start squad upload: ask admin to send player names."""
     query = update.callback_query
@@ -1963,6 +2028,7 @@ async def admin_squad_upload_start(update: Update, context: ContextTypes.DEFAULT
     return ADMIN_EXPECT_SQUAD_TEXT
 
 
+@admin_only
 async def admin_squad_upload_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Receive player names and add them to the squad."""
     club = context.user_data.pop("admin_squad_club", None)
@@ -1985,6 +2051,7 @@ async def admin_squad_upload_text(update: Update, context: ContextTypes.DEFAULT_
     return ConversationHandler.END
 
 
+@admin_only
 async def admin_squad_clear(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Clear all players from a club's squad."""
     query = update.callback_query
@@ -2003,6 +2070,7 @@ async def admin_squad_clear(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
 
 
+@admin_only
 async def admin_stub(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Stub for admin features under development."""
     query = update.callback_query
@@ -2218,6 +2286,7 @@ async def send_round_reminders(
 
     return (pm_sent, len(unplayed))
 
+@admin_only
 async def admin_remind_round(update: Update, context: ContextTypes.DEFAULT_TYPE, round_number: int | None = None) -> None:
     """Display match selection UI for sending round reminders."""
     query = update.callback_query
@@ -2284,6 +2353,7 @@ async def admin_remind_round(update: Update, context: ContextTypes.DEFAULT_TYPE,
                 pass
             await context.bot.send_message(chat_id=query.from_user.id, text=text, reply_markup=markup, parse_mode="HTML")
 
+@admin_only
 async def admin_toggle_remind_match(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Toggle a single match selection for reminder dispatch."""
     query = update.callback_query
@@ -2314,6 +2384,7 @@ async def admin_toggle_remind_match(update: Update, context: ContextTypes.DEFAUL
     context.user_data[selected_key] = selected_ids
     await admin_remind_round(update, context, round_number=round_number)
 
+@admin_only
 async def admin_toggle_remind_all(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Toggle select all / deselect all matches for reminder dispatch."""
     query = update.callback_query
@@ -2338,6 +2409,7 @@ async def admin_toggle_remind_all(update: Update, context: ContextTypes.DEFAULT_
 
     await admin_remind_round(update, context, round_number=round_number)
 
+@admin_only
 async def admin_send_selected_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Send reminders to only the selected matches."""
     query = update.callback_query
@@ -2416,6 +2488,7 @@ async def job_check_deadlines_and_remind(context: ContextTypes.DEFAULT_TYPE) -> 
                 await send_round_reminders(context, r_num, time_left_str="1 час! 🚨")
                 await asyncio.to_thread(database.record_reminder_sent, r_num, "1h")
 
+@admin_only
 async def admin_set_squad_topic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Set the topic where squads will be sent."""
     user_id = update.effective_user.id
@@ -2431,6 +2504,7 @@ async def admin_set_squad_topic(update: Update, context: ContextTypes.DEFAULT_TY
     await asyncio.to_thread(database.set_config, "squad_topic_id", str(thread_id))
     await update.message.reply_text(f"✅ Топик для составов успешно установлен (ID: {thread_id}). Теперь составы будут присылаться сюда.")
 
+@admin_only
 async def admin_set_reports_topic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Set the topic for reports/announcements."""
     user_id = update.effective_user.id
@@ -2446,6 +2520,7 @@ async def admin_set_reports_topic(update: Update, context: ContextTypes.DEFAULT_
     await asyncio.to_thread(database.set_config, "reports_topic_id", str(thread_id))
     await update.message.reply_text(f"✅ Тема «Отчёты» успешно установлена (ID: {thread_id}). Анонсы туров и важные новости будут присылаться сюда!")
 
+@admin_only
 async def admin_set_results_topic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Set the topic for match results."""
     user_id = update.effective_user.id

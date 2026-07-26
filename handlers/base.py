@@ -13,6 +13,39 @@ def is_admin(telegram_id: int) -> bool:
     """Check if the user is in the configured Admin IDs."""
     return telegram_id in ADMIN_IDS
 
+from functools import wraps
+from telegram.ext import ConversationHandler
+
+def admin_only(func):
+    """Decorator to enforce admin permissions and answer CallbackQuery early."""
+    @wraps(func)
+    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
+        user = update.effective_user
+        query = update.callback_query
+        user_id = user.id if user else (query.from_user.id if query else None)
+
+        if not user_id or not is_admin(user_id):
+            if query:
+                try:
+                    await query.answer("⛔ Доступ запрещён", show_alert=True)
+                except Exception:
+                    pass
+            elif update.message:
+                try:
+                    await update.message.reply_text("❌ У вас нет прав доступа к этой панели.")
+                except Exception:
+                    pass
+            return ConversationHandler.END
+
+        if query:
+            try:
+                await query.answer()
+            except Exception:
+                pass
+
+        return await func(update, context, *args, **kwargs)
+    return wrapper
+
 def get_main_inline_keyboard(telegram_id: int) -> InlineKeyboardMarkup:
     """Generate main InlineKeyboardMarkup based on the user's role (matched to screenshot)."""
     keyboard = [
