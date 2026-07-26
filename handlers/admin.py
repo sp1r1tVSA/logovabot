@@ -699,13 +699,18 @@ async def admin_open_batch_rounds(update: Update, context: ContextTypes.DEFAULT_
         return ADMIN_WAITING_FOR_BATCH_ROUNDS
         
     text = update.message.text.strip()
+    normalized = text.replace("–", "-").replace("—", "-").replace(" ", "")
     try:
-        if "-" in text:
-            start_r, end_r = map(int, text.split("-"))
+        if "-" in normalized:
+            parts = normalized.split("-")
+            start_r = int(parts[0])
+            end_r = int(parts[1])
         else:
-            start_r = end_r = int(text)
-    except ValueError:
-        await update.message.reply_text("❌ Неверный формат. Используйте `1-3` или `2`.")
+            start_r = end_r = int(normalized)
+        if start_r > end_r:
+            start_r, end_r = end_r, start_r
+    except Exception:
+        await update.message.reply_text("❌ Неверный формат. Используйте `1-3` или `2`.", parse_mode="Markdown")
         return ADMIN_WAITING_FOR_BATCH_ROUNDS
         
     context.user_data["batch_start"] = start_r
@@ -720,6 +725,7 @@ async def admin_open_batch_rounds(update: Update, context: ContextTypes.DEFAULT_
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
     return ADMIN_WAITING_FOR_BATCH_DEADLINE
+
 
 @admin_only
 async def admin_open_batch_deadline(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:

@@ -17,8 +17,19 @@ from constants import (
 logger = logging.getLogger(__name__)
 
 def is_admin(telegram_id: int) -> bool:
-    """Check if the user is in the configured Admin IDs."""
-    return telegram_id in ADMIN_IDS
+    """Check if the user is in the configured Admin IDs or has admin role in database."""
+    if not telegram_id:
+        return False
+    if telegram_id in ADMIN_IDS:
+        return True
+    try:
+        user = database.get_user(telegram_id)
+        if user and user.get("role") == "admin":
+            return True
+    except Exception:
+        pass
+    return False
+
 
 from functools import wraps
 from telegram.ext import ConversationHandler
