@@ -13,22 +13,19 @@ def generate_chat_reply(user_id: int, user_text: str, chat_history: list[dict], 
     """
     api_key = config.GEMINI_CHAT_API_KEY
     if not api_key:
-        logger.error("GEMINI_CHAT_API_KEY is not set.")
+        logger.warning("GEMINI_CHAT_API_KEY is not set.")
         return "Ошибка: Не настроен ключ для чата (GEMINI_CHAT_API_KEY)."
 
-    # We will use the same flash-lite model, or fallback to standard flash.
+    # List of valid, official Google Gemini API models in order of preference
     candidate_models = [
-        "gemini-3.1-flash-lite",
-        "gemini-3.5-flash-lite",
         "gemini-2.5-flash-lite",
+        "gemini-2.5-flash",
         "gemini-2.0-flash-lite",
-        "gemini-1.5-flash-lite",
         "gemini-2.0-flash",
+        "gemini-1.5-flash-lite",
         "gemini-1.5-flash",
     ]
 
-    # Build the conversation payload
-    # Add the system instruction with the context
     system_instruction = {
         "parts": [{
             "text": (
@@ -48,7 +45,6 @@ def generate_chat_reply(user_id: int, user_text: str, chat_history: list[dict], 
         }]
     }
 
-    # Format history for Gemini API: roles can be "user" or "model"
     contents = []
     for msg in chat_history:
         contents.append({
@@ -56,7 +52,6 @@ def generate_chat_reply(user_id: int, user_text: str, chat_history: list[dict], 
             "parts": [{"text": msg["text"]}]
         })
     
-    # Add current user message
     contents.append({
         "role": "user",
         "parts": [{"text": user_text}]
@@ -77,25 +72,28 @@ def generate_chat_reply(user_id: int, user_text: str, chat_history: list[dict], 
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
         req = urllib.request.Request(url, data=payload_bytes, headers={'Content-Type': 'application/json'})
         try:
-            with urllib.request.urlopen(req, timeout=30) as response:
+            with urllib.request.urlopen(req, timeout=25) as response:
                 result = json.loads(response.read().decode('utf-8'))
                 
-                # Check for prompt feedback block if output is empty
                 if "candidates" not in result or not result["candidates"]:
-                    logger.warning(f"AI Chat: No candidates returned from {model_name}. Response: {result}")
+                    logger.warning(f"AI Chat: No candidates returned from model '{model_name}'. Response: {result}")
                     continue
                 
                 text_response = result["candidates"][0]["content"]["parts"][0]["text"]
-                # Clean any asterisks from markdown
                 clean_text = text_response.replace("**", "").replace("*", "")
                 cleaned_lines = [line.strip() for line in clean_text.split("\n")]
                 return "\n".join(cleaned_lines).strip()
                 
         except urllib.error.HTTPError as e:
-            logger.warning(f"AI Chat: Model {model_name} HTTP Error {e.code}: {e.reason}")
+            if e.code == 429:
+                logger.warning(f"AI Chat: Model '{model_name}' rate-limited (429). Trying fallback model...")
+            elif e.code == 404:
+                logger.warning(f"AI Chat: Model '{model_name}' not found (404). Trying fallback model...")
+            else:
+                logger.warning(f"AI Chat: Model '{model_name}' HTTP Error {e.code}: {e}")
             continue
         except Exception as e:
-            logger.error(f"AI Chat: Error generating reply with {model_name}: {e}")
+            logger.exception(f"AI Chat: Unexpected error generating reply with model '{model_name}'")
             continue
             
     return "Ох, что-то я сейчас не в форме (ошибка API или лимиты), попробуй написать попозже! ⚽"

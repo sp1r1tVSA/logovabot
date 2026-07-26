@@ -1,6 +1,7 @@
 import os
 import base64
 import json
+import re
 import logging
 import urllib.request
 import urllib.error
@@ -10,12 +11,12 @@ logger = logging.getLogger(__name__)
 
 def recognize_match_screenshots_bytes(images_bytes_list: list[bytes], mime_type: str = "image/jpeg") -> dict | None:
     """
-    Sends 1 or 2 match screenshot image bytes to Google Gemini API (default: gemini-1.5-flash-lite).
+    Sends 1 or 2 match screenshot image bytes to Google Gemini API.
     Supports both 2-column match stats screenshots and single vertical timeline goal list screenshots.
     Returns structured dict with match scores, goals, assists, and is_single_timeline flag.
     """
     api_key = getattr(config, "GEMINI_API_KEY", "")
-    model_setting = getattr(config, "GEMINI_MODEL", "gemini-1.5-flash-lite")
+    model_setting = getattr(config, "GEMINI_MODEL", "gemini-2.5-flash-lite")
 
     if not api_key:
         logger.warning("GEMINI_API_KEY is not set.")
@@ -93,14 +94,15 @@ def recognize_match_screenshots_bytes(images_bytes_list: list[bytes], mime_type:
 
     req_data = json.dumps(payload).encode("utf-8")
 
+    # List of valid, official Google Gemini API vision models
     candidate_models = list(dict.fromkeys(filter(None, [
         model_setting,
-        "gemini-3.1-flash-lite",   # 500 RPD, 15 RPM — приоритет
-        "gemini-3.5-flash-lite",   # 500 RPD, 15 RPM — фоллбек
-        "gemini-2.5-flash-lite",   # 20 RPD
-        "gemini-2.5-flash",        # 20 RPD
-        "gemini-2.0-flash-lite",   # 429, но работает
-        "gemini-2.0-flash",        # 429, последний фоллбек
+        "gemini-2.5-flash-lite",
+        "gemini-2.5-flash",
+        "gemini-2.0-flash-lite",
+        "gemini-2.0-flash",
+        "gemini-1.5-flash-lite",
+        "gemini-1.5-flash",
     ])))
 
     for m_name in candidate_models:
@@ -120,9 +122,33 @@ def recognize_match_screenshots_bytes(images_bytes_list: list[bytes], mime_type:
                 
                 candidates = res_json.get("candidates", [])
                 if candidates:
-                    text_content = candidates[0]["content"]["parts"][0]["text"]
+                    text_content = candidates[0]["content"]["parts"][0]["text"].strip()
+                    
+                    # Robust cleaning of markdown codeblocks if model returned ```json ... ```
+                    if text_content.startswith("```"):
+                        text_content = re.sub(r"^```(?:json)?\s*", "", text_content, flags=re.IGNORECASE)
+                        text_content = re.sub(r"\s*```$", "", text_content)
+                    
                     parsed_data = json.loads(text_content)
-                    logger.info(f"AI Vision ({m_name}) recognized match: {parsed_data.get('home_score')} - {parsed_data.get('away_score')} (is_single_timeline={parsed_data.get('is_single_timeline')})")
+                    
+                    if not isinstance(parsed_data, dict):
+                        logger.warning(f"Gemini model '{m_name}' returned non-dict JSON: {parsed_data}")
+                        continue
+                    
+                    # Ensure mandatory fields are present
+                    parsed_data.setdefault("home_score", 0)
+                    parsed_data.setdefault("away_score", 0)
+                    parsed_data.setdefault("side1_goals", [])
+                    parsed_data.setdefault("side2_goals", [])
+                    parsed_data.setdefault("side1_assists", [])
+                    parsed_data.setdefault("side2_assists", [])
+                    parsed_data.setdefault("is_single_timeline", False)
+                    
+                    logger.info(
+                        f"AI Vision ({m_name}) recognized match: "
+                        f"{parsed_data.get('home_score')} - {parsed_data.get('away_score')} "
+                        f"(is_single_timeline={parsed_data.get('is_single_timeline')})"
+                    )
                     return parsed_data
                 else:
                     logger.warning(f"Gemini model '{m_name}' returned no candidates: {res_json}")
@@ -133,10 +159,10 @@ def recognize_match_screenshots_bytes(images_bytes_list: list[bytes], mime_type:
             elif e.code == 404:
                 logger.warning(f"Gemini model '{m_name}' not found (404). Trying next fallback model...")
             else:
-                logger.exception("Gemini model '{m_name}' HTTP Error {e.code}")
+                logger.exception(f"Gemini model '{m_name}' HTTP Error {e.code}")
             continue
         except Exception as e:
-            logger.exception("Gemini model '{m_name}' recognition error")
+            logger.exception(f"Gemini model '{m_name}' recognition error")
             continue
 
     logger.error("All Gemini Vision fallback models failed or were rate-limited.")
