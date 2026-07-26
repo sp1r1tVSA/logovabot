@@ -114,9 +114,19 @@ def init_db() -> None:
         except sqlite3.OperationalError:
             pass
             
-        for col in [('photo_id', 'TEXT'), ('dispute_photos', 'TEXT'), ('reported_by', 'INTEGER'), ('proposed_time', 'TEXT'), ('proposed_by', 'INTEGER'), ('time_status', "TEXT DEFAULT 'none'")]:
+        # Safely migration-add new columns to matches using predefined SAFE_COLUMNS tuple.
+        # Note: String interpolation is safe here as column names/types are hardcoded internal constants, not user input.
+        SAFE_COLUMNS = (
+            ("photo_id", "TEXT"),
+            ("dispute_photos", "TEXT"),
+            ("reported_by", "INTEGER"),
+            ("proposed_time", "TEXT"),
+            ("proposed_by", "INTEGER"),
+            ("time_status", "TEXT DEFAULT 'none'"),
+        )
+        for col_name, col_type in SAFE_COLUMNS:
             try:
-                cursor.execute(f"ALTER TABLE matches ADD COLUMN {col[0]} {col[1]}")
+                cursor.execute(f"ALTER TABLE matches ADD COLUMN {col_name} {col_type}")
             except sqlite3.OperationalError:
                 pass
             
