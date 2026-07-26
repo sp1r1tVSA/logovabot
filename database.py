@@ -295,15 +295,21 @@ def get_standings() -> list[dict]:
     """Calculate the standings of all registered players dynamically."""
     with transaction() as conn:
         cursor = conn.cursor()
-        # Get all registered users who completed profile registration
-        cursor.execute(
-            "SELECT telegram_id, team_name, username FROM users WHERE team_name IS NOT NULL"
-        )
+        # Get all registered users and players with confirmed match history
+        cursor.execute("""
+            SELECT telegram_id, COALESCE(NULLIF(team_name, ''), 'Бывший участник') AS team_name, COALESCE(username, '') AS username 
+            FROM users 
+            WHERE (team_name IS NOT NULL AND team_name != '') OR telegram_id IN (
+                SELECT player1_id FROM matches WHERE status = 'confirmed' AND player1_id IS NOT NULL
+                UNION
+                SELECT player2_id FROM matches WHERE status = 'confirmed' AND player2_id IS NOT NULL
+            )
+        """)
         users = {
             row["telegram_id"]: {
                 "telegram_id": row["telegram_id"],
-                "team_name": row["team_name"] or "",
-                "username": row["username"] or "",
+                "team_name": row["team_name"],
+                "username": row["username"],
                 "played": 0,
                 "wins": 0,
                 "draws": 0,
