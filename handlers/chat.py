@@ -91,6 +91,31 @@ async def handle_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         form_str = "-".join(form_list) if form_list else "нет игр"
         form_text += f"• {st['team_name']}: {form_str}\n"
 
+    # Full upcoming schedule (all pending/unplayed matches)
+    pending_matches = database.get_open_pending_matches()
+    schedule_by_round: dict[int, list[str]] = {}
+    for pm in pending_matches:
+        rnd = pm.get("round_number", "?")
+        team1 = pm.get("player1_team", "?")
+        team2 = pm.get("player2_team", "?")
+        nick1 = pm.get("player1_nickname", "")
+        nick2 = pm.get("player2_nickname", "")
+        deadline = pm.get("deadline", "")
+        line = f"{team1} (@{nick1}) vs {team2} (@{nick2})"
+        if deadline:
+            line += f" [дедлайн: {deadline}]"
+        schedule_by_round.setdefault(rnd, []).append(line)
+
+    schedule_text = "📅 РАСПИСАНИЕ ПРЕДСТОЯЩИХ МАТЧЕЙ (ещё не сыгранные):\n"
+    if schedule_by_round:
+        for rnd in sorted(schedule_by_round.keys()):
+            schedule_text += f"\nТур {rnd}:\n"
+            for entry in schedule_by_round[rnd]:
+                schedule_text += f"  • {entry}\n"
+    else:
+        schedule_text += "Все матчи уже сыграны или расписание ещё не загружено.\n"
+
+
     # History of past seasons
     past_seasons_text = (
         "📜 ИСТОРИЯ ПРОШЛЫХ СЕЗОНОВ ЛИГИ (КПЛ):\n\n"
@@ -140,6 +165,7 @@ async def handle_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Всего туров в турнире: {total_rounds}.\n\n"
         f"{standings_text}\n"
         f"{form_text}\n"
+        f"{schedule_text}\n"
         f"{scorers_text}\n"
         f"{assists_text}\n"
         f"{matches_text}\n"
