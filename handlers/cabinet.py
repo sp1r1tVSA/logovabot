@@ -1086,7 +1086,7 @@ async def cb_report_choice_auto(update: Update, context: ContextTypes.DEFAULT_TY
         "💡 <i>Вы можете отправить 1 фото или сразу 2 фото альбомом.</i>"
     )
     keyboard = [[InlineKeyboardButton("❌ Отмена", callback_data=f"cabinet_view_match_{match_id}")]]
-    await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+    await safe_edit_or_reply(query, context, text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def cb_report_choice_manual(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
@@ -1141,7 +1141,7 @@ async def cb_report_choice_manual(update: Update, context: ContextTypes.DEFAULT_
         keyboard.append(row)
     keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data=f"cabinet_view_match_{match_id}")])
 
-    await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+    await safe_edit_or_reply(query, context, text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def cb_report_home_goals(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
