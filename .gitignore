@@ -7,3 +7,6 @@ __pycache__/
 *.pyc
 state/
 artifacts/
+*.db
+league.db
+
