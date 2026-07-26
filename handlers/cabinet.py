@@ -1734,39 +1734,44 @@ async def submit_report_to_guest(update: Update, context: ContextTypes.DEFAULT_T
         await query.answer("❌ Ошибка: матч не найден.", show_alert=True)
         return
 
-    home_user_id = query.from_user.id
+    submitter_id = query.from_user.id
+    is_submitter_home = (submitter_id == match['player1_id'])
+
+    submitter_team = match['player1_team'] or match['player1_nickname'] if is_submitter_home else match['player2_team'] or match['player2_nickname']
+    recipient_team = match['player2_team'] or match['player2_nickname'] if is_submitter_home else match['player1_team'] or match['player1_nickname']
+    recipient_id = match['player2_id'] if is_submitter_home else match['player1_id']
+
     hg = context.user_data.get("report_home_goals", 0)
     ag = context.user_data.get("report_away_goals", 0)
     photo_id = context.user_data.get("report_photo_id")
 
     # Build events list for database
     events = []
-    home_team = match['player1_team'] or match['player1_nickname']
-    goals_dict = context.user_data.get("home_goals_count", {})
-    assists_dict = context.user_data.get("home_assists_count", {})
+    goals_dict = context.user_data.get("home_goals_count" if is_submitter_home else "away_goals_count", {})
+    assists_dict = context.user_data.get("home_assists_count" if is_submitter_home else "away_assists_count", {})
 
     for p, c in goals_dict.items():
-        events.append((home_team, p, "goal", c))
+        events.append((submitter_team, p, "goal", c))
     for p, c in assists_dict.items():
-        events.append((home_team, p, "assist", c))
+        events.append((submitter_team, p, "assist", c))
 
     # Save to database
-    await asyncio.to_thread(database.report_match_score, match_id, hg, ag, home_user_id, photo_id)
+    await asyncio.to_thread(database.report_match_score, match_id, hg, ag, submitter_id, photo_id)
     if events:
-        await asyncio.to_thread(database.save_match_events, match_id, events, team_name=home_team)
+        await asyncio.to_thread(database.save_match_events, match_id, events, team_name=submitter_team)
 
-    # Notify Guest
-    guest_id = match['player2_id']
+    # Notify Recipient Opponent
+    home_team = match['player1_team'] or match['player1_nickname']
     away_team = match['player2_team'] or match['player2_nickname']
 
     goals_summary = ", ".join([f"{p} ({c})" for p, c in goals_dict.items()]) if goals_dict else "Не указано"
     assists_summary = ", ".join([f"{p} ({c})" for p, c in assists_dict.items()]) if assists_dict else "Нет"
 
     guest_text = (
-        f"🔔 <b>Хозяева поля ({html.escape(home_team)}) ввели результат матча #{match_id}!</b>\n\n"
+        f"🔔 <b>Участник {html.escape(submitter_team)} ввёл результат матча #{match_id}!</b>\n\n"
         f"🏠 <b>{html.escape(home_team)}</b> {hg} : {ag} <b>{html.escape(away_team)}</b> ✈️\n\n"
-        f"⚽ <b>Голы ({html.escape(home_team)}):</b> {html.escape(goals_summary)}\n"
-        f"🎯 <b>Ассисты ({html.escape(home_team)}):</b> {html.escape(assists_summary)}\n\n"
+        f"⚽ <b>Голы ({html.escape(submitter_team)}):</b> {html.escape(goals_summary)}\n"
+        f"🎯 <b>Ассисты ({html.escape(submitter_team)}):</b> {html.escape(assists_summary)}\n\n"
         f"Вы подтверждаете этот результат?"
     )
 
@@ -1779,19 +1784,20 @@ async def submit_report_to_guest(update: Update, context: ContextTypes.DEFAULT_T
     err_reason = ""
     if photo_id:
         try:
-            await context.bot.send_photo(chat_id=guest_id, photo=photo_id, caption=guest_text, parse_mode="HTML", reply_markup=guest_markup)
+            await context.bot.send_photo(chat_id=recipient_id, photo=photo_id, caption=guest_text, parse_mode="HTML", reply_markup=guest_markup)
             sent_success = True
         except Exception as e1:
-            logger.warning(f"Photo send with HTML failed for guest {guest_id}: {e1}. Trying text fallback...")
+            logger.warning(f"Photo send with HTML failed for recipient {recipient_id}: {e1}. Trying text fallback...")
             err_reason = str(e1)
 
     if not sent_success:
         try:
-            await context.bot.send_message(chat_id=guest_id, text=guest_text, parse_mode="HTML", reply_markup=guest_markup)
+            await context.bot.send_message(chat_id=recipient_id, text=guest_text, parse_mode="HTML", reply_markup=guest_markup)
             sent_success = True
         except Exception as e2:
-            logger.warning(f"Failed to send HTML message to guest {guest_id}: {e2}. Trying plain text fallback...")
+            logger.warning(f"Failed to send HTML message to recipient {recipient_id}: {e2}. Trying plain text fallback...")
             err_reason = str(e2)
+
 
     if not sent_success:
         try:
@@ -1872,24 +1878,30 @@ async def handle_confirm_score(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     user_id = query.from_user.id
-    if match['player2_id'] != user_id:
-        await query.answer("⛔ Только гостевой игрок может подтвердить данный результат.", show_alert=True)
+    reporter_id = match.get('reported_by') or match['player1_id']
+    expected_confirmer_id = match['player2_id'] if reporter_id == match['player1_id'] else match['player1_id']
+
+    if user_id != expected_confirmer_id:
+        await query.answer("⛔ Только соперник может подтвердить данный результат.", show_alert=True)
         return
 
-    away_team = match['player2_team'] or match['player2_nickname']
-    away_goals = match['player2_score'] or 0
+    is_confirmer_home = (user_id == match['player1_id'])
+    confirmer_team = match['player1_team'] or match['player1_nickname'] if is_confirmer_home else match['player2_team'] or match['player2_nickname']
+    confirmer_goals = match['player1_score'] if is_confirmer_home else match['player2_score']
+    confirmer_goals = confirmer_goals or 0
 
-    # If away team scored > 0, prompt guest to pick their goalscorers
-    if away_goals > 0:
+    # If confirmer's team scored > 0, prompt to pick their goalscorers
+    if confirmer_goals > 0:
         context.user_data["guest_confirm_match_id"] = match_id
-        context.user_data["guest_away_team"] = away_team
-        context.user_data["guest_goals_to_pick"] = away_goals
+        context.user_data["guest_away_team"] = confirmer_team
+        context.user_data["guest_goals_to_pick"] = confirmer_goals
         context.user_data["guest_goals_count"] = {}
-        await render_guest_goals_picker(update, context, away_team)
+        await render_guest_goals_picker(update, context, confirmer_team)
     else:
-        # 0 away goals -> confirm immediately
+        # 0 goals -> confirm immediately
         await asyncio.to_thread(database.confirm_match, match_id)
         await notify_match_confirmed(context, match_id)
+
 
 async def render_guest_goals_picker(update: Update, context: ContextTypes.DEFAULT_TYPE, team_name: str) -> None:
     query = update.callback_query
