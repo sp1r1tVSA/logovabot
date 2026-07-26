@@ -77,7 +77,7 @@ from handlers.cabinet import (
     start_custom_time_prompt,
     save_custom_match_time,
     cb_request_admin_result,
-    cb_admin_enter_result,
+    cb_admin_approve_result,
 )
 
 # Import admin handlers
@@ -436,9 +436,9 @@ def register_all_handlers(application: Application) -> None:
     application.add_handler(CallbackQueryHandler(cb_quick_time, pattern="^cb_quick_time_\\d+_.+$"))
     application.add_handler(CallbackQueryHandler(cb_accept_time, pattern="^cb_accept_time_\\d+$"))
 
-    # Overdue match admin request
+    # Overdue match admin request & approval
     application.add_handler(CallbackQueryHandler(cb_request_admin_result, pattern="^cb_request_admin_result_\\d+$"))
-    application.add_handler(CallbackQueryHandler(cb_admin_enter_result, pattern="^cb_admin_enter_result_\\d+$"))
+    application.add_handler(CallbackQueryHandler(cb_admin_approve_result, pattern="^cb_admin_approve_\\d+_\\d+$"))
     
     # Score Reporting & Stats Callbacks
     application.add_handler(CallbackQueryHandler(cb_report_choice_auto, pattern="^cb_report_choice_auto_\\d+$"))

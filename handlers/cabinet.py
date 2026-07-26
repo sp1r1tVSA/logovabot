@@ -602,7 +602,7 @@ async def cabinet_view_match(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await safe_edit_or_reply(query, context, text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
 async def cb_request_admin_result(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Player requests admin to enter result for an overdue match."""
+    """Player requests permission from admin to enter result for an overdue match."""
     query = update.callback_query
     if not query:
         return
@@ -615,9 +615,12 @@ async def cb_request_admin_result(update: Update, context: ContextTypes.DEFAULT_
         await query.answer("Матч не найден.", show_alert=True)
         return
 
-    # Ensure user is a participant
     if user_id not in (m['player1_id'], m['player2_id']):
         await query.answer("⛔ Вы не являетесь участником этого матча.", show_alert=True)
+        return
+
+    if m.get('is_extended'):
+        await query.answer("✅ Разрешение уже выдано! Вы можете вносить результат.", show_alert=True)
         return
 
     team1 = m.get('player1_team') or m.get('player1_nickname') or '?'
@@ -631,15 +634,16 @@ async def cb_request_admin_result(update: Update, context: ContextTypes.DEFAULT_
     requester_username = f"@{query.from_user.username}" if query.from_user.username else f"id{user_id}"
 
     admin_text = (
-        f"📨 <b>Запрос на внесение результата просроченного матча</b>\n\n"
+        f"📨 <b>Запрос на разрешение внесения результата</b>\n\n"
         f"🏟 Матч #{match_id} | Тур {rnd}\n"
         f"🏠 {html.escape(team1)} (@{html.escape(nick1)}) vs {html.escape(team2)} (@{html.escape(nick2)}) ✈️\n"
         f"⏳ Дедлайн истёк: {html.escape(str(deadline))}\n\n"
         f"👤 Запрос отправил: {html.escape(requester_name)} ({requester_username})\n\n"
-        f"Нажмите кнопку ниже, чтобы внести результат за участников."
+        f"Нажмите <b>✅ Разрешить</b>, чтобы игрок мог сам внести результат."
     )
+    # callback carries both match_id and requesting player_id
     admin_keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📝 Внести результат", callback_data=f"cb_admin_enter_result_{match_id}")]
+        [InlineKeyboardButton("✅ Разрешить внесение", callback_data=f"cb_admin_approve_{match_id}_{user_id}")]
     ])
 
     sent_count = 0
@@ -657,25 +661,32 @@ async def cb_request_admin_result(update: Update, context: ContextTypes.DEFAULT_
             logger.warning(f"Could not notify admin {admin_id}: {e}")
 
     if sent_count > 0:
-        await query.answer("✅ Запрос отправлен администратору!", show_alert=True)
+        await query.answer("✅ Запрос отправлен администратору!\nКак только он одобрит — бот пришлёт вам уведомление.", show_alert=True)
     else:
         await query.answer("⚠️ Не удалось уведомить администраторов. Напишите напрямую @antonv2801.", show_alert=True)
 
 
-async def cb_admin_enter_result(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Admin clicks 'Enter result' from the request notification — opens score reporting for that match."""
+async def cb_admin_approve_result(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Admin approves the player's request — unlocks the match and sends player a match card to enter result."""
     query = update.callback_query
     if not query:
         return
     await query.answer()
 
-    user_id = query.from_user.id
+    admin_id = query.from_user.id
     from config import ADMIN_IDS
-    if user_id not in ADMIN_IDS:
-        await query.answer("⛔ Только администратор может вносить результаты просроченных матчей.", show_alert=True)
+    if admin_id not in ADMIN_IDS:
+        await query.answer("⛔ Только администратор может одобрять запросы.", show_alert=True)
         return
 
-    match_id = int(query.data.replace("cb_admin_enter_result_", ""))
+    # parse match_id and player_id from callback data: cb_admin_approve_{match_id}_{player_id}
+    parts = query.data.replace("cb_admin_approve_", "").split("_")
+    if len(parts) < 2:
+        await query.answer("Ошибка данных.", show_alert=True)
+        return
+    match_id = int(parts[0])
+    player_id = int(parts[1])
+
     m = database.get_match(match_id)
     if not m:
         await query.answer("Матч не найден.", show_alert=True)
@@ -685,27 +696,47 @@ async def cb_admin_enter_result(update: Update, context: ContextTypes.DEFAULT_TY
         await query.answer(f"Матч уже имеет статус: {m['status']}.", show_alert=True)
         return
 
-    # Temporarily set context so admin enters score reporting flow for this match
-    context.user_data["reporting_match_id"] = match_id
-    context.user_data["reporting_is_admin_override"] = True
+    # Unlock the match — set is_extended = 1 so overdue check is bypassed for the player
+    database.extend_match_deadline(match_id)
 
     team1 = m.get('player1_team') or m.get('player1_nickname') or '?'
     team2 = m.get('player2_team') or m.get('player2_nickname') or '?'
+    rnd = m.get('round_number', '?')
+    admin_username = query.from_user.username or str(admin_id)
 
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("⚡ Ввод по фото (ИИ)", callback_data=f"cb_report_choice_auto_{match_id}")],
-        [InlineKeyboardButton("✍️ Ввести вручную", callback_data=f"cb_report_choice_manual_{match_id}")],
-        [InlineKeyboardButton("« Отмена", callback_data=f"cabinet_view_match_{match_id}")]
-    ])
-    await query.edit_message_text(
-        text=(
-            f"📝 <b>Ввод результата (от имени админа)</b>\n\n"
-            f"🏟 Матч #{match_id}: {html.escape(team1)} vs {html.escape(team2)}\n\n"
-            f"Выберите способ внесения результата:"
-        ),
-        parse_mode="HTML",
-        reply_markup=keyboard
+    # Notify player with match card and direct "Enter result" button
+    player_text = (
+        f"✅ <b>Разрешение получено!</b>\n\n"
+        f"Администратор @{html.escape(admin_username)} разрешил вам внести результат матча:\n\n"
+        f"🏟 Матч #{match_id} | Тур {rnd}\n"
+        f"🏠 {html.escape(team1)} vs {html.escape(team2)} ✈️\n\n"
+        f"Нажмите кнопку ниже, чтобы сразу внести результат:"
     )
+    player_keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📝 Ввести результат", callback_data=f"cabinet_report_score_{match_id}")]
+    ])
+
+    try:
+        await context.bot.send_message(
+            chat_id=player_id,
+            text=player_text,
+            parse_mode="HTML",
+            reply_markup=player_keyboard
+        )
+    except Exception as e:
+        logger.error(f"Failed to notify player {player_id} about admin approval: {e}")
+
+    # Update admin's message to show it's been approved
+    try:
+        await query.edit_message_text(
+            text=(
+                f"✅ <b>Разрешение выдано!</b>\n\n"
+                f"Игрок получил уведомление и может сам внести результат матча #{match_id}."
+            ),
+            parse_mode="HTML"
+        )
+    except Exception:
+        pass
 
 
 async def cb_propose_time_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
