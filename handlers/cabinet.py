@@ -990,6 +990,19 @@ async def start_score_reporting(update: Update, context: ContextTypes.DEFAULT_TY
             await query.answer("❌ Матч не найден.", show_alert=True)
         return
 
+    if not match.get("is_extended"):
+        round_info = await asyncio.to_thread(database.get_round_info, match['round_number'])
+        deadline_text = round_info.get("deadline") if round_info else None
+        if deadline_text:
+            try:
+                dt = datetime.datetime.strptime(deadline_text, "%d.%m.%Y %H:%M")
+                if datetime.datetime.now() > dt:
+                    if query:
+                        await query.answer("🔴 Дедлайн тура истёк! Запросите разрешение у админа.", show_alert=True)
+                    return
+            except ValueError:
+                pass
+
     home_team = match['player1_team'] or match['player1_nickname']
     away_team = match['player2_team'] or match['player2_nickname']
 
@@ -1022,6 +1035,24 @@ async def cb_report_choice_auto(update: Update, context: ContextTypes.DEFAULT_TY
     await query.answer()
 
     match_id = int(query.data.replace("cb_report_choice_auto_", ""))
+
+    match = await asyncio.to_thread(database.get_match, match_id)
+    if not match:
+        await query.answer("❌ Матч не найден.", show_alert=True)
+        return
+
+    if not match.get("is_extended"):
+        round_info = await asyncio.to_thread(database.get_round_info, match['round_number'])
+        deadline_text = round_info.get("deadline") if round_info else None
+        if deadline_text:
+            try:
+                dt = datetime.datetime.strptime(deadline_text, "%d.%m.%Y %H:%M")
+                if datetime.datetime.now() > dt:
+                    await query.answer("🔴 Дедлайн тура истёк! Запросите разрешение у админа.", show_alert=True)
+                    return
+            except ValueError:
+                pass
+
     context.user_data["reporting_match_id"] = match_id
     context.user_data["reporting_mode"] = "auto"
     context.user_data["awaiting_report_photo"] = True
@@ -1042,11 +1073,29 @@ async def cb_report_choice_manual(update: Update, context: ContextTypes.DEFAULT_
     await query.answer()
 
     match_id = int(query.data.replace("cb_report_choice_manual_", ""))
+
+    match = await asyncio.to_thread(database.get_match, match_id)
+    if not match:
+        await query.answer("❌ Матч не найден.", show_alert=True)
+        return
+
+    if not match.get("is_extended"):
+        round_info = await asyncio.to_thread(database.get_round_info, match['round_number'])
+        deadline_text = round_info.get("deadline") if round_info else None
+        if deadline_text:
+            try:
+                dt = datetime.datetime.strptime(deadline_text, "%d.%m.%Y %H:%M")
+                if datetime.datetime.now() > dt:
+                    await query.answer("🔴 Дедлайн тура истёк! Запросите разрешение у админа.", show_alert=True)
+                    return
+            except ValueError:
+                pass
+
     context.user_data["reporting_match_id"] = match_id
     context.user_data["reporting_mode"] = "manual"
 
-    home_team = context.user_data.get("report_home_team", "Хозяева")
-    away_team = context.user_data.get("report_away_team", "Гости")
+    home_team = context.user_data.get("report_home_team") or match['player1_team'] or match['player1_nickname']
+    away_team = context.user_data.get("report_away_team") or match['player2_team'] or match['player2_nickname']
 
     text = (
         f"⚽ <b>Ввод результата матча #{match_id}</b>\n"
@@ -1399,6 +1448,7 @@ async def save_report_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) 
                 await context.bot.send_photo(chat_id=update.effective_user.id, photo=photo_id, caption=text, parse_mode="HTML", reply_markup=markup)
                 return ConversationHandler.END
             else:
+                context.user_data.pop("report_photo_id", None)
                 user_id = update.effective_user.id
                 cancel_cb = get_match_cancel_cb(context, user_id, match_id)
                 fail_text = (
@@ -1413,6 +1463,7 @@ async def save_report_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) 
                 return ConversationHandler.END
         except Exception as e:
             logger.exception("AI Vision processing error")
+            context.user_data.pop("report_photo_id", None)
         finally:
             if status_msg:
                 try:
