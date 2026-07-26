@@ -651,8 +651,16 @@ def create_round(round_number: int, deadline: str = None) -> None:
 
 def create_match(round_number: int, player1_id: int, player2_id: int) -> int:
     """Create a new pending match between two players in a round."""
+    if player1_id == player2_id:
+        raise ValueError("Игрок не может играть сам с собой (player1_id == player2_id).")
+        
     with transaction() as conn:
         cursor = conn.cursor()
+        cursor.execute("SELECT team_name FROM users WHERE telegram_id IN (?, ?)", (player1_id, player2_id))
+        teams = [r[0] for r in cursor.fetchall() if r[0]]
+        if len(teams) == 2 and teams[0].lower() == teams[1].lower():
+            raise ValueError(f"Команды участников совпадают: {teams[0]}")
+
         cursor.execute(
             "INSERT INTO matches (round_number, player1_id, player2_id, status) VALUES (?, ?, ?, 'pending')",
             (round_number, player1_id, player2_id)
@@ -1117,15 +1125,18 @@ def clear_all_matches() -> None:
 
 def batch_insert_matches(fixtures: list[tuple[int, int, int]]) -> None:
     """Insert a list of matches. fixtures format: (round_number, p1, p2)"""
+    valid_fixtures = [f for f in fixtures if f[1] != f[2]]
+    if not valid_fixtures:
+        return
     with transaction() as conn:
         cursor = conn.cursor()
         cursor.executemany(
             "INSERT INTO matches (round_number, player1_id, player2_id, status) VALUES (?, ?, ?, 'pending')",
-            fixtures
+            valid_fixtures
         )
-        rounds = set([f[0] for f in fixtures])
+        rounds = set([f[0] for f in valid_fixtures])
         cursor.executemany(
-            "INSERT INTO rounds (round_number, is_open, deadline) VALUES (?, 0, NULL)",
+            "INSERT OR IGNORE INTO rounds (round_number, is_open, deadline) VALUES (?, 0, NULL)",
             [(r,) for r in rounds]
         )
 

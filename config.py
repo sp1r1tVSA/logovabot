@@ -51,3 +51,6 @@ CLUBS = [
     "АЕК"
 ]
 
+MAX_MATCH_GOALS = 50
+
+

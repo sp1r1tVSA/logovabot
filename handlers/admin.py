@@ -7,7 +7,9 @@ import html
 import database
 from handlers.base import is_admin, admin_only, post_league_table_to_reports
 from handlers.cabinet import notify_match_confirmed, safe_send_notification
+import config
 from config import CLUBS
+
 from schedule_parser import parse_schedule_text, create_matches_from_parsed_schedule
 import logging
 
@@ -276,8 +278,15 @@ async def admin_save_dispute_score(update: Update, context: ContextTypes.DEFAULT
     p1_score = int(m.group(1))
     p2_score = int(m.group(2))
 
+    if p1_score < 0 or p2_score < 0 or p1_score > config.MAX_MATCH_GOALS or p2_score > config.MAX_MATCH_GOALS:
+        await update.message.reply_text(
+            f"❌ Некорректный счёт. Максимальное количество голов: {config.MAX_MATCH_GOALS}."
+        )
+        return ADMIN_WAITING_FOR_DISPUTE_SCORE
+
     # Save to database (confirms match)
     await asyncio.to_thread(database.admin_set_match_score, match_id, p1_score, p2_score)
+
     context.user_data.pop("admin_resolve_match_id", None)
 
     await update.message.reply_text(
@@ -1348,8 +1357,14 @@ async def admin_set_score_text(update: Update, context: ContextTypes.DEFAULT_TYP
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Отмена", callback_data=f"admin_view_match_{match_id}")]])
         )
         return ADMIN_EXPECT_MATCH_SCORE
-        
-    context.user_data.pop("admin_set_match_id", None)
+
+    if s1 < 0 or s2 < 0 or s1 > config.MAX_MATCH_GOALS or s2 > config.MAX_MATCH_GOALS:
+        await update.message.reply_text(
+            f"❌ Некорректный счёт. Максимальное количество голов: {config.MAX_MATCH_GOALS}.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Отмена", callback_data=f"admin_view_match_{match_id}")]])
+        )
+        return ADMIN_EXPECT_MATCH_SCORE
+
     match = await asyncio.to_thread(database.get_match, match_id)
     if not match:
         await update.message.reply_text("❌ Матч не найден. Сброс.")
