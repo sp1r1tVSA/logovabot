@@ -687,9 +687,10 @@ def get_disputed_matches() -> list[dict]:
         return [dict(row) for row in cursor.fetchall()]
 
 def admin_set_match_score(match_id: int, player1_score: int, player2_score: int) -> None:
-    """Manually set match score and confirm it by admin."""
+    """Manually set match score and confirm it by admin, clearing any previous match events."""
     with transaction() as conn:
         cursor = conn.cursor()
+        cursor.execute("DELETE FROM match_events WHERE match_id = ?", (match_id,))
         cursor.execute(
             "UPDATE matches SET player1_score = ?, player2_score = ?, status = 'confirmed', played_at = CURRENT_TIMESTAMP WHERE id = ?",
             (player1_score, player2_score, match_id)
@@ -782,9 +783,10 @@ def get_matches_by_round(round_number: int) -> list[dict]:
         return [dict(row) for row in cursor.fetchall()]
 
 def reset_match(match_id: int) -> None:
-    """Reset a match result, setting status back to 'pending' and clearing scores."""
+    """Reset a match result, setting status back to 'pending' and clearing scores and events."""
     with transaction() as conn:
         cursor = conn.cursor()
+        cursor.execute("DELETE FROM match_events WHERE match_id = ?", (match_id,))
         cursor.execute(
             "UPDATE matches SET player1_score = NULL, player2_score = NULL, status = 'pending', played_at = NULL WHERE id = ?",
             (match_id,)
@@ -1182,7 +1184,7 @@ def set_technical_result(match_id: int, p1_score: int, p2_score: int) -> bool:
         cursor = conn.cursor()
         cursor.execute("DELETE FROM match_events WHERE match_id = ?", (match_id,))
         cursor.execute(
-            "UPDATE matches SET status = 'completed', player1_score = ?, player2_score = ?, played_at = CURRENT_TIMESTAMP WHERE id = ?",
+            "UPDATE matches SET status = 'confirmed', player1_score = ?, player2_score = ?, played_at = CURRENT_TIMESTAMP WHERE id = ?",
             (p1_score, p2_score, match_id)
         )
         return cursor.rowcount > 0
