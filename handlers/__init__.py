@@ -205,7 +205,8 @@ def register_all_handlers(application: Application) -> None:
             MessageHandler(filters.Regex("^Отмена$"), cancel_registration)
         ],
         allow_reentry=True,
-        per_message=False
+        per_message=False,
+        conversation_timeout=300
     )
     application.add_handler(reg_conv)
 
@@ -222,7 +223,8 @@ def register_all_handlers(application: Application) -> None:
             CommandHandler("cancel", cancel_registration)
         ],
         allow_reentry=True,
-        per_message=False
+        per_message=False,
+        conversation_timeout=300
     )
     application.add_handler(score_report_conv)
 
@@ -239,7 +241,8 @@ def register_all_handlers(application: Application) -> None:
             CommandHandler("cancel", cancel_registration)
         ],
         allow_reentry=True,
-        per_message=False
+        per_message=False,
+        conversation_timeout=300
     )
     application.add_handler(dispute_conv)
 
@@ -256,7 +259,8 @@ def register_all_handlers(application: Application) -> None:
             CommandHandler("cancel", cancel_upload_squad)
         ],
         allow_reentry=True,
-        per_message=False
+        per_message=False,
+        conversation_timeout=300
     )
     application.add_handler(squad_conv)
 
@@ -273,7 +277,8 @@ def register_all_handlers(application: Application) -> None:
             CommandHandler("cancel", cancel_registration)
         ],
         allow_reentry=True,
-        per_message=False
+        per_message=False,
+        conversation_timeout=300
     )
     application.add_handler(custom_time_conv)
 
@@ -290,7 +295,8 @@ def register_all_handlers(application: Application) -> None:
             MessageHandler(filters.Regex("^Отмена$"), admin_cancel_dispute_resolve)
         ],
         allow_reentry=True,
-        per_message=False
+        per_message=False,
+        conversation_timeout=300
     )
     application.add_handler(admin_dispute_conv)
 
@@ -318,7 +324,8 @@ def register_all_handlers(application: Application) -> None:
             CommandHandler("cancel", admin_cancel_player_action)
         ],
         allow_reentry=True,
-        per_message=False
+        per_message=False,
+        conversation_timeout=300
     )
     application.add_handler(admin_player_conv)
 
@@ -335,7 +342,8 @@ def register_all_handlers(application: Application) -> None:
             CommandHandler("cancel", admin_cancel_match_action)
         ],
         allow_reentry=True,
-        per_message=False
+        per_message=False,
+        conversation_timeout=300
     )
     application.add_handler(admin_match_score_conv)
 
@@ -352,7 +360,8 @@ def register_all_handlers(application: Application) -> None:
             CommandHandler("cancel", admin_cancel_match_action)
         ],
         allow_reentry=True,
-        per_message=False
+        per_message=False,
+        conversation_timeout=300
     )
     application.add_handler(admin_round_deadline_conv)
 
@@ -370,7 +379,8 @@ def register_all_handlers(application: Application) -> None:
             CommandHandler("cancel", admin_cancel_match_action)
         ],
         allow_reentry=True,
-        per_message=False
+        per_message=False,
+        conversation_timeout=300
     )
     application.add_handler(admin_batch_round_conv)
 
@@ -389,7 +399,8 @@ def register_all_handlers(application: Application) -> None:
             CommandHandler("cancel", admin_manage_matches_info)
         ],
         allow_reentry=True,
-        per_message=False
+        per_message=False,
+        conversation_timeout=300
     )
     application.add_handler(admin_create_matches_conv)
 

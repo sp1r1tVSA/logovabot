@@ -1541,6 +1541,10 @@ async def cb_confirm_ai_final(update: Update, context: ContextTypes.DEFAULT_TYPE
         await query.answer("❌ Матч не найден.", show_alert=True)
         return
 
+    if match['status'] == 'confirmed':
+        await query.answer("Результат уже зафиксирован!", show_alert=True)
+        return
+
     user_id = query.from_user.id
     h_score = context.user_data.get("report_home_goals", 0)
     a_score = context.user_data.get("report_away_goals", 0)
@@ -1812,6 +1816,10 @@ async def handle_confirm_score(update: Update, context: ContextTypes.DEFAULT_TYP
         await query.edit_message_text("❌ Матч не найден.")
         return
 
+    if match['status'] == 'confirmed':
+        await query.answer("Результат уже зафиксирован!", show_alert=True)
+        return
+
     user_id = query.from_user.id
     if match['player2_id'] != user_id:
         await query.answer("⛔ Только гостевой игрок может подтвердить данный результат.", show_alert=True)
@@ -1973,6 +1981,12 @@ async def guest_skip_assists(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def finalize_guest_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     match_id = context.user_data.get("guest_confirm_match_id")
+    match = await asyncio.to_thread(database.get_match, match_id) if match_id else None
+    if match and match['status'] == 'confirmed':
+        if update.callback_query:
+            await update.callback_query.answer("Результат уже зафиксирован!", show_alert=True)
+        return
+
     away_team = context.user_data.get("guest_away_team")
 
     goals_dict = context.user_data.get("guest_goals_count", {})

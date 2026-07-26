@@ -120,6 +120,13 @@ def init_db() -> None:
             except sqlite3.OperationalError:
                 pass
             
+        # Performance indexes for matches and match_events
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_matches_p1 ON matches(player1_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_matches_p2 ON matches(player2_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_matches_round ON matches(round_number)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_matches_status ON matches(status)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_match ON match_events(match_id)")
+
         logger.info("Database tables initialized successfully.")
 
 def get_user(telegram_id: int) -> sqlite3.Row | None:
