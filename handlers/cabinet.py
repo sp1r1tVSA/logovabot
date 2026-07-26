@@ -1,3 +1,4 @@
+import datetime
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from telegram.ext import ContextTypes, ConversationHandler
 import html
@@ -159,10 +160,10 @@ async def safe_send_notification(bot, chat_id: int, text: str, reply_markup=None
         await asyncio.sleep(e.retry_after)
         return await safe_send_notification(bot, chat_id, text, reply_markup, parse_mode)
     except telegram.error.TelegramError as e:
-        logger.error(f"Telegram error sending to {chat_id}: {e}")
+        logger.exception("Telegram error sending to {chat_id}")
         return False
     except Exception as e:
-        logger.error(f"Unexpected error sending to {chat_id}: {e}")
+        logger.exception("Unexpected error sending to {chat_id}")
         return False
 
 # Conversation states
@@ -483,7 +484,6 @@ async def cabinet_view_match(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     is_overdue = False
     if deadline_text:
-        import datetime
         try:
             dt = datetime.datetime.strptime(deadline_text, "%d.%m.%Y %H:%M")
             if datetime.datetime.now() > dt:
@@ -724,7 +724,7 @@ async def cb_admin_approve_result(update: Update, context: ContextTypes.DEFAULT_
             reply_markup=player_keyboard
         )
     except Exception as e:
-        logger.error(f"Failed to notify player {player_id} about admin approval: {e}")
+        logger.exception("Failed to notify player {player_id} about admin approval")
 
     # Update admin's message to show it's been approved
     try:
@@ -1412,7 +1412,7 @@ async def save_report_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) 
                 await update.message.reply_text(fail_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
                 return ConversationHandler.END
         except Exception as e:
-            logger.error(f"AI Vision processing error: {e}")
+            logger.exception("AI Vision processing error")
         finally:
             if status_msg:
                 try:
@@ -1661,7 +1661,7 @@ async def cb_confirm_ai_final(update: Update, context: ContextTypes.DEFAULT_TYPE
                 kwargs.pop("caption", None)
                 await context.bot.send_message(**kwargs)
         except Exception as e:
-            logger.error(f"Failed to post result to group: {e}")
+            logger.exception("Failed to post result to group")
 
 async def submit_report_to_guest(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
@@ -1754,7 +1754,7 @@ async def submit_report_to_guest(update: Update, context: ContextTypes.DEFAULT_T
             await context.bot.send_message(chat_id=guest_id, text=plain_text, reply_markup=guest_markup)
             sent_success = True
         except Exception as e3:
-            logger.error(f"Plain text fallback failed for guest {guest_id}: {e3}")
+            logger.exception("Plain text fallback failed for guest {guest_id}")
             err_reason = str(e3)
 
     is_admin_user = is_admin(home_user_id) or context.user_data.get("is_admin_reporting", False)
@@ -1802,7 +1802,7 @@ async def submit_report_to_guest(update: Update, context: ContextTypes.DEFAULT_T
                 parse_mode="HTML"
             )
         except Exception as e:
-            logger.error(f"Failed to send confirmation message to home player: {e}")
+            logger.exception("Failed to send confirmation message to home player")
 
 async def handle_confirm_score(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
@@ -2042,7 +2042,7 @@ async def notify_match_confirmed(context: ContextTypes.DEFAULT_TYPE, match_id: i
             try:
                 await context.bot.send_message(chat_id=p_id, text=pm_text, parse_mode="HTML")
             except Exception as e:
-                logger.error(f"Failed to send confirmation to player {p_id}: {e}")
+                logger.exception("Failed to send confirmation to player {p_id}")
 
     results_topic_id = await asyncio.to_thread(database.get_config, "results_topic_id")
     group_id = await asyncio.to_thread(database.get_group_id)
@@ -2076,7 +2076,7 @@ async def notify_match_confirmed(context: ContextTypes.DEFAULT_TYPE, match_id: i
                     kwargs["message_thread_id"] = int(results_topic_id)
                 await context.bot.send_message(**kwargs)
         except Exception as e:
-            logger.error(f"Failed to post result to topic/group: {e}")
+            logger.exception("Failed to post result to topic/group")
 
 # ==========================================
 # ОСПОРАРИВАНИЕ МАТЧА ГОСТЕМ (ФОТО ДОКАЗАТЕЛЬСТВА)
@@ -2296,7 +2296,7 @@ async def cabinet_view_squad(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 parse_mode="HTML"
             )
         except Exception as e:
-            logger.error(f"Failed to send squad photo: {e}")
+            logger.exception("Failed to send squad photo")
     else:
         await safe_query_answer(query, f"❌ Команда {team_name} еще не загрузила свой состав.", show_alert=True)
 

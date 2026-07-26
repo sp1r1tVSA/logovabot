@@ -1,3 +1,4 @@
+import datetime
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardRemove
 from telegram.ext import ContextTypes
 import html
@@ -6,6 +7,12 @@ import database
 import logging
 from config import ADMIN_IDS, CLUBS
 from table_generator import generate_league_table_image
+from constants import (
+    CB_MAIN_MENU, CB_MENU_CABINET, CB_MENU_TOURNAMENTS,
+    CB_MENU_LEAGUE, CB_MENU_SUPPORT, CB_LEAGUE_TABLE,
+    CB_LEAGUE_SCORERS, CB_LEAGUE_ASSISTS, CB_REFRESH_LEAGUE_TABLE,
+    CB_ADMIN_MAIN_MENU
+)
 
 logger = logging.getLogger(__name__)
 
@@ -49,15 +56,15 @@ def admin_only(func):
 def get_main_inline_keyboard(telegram_id: int) -> InlineKeyboardMarkup:
     """Generate main InlineKeyboardMarkup based on the user's role (matched to screenshot)."""
     keyboard = [
-        [InlineKeyboardButton("👤 Мой Кабинет", callback_data="menu_cabinet")],
-        [InlineKeyboardButton("🏆 Турниры", callback_data="menu_tournaments")]
+        [InlineKeyboardButton("👤 Мой Кабинет", callback_data=CB_MENU_CABINET)],
+        [InlineKeyboardButton("🏆 Турниры", callback_data=CB_MENU_TOURNAMENTS)]
     ]
     if is_admin(telegram_id):
-        keyboard.append([InlineKeyboardButton("👑 Админ-панель", callback_data="admin_main_menu")])
+        keyboard.append([InlineKeyboardButton("👑 Админ-панель", callback_data=CB_ADMIN_MAIN_MENU)])
         
     keyboard.extend([
-        [InlineKeyboardButton("🏆 Лига", callback_data="menu_league")],
-        [InlineKeyboardButton("🆘 Поддержка", callback_data="menu_support")]
+        [InlineKeyboardButton("🏆 Лига", callback_data=CB_MENU_LEAGUE)],
+        [InlineKeyboardButton("🆘 Поддержка", callback_data=CB_MENU_SUPPORT)]
     ])
     return InlineKeyboardMarkup(keyboard)
 
@@ -334,7 +341,6 @@ async def show_round_matches(update: Update, context: ContextTypes.DEFAULT_TYPE)
         
         if is_open and deadline_text:
             try:
-                import datetime
                 dt = datetime.datetime.strptime(deadline_text, "%d.%m.%Y %H:%M")
                 if datetime.datetime.now() > dt:
                     text += "Статус: 🔴 Дедлайн истек (результаты принимаются только администратором)\n"
@@ -427,7 +433,7 @@ async def post_league_table_to_reports(context: ContextTypes.DEFAULT_TYPE) -> No
             kwargs["message_thread_id"] = int(reports_topic_id)
         await context.bot.send_photo(**kwargs)
     except Exception as e:
-        logger.error(f"Failed to post graphic league table to reports topic: {e}")
+        logger.exception("Failed to post graphic league table to reports topic")
 
 async def cb_refresh_league_table_topic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
@@ -447,7 +453,7 @@ async def cb_refresh_league_table_topic(update: Update, context: ContextTypes.DE
             reply_markup=markup
         )
     except Exception as e:
-        logger.error(f"Failed to refresh graphic table: {e}")
+        logger.exception("Failed to refresh graphic table")
 
 async def show_support(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query

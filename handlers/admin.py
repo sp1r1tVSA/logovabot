@@ -1,4 +1,6 @@
 import asyncio
+import datetime
+import re
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes, ConversationHandler
 import html
@@ -181,7 +183,7 @@ async def admin_generate_matches_execute(update: Update, context: ContextTypes.D
         try:
             await context.bot.send_message(chat_id=group_id, text=group_text, parse_mode="Markdown")
         except Exception as e:
-            logger.error(f"Не удалось отправить уведомление о генерации в группу: {e}")
+            logger.exception("Не удалось отправить уведомление о генерации в группу")
 
 # --- Disputed Matches & Resolution Flow ---
 
@@ -263,7 +265,6 @@ async def admin_save_dispute_score(update: Update, context: ContextTypes.DEFAULT
         await update.message.reply_text("Матч не найден.")
         return ConversationHandler.END
 
-    import re
     pattern = r"^\s*(\d+)\s*[:.-]\s*(\d+)\s*$"
     m = re.match(pattern, text)
     if not m:
@@ -479,7 +480,7 @@ async def admin_delete_player_execute(update: Update, context: ContextTypes.DEFA
             try:
                 await context.bot.send_message(chat_id=group_id, text=f"📢 **Изменение состава лиги!**\n\n{msg}", parse_mode="Markdown")
             except Exception as e:
-                logger.error(f"Не удалось отправить уведомление в группу: {e}")
+                logger.exception("Не удалось отправить уведомление в группу")
     else:
         await query.edit_message_text(f"❌ {msg}", reply_markup=InlineKeyboardMarkup(keyboard))
 
@@ -662,7 +663,7 @@ async def admin_open_round_save(update: Update, context: ContextTypes.DEFAULT_TY
             if round_number == 1:
                 await post_league_table_to_reports(context)
         except Exception as e:
-            logger.error(f"Failed to notify main group: {e}")
+            logger.exception("Failed to notify main group")
             
     await notify_players_rounds_opened(context, [round_number], deadline_text)
     return ConversationHandler.END
@@ -746,7 +747,7 @@ async def admin_open_batch_deadline(update: Update, context: ContextTypes.DEFAUL
             if start_r == 1 or (start_r <= 1 <= end_r):
                 await post_league_table_to_reports(context)
         except Exception as e:
-            logger.error(f"Failed to notify main group: {e}")
+            logger.exception("Failed to notify main group")
             
     opened_rounds = list(range(start_r, end_r + 1))
     await notify_players_rounds_opened(context, opened_rounds, deadline_text)
@@ -1371,7 +1372,7 @@ async def admin_set_score_text(update: Update, context: ContextTypes.DEFAULT_TYP
         try:
             await context.bot.send_message(chat_id=p_id, text=player_text, parse_mode="Markdown")
         except Exception as e:
-            logger.error(f"Не удалось отправить уведомление игроку {p_id}: {e}")
+            logger.exception("Не удалось отправить уведомление игроку {p_id}")
 
     # Notify Telegram Group
     group_id = await asyncio.to_thread(database.get_group_id)
@@ -1386,7 +1387,7 @@ async def admin_set_score_text(update: Update, context: ContextTypes.DEFAULT_TYP
         try:
             await context.bot.send_message(chat_id=group_id, text=group_text, parse_mode="Markdown")
         except Exception as e:
-            logger.error(f"Не удалось отправить сообщение в группу: {e}")
+            logger.exception("Не удалось отправить сообщение в группу")
             
     return ConversationHandler.END
 
@@ -1526,7 +1527,7 @@ async def admin_wipe_player_execute(update: Update, context: ContextTypes.DEFAUL
             try:
                 await context.bot.send_message(chat_id=group_id, text=f"📢 **Полное удаление участника!**\n\n{msg}", parse_mode="Markdown")
             except Exception as e:
-                logger.error(f"Не удалось отправить уведомление в группу: {e}")
+                logger.exception("Не удалось отправить уведомление в группу")
     else:
         await query.edit_message_text(f"❌ {msg}", reply_markup=InlineKeyboardMarkup(keyboard))
 
@@ -1629,7 +1630,7 @@ async def admin_clear_league_text(update: Update, context: ContextTypes.DEFAULT_
                 parse_mode="Markdown"
             )
         except Exception as e:
-            logger.error(f"Не удалось отправить уведомление в группу: {e}")
+            logger.exception("Не удалось отправить уведомление в группу")
             
     return ConversationHandler.END
 
@@ -1939,7 +1940,7 @@ async def admin_delete_player_execute(update: Update, context: ContextTypes.DEFA
                 kwargs["message_thread_id"] = int(reports_topic_id)
             await context.bot.send_message(**kwargs)
         except Exception as e:
-            logger.error(f"Failed to post player deletion notice to reports topic: {e}")
+            logger.exception("Failed to post player deletion notice to reports topic")
 
     await query.answer(f"✅ {msg}", show_alert=True)
     await admin_list_players_page(update, context, page=0)
@@ -2185,7 +2186,7 @@ async def notify_players_rounds_opened(context: ContextTypes.DEFAULT_TYPE, round
             try:
                 await context.bot.send_message(chat_id=pid, text="\n".join(lines), parse_mode="HTML", reply_markup=InlineKeyboardMarkup(kb))
             except Exception as e:
-                logger.error(f"Failed to send multi-match card to player {pid}: {e}")
+                logger.exception("Failed to send multi-match card to player {pid}")
 
 async def send_round_reminders(
     context: ContextTypes.DEFAULT_TYPE, 
@@ -2282,7 +2283,7 @@ async def send_round_reminders(
                 kwargs["message_thread_id"] = int(reports_topic_id)
             await context.bot.send_message(**kwargs)
         except Exception as e:
-            logger.error(f"Failed to post reminder summary to group: {e}")
+            logger.exception("Failed to post reminder summary to group")
 
     return (pm_sent, len(unplayed))
 
@@ -2452,7 +2453,6 @@ async def job_check_deadlines_and_remind(context: ContextTypes.DEFAULT_TYPE) -> 
     if not open_rounds:
         return
 
-    import datetime
     now = datetime.datetime.now()
 
     for r in open_rounds:

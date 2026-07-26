@@ -135,10 +135,10 @@ def recognize_match_screenshots_bytes(images_bytes_list: list[bytes], mime_type:
             elif e.code == 404:
                 logger.warning(f"Gemini model '{m_name}' not found (404). Trying next fallback model...")
             else:
-                logger.error(f"Gemini model '{m_name}' HTTP Error {e.code}: {e}")
+                logger.exception("Gemini model '{m_name}' HTTP Error {e.code}")
             continue
         except Exception as e:
-            logger.error(f"Gemini model '{m_name}' recognition error: {e}")
+            logger.exception("Gemini model '{m_name}' recognition error")
             continue
 
     logger.error("All Gemini Vision fallback models failed or were rate-limited.")

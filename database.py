@@ -16,7 +16,7 @@ def get_connection() -> sqlite3.Connection:
         conn.execute("PRAGMA foreign_keys = ON")
         return conn
     except sqlite3.Error as e:
-        logger.error(f"Failed to connect to database at {DB_PATH}: {e}")
+        logger.exception("Failed to connect to database at {DB_PATH}")
         raise
 
 @contextmanager
@@ -28,7 +28,7 @@ def transaction() -> Generator[sqlite3.Connection, None, None]:
         conn.commit()
     except Exception as e:
         conn.rollback()
-        logger.error(f"Transaction rolled back due to error: {e}")
+        logger.exception("Transaction rolled back due to error")
         raise
     finally:
         conn.close()
@@ -177,56 +177,43 @@ def list_users() -> list[sqlite3.Row]:
         return cursor.fetchall()
 
 def get_player_stats(telegram_id: int) -> dict:
-    """Calculate and return match statistics for a player."""
+    """Calculate and return match statistics for a player using a single aggregated SQL query."""
     with transaction() as conn:
         cursor = conn.cursor()
-        
-        # Wins
         cursor.execute("""
-            SELECT COUNT(*) FROM matches 
-            WHERE status = 'confirmed' AND (
-                (player1_id = ? AND player1_score > player2_score) OR
-                (player2_id = ? AND player2_score > player1_score)
-            )
-        """, (telegram_id, telegram_id))
-        wins = cursor.fetchone()[0] or 0
+            SELECT
+                SUM(CASE 
+                    WHEN (player1_id = ? AND player1_score > player2_score) OR (player2_id = ? AND player2_score > player1_score) THEN 1 
+                    ELSE 0 
+                END) AS wins,
+                SUM(CASE 
+                    WHEN player1_score = player2_score THEN 1 
+                    ELSE 0 
+                END) AS draws,
+                SUM(CASE 
+                    WHEN (player1_id = ? AND player1_score < player2_score) OR (player2_id = ? AND player2_score < player1_score) THEN 1 
+                    ELSE 0 
+                END) AS losses,
+                SUM(CASE 
+                    WHEN player1_id = ? THEN COALESCE(player1_score, 0)
+                    WHEN player2_id = ? THEN COALESCE(player2_score, 0)
+                    ELSE 0 
+                END) AS goals_scored,
+                SUM(CASE 
+                    WHEN player1_id = ? THEN COALESCE(player2_score, 0)
+                    WHEN player2_id = ? THEN COALESCE(player1_score, 0)
+                    ELSE 0 
+                END) AS goals_conceded
+            FROM matches
+            WHERE status = 'confirmed' AND (player1_id = ? OR player2_id = ?)
+        """, (telegram_id, telegram_id, telegram_id, telegram_id, telegram_id, telegram_id, telegram_id, telegram_id, telegram_id, telegram_id))
         
-        # Draws
-        cursor.execute("""
-            SELECT COUNT(*) FROM matches 
-            WHERE status = 'confirmed' AND player1_score = player2_score AND (player1_id = ? OR player2_id = ?)
-        """, (telegram_id, telegram_id))
-        draws = cursor.fetchone()[0] or 0
-        
-        # Losses
-        cursor.execute("""
-            SELECT COUNT(*) FROM matches 
-            WHERE status = 'confirmed' AND (
-                (player1_id = ? AND player1_score < player2_score) OR
-                (player2_id = ? AND player2_score < player1_score)
-            )
-        """, (telegram_id, telegram_id))
-        losses = cursor.fetchone()[0] or 0
-        
-        # Goals Scored
-        cursor.execute("""
-            SELECT SUM(score) FROM (
-                SELECT player1_score AS score FROM matches WHERE player1_id = ? AND status = 'confirmed'
-                UNION ALL
-                SELECT player2_score AS score FROM matches WHERE player2_id = ? AND status = 'confirmed'
-            )
-        """, (telegram_id, telegram_id))
-        goals_scored = cursor.fetchone()[0] or 0
-        
-        # Goals Conceded
-        cursor.execute("""
-            SELECT SUM(score) FROM (
-                SELECT player2_score AS score FROM matches WHERE player1_id = ? AND status = 'confirmed'
-                UNION ALL
-                SELECT player1_score AS score FROM matches WHERE player2_id = ? AND status = 'confirmed'
-            )
-        """, (telegram_id, telegram_id))
-        goals_conceded = cursor.fetchone()[0] or 0
+        row = cursor.fetchone()
+        wins = row["wins"] or 0 if row else 0
+        draws = row["draws"] or 0 if row else 0
+        losses = row["losses"] or 0 if row else 0
+        goals_scored = row["goals_scored"] or 0 if row else 0
+        goals_conceded = row["goals_conceded"] or 0 if row else 0
         
         played = wins + draws + losses
         points = wins * 3 + draws
