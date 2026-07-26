@@ -94,16 +94,16 @@ def recognize_match_screenshots_bytes(images_bytes_list: list[bytes], mime_type:
 
     req_data = json.dumps(payload).encode("utf-8")
 
-    # List of valid, official Google Gemini API vision models
     candidate_models = list(dict.fromkeys(filter(None, [
         model_setting,
+        "gemini-3.1-flash-lite",
+        "gemini-3.5-flash-lite",
         "gemini-2.5-flash-lite",
         "gemini-2.5-flash",
         "gemini-2.0-flash-lite",
         "gemini-2.0-flash",
-        "gemini-1.5-flash-lite",
-        "gemini-1.5-flash",
     ])))
+
 
     for m_name in candidate_models:
         if not m_name:
