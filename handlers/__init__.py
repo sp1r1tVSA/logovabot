@@ -47,6 +47,7 @@ from handlers.cabinet import (
     cabinet_view_squad,
     show_game_history,
     cancel_registration,
+    cabinet_cancel_report,
     TEAM_NAME,
     EDITING_FIELD,
     start_score_reporting,
@@ -333,11 +334,12 @@ def _register_cabinet_handlers(app: Application) -> None:
     app.add_handler(CallbackQueryHandler(cb_confirm_ai_final, pattern="^cb_confirm_ai_final_\\d+$"))
     app.add_handler(CallbackQueryHandler(cb_report_home_goals, pattern="^cb_report_hg_\\d+$"))
     app.add_handler(CallbackQueryHandler(cb_report_away_goals, pattern="^cb_report_ag_\\d+$"))
-    app.add_handler(CallbackQueryHandler(cb_pick_goal, pattern="^cb_pick_goal_.*$"))
+    app.add_handler(CallbackQueryHandler(cb_pick_goal, pattern="^cb_pick_goal_idx_\\d+$"))
     app.add_handler(CallbackQueryHandler(cb_skip_goals, pattern="^cb_skip_goals$"))
-    app.add_handler(CallbackQueryHandler(cb_pick_assist, pattern="^cb_pick_assist_.*$"))
+    app.add_handler(CallbackQueryHandler(cb_pick_assist, pattern="^cb_pick_assist_idx_\\d+$"))
     app.add_handler(CallbackQueryHandler(cb_skip_assists, pattern="^cb_skip_assists$"))
     app.add_handler(CallbackQueryHandler(submit_report_to_guest, pattern="^cb_submit_report_to_guest(_\\d+)?$"))
+    app.add_handler(CallbackQueryHandler(cabinet_cancel_report, pattern="^cabinet_cancel_report_\\d+$"))
 
     async def global_photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not update.message or update.effective_chat.type != "private":
@@ -348,9 +350,9 @@ def _register_cabinet_handlers(app: Application) -> None:
     app.add_handler(MessageHandler(filters.ChatType.PRIVATE & (filters.PHOTO | filters.Document.ALL), global_photo_handler))
 
     app.add_handler(CallbackQueryHandler(handle_confirm_score, pattern="^confirm_score_\\d+$"))
-    app.add_handler(CallbackQueryHandler(guest_pick_goal, pattern="^guest_pick_goal_.*$"))
+    app.add_handler(CallbackQueryHandler(guest_pick_goal, pattern="^guest_pick_goal_idx_\\d+$"))
     app.add_handler(CallbackQueryHandler(guest_skip_goals, pattern="^guest_skip_goals$"))
-    app.add_handler(CallbackQueryHandler(guest_pick_assist, pattern="^guest_pick_assist_.*$"))
+    app.add_handler(CallbackQueryHandler(guest_pick_assist, pattern="^guest_pick_assist_idx_\\d+$"))
     app.add_handler(CallbackQueryHandler(guest_skip_assists, pattern="^guest_skip_assists$"))
     app.add_handler(CallbackQueryHandler(handle_dispute_score, pattern="^dispute_score_\\d+$"))
     app.add_handler(CallbackQueryHandler(cb_finish_dispute_photos, pattern="^cb_finish_dispute_photos$"))

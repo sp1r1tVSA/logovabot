@@ -601,6 +601,16 @@ async def cabinet_view_match(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     await safe_edit_or_reply(query, context, text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
+async def cabinet_cancel_report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query:
+        return
+    await safe_query_answer(query, "Отправка результата отменена.")
+    match_id = int(query.data.replace("cabinet_cancel_report_", ""))
+    await asyncio.to_thread(database.reset_match_report, match_id)
+    query.data = f"cabinet_view_match_{match_id}"
+    await cabinet_view_match(update, context)
+
 async def cb_request_admin_result(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Player requests permission from admin to enter result for an overdue match."""
     query = update.callback_query
@@ -919,8 +929,9 @@ async def save_custom_match_time(update: Update, context: ContextTypes.DEFAULT_T
             opp_team = m_info['player1_team'] or m_info['player1_nickname']
             score_str = f"{m_info['player2_score']}:{m_info['player1_score']}" if m_info['player1_score'] is not None else "-:-"
 
+        opp_id = m_info['player2_id'] if m_info['player1_id'] == user_id else m_info['player1_id']
         kb_match = [
-            [InlineKeyboardButton("👀 Состав", callback_data=f"cabinet_view_squad_{match_id}"), InlineKeyboardButton("🕵️‍♂️ Скаут", callback_data="stub")],
+            [InlineKeyboardButton("👀 Состав", callback_data=f"cabinet_view_squad_{opp_id}"), InlineKeyboardButton("🕵️‍♂️ Скаут", callback_data="stub")],
             [InlineKeyboardButton("✏️ Изменить предложенное время", callback_data=f"cb_propose_time_prompt_{match_id}")],
             [InlineKeyboardButton("🔙 К списку матчей", callback_data="cabinet_my_matches")]
         ]
@@ -1203,13 +1214,14 @@ async def render_squad_goals_picker(update: Update, context: ContextTypes.DEFAUL
     )
 
     keyboard = []
+    context.user_data["temp_home_squad_goals"] = squad
     if not squad:
         text += "\n\n⚠️ *Состав вашей команды пока не добавлен в систему.*"
         keyboard.append([InlineKeyboardButton("⏩ Пропустить ввод авторов голов", callback_data="cb_skip_goals")])
     else:
         row = []
-        for player in squad:
-            row.append(InlineKeyboardButton(f"🏃‍♂️ {player}", callback_data=f"cb_pick_goal_{player}"))
+        for idx, player in enumerate(squad):
+            row.append(InlineKeyboardButton(f"🏃‍♂️ {player}", callback_data=f"cb_pick_goal_idx_{idx}"))
             if len(row) == 2:
                 keyboard.append(row)
                 row = []
@@ -1232,7 +1244,9 @@ async def cb_pick_goal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
     await query.answer()
 
-    player = query.data.replace("cb_pick_goal_", "")
+    idx = int(query.data.replace("cb_pick_goal_idx_", ""))
+    squad = context.user_data.get("temp_home_squad_goals", [])
+    player = squad[idx] if idx < len(squad) else "Unknown"
     left = context.user_data.get("goals_to_pick", 0)
     dict_goals = context.user_data.get("home_goals_count", {})
 
@@ -1281,10 +1295,11 @@ async def render_squad_assists_picker(update: Update, context: ContextTypes.DEFA
     )
 
     keyboard = []
+    context.user_data["temp_home_squad_assists"] = squad
     if squad and left > 0:
         row = []
-        for player in squad:
-            row.append(InlineKeyboardButton(f"🎯 {player}", callback_data=f"cb_pick_assist_{player}"))
+        for idx, player in enumerate(squad):
+            row.append(InlineKeyboardButton(f"🎯 {player}", callback_data=f"cb_pick_assist_idx_{idx}"))
             if len(row) == 2:
                 keyboard.append(row)
                 row = []
@@ -1307,7 +1322,9 @@ async def cb_pick_assist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
     await query.answer()
 
-    player = query.data.replace("cb_pick_assist_", "")
+    idx = int(query.data.replace("cb_pick_assist_idx_", ""))
+    squad = context.user_data.get("temp_home_squad_assists", [])
+    player = squad[idx] if idx < len(squad) else "Unknown"
     left = context.user_data.get("assists_to_pick", 0)
     dict_assists = context.user_data.get("home_assists_count", {})
 
@@ -1876,13 +1893,14 @@ async def render_guest_goals_picker(update: Update, context: ContextTypes.DEFAUL
     )
 
     keyboard = []
+    context.user_data["temp_guest_squad_goals"] = squad
     if not squad:
         text += "\n\n⚠️ *Состав вашей команды пока не добавлен в систему.*"
         keyboard.append([InlineKeyboardButton("⏩ Пропустить авторов голов", callback_data="guest_skip_goals")])
     else:
         row = []
-        for player in squad:
-            row.append(InlineKeyboardButton(f"🏃‍♂️ {player}", callback_data=f"guest_pick_goal_{player}"))
+        for idx, player in enumerate(squad):
+            row.append(InlineKeyboardButton(f"🏃‍♂️ {player}", callback_data=f"guest_pick_goal_idx_{idx}"))
             if len(row) == 2:
                 keyboard.append(row)
                 row = []
@@ -1902,7 +1920,9 @@ async def guest_pick_goal(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
     await query.answer()
 
-    player = query.data.replace("guest_pick_goal_", "")
+    idx = int(query.data.replace("guest_pick_goal_idx_", ""))
+    squad = context.user_data.get("temp_guest_squad_goals", [])
+    player = squad[idx] if idx < len(squad) else "Unknown"
     left = context.user_data.get("guest_goals_to_pick", 0)
     dict_goals = context.user_data.get("guest_goals_count", {})
 
@@ -1951,10 +1971,11 @@ async def render_guest_assists_picker(update: Update, context: ContextTypes.DEFA
     )
 
     keyboard = []
+    context.user_data["temp_guest_squad_assists"] = squad
     if squad and left > 0:
         row = []
-        for player in squad:
-            row.append(InlineKeyboardButton(f"🎯 {player}", callback_data=f"guest_pick_assist_{player}"))
+        for idx, player in enumerate(squad):
+            row.append(InlineKeyboardButton(f"🎯 {player}", callback_data=f"guest_pick_assist_idx_{idx}"))
             if len(row) == 2:
                 keyboard.append(row)
                 row = []
@@ -1975,7 +1996,9 @@ async def guest_pick_assist(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return
     await query.answer()
 
-    player = query.data.replace("guest_pick_assist_", "")
+    idx = int(query.data.replace("guest_pick_assist_idx_", ""))
+    squad = context.user_data.get("temp_guest_squad_assists", [])
+    player = squad[idx] if idx < len(squad) else "Unknown"
     left = context.user_data.get("guest_assists_to_pick", 0)
     dict_assists = context.user_data.get("guest_assists_count", {})
 
