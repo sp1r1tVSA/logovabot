@@ -103,7 +103,6 @@ def recognize_match_screenshots_bytes(images_bytes_list: list[bytes], mime_type:
         "gemini-2.0-flash",        # 429, последний фоллбек
     ])))
 
-    import time
     for m_name in candidate_models:
         if not m_name:
             continue
@@ -131,7 +130,6 @@ def recognize_match_screenshots_bytes(images_bytes_list: list[bytes], mime_type:
         except urllib.error.HTTPError as e:
             if e.code == 429:
                 logger.warning(f"Gemini model '{m_name}' rate-limited (429). Trying next fallback model...")
-                time.sleep(1)
             elif e.code == 404:
                 logger.warning(f"Gemini model '{m_name}' not found (404). Trying next fallback model...")
             else:
