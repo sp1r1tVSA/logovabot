@@ -990,6 +990,12 @@ async def start_score_reporting(update: Update, context: ContextTypes.DEFAULT_TY
             await query.answer("❌ Матч не найден.", show_alert=True)
         return
 
+    if match['status'] == 'confirmed':
+        if query:
+            await query.answer("⛔ Результат этого матча уже занесён в таблицу!", show_alert=True)
+        return
+
+
     if not match.get("is_extended"):
         round_info = await asyncio.to_thread(database.get_round_info, match['round_number'])
         deadline_text = round_info.get("deadline") if round_info else None
@@ -1041,6 +1047,11 @@ async def cb_report_choice_auto(update: Update, context: ContextTypes.DEFAULT_TY
         await query.answer("❌ Матч не найден.", show_alert=True)
         return
 
+    if match['status'] == 'confirmed':
+        await query.answer("⛔ Результат этого матча уже занесён в таблицу!", show_alert=True)
+        return
+
+
     if not match.get("is_extended"):
         round_info = await asyncio.to_thread(database.get_round_info, match['round_number'])
         deadline_text = round_info.get("deadline") if round_info else None
@@ -1078,6 +1089,11 @@ async def cb_report_choice_manual(update: Update, context: ContextTypes.DEFAULT_
     if not match:
         await query.answer("❌ Матч не найден.", show_alert=True)
         return
+
+    if match['status'] == 'confirmed':
+        await query.answer("⛔ Результат этого матча уже занесён в таблицу!", show_alert=True)
+        return
+
 
     if not match.get("is_extended"):
         round_info = await asyncio.to_thread(database.get_round_info, match['round_number'])
@@ -1734,6 +1750,10 @@ async def submit_report_to_guest(update: Update, context: ContextTypes.DEFAULT_T
         await query.answer("❌ Ошибка: матч не найден.", show_alert=True)
         return
 
+    if match['status'] == 'confirmed':
+        await query.answer("⛔ Результат этого матча уже занесён в таблицу!", show_alert=True)
+        return
+
     submitter_id = query.from_user.id
     is_submitter_home = (submitter_id == match['player1_id'])
 
@@ -1755,113 +1775,49 @@ async def submit_report_to_guest(update: Update, context: ContextTypes.DEFAULT_T
     for p, c in assists_dict.items():
         events.append((submitter_team, p, "assist", c))
 
-    # Save to database
-    await asyncio.to_thread(database.report_match_score, match_id, hg, ag, submitter_id, photo_id)
-    if events:
-        await asyncio.to_thread(database.save_match_events, match_id, events, team_name=submitter_team)
+    # Instant Match Finalization in DB
+    await asyncio.to_thread(database.confirm_and_finalize_match, match_id, hg, ag, events, reporter_id=submitter_id, photo_id=photo_id)
 
-    # Notify Recipient Opponent
+    # 1. Respond to Submitter
+    submitter_msg = f"🎉 <b>Результат матча #{match_id} ({hg}:{ag}) успешно занесён в турнирную таблицу!</b>"
+    try:
+        await query.edit_message_caption(caption=submitter_msg, parse_mode="HTML")
+    except Exception:
+        try:
+            await query.edit_message_text(text=submitter_msg, parse_mode="HTML")
+        except Exception:
+            await context.bot.send_message(chat_id=submitter_id, text=submitter_msg, parse_mode="HTML")
+
+    # 2. Informative notification to Opponent (Recipient) - NO buttons attached
     home_team = match['player1_team'] or match['player1_nickname']
     away_team = match['player2_team'] or match['player2_nickname']
 
     goals_summary = ", ".join([f"{p} ({c})" for p, c in goals_dict.items()]) if goals_dict else "Не указано"
     assists_summary = ", ".join([f"{p} ({c})" for p, c in assists_dict.items()]) if assists_dict else "Нет"
 
-    guest_text = (
-        f"🔔 <b>Участник {html.escape(submitter_team)} ввёл результат матча #{match_id}!</b>\n\n"
+    recipient_text = (
+        f"🔔 <b>Результат матча #{match_id} зафиксирован!</b>\n"
+        f"Участник <b>{html.escape(submitter_team)}</b> внёс результат:\n"
         f"🏠 <b>{html.escape(home_team)}</b> {hg} : {ag} <b>{html.escape(away_team)}</b> ✈️\n\n"
         f"⚽ <b>Голы ({html.escape(submitter_team)}):</b> {html.escape(goals_summary)}\n"
         f"🎯 <b>Ассисты ({html.escape(submitter_team)}):</b> {html.escape(assists_summary)}\n\n"
-        f"Вы подтверждаете этот результат?"
+        f"📊 Данные внесены в турнирную таблицу."
     )
 
-    guest_keyboard = [
-        [InlineKeyboardButton("✅ Подтвердить", callback_data=f"confirm_score_{match_id}"), InlineKeyboardButton("❌ Оспорить", callback_data=f"dispute_score_{match_id}")]
-    ]
-    guest_markup = InlineKeyboardMarkup(guest_keyboard)
-
-    sent_success = False
-    err_reason = ""
-    if photo_id:
+    if recipient_id:
         try:
-            await context.bot.send_photo(chat_id=recipient_id, photo=photo_id, caption=guest_text, parse_mode="HTML", reply_markup=guest_markup)
-            sent_success = True
-        except Exception as e1:
-            logger.warning(f"Photo send with HTML failed for recipient {recipient_id}: {e1}. Trying text fallback...")
-            err_reason = str(e1)
-
-    if not sent_success:
-        try:
-            await context.bot.send_message(chat_id=recipient_id, text=guest_text, parse_mode="HTML", reply_markup=guest_markup)
-            sent_success = True
-        except Exception as e2:
-            logger.warning(f"Failed to send HTML message to recipient {recipient_id}: {e2}. Trying plain text fallback...")
-            err_reason = str(e2)
-
-
-    if not sent_success:
-        try:
-            plain_text = (
-                f"🔔 Хозяева поля ({home_team}) ввели результат матча #{match_id}!\n\n"
-                f"🏠 {home_team} {hg} : {ag} {away_team} ✈️\n\n"
-                f"⚽ Голы ({home_team}): {goals_summary}\n"
-                f"🎯 Ассисты ({home_team}): {assists_summary}\n\n"
-                f"Вы подтверждаете этот результат?"
-            )
-            await context.bot.send_message(chat_id=guest_id, text=plain_text, reply_markup=guest_markup)
-            sent_success = True
-        except Exception as e3:
-            logger.exception("Plain text fallback failed for guest {guest_id}")
-            err_reason = str(e3)
-
-    is_admin_user = is_admin(home_user_id) or context.user_data.get("is_admin_reporting", False)
-
-    if is_admin_user or not sent_success:
-        # Auto-confirm and finalize if admin or if guest cannot be reached in PM
-        await asyncio.to_thread(database.confirm_and_finalize_match, match_id, hg, ag, events, reporter_id=home_user_id, photo_id=photo_id)
-        
-        reason_msg = "✅ КАК АДМИНИСТРАТОР: Результат сразу занесен в таблицу!" if is_admin_user else "⚠️ У соперника закрыто ЛС бота. Результат автоматически занесен в таблицу!"
-        await safe_query_answer(query, reason_msg, show_alert=True)
-        
-        try:
-            await query.edit_message_caption(
-                caption=f"🎉 <b>Результат матча #{match_id} успешно занесен в турнирную таблицу!</b>",
-                parse_mode="HTML"
-            )
-        except Exception:
-            try:
-                await query.edit_message_text(
-                    text=f"🎉 <b>Результат матча #{match_id} успешно занесен в турнирную таблицу!</b>",
-                    parse_mode="HTML"
-                )
-            except Exception:
-                pass
-    elif sent_success:
-        await safe_query_answer(query, "✅ Результат успешно отправлен гостям на подтверждение!", show_alert=True)
-        try:
-            await query.edit_message_caption(
-                caption=f"✅ <b>Результат матча #{match_id} отправлен гостю! Таблица обновится после его подтверждения.</b>",
-                parse_mode="HTML"
-            )
-        except Exception:
-            try:
-                await query.edit_message_text(
-                    text=f"✅ <b>Результат матча #{match_id} отправлен гостю! Таблица обновится после его подтверждения.</b>",
-                    parse_mode="HTML"
-                )
-            except Exception:
-                pass
-
-        try:
-            await context.bot.send_message(
-                chat_id=query.from_user.id,
-                text=f"✅ <b>Результат матча #{match_id} отправлен!</b>\n\nОжидаем подтверждения от соперника (<b>{html.escape(away_team)}</b>). Как только он нажмет 'Подтвердить', результат занесется в таблицу.",
-                parse_mode="HTML"
-            )
+            if photo_id:
+                await context.bot.send_photo(chat_id=recipient_id, photo=photo_id, caption=recipient_text, parse_mode="HTML")
+            else:
+                await context.bot.send_message(chat_id=recipient_id, text=recipient_text, parse_mode="HTML")
         except Exception as e:
-            logger.exception("Failed to send confirmation message to home player")
+            logger.warning(f"Failed to send match notification to recipient {recipient_id}: {e}")
+
+    # 3. Post to Main Group & Update Standings Graphic
+    await notify_match_confirmed(context, match_id)
 
 async def handle_confirm_score(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+
     query = update.callback_query
     if not query:
         return
