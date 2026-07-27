@@ -446,7 +446,8 @@ def _register_admin_handlers(app: Application) -> None:
         },
         fallbacks=[
             CallbackQueryHandler(admin_cancel_match_action, pattern="^admin_cancel_match_action$"),
-            CommandHandler("cancel", admin_cancel_match_action)
+            CommandHandler("cancel", admin_cancel_match_action),
+            MessageHandler(filters.Regex("^(Отмена|отмена)$"), admin_cancel_match_action) # <-- Добавлено!
         ],
         allow_reentry=True,
         per_message=False,
@@ -464,7 +465,8 @@ def _register_admin_handlers(app: Application) -> None:
         },
         fallbacks=[
             CallbackQueryHandler(admin_cancel_match_action, pattern="^admin_cancel_match_action$"),
-            CommandHandler("cancel", admin_cancel_match_action)
+            CommandHandler("cancel", admin_cancel_match_action),
+            MessageHandler(filters.Regex("^(Отмена|отмена)$"), admin_cancel_match_action) # <-- Добавлено!
         ],
         allow_reentry=True,
         per_message=False,

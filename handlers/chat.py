@@ -18,8 +18,17 @@ async def handle_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_text = update.message.text.strip()
 
-    # Trigger word check (case-insensitive)
+    # Если сообщение НЕ начинается с "темшик"
     if not user_text.lower().startswith("темшик"):
+        # Проверяем, похож ли ввод на дату дедлайна (например, "27.07.2026 23:59")
+        # Если да, но сообщение попало сюда, значит FSM-сессия сбросилась при рестарте
+        import re
+        if re.match(r"^\d{2}\.\d{2}\.\d{4}\s+\d{2}:\d{2}$", user_text):
+            await update.message.reply_text(
+                "⚠️ **Сессия ввода прервана из-за перезапуска бота.**\n\n"
+                "Пожалуйста, откройте админ-панель заново и повторите ввод дедлайна.",
+                parse_mode="Markdown"
+            )
         return
 
     user_id = update.effective_user.id
