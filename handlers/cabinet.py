@@ -611,6 +611,56 @@ async def cabinet_cancel_report(update: Update, context: ContextTypes.DEFAULT_TY
     query.data = f"cabinet_view_match_{match_id}"
     await cabinet_view_match(update, context)
 
+async def cancel_score_report_and_navigate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """FSM fallback: clears all score-reporting state and routes user to the appropriate screen.
+
+    Triggered when a user presses a navigation button (e.g. «К списку матчей», «Главное меню»)
+    while a score-reporting ConversationHandler is active. Without this fallback the reporting
+    keys survive in context.user_data and corrupt the next reporting session.
+    """
+    # ── Wipe every key that the reporting flow may have written ──────────────────
+    for key in (
+        "reporting_match_id",
+        "report_photo_id",
+        "awaiting_report_photo",
+        "home_goals",
+        "away_goals",
+        "home_assists",
+        "away_assists",
+        "home_goal_players",
+        "away_goal_players",
+        "home_assist_players",
+        "away_assist_players",
+        "is_admin_reporting",
+        "ai_photos_list",
+        "processed_media_groups",
+        "guest_reporting_match_id",
+        "guest_home_goals",
+        "guest_away_goals",
+        "guest_home_goal_players",
+        "guest_away_goal_players",
+        "guest_home_assist_players",
+        "guest_away_assist_players",
+    ):
+        context.user_data.pop(key, None)
+
+    query = update.callback_query
+    if query:
+        await query.answer()
+        dest = query.data  # "main_menu" | "cabinet_my_matches" | anything else
+    else:
+        dest = ""
+
+    from telegram.ext import ConversationHandler
+    if dest == "main_menu":
+        from handlers.base import show_main_menu
+        await show_main_menu(update, context)
+    else:
+        await show_my_matches(update, context)
+
+    return ConversationHandler.END
+
+
 async def cb_request_admin_result(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Player requests permission from admin to enter result for an overdue match."""
     query = update.callback_query

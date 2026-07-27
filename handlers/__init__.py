@@ -85,6 +85,7 @@ from handlers.cabinet import (
     cb_accept_time,
     cb_request_admin_result,
     cb_admin_approve_result,
+    cancel_score_report_and_navigate,
 )
 
 # Import admin handlers
@@ -259,6 +260,9 @@ def _register_cabinet_handlers(app: Application) -> None:
         },
         fallbacks=[
             CallbackQueryHandler(cabinet_view_match, pattern="^cabinet_view_match_\\d+$"),
+            CallbackQueryHandler(cancel_score_report_and_navigate, pattern="^cabinet_my_matches$"),
+            CallbackQueryHandler(cancel_score_report_and_navigate, pattern="^main_menu$"),
+            CallbackQueryHandler(cancel_score_report_and_navigate, pattern="^menu_cabinet$"),
             CommandHandler("cancel", cancel_registration)
         ],
         allow_reentry=True,
@@ -276,6 +280,9 @@ def _register_cabinet_handlers(app: Application) -> None:
         },
         fallbacks=[
             CallbackQueryHandler(cb_finish_dispute_photos, pattern="^cb_finish_dispute_photos$"),
+            CallbackQueryHandler(cancel_score_report_and_navigate, pattern="^cabinet_my_matches$"),
+            CallbackQueryHandler(cancel_score_report_and_navigate, pattern="^main_menu$"),
+            CallbackQueryHandler(cancel_score_report_and_navigate, pattern="^menu_cabinet$"),
             CommandHandler("cancel", cancel_registration)
         ],
         allow_reentry=True,
@@ -310,6 +317,9 @@ def _register_cabinet_handlers(app: Application) -> None:
         },
         fallbacks=[
             CallbackQueryHandler(cabinet_view_match, pattern="^cabinet_view_match_\\d+$"),
+            CallbackQueryHandler(cancel_score_report_and_navigate, pattern="^cabinet_my_matches$"),
+            CallbackQueryHandler(cancel_score_report_and_navigate, pattern="^main_menu$"),
+            CallbackQueryHandler(cancel_score_report_and_navigate, pattern="^menu_cabinet$"),
             CommandHandler("cancel", cancel_registration)
         ],
         allow_reentry=True,
