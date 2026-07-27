@@ -627,7 +627,7 @@ async def admin_open_round_prompt(update: Update, context: ContextTypes.DEFAULT_
     keyboard = [[InlineKeyboardButton("Отмена", callback_data="admin_cancel_match_action")]]
     await query.edit_message_text(
         f"Укажите строгий дедлайн для {round_number}-го тура.\n"
-        "Формат: `ДД.ММ.ГГГГ ЧЧ:ММ` (например: `22.11.2023 23:59`)\n\n"
+        "Формат: `ДД.ММ.ГГГГ ЧЧ:ММ` (например: `29.07.2026 23:59`)\n\n"
         "Отправьте текст дедлайна:",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(keyboard)
@@ -727,7 +727,7 @@ async def admin_open_batch_rounds(update: Update, context: ContextTypes.DEFAULT_
     await update.message.reply_text(
         f"Выбраны туры: с {start_r} по {end_r}.\n\n"
         "Теперь укажите строгий дедлайн для этих туров.\n"
-        "Формат: `ДД.ММ.ГГГГ ЧЧ:ММ` (например: `22.11.2023 23:59`)",
+        "Формат: `ДД.ММ.ГГГГ ЧЧ:ММ` (например: `29.07.2026 23:59`)",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
