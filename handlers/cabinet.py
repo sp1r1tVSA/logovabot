@@ -417,20 +417,37 @@ async def cancel_registration(update: Update, context: ContextTypes.DEFAULT_TYPE
         
     return ConversationHandler.END
 
-async def safe_edit_or_reply(query: CallbackQuery, context: ContextTypes.DEFAULT_TYPE, text: str, reply_markup=None, parse_mode: str = "Markdown") -> None:
+async def safe_edit_or_reply(query: CallbackQuery, context: ContextTypes.DEFAULT_TYPE, text: str, reply_markup=None, parse_mode: str = "HTML") -> None:
     """Safely edit a message whether it's a text message or photo message, preventing BadRequest errors."""
     if not query:
         return
     user_id = query.from_user.id
-    if query.message and query.message.photo:
+
+    # 1. Проверяем, содержит ли исходное сообщение медиафайл (фотография)
+    has_photo = bool(query.message and (query.message.photo or query.message.caption or query.message.document))
+
+    if has_photo:
+        # Для фото-сообщений ВСЕГДА удаляем старое сообщение с картинкой и слаем новое текстовое
         try:
             await query.message.delete()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Could not delete photo message: {e}")
         await context.bot.send_message(chat_id=user_id, text=text, parse_mode=parse_mode, reply_markup=reply_markup)
     else:
+        # Для обычных текстовых сообщений пробуем отредактировать текст
         try:
             await query.edit_message_text(text, parse_mode=parse_mode, reply_markup=reply_markup)
+        except telegram.error.BadRequest as e:
+            err_msg = str(e).lower()
+            if "there is no text in the message to edit" in err_msg or "message is not modified" in err_msg:
+                # Если сработал краевой случай Telegram — удаляем и пересоздаем
+                try:
+                    await query.message.delete()
+                except Exception:
+                    pass
+                await context.bot.send_message(chat_id=user_id, text=text, parse_mode=parse_mode, reply_markup=reply_markup)
+            else:
+                logger.warning(f"safe_edit_or_reply BadRequest: {e}")
         except Exception as e:
             logger.warning(f"edit_message_text failed ({e}). Falling back to delete & send_message...")
             try:
