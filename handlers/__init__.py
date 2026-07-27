@@ -227,8 +227,6 @@ def _register_user_handlers(app: Application) -> None:
     app.add_handler(CallbackQueryHandler(show_main_menu, pattern="^main_menu$"))
     app.add_handler(CallbackQueryHandler(show_round_matches, pattern="^show_round_matches_\\d+$"))
 
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_ai_chat))
-
 def _register_cabinet_handlers(app: Application) -> None:
     """Register player cabinet FSM and interactive match handlers."""
     reg_conv = ConversationHandler(
@@ -558,9 +556,16 @@ def _register_admin_handlers(app: Application) -> None:
 def register_all_handlers(application: Application) -> None:
     """Register all command, message, and callback handlers to the application."""
     application.add_handler(MessageHandler(filters.ChatType.GROUPS, track_group_id), group=1)
+    
+    # 1. Сначала регистрируем кнопки и основные команды
     _register_user_handlers(application)
+    
+    # 2. Затем диалоги кабинета и админки (FSM conversation handlers)
     _register_cabinet_handlers(application)
     _register_admin_handlers(application)
+
+    # 3. И ТОЛЬКО В САМОМ КОНЦЕ перехватчик случайного текста для ИИ Темшика!
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_ai_chat))
 
     # Final catch-all for inline button clicks in development
     application.add_handler(CallbackQueryHandler(handle_placeholders, pattern=".*"))
