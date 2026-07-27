@@ -1322,6 +1322,7 @@ async def admin_receive_schedule_input(update: Update, context: ContextTypes.DEF
     return ConversationHandler.END
 
 @admin_only
+@admin_only
 async def admin_set_score_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Start manual match score override flow."""
     query = update.callback_query
@@ -1333,7 +1334,7 @@ async def admin_set_score_start(update: Update, context: ContextTypes.DEFAULT_TY
     match = await asyncio.to_thread(database.get_match, match_id)
     
     if not match:
-        await query.edit_message_text("❌ Матч не найден.")
+        await context.bot.send_message(chat_id=query.from_user.id, text="❌ Матч не найден.")
         return ConversationHandler.END
         
     context.user_data["admin_set_match_id"] = match_id
@@ -1344,7 +1345,25 @@ async def admin_set_score_start(update: Update, context: ContextTypes.DEFAULT_TY
         f"Введите итоговый результат в формате `хозяева:гости` (например, `3:1`):"
     )
     keyboard = [[InlineKeyboardButton("❌ Отмена", callback_data=f"admin_view_match_{match_id}")]]
-    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    markup = InlineKeyboardMarkup(keyboard)
+
+    # Безопасное удаление сообщения с фото, если вызов пришел из карточки ИИ
+    if query.message and (query.message.photo or query.message.caption or query.message.document):
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
+        await context.bot.send_message(chat_id=query.from_user.id, text=text, parse_mode="Markdown", reply_markup=markup)
+    else:
+        try:
+            await query.edit_message_text(text, reply_markup=markup, parse_mode="Markdown")
+        except Exception:
+            try:
+                await query.message.delete()
+            except Exception:
+                pass
+            await context.bot.send_message(chat_id=query.from_user.id, text=text, parse_mode="Markdown", reply_markup=markup)
+
     return ADMIN_EXPECT_MATCH_SCORE
 
 @admin_only

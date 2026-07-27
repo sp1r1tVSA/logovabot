@@ -1543,7 +1543,7 @@ async def save_report_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
                 is_admin_user = is_admin(update.effective_user.id) or context.user_data.get("is_admin_reporting", False)
                 cancel_cb = f"admin_view_match_{match_id}" if is_admin_user else f"cabinet_view_match_{match_id}"
-                manual_cb = f"admin_set_score_start_{match_id}" if is_admin_user else f"cb_report_choice_manual_{match_id}"
+                manual_cb = f"cb_report_choice_manual_{match_id}"
 
                 keyboard = [
                     [InlineKeyboardButton("✅ Всё верно (Сохранить и занести результат)", callback_data=f"cb_confirm_ai_final_{match_id}")],
