@@ -1007,10 +1007,10 @@ async def show_game_history(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if not query:
         return
     await query.answer()
-    
+
     user_id = query.from_user.id
     matches = await asyncio.to_thread(database.get_match_history, user_id)
-    
+
     text = "📜 **Ваша история игр:**\n\n"
     if not matches:
         text += "Вы еще не сыграли ни одного матча."
@@ -1020,10 +1020,11 @@ async def show_game_history(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             user_score = m['player1_score'] if m['player1_id'] == user_id else m['player2_score']
             opp_score = m['player2_score'] if m['player1_id'] == user_id else m['player1_score']
             text += f"Тур {m['round_number']}: *Вы* {user_score} : {opp_score} *{opp}*\n"
-            
+
     keyboard = [[InlineKeyboardButton("« Назад в кабинет", callback_data="menu_cabinet")]]
     markup = InlineKeyboardMarkup(keyboard)
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=markup)
+
 
 # ==========================================
 # ВВОД И ПОДТВЕРЖДЕНИЕ РЕЗУЛЬТАТОВ МАТЧА
@@ -1048,12 +1049,12 @@ async def start_score_reporting(update: Update, context: ContextTypes.DEFAULT_TY
     match = await asyncio.to_thread(database.get_match, match_id)
     if not match:
         if query:
-            await query.answer("❌ Матч не найден.", show_alert=True)
+            await context.bot.send_message(chat_id=query.from_user.id, text="❌ Матч не найден.")
         return
 
     if match['status'] == 'confirmed':
         if query:
-            await query.answer("⛔ Результат этого матча уже занесён в таблицу!", show_alert=True)
+            await context.bot.send_message(chat_id=query.from_user.id, text="⛔ Результат этого матча уже занесён в таблицу!")
         return
 
 
@@ -1065,7 +1066,7 @@ async def start_score_reporting(update: Update, context: ContextTypes.DEFAULT_TY
                 dt = datetime.datetime.strptime(deadline_text, "%d.%m.%Y %H:%M")
                 if datetime.datetime.now() > dt:
                     if query:
-                        await query.answer("🔴 Дедлайн тура истёк! Запросите разрешение у админа.", show_alert=True)
+                        await context.bot.send_message(chat_id=query.from_user.id, text="🔴 Дедлайн тура истёк! Запросите разрешение у админа.")
                     return
             except ValueError:
                 pass
@@ -1105,11 +1106,11 @@ async def cb_report_choice_auto(update: Update, context: ContextTypes.DEFAULT_TY
 
     match = await asyncio.to_thread(database.get_match, match_id)
     if not match:
-        await query.answer("❌ Матч не найден.", show_alert=True)
+        await context.bot.send_message(chat_id=query.from_user.id, text="❌ Матч не найден.")
         return
 
     if match['status'] == 'confirmed':
-        await query.answer("⛔ Результат этого матча уже занесён в таблицу!", show_alert=True)
+        await context.bot.send_message(chat_id=query.from_user.id, text="⛔ Результат этого матча уже занесён в таблицу!")
         return
 
 
@@ -1120,7 +1121,7 @@ async def cb_report_choice_auto(update: Update, context: ContextTypes.DEFAULT_TY
             try:
                 dt = datetime.datetime.strptime(deadline_text, "%d.%m.%Y %H:%M")
                 if datetime.datetime.now() > dt:
-                    await query.answer("🔴 Дедлайн тура истёк! Запросите разрешение у админа.", show_alert=True)
+                    await context.bot.send_message(chat_id=query.from_user.id, text="🔴 Дедлайн тура истёк! Запросите разрешение у админа.")
                     return
             except ValueError:
                 pass
@@ -1672,11 +1673,11 @@ async def cb_confirm_ai_final(update: Update, context: ContextTypes.DEFAULT_TYPE
     match_id = int(query.data.replace("cb_confirm_ai_final_", ""))
     match = await asyncio.to_thread(database.get_match, match_id)
     if not match:
-        await query.answer("❌ Матч не найден.", show_alert=True)
+        await context.bot.send_message(chat_id=query.from_user.id, text="❌ Матч не найден.")
         return
 
     if match['status'] == 'confirmed':
-        await query.answer("Результат уже зафиксирован!", show_alert=True)
+        await context.bot.send_message(chat_id=query.from_user.id, text="✅ Результат уже зафиксирован!")
         return
 
     user_id = query.from_user.id
@@ -1814,11 +1815,11 @@ async def submit_report_to_guest(update: Update, context: ContextTypes.DEFAULT_T
 
     match = await asyncio.to_thread(database.get_match, match_id) if match_id else None
     if not match:
-        await query.answer("❌ Ошибка: матч не найден.", show_alert=True)
+        await context.bot.send_message(chat_id=query.from_user.id, text="❌ Ошибка: матч не найден.")
         return
 
     if match['status'] == 'confirmed':
-        await query.answer("⛔ Результат этого матча уже занесён в таблицу!", show_alert=True)
+        await context.bot.send_message(chat_id=query.from_user.id, text="⛔ Результат этого матча уже занесён в таблицу!")
         return
 
     submitter_id = query.from_user.id
