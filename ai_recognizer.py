@@ -77,6 +77,12 @@ def clean_json_response(raw_text: str) -> str:
     return text.strip()
 
 def recognize_match_screenshots_bytes(images_bytes_list: list[bytes], mime_type: str = "image/jpeg", api_key: str = None) -> dict | None:
+    target_api_key = (api_key or config.GEMINI_API_KEY).strip()
+
+    if not target_api_key:
+        logger.error("GEMINI_API_KEY is empty or not set!")
+        return None
+
     if not images_bytes_list:
         return None
 
@@ -99,7 +105,7 @@ def recognize_match_screenshots_bytes(images_bytes_list: list[bytes], mime_type:
                 }
             }
 
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{m_name}:generateContent?key={api_key}"
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{m_name}:generateContent?key={target_api_key}"
             req = urllib.request.Request(
                 url,
                 data=json.dumps(payload).encode("utf-8"),
