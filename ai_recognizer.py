@@ -16,7 +16,7 @@ def recognize_match_screenshots_bytes(images_bytes_list: list[bytes], mime_type:
     Returns structured dict with match scores, goals, assists, and is_single_timeline flag.
     """
     api_key = getattr(config, "GEMINI_API_KEY", "")
-    model_setting = getattr(config, "GEMINI_MODEL", "gemini-2.5-flash-lite")
+    model_setting = getattr(config, "GEMINI_MODEL", "gemini-3.1-flash-lite")
 
     if not api_key:
         logger.warning("GEMINI_API_KEY is not set.")
@@ -107,8 +107,8 @@ def recognize_match_screenshots_bytes(images_bytes_list: list[bytes], mime_type:
 
     candidate_models = list(dict.fromkeys(filter(None, [
         model_setting,
-        "gemini-3.5-flash-lite",
         "gemini-3.1-flash-lite",
+        "gemini-3.5-flash-lite",
         "gemini-2.5-flash-lite",
         "gemini-2.5-flash",
         "gemini-2.0-flash-lite",
