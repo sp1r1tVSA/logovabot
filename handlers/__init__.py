@@ -196,9 +196,11 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
     if isinstance(context.error, (telegram.error.TimedOut, telegram.error.NetworkError)):
         logger.warning(f"Сетевая задержка Telegram (TimedOut/NetworkError): {context.error}")
         return
-    if isinstance(context.error, telegram.error.BadRequest) and "query is too old" in str(context.error).lower():
-        logger.warning(f"Устаревший запрос кнопки (Query is too old): {context.error}")
-        return
+    if isinstance(context.error, telegram.error.BadRequest):
+        err_str = str(context.error).lower()
+        if "query is too old" in err_str or "message is not modified" in err_str:
+            logger.warning(f"Telegram BadRequest (игнорируется): {context.error}")
+            return
     logger.exception("Исключение при обработке обновления:")
 
 def _register_user_handlers(app: Application) -> None:
@@ -512,7 +514,7 @@ def _register_admin_handlers(app: Application) -> None:
     app.add_handler(CallbackQueryHandler(admin_list_players_page, pattern="^admin_list_players_page_\\d+$"))
     app.add_handler(CallbackQueryHandler(admin_view_player, pattern="^admin_view_player_-?\\d+$"))
     app.add_handler(CallbackQueryHandler(admin_edit_club_select, pattern="^admin_edit_club_select_-?\\d+$"))
-    app.add_handler(CallbackQueryHandler(admin_edit_club_execute, pattern="^admin_edit_club_execute_-?\\d+_.+$"))
+    app.add_handler(CallbackQueryHandler(admin_edit_club_execute, pattern="^admin_eclub_-?\\d+_\\d+$"))
     app.add_handler(CallbackQueryHandler(admin_delete_player_confirm, pattern="^admin_delete_player_confirm_-?\\d+$"))
     app.add_handler(CallbackQueryHandler(admin_delete_player_execute, pattern="^admin_delete_player_execute_-?\\d+$"))
     app.add_handler(CallbackQueryHandler(admin_manage_round, pattern="^admin_manage_round_\\d+$"))

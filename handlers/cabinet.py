@@ -616,21 +616,21 @@ async def cb_request_admin_result(update: Update, context: ContextTypes.DEFAULT_
     query = update.callback_query
     if not query:
         return
-    await query.answer()
+    await query.answer()  # Single answer() to dismiss loading spinner
 
     match_id = int(query.data.replace("cb_request_admin_result_", ""))
     user_id = query.from_user.id
     m = await asyncio.to_thread(database.get_match, match_id)
     if not m:
-        await query.answer("Матч не найден.", show_alert=True)
+        await context.bot.send_message(chat_id=user_id, text="❌ Матч не найден.")
         return
 
     if user_id not in (m['player1_id'], m['player2_id']):
-        await query.answer("⛔ Вы не являетесь участником этого матча.", show_alert=True)
+        await context.bot.send_message(chat_id=user_id, text="⛔ Вы не являетесь участником этого матча.")
         return
 
     if m.get('is_extended'):
-        await query.answer("✅ Разрешение уже выдано! Вы можете вносить результат.", show_alert=True)
+        await context.bot.send_message(chat_id=user_id, text="✅ Разрешение уже выдано! Вы можете вносить результат.")
         return
 
     team1 = m.get('player1_team') or m.get('player1_nickname') or '?'

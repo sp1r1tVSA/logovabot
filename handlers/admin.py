@@ -1852,7 +1852,7 @@ async def admin_edit_club_select(update: Update, context: ContextTypes.DEFAULT_T
     keyboard = []
     row = []
 
-    for club in CLUBS:
+    for club_idx, club in enumerate(CLUBS):
         occupied_by = club_to_player.get(club.lower())
         if player['team_name'] and player['team_name'].lower() == club.lower():
             btn_text = f"⭐ {club} (текущий)"
@@ -1861,7 +1861,8 @@ async def admin_edit_club_select(update: Update, context: ContextTypes.DEFAULT_T
         else:
             btn_text = f"🟢 {club} (свободен)"
 
-        row.append(InlineKeyboardButton(btn_text, callback_data=f"admin_edit_club_execute_{p_id}_{club}"))
+        # Use club index instead of full club name to stay under Telegram's 64-byte callback_data limit
+        row.append(InlineKeyboardButton(btn_text, callback_data=f"admin_eclub_{p_id}_{club_idx}"))
         if len(row) == 2:
             keyboard.append(row)
             row = []
@@ -1882,16 +1883,21 @@ async def admin_edit_club_execute(update: Update, context: ContextTypes.DEFAULT_
     query = update.callback_query
     if not query or not is_admin(query.from_user.id):
         return
-    await query.answer()
-
-    data_parts = query.data.replace("admin_edit_club_execute_", "").split("_", 1)
+    # Parse: admin_eclub_{p_id}_{club_idx}
+    data_parts = query.data.replace("admin_eclub_", "").split("_", 1)
     if len(data_parts) != 2:
+        await query.answer()
         return
     p_id = int(data_parts[0])
-    new_club = data_parts[1]
+    club_idx = int(data_parts[1])
+    if club_idx < 0 or club_idx >= len(CLUBS):
+        await query.answer("❌ Неверный индекс клуба.", show_alert=True)
+        return
+    new_club = CLUBS[club_idx]
 
     success, msg = await asyncio.to_thread(database.set_player_club, str(p_id), new_club)
-    await query.answer(f"✅ {msg}", show_alert=True)
+    # Use single query.answer() with the result message to avoid BadRequest: query already answered
+    await query.answer(f"✅ {msg}" if success else f"❌ {msg}", show_alert=True)
 
     await admin_view_player(update, context, player_id=p_id)
 
