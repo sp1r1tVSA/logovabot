@@ -1074,8 +1074,8 @@ async def start_score_reporting(update: Update, context: ContextTypes.DEFAULT_TY
             await context.bot.send_message(chat_id=query.from_user.id, text="⛔ Результат этого матча уже занесён в таблицу!")
         return
 
-
-    if not match.get("is_extended"):
+    user_id = query.from_user.id if query else update.effective_user.id
+    if not match.get("is_extended") and not is_admin(user_id):
         round_info = await asyncio.to_thread(database.get_round_info, match['round_number'])
         deadline_text = round_info.get("deadline") if round_info else None
         if deadline_text:
@@ -1083,7 +1083,7 @@ async def start_score_reporting(update: Update, context: ContextTypes.DEFAULT_TY
                 dt = datetime.datetime.strptime(deadline_text, "%d.%m.%Y %H:%M")
                 if datetime.datetime.now() > dt:
                     if query:
-                        await context.bot.send_message(chat_id=query.from_user.id, text="🔴 Дедлайн тура истёк! Запросите разрешение у админа.")
+                        await context.bot.send_message(chat_id=user_id, text="🔴 Дедлайн тура истёк! Запросите разрешение у админа.")
                     return
             except ValueError:
                 pass
@@ -1130,15 +1130,15 @@ async def cb_report_choice_auto(update: Update, context: ContextTypes.DEFAULT_TY
         await context.bot.send_message(chat_id=query.from_user.id, text="⛔ Результат этого матча уже занесён в таблицу!")
         return
 
-
-    if not match.get("is_extended"):
+    user_id = query.from_user.id
+    if not match.get("is_extended") and not is_admin(user_id):
         round_info = await asyncio.to_thread(database.get_round_info, match['round_number'])
         deadline_text = round_info.get("deadline") if round_info else None
         if deadline_text:
             try:
                 dt = datetime.datetime.strptime(deadline_text, "%d.%m.%Y %H:%M")
                 if datetime.datetime.now() > dt:
-                    await context.bot.send_message(chat_id=query.from_user.id, text="🔴 Дедлайн тура истёк! Запросите разрешение у админа.")
+                    await context.bot.send_message(chat_id=user_id, text="🔴 Дедлайн тура истёк! Запросите разрешение у админа.")
                     return
             except ValueError:
                 pass
@@ -1173,14 +1173,15 @@ async def cb_report_choice_manual(update: Update, context: ContextTypes.DEFAULT_
         await context.bot.send_message(chat_id=query.from_user.id, text="⛔ Результат этого матча уже занесён в таблицу!")
         return
 
-    if not match.get("is_extended"):
+    user_id = query.from_user.id
+    if not match.get("is_extended") and not is_admin(user_id):
         round_info = await asyncio.to_thread(database.get_round_info, match['round_number'])
         deadline_text = round_info.get("deadline") if round_info else None
         if deadline_text:
             try:
                 dt = datetime.datetime.strptime(deadline_text, "%d.%m.%Y %H:%M")
                 if datetime.datetime.now() > dt:
-                    await context.bot.send_message(chat_id=query.from_user.id, text="🔴 Дедлайн тура истёк! Запросите разрешение у админа.")
+                    await context.bot.send_message(chat_id=user_id, text="🔴 Дедлайн тура истёк! Запросите разрешение у админа.")
                     return
             except ValueError:
                 pass
