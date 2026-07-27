@@ -1149,13 +1149,12 @@ async def cb_report_choice_manual(update: Update, context: ContextTypes.DEFAULT_
 
     match = await asyncio.to_thread(database.get_match, match_id)
     if not match:
-        await query.answer("❌ Матч не найден.", show_alert=True)
+        await context.bot.send_message(chat_id=query.from_user.id, text="❌ Матч не найден.")
         return
 
     if match['status'] == 'confirmed':
-        await query.answer("⛔ Результат этого матча уже занесён в таблицу!", show_alert=True)
+        await context.bot.send_message(chat_id=query.from_user.id, text="⛔ Результат этого матча уже занесён в таблицу!")
         return
-
 
     if not match.get("is_extended"):
         round_info = await asyncio.to_thread(database.get_round_info, match['round_number'])
@@ -1164,7 +1163,7 @@ async def cb_report_choice_manual(update: Update, context: ContextTypes.DEFAULT_
             try:
                 dt = datetime.datetime.strptime(deadline_text, "%d.%m.%Y %H:%M")
                 if datetime.datetime.now() > dt:
-                    await query.answer("🔴 Дедлайн тура истёк! Запросите разрешение у админа.", show_alert=True)
+                    await context.bot.send_message(chat_id=query.from_user.id, text="🔴 Дедлайн тура истёк! Запросите разрешение у админа.")
                     return
             except ValueError:
                 pass
@@ -1190,8 +1189,12 @@ async def cb_report_choice_manual(update: Update, context: ContextTypes.DEFAULT_
             row = []
     if row:
         keyboard.append(row)
-    keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data=f"cabinet_view_match_{match_id}")])
+        
+    user_id = query.from_user.id
+    cancel_cb = get_match_cancel_cb(context, user_id, match_id)
+    keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data=cancel_cb)])
 
+    # Используем safe_edit_or_reply, чтобы корректно удалить карточку с картинкой!
     await safe_edit_or_reply(query, context, text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def cb_report_home_goals(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1208,9 +1211,9 @@ async def cb_report_home_goals(update: Update, context: ContextTypes.DEFAULT_TYP
     away_team = context.user_data.get("report_away_team")
 
     text = (
-        f"⚽ **Ввод результата матча #{match_id}**\n"
-        f"🏠 **{home_team}** ({hg}) vs **{away_team}** (?)\n\n"
-        f"Теперь выберите, сколько забил соперник (**{away_team}**):"
+        f"⚽ <b>Ввод результата матча #{match_id}</b>\n"
+        f"🏠 <b>{safe_escape(home_team)}</b> ({hg}) vs <b>{safe_escape(away_team)}</b> (?)\n\n"
+        f"Теперь выберите, сколько забил соперник (<b>{safe_escape(away_team)}</b>):"
     )
 
     keyboard = []
@@ -1222,9 +1225,12 @@ async def cb_report_home_goals(update: Update, context: ContextTypes.DEFAULT_TYP
             row = []
     if row:
         keyboard.append(row)
-    keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data=f"cabinet_view_match_{match_id}")])
+        
+    user_id = query.from_user.id
+    cancel_cb = get_match_cancel_cb(context, user_id, match_id)
+    keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data=cancel_cb)])
 
-    await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+    await safe_edit_or_reply(query, context, text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def cb_report_away_goals(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
