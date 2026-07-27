@@ -539,6 +539,8 @@ async def admin_manage_round(update: Update, context: ContextTypes.DEFAULT_TYPE)
     info = await asyncio.to_thread(database.get_round_info, round_number)
     
     if not info:
+        keyboard = [[InlineKeyboardButton("« Назад", callback_data="admin_manage_matches_info")]]
+        await query.edit_message_text("❌ Тур не найден в базе данных.", reply_markup=InlineKeyboardMarkup(keyboard))
         return
         
     is_open = info["is_open"]
@@ -2330,7 +2332,11 @@ async def admin_remind_round(update: Update, context: ContextTypes.DEFAULT_TYPE,
 
     unplayed = await asyncio.to_thread(database.get_unplayed_matches_by_round, round_number)
     if not unplayed:
-        await query.answer("🎉 В этом туре нет несыгранных матчей!", show_alert=True)
+        keyboard = [[InlineKeyboardButton("« Назад к туру", callback_data=f"admin_manage_round_{round_number}")]]
+        try:
+            await query.edit_message_text("🎉 В этом туре нет несыгранных матчей!", reply_markup=InlineKeyboardMarkup(keyboard))
+        except Exception:
+            await context.bot.send_message(chat_id=query.from_user.id, text="🎉 В этом туре нет несыгранных матчей!", reply_markup=InlineKeyboardMarkup(keyboard))
         return
 
     selected_key = f"remind_selected_{round_number}"
@@ -2453,7 +2459,7 @@ async def admin_send_selected_reminders(update: Update, context: ContextTypes.DE
     selected_ids = context.user_data.get(selected_key, set())
 
     if not selected_ids:
-        await query.answer("⚠️ Не выбрано ни одного матча!", show_alert=True)
+        await context.bot.send_message(chat_id=query.from_user.id, text="⚠️ Не выбрано ни одного матча!")
         return
 
     pm_sent, count_matches = await send_round_reminders(context, round_number, target_match_ids=selected_ids)

@@ -729,17 +729,16 @@ def get_group_id() -> int | None:
     except ValueError:
         return None
 
-def get_all_rounds() -> list[int]:
-    """Retrieve all unique round numbers from matches."""
-    with transaction() as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT DISTINCT round_number FROM matches ORDER BY round_number ASC")
-        return [row[0] for row in cursor.fetchall()]
 
 def open_rounds_batch(start_round: int, end_round: int, deadline: str) -> None:
     """Open multiple rounds and set a shared deadline."""
     with transaction() as conn:
         cursor = conn.cursor()
+        for r_num in range(start_round, end_round + 1):
+            cursor.execute(
+                "INSERT OR IGNORE INTO rounds (round_number, is_open, deadline) VALUES (?, 0, NULL)",
+                (r_num,)
+            )
         cursor.execute(
             "UPDATE rounds SET is_open = 1, deadline = ? WHERE round_number >= ? AND round_number <= ?",
             (deadline, start_round, end_round)
