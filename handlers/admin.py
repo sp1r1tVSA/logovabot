@@ -636,14 +636,16 @@ async def admin_open_round_prompt(update: Update, context: ContextTypes.DEFAULT_
 
 import datetime
 
-@admin_only
 async def admin_open_round_save(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    user = update.effective_user
+    if not user or not is_admin(user.id):
+        return ConversationHandler.END
+
     if not update.message or not update.message.text:
         return ADMIN_WAITING_FOR_DEADLINE
         
     deadline_text = update.message.text
     
-    # Try to parse
     try:
         dt = datetime.datetime.strptime(deadline_text.strip(), "%d.%m.%Y %H:%M")
     except ValueError:
@@ -695,8 +697,11 @@ async def admin_open_batch_prompt(update: Update, context: ContextTypes.DEFAULT_
     )
     return ADMIN_WAITING_FOR_BATCH_ROUNDS
 
-@admin_only
 async def admin_open_batch_rounds(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    user = update.effective_user
+    if not user or not is_admin(user.id):
+        return ConversationHandler.END
+
     if not update.message or not update.message.text:
         return ADMIN_WAITING_FOR_BATCH_ROUNDS
         
@@ -728,9 +733,11 @@ async def admin_open_batch_rounds(update: Update, context: ContextTypes.DEFAULT_
     )
     return ADMIN_WAITING_FOR_BATCH_DEADLINE
 
-
-@admin_only
 async def admin_open_batch_deadline(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    user = update.effective_user
+    if not user or not is_admin(user.id):
+        return ConversationHandler.END
+
     if not update.message or not update.message.text:
         return ADMIN_WAITING_FOR_BATCH_DEADLINE
         
