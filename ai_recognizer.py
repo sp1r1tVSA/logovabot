@@ -9,7 +9,6 @@ import config
 
 logger = logging.getLogger(__name__)
 
-# Использование полновесных модели Flash с лучшими лимитами и идеальным vision-восприятием
 GEMINI_MODELS = [
     "gemini-2.5-flash",
     "gemini-3.5-flash",
@@ -73,25 +72,18 @@ PROMPT_TEXT = """
 def clean_json_response(raw_text: str) -> str:
     """Очищает ответ модели от возможных markdown-тегов ```json ... ```."""
     text = raw_text.strip()
-    # Удаляем тройные бэктики и название языка, если модель их добавила
     text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
     text = re.sub(r"\s*```$", "", text)
     return text.strip()
 
 def recognize_match_screenshots_bytes(images_bytes_list: list[bytes], mime_type: str = "image/jpeg", api_key: str = None) -> dict | None:
-    """
-    Распознает результаты матча по списку байтов изображений через Gemini API.
-    """
     if not images_bytes_list:
         return None
 
     for m_name in GEMINI_MODELS:
         try:
-            # Формирование полезной нагрузки для REST API Gemini
-            # (Здесь используется стандартный контракт API Google)
             parts = [{"text": PROMPT_TEXT}]
             for img_bytes in images_bytes_list:
-                import base64
                 parts.append({
                     "inline_data": {
                         "mime_type": mime_type,
@@ -99,11 +91,11 @@ def recognize_match_screenshots_bytes(images_bytes_list: list[bytes], mime_type:
                     }
                 })
 
+            # Безопасный payload без конфликтных полей в generationConfig
             payload = {
                 "contents": [{"parts": parts}],
                 "generationConfig": {
-                    "temperature": 0.1,  # Низкая температура для устранения галлюцинаций
-                    "response_mime_type": "application/json"  # Принудительный JSON-режим
+                    "temperature": 0.1
                 }
             }
 
@@ -120,8 +112,6 @@ def recognize_match_screenshots_bytes(images_bytes_list: list[bytes], mime_type:
                 candidates = res_json.get("candidates", [])
                 if candidates and "content" in candidates[0]:
                     text_content = candidates[0]["content"]["parts"][0]["text"]
-                    
-                    # 1. Безопасная очистка текста от markdown-разметки
                     clean_text = clean_json_response(text_content)
                     parsed_data = json.loads(clean_text)
 
@@ -129,7 +119,6 @@ def recognize_match_screenshots_bytes(images_bytes_list: list[bytes], mime_type:
                         logger.warning(f"Gemini model '{m_name}' returned non-dict JSON: {parsed_data}")
                         continue
 
-                    # 2. Установка дефолтов для геометрических полей
                     parsed_data.setdefault("left_score", 0)
                     parsed_data.setdefault("right_score", 0)
                     parsed_data.setdefault("left_goals", [])
@@ -138,7 +127,7 @@ def recognize_match_screenshots_bytes(images_bytes_list: list[bytes], mime_type:
                     parsed_data.setdefault("right_assists", [])
                     parsed_data.setdefault("is_single_timeline", False)
 
-                    # 3. Совместимость со старым форматом (side1 / home)
+                    # Совместимость со старой структурой
                     parsed_data.setdefault("home_score", parsed_data["left_score"])
                     parsed_data.setdefault("away_score", parsed_data["right_score"])
                     parsed_data.setdefault("side1_goals", parsed_data["left_goals"])
@@ -146,19 +135,14 @@ def recognize_match_screenshots_bytes(images_bytes_list: list[bytes], mime_type:
                     parsed_data.setdefault("side1_assists", parsed_data["left_assists"])
                     parsed_data.setdefault("side2_assists", parsed_data["right_assists"])
 
-                    # 4. ПАТЧ ЗАЩИТЫ ОТ 0 - 0: Если модель упустила верхний счёт, 
-                    # но нашла авторов голов в таблице — вычисляем счет по длине списка голов
+                    # Корректировка счета 0 - 0 по списку голов
                     if parsed_data["left_score"] == 0 and len(parsed_data["left_goals"]) > 0:
-                        correct_score = len(parsed_data["left_goals"])
-                        parsed_data["left_score"] = correct_score
-                        parsed_data["home_score"] = correct_score
-                        logger.warning(f"Auto-corrected left_score to {correct_score} based on goals list")
+                        parsed_data["left_score"] = len(parsed_data["left_goals"])
+                        parsed_data["home_score"] = len(parsed_data["left_goals"])
 
                     if parsed_data["right_score"] == 0 and len(parsed_data["right_goals"]) > 0:
-                        correct_score = len(parsed_data["right_goals"])
-                        parsed_data["right_score"] = correct_score
-                        parsed_data["away_score"] = correct_score
-                        logger.warning(f"Auto-corrected right_score to {correct_score} based on goals list")
+                        parsed_data["right_score"] = len(parsed_data["right_goals"])
+                        parsed_data["away_score"] = len(parsed_data["right_goals"])
 
                     logger.info(
                         f"AI Vision ({m_name}) recognized match: "
@@ -171,12 +155,13 @@ def recognize_match_screenshots_bytes(images_bytes_list: list[bytes], mime_type:
                     continue
 
         except urllib.error.HTTPError as e:
+            error_body = e.read().decode("utf-8", errors="ignore")
             if e.code == 429:
                 logger.warning(f"Gemini model '{m_name}' rate-limited (429). Trying next fallback model...")
             elif e.code == 404:
                 logger.warning(f"Gemini model '{m_name}' not found (404). Trying next fallback model...")
             else:
-                logger.exception(f"Gemini model '{m_name}' HTTP Error {e.code}")
+                logger.error(f"Gemini model '{m_name}' HTTP Error {e.code}: {error_body}")
             continue
         except Exception as e:
             logger.exception(f"Gemini model '{m_name}' recognition error: {e}")
@@ -186,5 +171,4 @@ def recognize_match_screenshots_bytes(images_bytes_list: list[bytes], mime_type:
     return None
 
 def recognize_match_screenshot_bytes(image_bytes: bytes, mime_type: str = "image/jpeg", api_key: str = None) -> dict | None:
-    """Wrapper for backward compatibility."""
     return recognize_match_screenshots_bytes([image_bytes], mime_type=mime_type, api_key=api_key)
