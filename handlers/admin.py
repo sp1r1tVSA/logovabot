@@ -2600,17 +2600,9 @@ async def admin_set_results_topic(update: Update, context: ContextTypes.DEFAULT_
 @admin_only
 async def admin_fetch_photos(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
-    /fetch_photos — download and cache player portraits from API-Football.
+    /fetch_photos — download and cache player portraits from hybrid free providers.
     Skips players that are already cached.
     """
-    if not config.APISPORTS_KEY:
-        await update.message.reply_text(
-            "⚠️ <b>APISPORTS_KEY не задан.</b>\n"
-            "Добавь переменную окружения <code>APISPORTS_KEY</code> и перезапусти бота.",
-            parse_mode="HTML"
-        )
-        return
-
     squads = await asyncio.to_thread(database.get_all_squads)
     all_players: list[tuple[str, str]] = []  # (player_name, team)
     for team_name, players in squads.items():
@@ -2646,25 +2638,8 @@ async def admin_fetch_photos(update: Update, context: ContextTypes.DEFAULT_TYPE)
     failed_names: list[str] = []
 
     for i, (name, team) in enumerate(to_fetch, 1):
-        try:
-            result = await asyncio.to_thread(player_photos.fetch_and_cache, name, team)
-        except player_photos.RateLimitExceeded:
-            # API is still refusing requests after backing off — almost
-            # certainly the daily quota, not just the per-minute rate.
-            # Stop here instead of burning through the rest of the list
-            # (they'd all fail identically), and tell the admin clearly
-            # so "180 not found" doesn't get misread as "no photos exist".
-            remaining = len(to_fetch) - i + 1
-            await status_msg.edit_text(
-                f"⚠️ <b>API-Football лимитировал запросы</b> (похоже, исчерпана дневная квота).\n\n"
-                f"✅ Загружено: <b>{ok_count}</b>\n"
-                f"⏸ Осталось необработанных: <b>{remaining}</b>\n"
-                f"📦 Уже были: <b>{len(already_cached)}</b>\n\n"
-                "Повторите /fetch_photos позже (например, завтра) — уже "
-                "загруженные фото скачиваться заново не будут.",
-                parse_mode="HTML"
-            )
-            return
+        # Убрана конструкция try...except RateLimitExceeded, так как лимитов больше нет
+        result = await asyncio.to_thread(player_photos.fetch_and_cache, name, team)
 
         if result:
             ok_count += 1
