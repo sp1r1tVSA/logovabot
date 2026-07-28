@@ -20,6 +20,7 @@ DB_PATH = os.getenv("LEAGUE_SQLITE_PATH", "league.db")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 GEMINI_CHAT_API_KEY = os.getenv("GEMINI_CHAT_API_KEY", "").strip()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip()
+APISPORTS_KEY = os.getenv("APISPORTS_KEY", "").strip()
 
 def _get_group_id() -> int | None:
     group_raw = os.getenv("TELEGRAM_GROUP_ID", "").strip()

@@ -2,6 +2,7 @@ import os
 import io
 from PIL import Image, ImageDraw, ImageFont
 from table_generator import TEAM_LOGO_MAP, load_font
+import player_photos
 
 BASE_DIR = os.path.dirname(__file__)
 LOGOS_DIR = os.path.join(BASE_DIR, "assets", "logos")
@@ -59,7 +60,7 @@ def generate_player_card(stats: dict) -> io.BytesIO:
     font_season   = load_font(13, bold=True)
 
     # ── Dynamic height ─────────────────────────────────────────────────────
-    HEADER_H      = 90    # logo + name block
+    HEADER_H      = 100   # player photo + name block
     DIVIDER       = 1
     BIG_STATS_H   = 100   # goals / assists big numbers
     ROUNDS_HEADER = 36
@@ -90,14 +91,54 @@ def generate_player_card(stats: dict) -> io.BytesIO:
     y = CARD_PADDING
 
     # ══════════════════════════════════════════════════════════════════════
-    # 1. HEADER  — logo  |  player name + team
+    # 1. HEADER  — player photo  |  name + team + club logo
     # ══════════════════════════════════════════════════════════════════════
-    # Logo badge
-    BADGE_D = 64
-    badge_x = CARD_PADDING
-    badge_y = y + (HEADER_H - BADGE_D) // 2
+    PHOTO_D = 80   # player portrait diameter
+    BADGE_D = 32   # club logo badge diameter
 
-    # White circle
+    photo_x = CARD_PADDING
+    photo_y = y + (HEADER_H - PHOTO_D) // 2
+
+    # ── Player portrait ────────────────────────────────────────────────
+    photo_path = player_photos.get_photo_path(player_name)
+
+    # Draw circular clip mask
+    mask = Image.new("L", (PHOTO_D, PHOTO_D), 0)
+    mask_draw = ImageDraw.Draw(mask)
+    mask_draw.ellipse([0, 0, PHOTO_D, PHOTO_D], fill=255)
+
+    if photo_path:
+        try:
+            portrait = Image.open(photo_path).convert("RGBA")
+            portrait = portrait.resize((PHOTO_D, PHOTO_D), Image.Resampling.LANCZOS)
+            # Paste portrait with circular mask
+            img.paste(portrait, (photo_x, photo_y), mask)
+        except Exception:
+            photo_path = None  # fall through to placeholder
+
+    if not photo_path:
+        # Placeholder: grey circle with initials
+        placeholder = Image.new("RGBA", (PHOTO_D, PHOTO_D), (55, 65, 81, 255))
+        ph_draw = ImageDraw.Draw(placeholder)
+        initials = "".join(w[0].upper() for w in player_name.split()[:2]) if player_name else "?"
+        font_init = load_font(28, bold=True)
+        init_w = int(ph_draw.textlength(initials, font=font_init))
+        ph_draw.text(
+            ((PHOTO_D - init_w) // 2, (PHOTO_D - 32) // 2),
+            initials, fill=WHITE, font=font_init
+        )
+        img.paste(placeholder, (photo_x, photo_y), mask)
+
+    # Thin white ring around portrait
+    draw.ellipse(
+        [photo_x - 2, photo_y - 2, photo_x + PHOTO_D + 2, photo_y + PHOTO_D + 2],
+        outline=BORDER_COLOR, width=2
+    )
+
+    # ── Club logo badge (bottom-right of portrait) ─────────────────────
+    badge_x = photo_x + PHOTO_D - BADGE_D // 2
+    badge_y = photo_y + PHOTO_D - BADGE_D // 2
+
     draw.ellipse(
         [badge_x, badge_y, badge_x + BADGE_D, badge_y + BADGE_D],
         fill=WHITE
@@ -108,7 +149,7 @@ def generate_player_card(stats: dict) -> io.BytesIO:
     if os.path.exists(logo_path):
         try:
             logo_img  = Image.open(logo_path).convert("RGBA")
-            inner     = BADGE_D - 10
+            inner     = BADGE_D - 6
             logo_img  = logo_img.resize((inner, inner), Image.Resampling.LANCZOS)
             off_x     = badge_x + (BADGE_D - inner) // 2
             off_y     = badge_y + (BADGE_D - inner) // 2
@@ -116,12 +157,12 @@ def generate_player_card(stats: dict) -> io.BytesIO:
         except Exception:
             pass
 
-    # Player name + team label
-    text_x = badge_x + BADGE_D + 18
-    name_y = y + 18
+    # ── Player name + team label ───────────────────────────────────────
+    text_x = photo_x + PHOTO_D + 20
+    name_y = y + 22
     draw.text((text_x, name_y), player_name, fill=WHITE, font=font_player)
 
-    team_y = name_y + 32
+    team_y = name_y + 34
     draw.text((text_x, team_y), team_name, fill=MUTED, font=font_team)
 
     # "Сезон 2026" badge — top-right

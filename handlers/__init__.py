@@ -175,6 +175,7 @@ from handlers.admin import (
     admin_squad_clear,
     ADMIN_EXPECT_SQUAD_TEXT,
     admin_stub,
+    admin_fetch_photos,
 )
 
 logger = logging.getLogger(__name__)
@@ -210,6 +211,7 @@ def _register_user_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("table", group_table_command))
     app.add_handler(CommandHandler("ratings", group_table_command))
+    app.add_handler(CommandHandler("fetch_photos", admin_fetch_photos))
 
     app.add_handler(MessageHandler(filters.Regex("^👤 Мой кабинет$"), show_cabinet))
     app.add_handler(MessageHandler(filters.Regex("^🏆 Турниры$"), show_tournaments))

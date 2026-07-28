@@ -11,6 +11,7 @@ import config
 from config import CLUBS
 
 from schedule_parser import parse_schedule_text, create_matches_from_parsed_schedule
+import player_photos
 import logging
 
 logger = logging.getLogger(__name__)
@@ -2594,3 +2595,83 @@ async def admin_set_results_topic(update: Update, context: ContextTypes.DEFAULT_
         
     await asyncio.to_thread(database.set_config, "results_topic_id", str(thread_id))
     await update.message.reply_text(f"✅ Тема «Результаты» успешно установлена (ID: {thread_id}). Все результаты матчей с авторами голов и ассистов будут публиковаться сюда!")
+
+
+@admin_only
+async def admin_fetch_photos(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    /fetch_photos — download and cache player portraits from API-Football.
+    Skips players that are already cached.
+    """
+    if not config.APISPORTS_KEY:
+        await update.message.reply_text(
+            "⚠️ <b>APISPORTS_KEY не задан.</b>\n"
+            "Добавь переменную окружения <code>APISPORTS_KEY</code> и перезапусти бота.",
+            parse_mode="HTML"
+        )
+        return
+
+    squads = await asyncio.to_thread(database.get_all_squads)
+    all_players: list[str] = []
+    for players in squads.values():
+        all_players.extend(players)
+
+    # Deduplicate preserving order
+    seen: set[str] = set()
+    unique_players: list[str] = []
+    for p in all_players:
+        if p not in seen:
+            unique_players.append(p)
+            seen.add(p)
+
+    already_cached = [p for p in unique_players if player_photos.is_cached(p)]
+    to_fetch       = [p for p in unique_players if not player_photos.is_cached(p)]
+
+    if not to_fetch:
+        await update.message.reply_text(
+            f"✅ Все {len(already_cached)} игроков уже имеют кэшированные фото."
+        )
+        return
+
+    status_msg = await update.message.reply_text(
+        f"⏳ Загружаю фото для <b>{len(to_fetch)}</b> игроков "
+        f"(уже есть: {len(already_cached)})...",
+        parse_mode="HTML"
+    )
+
+    ok_count   = 0
+    fail_count = 0
+    failed_names: list[str] = []
+
+    for i, name in enumerate(to_fetch, 1):
+        result = await asyncio.to_thread(player_photos.fetch_and_cache, name)
+        if result:
+            ok_count += 1
+        else:
+            fail_count += 1
+            failed_names.append(name)
+
+        # Update progress every 5 players
+        if i % 5 == 0 or i == len(to_fetch):
+            try:
+                await status_msg.edit_text(
+                    f"⏳ Прогресс: {i}/{len(to_fetch)} — "
+                    f"✅ {ok_count} загружено, ❌ {fail_count} не найдено",
+                    parse_mode="HTML"
+                )
+            except Exception:
+                pass
+
+    result_text = (
+        f"✅ <b>Готово!</b>\n\n"
+        f"Загружено: <b>{ok_count}</b>\n"
+        f"Не найдено: <b>{fail_count}</b>\n"
+        f"Уже были: <b>{len(already_cached)}</b>"
+    )
+    if failed_names:
+        sample = failed_names[:10]
+        result_text += "\n\n<b>Не найдены:</b>\n" + "\n".join(f"• {html.escape(n)}" for n in sample)
+        if len(failed_names) > 10:
+            result_text += f"\n<i>...и ещё {len(failed_names) - 10}</i>"
+
+    await status_msg.edit_text(result_text, parse_mode="HTML")
