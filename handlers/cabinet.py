@@ -13,6 +13,7 @@ import asyncio
 import telegram.error
 import ai_recognizer
 import config
+import player_card_generator
 
 def match_squad_player_names(raw_players: list[str], squad_list: list[str]) -> dict[str, int]:
     counts = {}
@@ -264,10 +265,17 @@ async def show_club_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     text = f"⚽ <b>Статистика игроков клуба {html.escape(team)}:</b>\n"
 
+    # Collect unique player names to add card buttons
+    all_players: list[str] = []
+    seen: set[str] = set()
+
     if scorers:
         text += "\n<b>🔥 Бомбардиры:</b>\n"
         for i, s in enumerate(scorers, 1):
             text += f"{i}. {html.escape(s['player_name'])} — {s['total']} ⚽\n"
+            if s['player_name'] not in seen:
+                all_players.append(s['player_name'])
+                seen.add(s['player_name'])
     else:
         text += "\n<i>Пока нет данных о голах.</i>\n"
 
@@ -275,13 +283,73 @@ async def show_club_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         text += "\n<b>👟 Ассистенты:</b>\n"
         for i, a in enumerate(assisters, 1):
             text += f"{i}. {html.escape(a['player_name'])} — {a['total']} 🅰️\n"
+            if a['player_name'] not in seen:
+                all_players.append(a['player_name'])
+                seen.add(a['player_name'])
     else:
         text += "\n<i>Пока нет данных о передачах.</i>\n"
+
+    # Build inline keyboard: one button per player (rows of 2), then Back
+    buttons: list[list[InlineKeyboardButton]] = []
+    row: list[InlineKeyboardButton] = []
+    for pname in all_players:
+        cb = f"player_card_{team}|{pname}"
+        btn = InlineKeyboardButton(f"👤 {pname}", callback_data=cb)
+        row.append(btn)
+        if len(row) == 2:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
+
+    if all_players:
+        text += "\n<i>Нажми на игрока, чтобы открыть его карточку:</i>"
+
+    buttons.append([InlineKeyboardButton("« Назад в кабинет", callback_data="menu_cabinet")])
+    markup = InlineKeyboardMarkup(buttons)
 
     if query:
         await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
     elif update.message:
         await update.message.reply_text(text, parse_mode="HTML", reply_markup=markup)
+
+
+async def show_player_card(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Send a player stats card image for the given player."""
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+
+    # Callback data format: "player_card_<team_name>|<player_name>"
+    data = query.data  # e.g. "player_card_Спортинг|Криштиану Роналду"
+    try:
+        payload = data[len("player_card_"):]
+        team_name, player_name = payload.split("|", 1)
+    except (ValueError, IndexError):
+        await query.answer("Ошибка: не удалось распознать игрока.", show_alert=True)
+        return
+
+    keyboard = [[InlineKeyboardButton("« Назад", callback_data="cabinet_club_stats")]]
+    markup = InlineKeyboardMarkup(keyboard)
+
+    # Fetch stats from DB in a thread
+    stats = await asyncio.to_thread(database.get_player_card_stats, player_name, team_name)
+
+    # Generate image in a thread
+    buf = await asyncio.to_thread(player_card_generator.generate_player_card, stats)
+
+    caption = (
+        f"<b>{html.escape(player_name)}</b> · {html.escape(team_name)}\n"
+        f"⚽ {stats['total_goals']} голов  |  🅰️ {stats['total_assists']} ассистов"
+    )
+
+    await query.message.reply_photo(
+        photo=buf,
+        caption=caption,
+        parse_mode="HTML",
+        reply_markup=markup,
+    )
 
 
 async def show_my_matches_stub(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

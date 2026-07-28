@@ -1276,3 +1276,74 @@ def get_all_squads() -> dict[str, list[str]]:
         return squads
 
 
+def get_player_card_stats(player_name: str, team_name: str) -> dict:
+    """
+    Get full season stats for a specific player:
+    - total goals and assists
+    - breakdown by round (goals + assists per round)
+    Only considers confirmed matches.
+    """
+    with transaction() as conn:
+        cursor = conn.cursor()
+
+        # Total goals
+        cursor.execute("""
+            SELECT COALESCE(SUM(me.count), 0) AS total
+            FROM match_events me
+            JOIN matches m ON me.match_id = m.id
+            WHERE LOWER(me.player_name) = LOWER(?)
+              AND LOWER(me.team_name) = LOWER(?)
+              AND me.event_type = 'goal'
+              AND m.status = 'confirmed'
+        """, (player_name.strip(), team_name.strip()))
+        total_goals = cursor.fetchone()["total"]
+
+        # Total assists
+        cursor.execute("""
+            SELECT COALESCE(SUM(me.count), 0) AS total
+            FROM match_events me
+            JOIN matches m ON me.match_id = m.id
+            WHERE LOWER(me.player_name) = LOWER(?)
+              AND LOWER(me.team_name) = LOWER(?)
+              AND me.event_type = 'assist'
+              AND m.status = 'confirmed'
+        """, (player_name.strip(), team_name.strip()))
+        total_assists = cursor.fetchone()["total"]
+
+        # Per-round breakdown
+        cursor.execute("""
+            SELECT
+                m.round_number,
+                me.event_type,
+                SUM(me.count) AS total
+            FROM match_events me
+            JOIN matches m ON me.match_id = m.id
+            WHERE LOWER(me.player_name) = LOWER(?)
+              AND LOWER(me.team_name) = LOWER(?)
+              AND m.status = 'confirmed'
+            GROUP BY m.round_number, me.event_type
+            ORDER BY m.round_number ASC
+        """, (player_name.strip(), team_name.strip()))
+
+        rounds_raw = cursor.fetchall()
+
+        # Build a dict: {round_number: {"goals": n, "assists": n}}
+        rounds: dict[int, dict] = {}
+        for row in rounds_raw:
+            rn = row["round_number"]
+            if rn not in rounds:
+                rounds[rn] = {"goals": 0, "assists": 0}
+            if row["event_type"] == "goal":
+                rounds[rn]["goals"] = row["total"]
+            elif row["event_type"] == "assist":
+                rounds[rn]["assists"] = row["total"]
+
+        return {
+            "player_name": player_name,
+            "team_name": team_name,
+            "total_goals": total_goals,
+            "total_assists": total_assists,
+            "rounds": rounds,  # {round_number: {"goals": n, "assists": n}}
+        }
+
+

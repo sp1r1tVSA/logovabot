@@ -20,6 +20,9 @@ CB_CABINET_CLUB_STATS = "cabinet_club_stats"
 CB_CABINET_GAME_HISTORY = "cabinet_game_history"
 CB_CABINET_UPLOAD_SQUAD = "cabinet_upload_squad"
 
+# Player Card
+CB_PLAYER_CARD = "player_card_"
+
 # Admin Navigation & Actions
 CB_ADMIN_MAIN_MENU = "admin_main_menu"
 CB_ADMIN_MANAGE_PLAYERS = "admin_manage_players"

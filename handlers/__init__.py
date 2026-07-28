@@ -86,6 +86,7 @@ from handlers.cabinet import (
     cb_request_admin_result,
     cb_admin_approve_result,
     cancel_score_report_and_navigate,
+    show_player_card,
 )
 
 # Import admin handlers
@@ -370,6 +371,7 @@ def _register_cabinet_handlers(app: Application) -> None:
     app.add_handler(CallbackQueryHandler(show_club_stats, pattern="^cabinet_club_stats$"))
     app.add_handler(CallbackQueryHandler(show_my_squad, pattern="^cabinet_my_squad$"))
     app.add_handler(CallbackQueryHandler(show_game_history, pattern="^cabinet_game_history$"))
+    app.add_handler(CallbackQueryHandler(show_player_card, pattern="^player_card_.+$"))
 
 def _register_admin_handlers(app: Application) -> None:
     """Register administrator panel, tournament management, and dispute resolution handlers."""
