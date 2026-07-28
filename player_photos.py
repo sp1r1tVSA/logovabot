@@ -22,6 +22,7 @@ import urllib.error
 import urllib.parse
 import json
 from datetime import date
+import unicodedata
 
 import config
 
@@ -74,23 +75,6 @@ def _throttle() -> None:
         if wait > 0:
             time.sleep(wait)
         _last_request_at = time.monotonic()
-
-
-def _default_season() -> int:
-    """
-    Best-effort guess at the current season year if none is configured.
-    КПЛ here is this tournament's own custom season label (run via the
-    Telegram bot), not the real Kazakhstan Premier League — its season
-    is tracked as a single calendar year, so no month-based cutoff is
-    needed; this just returns the current year.
-    """
-    return date.today().year
-
-
-# Prefer an explicit config.APISPORTS_SEASON if set, otherwise compute it
-# from today's date so this doesn't silently go stale year over year.
-SEASON = getattr(config, "APISPORTS_SEASON", None) or _default_season()
-
 
 def _ensure_photos_dir() -> None:
     os.makedirs(PHOTOS_DIR, exist_ok=True)
@@ -170,18 +154,28 @@ def _best_match(query: str, results: list[dict], team: str | None = None) -> dic
         return best_entry
     return None
 
+def _normalize_name(name: str) -> str:
+    """Убирает диакритику (акценты) из имени игрока: Orbelín -> Orbelin, Koïta -> Koita"""
+    nfkd_form = unicodedata.normalize('NFKD', name)
+    return "".join([c for c in nfkd_form if not unicodedata.combining(c)]).strip()
 
 def _api_search_player(name: str, team: str | None = None, retries: int = 1) -> dict | None:
     """
     Search api-sports.io for a player by name.
     Returns the best-matching player dict or None.
     """
-    if not config.APISPORTS_KEY:
+    if not getattr(config, "APISPORTS_KEY", None):
         logger.warning("APISPORTS_KEY not set — skipping photo fetch")
         return None
 
-    params = urllib.parse.urlencode({"search": name, "season": SEASON})
-    url    = f"https://{API_HOST}/players?{params}"
+    clean_name = _normalize_name(name)
+    if len(clean_name) < 3:
+        logger.warning("Player name '%s' too short for API search", name)
+        return None
+
+    # Ищем БЕЗ параметра season, чтобы найди фото игрока за любой сезон карьеры
+    params = urllib.parse.urlencode({"search": clean_name})
+    url = f"https://{API_HOST}/players?{params}"
 
     req = urllib.request.Request(url, headers={
         "x-apisports-key": config.APISPORTS_KEY,
@@ -194,31 +188,44 @@ def _api_search_player(name: str, team: str | None = None, retries: int = 1) -> 
             data = json.loads(resp.read().decode())
     except urllib.error.HTTPError as e:
         if e.code == 429 and retries > 0:
-            logger.warning(
-                "Rate limited by API-Football, backing off before retrying '%s'", name
-            )
+            logger.warning("Rate limited by API-Football, backing off before retrying '%s'", name)
             time.sleep(RATE_LIMIT_BACKOFF_SECONDS)
             return _api_search_player(name, team=team, retries=retries - 1)
         if e.code == 429:
-            logger.error(
-                "Still rate-limited for '%s' after retrying — likely daily quota exhausted", name
-            )
+            logger.error("Still rate-limited for '%s' after retrying — likely daily quota exhausted", name)
             raise RateLimitExceeded(f"API-Football rate limit exceeded for '{name}'") from e
         logger.error("API-Football HTTP error for '%s': %s", name, e)
         return None
     except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as e:
-        # Covers connection failures, DNS errors, and socket timeouts —
-        # a bare urlopen(timeout=...) timeout isn't always a URLError,
-        # so it must be caught explicitly or it propagates uncaught.
         logger.error("API-Football request failed for '%s': %s", name, e)
         return None
 
     results = data.get("response", [])
+    
+    # Если без сезона результатов нет, пробуем с упреждающими сезонами (2025, 2024)
+    if not results:
+        for fallback_season in [2025, 2024]:
+            params_fb = urllib.parse.urlencode({"search": clean_name, "season": fallback_season})
+            url_fb = f"https://{API_HOST}/players?{params_fb}"
+            req_fb = urllib.request.Request(url_fb, headers={
+                "x-apisports-key": config.APISPORTS_KEY,
+                "Accept": "application/json",
+            })
+            _throttle()
+            try:
+                with urllib.request.urlopen(req_fb, timeout=10) as resp:
+                    data_fb = json.loads(resp.read().decode())
+                    results = data_fb.get("response", [])
+                    if results:
+                        break
+            except Exception:
+                pass
+
     if not results:
         logger.info("No API result for player '%s'", name)
         return None
 
-    return _best_match(name, results, team=team) or results[0]["player"]
+    return _best_match(clean_name, results, team=team) or results[0]["player"]
 
 
 def _download_photo(url: str, dest_path: str) -> bool:
