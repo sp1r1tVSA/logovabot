@@ -7,6 +7,7 @@ import database
 import logging
 from config import ADMIN_IDS, CLUBS
 from table_generator import generate_league_table_image
+import top_stats_generator
 from constants import (
     CB_MAIN_MENU, CB_MENU_CABINET, CB_MENU_TOURNAMENTS,
     CB_MENU_LEAGUE, CB_MENU_SUPPORT, CB_LEAGUE_TABLE,
@@ -224,7 +225,9 @@ async def show_top_scorers(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             goals = row['total_goals']
             text += f"{rank} <b>{p_name}</b> ({t_name}) — <b>{goals}</b> ⚽\n"
 
+
     keyboard = [
+        [InlineKeyboardButton("🖼 Графика (с фото)", callback_data="img_top_scorers")],
         [InlineKeyboardButton("🎯 Перейти к Ассистам", callback_data="league_assists")],
         [InlineKeyboardButton("« Назад в раздел «Лига»", callback_data="menu_league")]
     ]
@@ -273,6 +276,7 @@ async def show_top_assists(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             text += f"{rank} <b>{p_name}</b> ({t_name}) — <b>{ast}</b> 🎯\n"
 
     keyboard = [
+        [InlineKeyboardButton("🖼 Графика (с фото)", callback_data="img_top_assisters")],
         [InlineKeyboardButton("⚽ Перейти к Бомбардирам", callback_data="league_scorers")],
         [InlineKeyboardButton("« Назад в раздел «Лига»", callback_data="menu_league")]
     ]
@@ -296,6 +300,66 @@ async def show_top_assists(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 await context.bot.send_message(chat_id=query.from_user.id, text=text, reply_markup=markup, parse_mode="HTML")
     elif update.message:
         await update.message.reply_text(text, reply_markup=markup, parse_mode="HTML")
+
+
+async def send_top_scorers_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Generate and send PNG graphics card for Top Scorers with player photos."""
+    query = update.callback_query
+    if query:
+        await query.answer()
+
+    buf = await asyncio.to_thread(top_stats_generator.generate_top_stats_image, "goals", 10)
+
+    keyboard = [
+        [InlineKeyboardButton("🎯 Ассистенты (Графика)", callback_data="img_top_assisters")],
+        [InlineKeyboardButton("⚽ К списку бомбардиров", callback_data="league_scorers")],
+        [InlineKeyboardButton("« Раздел «Лига»", callback_data="menu_league")]
+    ]
+    markup = InlineKeyboardMarkup(keyboard)
+
+    if query and query.message:
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
+
+    await context.bot.send_photo(
+        chat_id=update.effective_user.id,
+        photo=buf,
+        caption="<b>⚽ ТОП БОМБАРДИРОВ КПЛ 2026</b>",
+        parse_mode="HTML",
+        reply_markup=markup
+    )
+
+
+async def send_top_assisters_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Generate and send PNG graphics card for Top Assisters with player photos."""
+    query = update.callback_query
+    if query:
+        await query.answer()
+
+    buf = await asyncio.to_thread(top_stats_generator.generate_top_stats_image, "assists", 10)
+
+    keyboard = [
+        [InlineKeyboardButton("⚽ Бомбардиры (Графика)", callback_data="img_top_scorers")],
+        [InlineKeyboardButton("🎯 К списку ассистентов", callback_data="league_assists")],
+        [InlineKeyboardButton("« Раздел «Лига»", callback_data="menu_league")]
+    ]
+    markup = InlineKeyboardMarkup(keyboard)
+
+    if query and query.message:
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
+
+    await context.bot.send_photo(
+        chat_id=update.effective_user.id,
+        photo=buf,
+        caption="<b>🎯 ТОП АССИСТЕНТОВ КПЛ 2026</b>",
+        parse_mode="HTML",
+        reply_markup=markup
+    )
 
 async def show_tournaments(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query

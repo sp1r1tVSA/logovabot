@@ -24,6 +24,8 @@ from handlers.base import (
     show_league_menu,
     show_top_scorers,
     show_top_assists,
+    send_top_scorers_image,
+    send_top_assisters_image,
     show_support,
     group_table_command,
     show_round_matches,
@@ -226,6 +228,8 @@ def _register_user_handlers(app: Application) -> None:
     app.add_handler(CallbackQueryHandler(show_league_table, pattern="^(league_table|menu_ratings)$"))
     app.add_handler(CallbackQueryHandler(show_top_scorers, pattern="^league_scorers$"))
     app.add_handler(CallbackQueryHandler(show_top_assists, pattern="^league_assists$"))
+    app.add_handler(CallbackQueryHandler(send_top_scorers_image, pattern="^img_top_scorers$"))
+    app.add_handler(CallbackQueryHandler(send_top_assisters_image, pattern="^img_top_assisters$"))
     app.add_handler(CallbackQueryHandler(show_support, pattern="^menu_support$"))
     app.add_handler(CallbackQueryHandler(show_main_menu, pattern="^main_menu$"))
     app.add_handler(CallbackQueryHandler(show_round_matches, pattern="^show_round_matches_\\d+$"))
