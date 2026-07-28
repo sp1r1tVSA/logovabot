@@ -9,4 +9,10 @@ state/
 artifacts/
 *.db
 league.db
+venv/
+.venv/
+.claude/
+test_*.png
+*.log
+
 
