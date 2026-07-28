@@ -289,11 +289,14 @@ async def show_club_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     else:
         text += "\n<i>Пока нет данных о передачах.</i>\n"
 
-    # Build inline keyboard: one button per player (rows of 2), then Back
+    context.user_data["club_stats_team"] = team
+    context.user_data["club_stats_players"] = all_players
+
+    # Build inline keyboard: safe short callback_data (pcard_{idx}) to avoid Telegram 64-byte limit
     buttons: list[list[InlineKeyboardButton]] = []
     row: list[InlineKeyboardButton] = []
-    for pname in all_players:
-        cb = f"player_card_{team}|{pname}"
+    for idx, pname in enumerate(all_players):
+        cb = f"pcard_{idx}"
         btn = InlineKeyboardButton(f"👤 {pname}", callback_data=cb)
         row.append(btn)
         if len(row) == 2:
@@ -308,8 +311,17 @@ async def show_club_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     buttons.append([InlineKeyboardButton("« Назад в кабинет", callback_data="menu_cabinet")])
     markup = InlineKeyboardMarkup(buttons)
 
-    if query:
-        await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
+    if query and query.message and (query.message.photo or query.message.caption):
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
+        await context.bot.send_message(chat_id=query.from_user.id, text=text, parse_mode="HTML", reply_markup=markup)
+    elif query:
+        try:
+            await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
+        except Exception:
+            await context.bot.send_message(chat_id=query.from_user.id, text=text, parse_mode="HTML", reply_markup=markup)
     elif update.message:
         await update.message.reply_text(text, parse_mode="HTML", reply_markup=markup)
 
@@ -321,14 +333,38 @@ async def show_player_card(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
     await query.answer()
 
-    # Callback data format: "player_card_<team_name>|<player_name>"
-    data = query.data  # e.g. "player_card_Спортинг|Криштиану Роналду"
-    try:
+    data = query.data or ""
+    player_name = None
+    team_name = context.user_data.get("club_stats_team")
+
+    if data.startswith("pcard_"):
+        try:
+            idx = int(data.replace("pcard_", ""))
+            players_list = context.user_data.get("club_stats_players", [])
+            if 0 <= idx < len(players_list):
+                player_name = players_list[idx]
+        except ValueError:
+            pass
+    elif data.startswith("player_card_"):
         payload = data[len("player_card_"):]
-        team_name, player_name = payload.split("|", 1)
-    except (ValueError, IndexError):
+        if "|" in payload:
+            try:
+                team_name, player_name = payload.split("|", 1)
+            except ValueError:
+                pass
+        else:
+            player_name = payload
+
+    if not player_name:
         await query.answer("Ошибка: не удалось распознать игрока.", show_alert=True)
         return
+
+    if not team_name:
+        user = await asyncio.to_thread(database.get_user, query.from_user.id)
+        if user and user.get("team_name"):
+            team_name = user["team_name"]
+        else:
+            team_name = "—"
 
     keyboard = [[InlineKeyboardButton("« Назад", callback_data="cabinet_club_stats")]]
     markup = InlineKeyboardMarkup(keyboard)
@@ -344,7 +380,14 @@ async def show_player_card(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         f"⚽ {stats['total_goals']} голов  |  🅰️ {stats['total_assists']} ассистов"
     )
 
-    await query.message.reply_photo(
+    if query.message:
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
+
+    await context.bot.send_photo(
+        chat_id=query.from_user.id,
         photo=buf,
         caption=caption,
         parse_mode="HTML",

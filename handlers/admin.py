@@ -2022,6 +2022,7 @@ async def admin_manage_squads(update: Update, context: ContextTypes.DEFAULT_TYPE
             row = []
     if row:
         keyboard.append(row)
+    keyboard.append([InlineKeyboardButton("🖼 Загрузить фото игроков", callback_data="admin_fetch_photos_cb")])
     keyboard.append([InlineKeyboardButton("« Назад в админку", callback_data="admin_main_menu")])
 
     text = "📋 <b>Составы команд</b>\n\nВыберите клуб для просмотра и управления составом:"
@@ -2600,45 +2601,43 @@ async def admin_set_results_topic(update: Update, context: ContextTypes.DEFAULT_
 @admin_only
 async def admin_fetch_photos(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
-    /fetch_photos — download and cache player portraits from hybrid free providers.
-    Skips players that are already cached.
+    /fetch_photos or admin_fetch_photos_cb — download and cache player portraits
+    from hybrid free providers. Skips players that are already cached.
     """
-    squads = await asyncio.to_thread(database.get_all_squads)
-    all_players: list[tuple[str, str]] = []  # (player_name, team)
-    for team_name, players in squads.items():
-        for p in players:
-            all_players.append((p, team_name))
+    query = update.callback_query
+    if query:
+        await query.answer()
 
-    # Deduplicate preserving order — dedupe by (name, team), not name
-    # alone, since two different clubs can have same-named players.
-    seen: set[tuple[str, str]] = set()
-    unique_players: list[tuple[str, str]] = []
-    for item in all_players:
-        if item not in seen:
-            unique_players.append(item)
-            seen.add(item)
+    unique_players = await asyncio.to_thread(database.get_all_unique_players)
 
     already_cached = [item for item in unique_players if player_photos.is_cached(item[0], item[1])]
     to_fetch       = [item for item in unique_players if not player_photos.is_cached(item[0], item[1])]
 
+    text_initial = (
+        f"✅ Все {len(already_cached)} игроков уже имеют кэшированные фото."
+        if not to_fetch else
+        f"⏳ Загружаю фото для <b>{len(to_fetch)}</b> игроков (уже есть: {len(already_cached)})..."
+    )
+
     if not to_fetch:
-        await update.message.reply_text(
-            f"✅ Все {len(already_cached)} игроков уже имеют кэшированные фото."
-        )
+        if query:
+            await query.edit_message_text(text_initial, parse_mode="HTML")
+        elif update.message:
+            await update.message.reply_text(text_initial, parse_mode="HTML")
         return
 
-    status_msg = await update.message.reply_text(
-        f"⏳ Загружаю фото для <b>{len(to_fetch)}</b> игроков "
-        f"(уже есть: {len(already_cached)})...",
-        parse_mode="HTML"
-    )
+    if query:
+        status_msg = await query.edit_message_text(text_initial, parse_mode="HTML")
+    elif update.message:
+        status_msg = await update.message.reply_text(text_initial, parse_mode="HTML")
+    else:
+        return
 
     ok_count   = 0
     fail_count = 0
     failed_names: list[str] = []
 
     for i, (name, team) in enumerate(to_fetch, 1):
-        # Убрана конструкция try...except RateLimitExceeded, так как лимитов больше нет
         result = await asyncio.to_thread(player_photos.fetch_and_cache, name, team)
 
         if result:
@@ -2670,4 +2669,7 @@ async def admin_fetch_photos(update: Update, context: ContextTypes.DEFAULT_TYPE)
         if len(failed_names) > 10:
             result_text += f"\n<i>...и ещё {len(failed_names) - 10}</i>"
 
-    await status_msg.edit_text(result_text, parse_mode="HTML")
+    try:
+        await status_msg.edit_text(result_text, parse_mode="HTML")
+    except Exception:
+        pass

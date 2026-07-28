@@ -1276,6 +1276,20 @@ def get_all_squads() -> dict[str, list[str]]:
         return squads
 
 
+def get_all_unique_players() -> list[tuple[str, str]]:
+    """Retrieve all unique (player_name, team_name) tuples from squad_players and match_events."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT player_name, team_name FROM squad_players
+            UNION
+            SELECT player_name, team_name FROM match_events WHERE player_name IS NOT NULL AND player_name != ''
+            ORDER BY team_name, player_name ASC
+        """)
+        return [(row["player_name"], row["team_name"]) for row in cursor.fetchall()]
+
+
+
 def get_player_card_stats(player_name: str, team_name: str) -> dict:
     """
     Get full season stats for a specific player:

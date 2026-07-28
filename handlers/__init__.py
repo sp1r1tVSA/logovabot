@@ -373,7 +373,7 @@ def _register_cabinet_handlers(app: Application) -> None:
     app.add_handler(CallbackQueryHandler(show_club_stats, pattern="^cabinet_club_stats$"))
     app.add_handler(CallbackQueryHandler(show_my_squad, pattern="^cabinet_my_squad$"))
     app.add_handler(CallbackQueryHandler(show_game_history, pattern="^cabinet_game_history$"))
-    app.add_handler(CallbackQueryHandler(show_player_card, pattern="^player_card_.+$"))
+    app.add_handler(CallbackQueryHandler(show_player_card, pattern="^(player_card|pcard)_.+$"))
 
 def _register_admin_handlers(app: Application) -> None:
     """Register administrator panel, tournament management, and dispute resolution handlers."""
@@ -554,6 +554,7 @@ def _register_admin_handlers(app: Application) -> None:
     app.add_handler(CallbackQueryHandler(admin_manage_squads, pattern="^admin_manage_squads$"))
     app.add_handler(CallbackQueryHandler(admin_view_squad, pattern="^admin_squad_view_.*$"))
     app.add_handler(CallbackQueryHandler(admin_squad_clear, pattern="^admin_squad_clear_.*$"))
+    app.add_handler(CallbackQueryHandler(admin_fetch_photos, pattern="^admin_fetch_photos_cb$"))
     app.add_handler(CallbackQueryHandler(admin_stub, pattern="^admin_matches_stub$"))
     app.add_handler(CallbackQueryHandler(admin_stub, pattern="^admin_broadcast_stub$"))
 

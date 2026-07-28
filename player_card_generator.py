@@ -100,7 +100,7 @@ def generate_player_card(stats: dict) -> io.BytesIO:
     photo_y = y + (HEADER_H - PHOTO_D) // 2
 
     # ── Player portrait ────────────────────────────────────────────────
-    photo_path = player_photos.get_photo_path(player_name)
+    photo_path = player_photos.get_photo_path(player_name, team_name)
 
     # Draw circular clip mask
     mask = Image.new("L", (PHOTO_D, PHOTO_D), 0)
@@ -160,6 +160,12 @@ def generate_player_card(stats: dict) -> io.BytesIO:
     # ── Player name + team label ───────────────────────────────────────
     text_x = photo_x + PHOTO_D + 20
     name_y = y + 22
+    max_name_w = CARD_WIDTH - CARD_PADDING - text_x - 120
+    if draw.textlength(player_name, font=font_player) > max_name_w:
+        font_player = load_font(20, bold=True)
+        if draw.textlength(player_name, font=font_player) > max_name_w:
+            font_player = load_font(17, bold=True)
+
     draw.text((text_x, name_y), player_name, fill=WHITE, font=font_player)
 
     team_y = name_y + 34
@@ -245,7 +251,7 @@ def generate_player_card(stats: dict) -> io.BytesIO:
         # Thin line under header
         draw.line([(CARD_PADDING, y - 4), (CARD_WIDTH - CARD_PADDING, y - 4)], fill=BORDER_COLOR, width=1)
 
-        for idx, (rn, rd) in enumerate(sorted(rounds.items())):
+        for idx, (rn, rd) in enumerate(sorted(rounds.items(), key=lambda x: int(x[0]))):
             row_bg = SURFACE_COLOR if idx % 2 == 0 else BG_COLOR
             draw.rectangle(
                 [(CARD_PADDING - 4, y), (CARD_WIDTH - CARD_PADDING + 4, y + ROW_H - 2)],

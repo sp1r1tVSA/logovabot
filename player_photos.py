@@ -80,8 +80,15 @@ def is_cached(player_name: str, disambiguator: str | None = None) -> bool:
 
 
 def get_photo_path(player_name: str, disambiguator: str | None = None) -> str | None:
-    path = get_cached_photo_path(player_name, disambiguator)
-    return path if (os.path.isfile(path) and os.path.getsize(path) > 0) else None
+    if disambiguator:
+        path = get_cached_photo_path(player_name, disambiguator)
+        if os.path.isfile(path) and os.path.getsize(path) > 0:
+            return path
+    # Check without disambiguator
+    path = get_cached_photo_path(player_name, None)
+    if os.path.isfile(path) and os.path.getsize(path) > 0:
+        return path
+    return None
 
 
 def _get_thesportsdb_url(player_name: str) -> str | None:
@@ -162,10 +169,11 @@ def _get_transfermarkt_url(player_name: str) -> str | None:
     return None
 
 
-def _download_photo(url: str, dest_path: str) -> bool:
+def _download_photo(url: str, dest_path: str, headers: dict | None = None) -> bool:
+    if headers is None:
+        headers = STD_HEADERS
     try:
-        # Для скачивания картинок с CDN используем чистый стандартный заголовок
-        req = urllib.request.Request(url, headers=STD_HEADERS)
+        req = urllib.request.Request(url, headers=headers)
         with urllib.request.urlopen(req, timeout=8) as resp:
             data = resp.read()
             if len(data) < 500:
@@ -176,6 +184,7 @@ def _download_photo(url: str, dest_path: str) -> bool:
     except Exception as e:
         logger.debug(f"[Download] Error fetching from {url}: {e}")
         return False
+
 
 
 def fetch_and_cache(player_name: str, team: str | None = None) -> str | None:
@@ -191,16 +200,16 @@ def fetch_and_cache(player_name: str, team: str | None = None) -> str | None:
         time.sleep(0.5)
 
         providers = [
-            ("TheSportsDB", _get_thesportsdb_url),
-            ("FotMob", _get_fotmob_url),
-            ("SofaScore", _get_sofascore_url),
-            ("Transfermarkt", _get_transfermarkt_url)
+            ("TheSportsDB", _get_thesportsdb_url, STD_HEADERS),
+            ("FotMob", _get_fotmob_url, FOTMOB_HEADERS),
+            ("SofaScore", _get_sofascore_url, SOFASCORE_HEADERS),
+            ("Transfermarkt", _get_transfermarkt_url, TM_HEADERS)
         ]
 
-        for provider_name, get_url_func in providers:
+        for provider_name, get_url_func, p_headers in providers:
             photo_url = get_url_func(player_name)
             if photo_url:
-                if _download_photo(photo_url, cached):
+                if _download_photo(photo_url, cached, headers=p_headers):
                     logger.info(f"[{provider_name}] ✅ Downloaded photo for '{player_name}'")
                     return cached
                 else:
