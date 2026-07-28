@@ -2612,20 +2612,22 @@ async def admin_fetch_photos(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
 
     squads = await asyncio.to_thread(database.get_all_squads)
-    all_players: list[str] = []
-    for players in squads.values():
-        all_players.extend(players)
+    all_players: list[tuple[str, str]] = []  # (player_name, team)
+    for team_name, players in squads.items():
+        for p in players:
+            all_players.append((p, team_name))
 
-    # Deduplicate preserving order
-    seen: set[str] = set()
-    unique_players: list[str] = []
-    for p in all_players:
-        if p not in seen:
-            unique_players.append(p)
-            seen.add(p)
+    # Deduplicate preserving order — dedupe by (name, team), not name
+    # alone, since two different clubs can have same-named players.
+    seen: set[tuple[str, str]] = set()
+    unique_players: list[tuple[str, str]] = []
+    for item in all_players:
+        if item not in seen:
+            unique_players.append(item)
+            seen.add(item)
 
-    already_cached = [p for p in unique_players if player_photos.is_cached(p)]
-    to_fetch       = [p for p in unique_players if not player_photos.is_cached(p)]
+    already_cached = [item for item in unique_players if player_photos.is_cached(item[0], item[1])]
+    to_fetch       = [item for item in unique_players if not player_photos.is_cached(item[0], item[1])]
 
     if not to_fetch:
         await update.message.reply_text(
@@ -2643,13 +2645,32 @@ async def admin_fetch_photos(update: Update, context: ContextTypes.DEFAULT_TYPE)
     fail_count = 0
     failed_names: list[str] = []
 
-    for i, name in enumerate(to_fetch, 1):
-        result = await asyncio.to_thread(player_photos.fetch_and_cache, name)
+    for i, (name, team) in enumerate(to_fetch, 1):
+        try:
+            result = await asyncio.to_thread(player_photos.fetch_and_cache, name, team)
+        except player_photos.RateLimitExceeded:
+            # API is still refusing requests after backing off — almost
+            # certainly the daily quota, not just the per-minute rate.
+            # Stop here instead of burning through the rest of the list
+            # (they'd all fail identically), and tell the admin clearly
+            # so "180 not found" doesn't get misread as "no photos exist".
+            remaining = len(to_fetch) - i + 1
+            await status_msg.edit_text(
+                f"⚠️ <b>API-Football лимитировал запросы</b> (похоже, исчерпана дневная квота).\n\n"
+                f"✅ Загружено: <b>{ok_count}</b>\n"
+                f"⏸ Осталось необработанных: <b>{remaining}</b>\n"
+                f"📦 Уже были: <b>{len(already_cached)}</b>\n\n"
+                "Повторите /fetch_photos позже (например, завтра) — уже "
+                "загруженные фото скачиваться заново не будут.",
+                parse_mode="HTML"
+            )
+            return
+
         if result:
             ok_count += 1
         else:
             fail_count += 1
-            failed_names.append(name)
+            failed_names.append(f"{name} ({team})")
 
         # Update progress every 5 players
         if i % 5 == 0 or i == len(to_fetch):
