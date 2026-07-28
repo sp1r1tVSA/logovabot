@@ -42,15 +42,13 @@ def generate_top_stats_image(mode: str = "goals", limit: int = 10) -> io.BytesIO
     Returns io.BytesIO PNG buffer.
     """
     if mode == "goals":
-        title_text = "⚽ ТОП БОМБАРДИРОВ"
+        title_text = "ТОП БОМБАРДИРОВ"
         subtitle_text = "ГОНКА БОМБАРДИРОВ  •  СЕЗОН 2026"
-        stat_icon = "⚽"
         stat_color = GOAL_COLOR
         raw_data = database.get_top_scorers(limit)
     else:
-        title_text = "🅰️ ТОП АССИСТЕНТОВ"
+        title_text = "ТОП АССИСТЕНТОВ"
         subtitle_text = "ЛУЧШИЕ АССИСТЕНТЫ  •  СЕЗОН 2026"
-        stat_icon = "🅰️"
         stat_color = ASSIST_COLOR
         raw_data = database.get_top_assists(limit)
 
@@ -129,11 +127,11 @@ def generate_top_stats_image(mode: str = "goals", limit: int = 10) -> io.BytesIO
             rank_y = row_y0 + (ROW_H - rank_h) // 2
 
             if idx == 1:
-                r_fill, r_text_col, r_str = GOLD_BG, GOLD_TEXT, "🥇 1"
+                r_fill, r_text_col, r_str = GOLD_BG, GOLD_TEXT, "#1"
             elif idx == 2:
-                r_fill, r_text_col, r_str = SILVER_BG, SILVER_TEXT, "🥈 2"
+                r_fill, r_text_col, r_str = SILVER_BG, SILVER_TEXT, "#2"
             elif idx == 3:
-                r_fill, r_text_col, r_str = BRONZE_BG, BRONZE_TEXT, "🥉 3"
+                r_fill, r_text_col, r_str = BRONZE_BG, BRONZE_TEXT, "#3"
             else:
                 r_fill, r_text_col, r_str = (35, 35, 42), MUTED, f"#{idx}"
 
@@ -201,17 +199,20 @@ def generate_top_stats_image(mode: str = "goals", limit: int = 10) -> io.BytesIO
             draw.text((name_x, p_name_y), player_name, fill=WHITE, font=f_pname)
             draw.text((name_x, p_name_y + 24), team_name, fill=MUTED, font=font_team)
 
-            # ── Stat Count Badge (Right) ───────────────────────────────────
+            # ── Stat Count Badge (Right Pill) ─────────────────────────────
             val_str = f"{stat_value}"
             val_w = int(draw.textlength(val_str, font=font_stat_val))
-            val_x = row_x1 - 20 - val_w
-            val_y = row_y0 + (ROW_H - 26) // 2
 
-            draw.text((val_x, val_y), val_str, fill=stat_color, font=font_stat_val)
+            pill_w = max(50, val_w + 24)
+            pill_h = 36
+            pill_x = row_x1 - 16 - pill_w
+            pill_y = row_y0 + (ROW_H - pill_h) // 2
 
-            # Small stat icon next to count
-            icon_w = int(draw.textlength(stat_icon, font=font_footer))
-            draw.text((val_x - icon_w - 6, val_y + 4), stat_icon, fill=WHITE, font=font_footer)
+            bg_pill_col = (stat_color[0], stat_color[1], stat_color[2], 30)
+            _draw_rounded_rect(draw, (pill_x, pill_y, pill_x + pill_w, pill_y + pill_h), radius=8, fill=bg_pill_col, outline=stat_color)
+
+            sw = int(draw.textlength(val_str, font=font_stat_val))
+            draw.text((pill_x + (pill_w - sw) // 2, pill_y + (pill_h - 26) // 2), val_str, fill=stat_color, font=font_stat_val)
 
             y += ROW_H + ROW_GAP
 

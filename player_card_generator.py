@@ -204,7 +204,7 @@ def generate_player_card(stats: dict) -> io.BytesIO:
     # Number
     draw.text((g_center_x - g_num_w // 2, stats_y0 + 10), g_num_str, fill=GOAL_COLOR, font=font_big_num)
     # Label
-    g_lbl = "⚽  Голов"
+    g_lbl = "ГОЛОВ"
     g_lbl_w = int(draw.textlength(g_lbl, font=font_stat_lbl))
     draw.text((g_center_x - g_lbl_w // 2, stats_y0 + 62), g_lbl, fill=MUTED, font=font_stat_lbl)
 
@@ -218,7 +218,7 @@ def generate_player_card(stats: dict) -> io.BytesIO:
     a_center_x = (ast_bg_x0 + ast_bg_x1) // 2
 
     draw.text((a_center_x - a_num_w // 2, stats_y0 + 10), a_num_str, fill=ASSIST_COLOR, font=font_big_num)
-    a_lbl = "🅰️  Ассистов"
+    a_lbl = "АССИСТОВ"
     a_lbl_w = int(draw.textlength(a_lbl, font=font_stat_lbl))
     draw.text((a_center_x - a_lbl_w // 2, stats_y0 + 62), a_lbl, fill=MUTED, font=font_stat_lbl)
 
@@ -242,8 +242,8 @@ def generate_player_card(stats: dict) -> io.BytesIO:
         col_total_x   = CARD_WIDTH - CARD_PADDING - 10
 
         # Column headers
-        draw.text((col_goals_x,   y + 8), "⚽ Голы",    fill=MUTED, font=font_label, anchor="ra")
-        draw.text((col_assists_x, y + 8), "🅰️ Ас-ты",  fill=MUTED, font=font_label, anchor="ra")
+        draw.text((col_goals_x,   y + 8), "Голы",     fill=MUTED, font=font_label, anchor="ra")
+        draw.text((col_assists_x, y + 8), "Ассисты",  fill=MUTED, font=font_label, anchor="ra")
         draw.text((col_total_x,   y + 8), "Σ",          fill=MUTED, font=font_label, anchor="ra")
 
         y += ROUNDS_HEADER
