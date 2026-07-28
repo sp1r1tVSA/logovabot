@@ -46,9 +46,16 @@ def clean_text_for_tts(text: str) -> str:
     
     return cleaned_text
 
-async def generate_voice_audio(text: str, voice: str = DEFAULT_VOICE) -> bytes:
+async def generate_voice_audio(
+    text: str, 
+    voice: str = DEFAULT_VOICE,
+    pitch: str = "-14Hz",
+    rate: str = "-6%",
+    volume: str = "+10%"
+) -> bytes:
     """
     Asynchronously generates audio bytes (.mp3 / .ogg) for the given text using edge-tts.
+    Customized with lowered pitch and relaxed rate for an authentic 30+ Scuf voice.
     """
     cleaned = clean_text_for_tts(text)
     if not cleaned:
@@ -56,9 +63,9 @@ async def generate_voice_audio(text: str, voice: str = DEFAULT_VOICE) -> bytes:
 
     # Limit text length if too long for a single voice message
     if len(cleaned) > 2000:
-        cleaned = cleaned[:2000] + "... И так далее!"
+        cleaned = cleaned[:2000] + "... Ну и так далее, братан!"
 
-    communicate = edge_tts.Communicate(cleaned, voice)
+    communicate = edge_tts.Communicate(cleaned, voice, pitch=pitch, rate=rate, volume=volume)
     audio_buffer = io.BytesIO()
 
     async for chunk in communicate.stream():
