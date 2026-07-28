@@ -1361,3 +1361,39 @@ def get_player_card_stats(player_name: str, team_name: str) -> dict:
         }
 
 
+def rename_player(old_name: str, new_name: str, team_name: str | None = None) -> tuple[int, int]:
+    """
+    Rename a player across squad_players and match_events.
+    Returns (squad_updated_count, events_updated_count).
+    """
+    old_clean = old_name.strip()
+    new_clean = new_name.strip()
+    with transaction() as conn:
+        cursor = conn.cursor()
+        if team_name:
+            t_clean = team_name.strip()
+            cursor.execute(
+                "UPDATE squad_players SET player_name = ? WHERE LOWER(player_name) = LOWER(?) AND LOWER(team_name) = LOWER(?)",
+                (new_clean, old_clean, t_clean)
+            )
+            c1 = cursor.rowcount
+            cursor.execute(
+                "UPDATE match_events SET player_name = ? WHERE LOWER(player_name) = LOWER(?) AND LOWER(team_name) = LOWER(?)",
+                (new_clean, old_clean, t_clean)
+            )
+            c2 = cursor.rowcount
+        else:
+            cursor.execute(
+                "UPDATE squad_players SET player_name = ? WHERE LOWER(player_name) = LOWER(?)",
+                (new_clean, old_clean)
+            )
+            c1 = cursor.rowcount
+            cursor.execute(
+                "UPDATE match_events SET player_name = ? WHERE LOWER(player_name) = LOWER(?)",
+                (new_clean, old_clean)
+            )
+            c2 = cursor.rowcount
+        return (c1, c2)
+
+
+
