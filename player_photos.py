@@ -3,8 +3,8 @@ player_photos.py
 
 Fetches and caches player portrait photos using hybrid free providers:
 1. TheSportsDB API (Cutouts / Transparent PNG)
-2. SofaScore Search API (Fallback)
-3. Default Initials Generator (Safe Fallback)
+2. FotMob Search API (Massive Database)
+3. SofaScore Search API (Tertiary Fallback)
 """
 
 import os
@@ -25,6 +25,7 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     "Accept": "application/json, text/plain, */*",
     "Accept-Language": "en-US,en;q=0.9",
+    "Referer": "https://www.fotmob.com/"
 }
 
 _photos_lock = threading.Lock()
@@ -35,7 +36,7 @@ def _ensure_photos_dir() -> None:
 
 
 def _normalize_name(name: str) -> str:
-    """Убирает акценты/диакритику из имени (Orbelín -> Orbelin)."""
+    """Убирает акценты/диакритику из имени."""
     nfkd_form = unicodedata.normalize('NFKD', name)
     return "".join([c for c in nfkd_form if not unicodedata.combining(c)]).strip()
 
@@ -65,7 +66,7 @@ def get_photo_path(player_name: str, disambiguator: str | None = None) -> str | 
 
 
 def _get_thesportsdb_url(player_name: str) -> str | None:
-    """Источник 1: TheSportsDB (бесплатный ключ '2')"""
+    """Источник 1: TheSportsDB (Идеальные PNG без фона)"""
     clean_name = _normalize_name(player_name)
     encoded = urllib.parse.quote(clean_name)
     url = f"https://www.thesportsdb.com/api/v1/json/3/searchplayers.php?p={encoded}"
@@ -83,8 +84,35 @@ def _get_thesportsdb_url(player_name: str) -> str | None:
     return None
 
 
+def _get_fotmob_url(player_name: str) -> str | None:
+    """Источник 2: FotMob API (Самая большая и надёжная база)"""
+    clean_name = _normalize_name(player_name)
+    encoded = urllib.parse.quote(clean_name)
+    url = f"https://www.fotmob.com/api/searchData?term={encoded}"
+    
+    req = urllib.request.Request(url, headers=HEADERS)
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            players = data.get("player", []) or data.get("players", [])
+            if not players and isinstance(data, dict):
+                for key, val in data.items():
+                    if isinstance(val, list) and len(val) > 0 and isinstance(val[0], dict):
+                        if "id" in val[0] and ("name" in val[0] or "p" in val[0]):
+                            players = val
+                            break
+
+            if players:
+                player_id = players[0].get("id")
+                if player_id:
+                    return f"https://images.fotmob.com/image_resources/playerimages/{player_id}.png"
+    except Exception as e:
+        logger.debug(f"FotMob failed for '{player_name}': {e}")
+    return None
+
+
 def _get_sofascore_url(player_name: str) -> str | None:
-    """Источник 2 (Фоллбэк для редких игроков): SofaScore API"""
+    """Источник 3: SofaScore API (Запасной вариант)"""
     clean_name = _normalize_name(player_name)
     encoded = urllib.parse.quote(clean_name)
     url = f"https://api.sofascore.com/api/v1/search/all?q={encoded}"
@@ -128,10 +156,14 @@ def fetch_and_cache(player_name: str, team: str | None = None) -> str | None:
         return cached
 
     with _photos_lock:
-        # Попытка 1: TheSportsDB
+        # 1. Сначала ищем идеальное фото без фона (TheSportsDB)
         photo_url = _get_thesportsdb_url(player_name)
         
-        # Попытка 2: SofaScore (если TheSportsDB не нашел)
+        # 2. Если нет — ищем в гигантской базе FotMob
+        if not photo_url:
+            photo_url = _get_fotmob_url(player_name)
+            
+        # 3. Если и там нет — пробуем SofaScore
         if not photo_url:
             photo_url = _get_sofascore_url(player_name)
 
