@@ -28,6 +28,9 @@ TEAM_LOGO_MAP = {
     "АЕК": "aek.png"
 }
 
+SCALE = 2  # 2x Supersampling for Retina broadcast sharpness
+
+
 def load_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     """Load Arial or fallback font."""
     font_names = ["arialbd.ttf" if bold else "arial.ttf", "DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf", "seguiemj.ttf"]
@@ -38,13 +41,10 @@ def load_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFo
             continue
     return ImageFont.load_default()
 
-def draw_circle(draw: ImageDraw.ImageDraw, xy: tuple[float, float, float, float], fill: str):
-    """Draw smooth circle."""
-    draw.ellipse(xy, fill=fill)
 
 def generate_league_table_image(standings: list[dict] = None, form_map: dict[int, list[str]] = None) -> io.BytesIO:
     """
-    Generate a high-res graphic image of the league table matching the user's screenshot layout.
+    Generate a 2x supersampled, high-res graphic image of the league table.
     Returns io.BytesIO PNG buffer.
     """
     if standings is None:
@@ -52,95 +52,100 @@ def generate_league_table_image(standings: list[dict] = None, form_map: dict[int
     if form_map is None:
         form_map = database.get_teams_recent_form(limit=5)
 
-    # Dimensions & Layout constants
-    width = 1120
-    row_height = 46
-    header_top = 80
-    table_top = 130
+    # 1x Base Dimensions
+    width_1x = 1120
+    row_height_1x = 48
+    table_top_1x = 130
     num_rows = len(standings) if standings else 16
-    footer_height = 90
-    height = table_top + (num_rows * row_height) + footer_height
+    footer_height_1x = 90
+    height_1x = table_top_1x + (num_rows * row_height_1x) + footer_height_1x
+
+    # 2x Scaled Canvas Dimensions
+    width = width_1x * SCALE
+    height = height_1x * SCALE
+    row_height = row_height_1x * SCALE
+    table_top = table_top_1x * SCALE
 
     # Colors
-    bg_color = (20, 20, 22)       # #141416
-    row_bg_1 = (26, 26, 30)       # #1A1A1E
-    row_bg_2 = (20, 20, 22)       # #141416
-    header_text_color = (156, 163, 175) # #9CA3AF
+    bg_color           = (20, 20, 22)         # #141416
+    row_bg_1           = (26, 26, 30)         # #1A1A1E
+    row_bg_2           = (20, 20, 22)         # #141416
+    header_text_color  = (156, 163, 175)   # #9CA3AF
     primary_text_color = (255, 255, 255)
-    muted_text_color = (209, 213, 219)
-    red_accent_color = (239, 68, 68)
+    muted_text_color   = (209, 213, 219)
+    red_accent_color   = (239, 68, 68)
 
-    # Create image canvas
+    # Canvas
     img = Image.new("RGBA", (width, height), bg_color)
     draw = ImageDraw.Draw(img)
 
-    # Fonts
-    font_title = load_font(22, bold=True)
-    font_subtitle = load_font(14)
-    font_col_header = load_font(13, bold=True)
-    font_row_text = load_font(15, bold=False)
-    font_row_bold = load_font(15, bold=True)
-    font_footer = load_font(13)
+    # 2x Fonts
+    font_title      = load_font(22 * SCALE, bold=True)
+    font_subtitle   = load_font(14 * SCALE)
+    font_col_header = load_font(13 * SCALE, bold=True)
+    font_row_text   = load_font(15 * SCALE, bold=False)
+    font_row_bold   = load_font(15 * SCALE, bold=True)
+    font_footer     = load_font(13 * SCALE)
 
-    # 1. Header: Group 1 / КПЛ 2026 & Standings
-    draw.text((35, 25), "КПЛ 2026", fill=red_accent_color, font=font_title)
-    draw.text((35, 55), "Standings", fill=header_text_color, font=font_subtitle)
+    # Header
+    draw.text((35 * SCALE, 25 * SCALE), "КПЛ 2026", fill=red_accent_color, font=font_title)
+    draw.text((35 * SCALE, 58 * SCALE), "Standings", fill=header_text_color, font=font_subtitle)
 
-    # 2. Columns X offsets
+    # Column X offsets (scaled)
     col_x = {
-        "place": 35,
-        "team": 95,
-        "P": 390,
-        "M": 460,
-        "W": 530,
-        "T": 600,
-        "L": 670,
-        "GF": 740,
-        "GA": 810,
-        "GD": 880,
-        "%": 950,
-        "form": 1020
+        "place": 35 * SCALE,
+        "team": 95 * SCALE,
+        "P": 390 * SCALE,
+        "M": 460 * SCALE,
+        "W": 530 * SCALE,
+        "T": 600 * SCALE,
+        "L": 670 * SCALE,
+        "GF": 740 * SCALE,
+        "GA": 810 * SCALE,
+        "GD": 880 * SCALE,
+        "%": 950 * SCALE,
+        "form": 1020 * SCALE
     }
 
-    # Draw Column Headers
-    y_hdr = table_top - 25
+    # Column Headers
+    y_hdr = table_top - 28 * SCALE
     draw.text((col_x["place"], y_hdr), "Standings", fill=header_text_color, font=font_col_header)
     for col in ["P", "M", "W", "T", "L", "GF", "GA", "GD", "%"]:
         draw.text((col_x[col], y_hdr), col, fill=header_text_color, font=font_col_header, anchor="mm")
-    draw.text((col_x["form"] + 30, y_hdr), "Latest Results", fill=header_text_color, font=font_col_header, anchor="mm")
+    draw.text((col_x["form"] + 30 * SCALE, y_hdr), "Latest Results", fill=header_text_color, font=font_col_header, anchor="mm")
 
     # Separator line
-    draw.line([(30, table_top - 10), (width - 30, table_top - 10)], fill=(45, 45, 52), width=1)
+    draw.line([(30 * SCALE, table_top - 10 * SCALE), (width - 30 * SCALE, table_top - 10 * SCALE)], fill=(45, 45, 52), width=1 * SCALE)
 
-    # 3. Render Rows
+    # Rows
     y_curr = table_top
     for i, s in enumerate(standings, 1):
         bg = row_bg_1 if i % 2 == 1 else row_bg_2
-        draw.rectangle([(30, y_curr), (width - 30, y_curr + row_height - 2)], fill=bg)
+        draw.rectangle([(30 * SCALE, y_curr), (width - 30 * SCALE, y_curr + row_height - 2 * SCALE)], fill=bg)
 
-        y_center = y_curr + (row_height // 2) - 1
+        y_center = y_curr + (row_height // 2)
 
         # Place number
         place_str = str(i)
-        draw.text((col_x["place"] + 10, y_center), place_str, fill=primary_text_color, font=font_row_bold, anchor="mm")
+        draw.text((col_x["place"] + 10 * SCALE, y_center), place_str, fill=primary_text_color, font=font_row_bold, anchor="mm")
 
         # Team Logo with White Circular Container Badge
         team_name = s.get("team_name") or f"Команда {i}"
         logo_filename = TEAM_LOGO_MAP.get(team_name, "default.png")
         logo_path = os.path.join(LOGOS_DIR, logo_filename)
-        
-        badge_diameter = 28
+
+        badge_diameter = 30 * SCALE
         badge_x = col_x["team"]
         badge_y = y_center - (badge_diameter // 2)
-        
-        # 1. Draw crisp white circle background badge
+
+        # White circle background
         draw.ellipse([badge_x, badge_y, badge_x + badge_diameter, badge_y + badge_diameter], fill=(255, 255, 255))
-        
-        # 2. Fit emblem centered inside white circle badge with 2px padding
+
+        # Fit emblem centered
         if os.path.exists(logo_path):
             try:
                 logo_img = Image.open(logo_path).convert("RGBA")
-                inner_size = 22
+                inner_size = 24 * SCALE
                 logo_img = logo_img.resize((inner_size, inner_size), Image.Resampling.LANCZOS)
                 offset_x = badge_x + ((badge_diameter - inner_size) // 2)
                 offset_y = badge_y + ((badge_diameter - inner_size) // 2)
@@ -149,7 +154,7 @@ def generate_league_table_image(standings: list[dict] = None, form_map: dict[int
                 pass
 
         # Team Name
-        draw.text((col_x["team"] + 38, y_center), team_name, fill=primary_text_color, font=font_row_bold, anchor="lm")
+        draw.text((col_x["team"] + 42 * SCALE, y_center), team_name, fill=primary_text_color, font=font_row_bold, anchor="lm")
 
         # Stat Values
         p = s.get("points", 0)
@@ -170,8 +175,7 @@ def generate_league_table_image(standings: list[dict] = None, form_map: dict[int
         draw.text((col_x["L"], y_center), str(l), fill=muted_text_color, font=font_row_text, anchor="mm")
         draw.text((col_x["GF"], y_center), str(gf), fill=muted_text_color, font=font_row_text, anchor="mm")
         draw.text((col_x["GA"], y_center), str(ga), fill=muted_text_color, font=font_row_text, anchor="mm")
-        
-        # GD formatting (+gd or -gd)
+
         gd_str = f"+{gd}" if gd > 0 else str(gd)
         draw.text((col_x["GD"], y_center), gd_str, fill=muted_text_color, font=font_row_text, anchor="mm")
         draw.text((col_x["%"], y_center), rating_str, fill=muted_text_color, font=font_row_text, anchor="mm")
@@ -179,13 +183,12 @@ def generate_league_table_image(standings: list[dict] = None, form_map: dict[int
         # Form Dots (5 dots)
         uid = s.get("telegram_id")
         user_form = form_map.get(uid, []) if uid else []
-        # Pad to 5 dots
         dots = (['E'] * (5 - len(user_form))) + user_form[-5:]
-        
-        dot_radius = 5
+
+        dot_radius = 5 * SCALE
         start_x = col_x["form"]
         for d_idx, res in enumerate(dots):
-            dx = start_x + (d_idx * 15)
+            dx = start_x + (d_idx * 16 * SCALE)
             dy = y_center
             if res == 'W':
                 fill_color = (34, 197, 94)   # Green #22C55E
@@ -193,36 +196,39 @@ def generate_league_table_image(standings: list[dict] = None, form_map: dict[int
                 fill_color = (239, 68, 68)   # Red #EF4444
             elif res == 'D':
                 fill_color = (156, 163, 175) # Gray #9CA3AF
-            else: # 'E' empty
+            else:
                 fill_color = (55, 65, 81)    # Muted dark #374151
-            
+
             draw.ellipse([dx - dot_radius, dy - dot_radius, dx + dot_radius, dy + dot_radius], fill=fill_color)
 
         y_curr += row_height
 
-    # 4. Footer Legend
-    y_footer = y_curr + 25
+    # Footer Legend
+    y_footer = y_curr + 25 * SCALE
     legend_parts = [
         ("P", "Points"), ("M", "Matches"), ("W", "Wins"), ("T", "Ties"),
         ("L", "Losses"), ("GF", "Goals for"), ("GA", "Goals against"),
         ("GD", "Goals difference"), ("%", "Rating")
     ]
-    
-    x_leg = 35
+
+    x_leg = 35 * SCALE
     for code, desc in legend_parts:
         draw.text((x_leg, y_footer), code, fill=primary_text_color, font=font_row_bold)
-        x_leg += draw.textlength(code, font=font_row_bold) + 4
+        x_leg += draw.textlength(code, font=font_row_bold) + 4 * SCALE
         draw.text((x_leg, y_footer), desc, fill=header_text_color, font=font_footer)
-        x_leg += draw.textlength(desc, font=font_footer) + 20
+        x_leg += draw.textlength(desc, font=font_footer) + 20 * SCALE
 
-    # Save to BytesIO PNG
+    # Resample down from 2x scale to 1x scale using LANCZOS
+    resampled_img = img.resize((width_1x, height_1x), Image.Resampling.LANCZOS)
+
     buffer = io.BytesIO()
-    img.save(buffer, format="PNG", quality=95)
+    resampled_img.save(buffer, format="PNG", quality=95)
     buffer.seek(0)
     return buffer
+
 
 if __name__ == "__main__":
     buf = generate_league_table_image()
     with open("test_league_table.png", "wb") as f:
         f.write(buf.getvalue())
-    print("✓ test_league_table.png generated successfully!")
+    print("✓ test_league_table.png generated successfully with 2x supersampling!")
