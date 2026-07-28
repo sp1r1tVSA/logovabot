@@ -1,15 +1,17 @@
 """
 player_photos.py
 
-Fetches and caches player portrait photos using hybrid free providers:
+Fetches and caches player portrait photos using 4 free providers:
 1. TheSportsDB API (Cutouts / Transparent PNG)
 2. FotMob Search API (Massive Database)
-3. SofaScore Search API (Tertiary Fallback)
+3. SofaScore Search API 
+4. Transfermarkt API (Ultimate Fallback)
 """
 
 import os
 import re
 import json
+import time
 import logging
 import threading
 import unicodedata
@@ -22,10 +24,11 @@ BASE_DIR   = os.path.dirname(__file__)
 PHOTOS_DIR = os.path.join(BASE_DIR, "assets", "players")
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     "Accept": "application/json, text/plain, */*",
     "Accept-Language": "en-US,en;q=0.9",
-    "Referer": "https://www.fotmob.com/"
+    "Origin": "https://www.sofascore.com",
+    "Referer": "https://www.sofascore.com/"
 }
 
 _photos_lock = threading.Lock()
@@ -66,11 +69,9 @@ def get_photo_path(player_name: str, disambiguator: str | None = None) -> str | 
 
 
 def _get_thesportsdb_url(player_name: str) -> str | None:
-    """Источник 1: TheSportsDB (Идеальные PNG без фона)"""
     clean_name = _normalize_name(player_name)
     encoded = urllib.parse.quote(clean_name)
     url = f"https://www.thesportsdb.com/api/v1/json/3/searchplayers.php?p={encoded}"
-    
     req = urllib.request.Request(url, headers=HEADERS)
     try:
         with urllib.request.urlopen(req, timeout=5) as resp:
@@ -79,17 +80,15 @@ def _get_thesportsdb_url(player_name: str) -> str | None:
             if players and len(players) > 0:
                 p = players[0]
                 return p.get("strCutout") or p.get("strRender") or p.get("strThumb")
-    except Exception as e:
-        logger.debug(f"TheSportsDB failed for '{player_name}': {e}")
+    except Exception:
+        pass
     return None
 
 
 def _get_fotmob_url(player_name: str) -> str | None:
-    """Источник 2: FotMob API (Самая большая и надёжная база)"""
     clean_name = _normalize_name(player_name)
     encoded = urllib.parse.quote(clean_name)
     url = f"https://www.fotmob.com/api/searchData?term={encoded}"
-    
     req = urllib.request.Request(url, headers=HEADERS)
     try:
         with urllib.request.urlopen(req, timeout=5) as resp:
@@ -106,17 +105,15 @@ def _get_fotmob_url(player_name: str) -> str | None:
                 player_id = players[0].get("id")
                 if player_id:
                     return f"https://images.fotmob.com/image_resources/playerimages/{player_id}.png"
-    except Exception as e:
-        logger.debug(f"FotMob failed for '{player_name}': {e}")
+    except Exception:
+        pass
     return None
 
 
 def _get_sofascore_url(player_name: str) -> str | None:
-    """Источник 3: SofaScore API (Запасной вариант)"""
     clean_name = _normalize_name(player_name)
     encoded = urllib.parse.quote(clean_name)
     url = f"https://api.sofascore.com/api/v1/search/all?q={encoded}"
-    
     req = urllib.request.Request(url, headers=HEADERS)
     try:
         with urllib.request.urlopen(req, timeout=5) as resp:
@@ -127,8 +124,27 @@ def _get_sofascore_url(player_name: str) -> str | None:
                     p_id = res.get("entity", {}).get("id")
                     if p_id:
                         return f"https://api.sofascore.app/api/v1/player/{p_id}/image"
-    except Exception as e:
-        logger.debug(f"SofaScore failed for '{player_name}': {e}")
+    except Exception:
+        pass
+    return None
+
+
+def _get_transfermarkt_url(player_name: str) -> str | None:
+    """Ультимативный фоллбэк: Transfermarkt (имеет 100% базу всех игроков в мире)"""
+    clean_name = _normalize_name(player_name)
+    encoded = urllib.parse.quote(clean_name)
+    url = f"https://www.transfermarkt.com/quickselect/autosuggest?query={encoded}"
+    req = urllib.request.Request(url, headers=HEADERS)
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            for item in data:
+                img = item.get("image", "")
+                if img and "default" not in img.lower():
+                    # Меняем /small/ на /medium/ для лучшего качества
+                    return img.replace("/small/", "/medium/")
+    except Exception:
+        pass
     return None
 
 
@@ -137,13 +153,12 @@ def _download_photo(url: str, dest_path: str) -> bool:
         req = urllib.request.Request(url, headers=HEADERS)
         with urllib.request.urlopen(req, timeout=8) as resp:
             data = resp.read()
-            if len(data) < 500:
+            if len(data) < 500: # Заглушка или битый файл
                 return False
             with open(dest_path, "wb") as f:
                 f.write(data)
             return True
-    except Exception as e:
-        logger.error(f"Failed to download photo from {url}: {e}")
+    except Exception:
         return False
 
 
@@ -156,26 +171,31 @@ def fetch_and_cache(player_name: str, team: str | None = None) -> str | None:
         return cached
 
     with _photos_lock:
-        # 1. Сначала ищем идеальное фото без фона (TheSportsDB)
-        photo_url = _get_thesportsdb_url(player_name)
-        
-        # 2. Если нет — ищем в гигантской базе FotMob
-        if not photo_url:
-            photo_url = _get_fotmob_url(player_name)
-            
-        # 3. Если и там нет — пробуем SofaScore
-        if not photo_url:
-            photo_url = _get_sofascore_url(player_name)
+        # Задержка 0.4 сек защищает от банов Cloudflare (Снимает ошибки 403 Forbidden)
+        time.sleep(0.4)
 
-        if not photo_url:
-            logger.info(f"No photo found for player '{player_name}' in any provider")
-            return None
+        providers = [
+            ("TheSportsDB", _get_thesportsdb_url),
+            ("FotMob", _get_fotmob_url),
+            ("SofaScore", _get_sofascore_url),
+            ("Transfermarkt", _get_transfermarkt_url)
+        ]
 
-        logger.info(f"Downloading photo for '{player_name}' from {photo_url}")
-        if _download_photo(photo_url, cached):
-            return cached
-            
-    return None
+        # Умный цикл: перебирает источники, и если картинка битая (404), идет к следующему
+        for provider_name, get_url_func in providers:
+            try:
+                photo_url = get_url_func(player_name)
+                if photo_url:
+                    if _download_photo(photo_url, cached):
+                        logger.info(f"[{provider_name}] ✅ Downloaded photo for '{player_name}'")
+                        return cached
+                    else:
+                        logger.debug(f"[{provider_name}] ⚠️ Photo URL found but file is missing (404). Trying next provider...")
+            except Exception as e:
+                logger.debug(f"[{provider_name}] ❌ Error for '{player_name}': {e}")
+                
+        logger.info(f"No photo found for player '{player_name}' in any provider")
+        return None
 
 
 def fetch_all_players(players: list[str] | list[tuple[str, str]]) -> dict[str, str | None]:
