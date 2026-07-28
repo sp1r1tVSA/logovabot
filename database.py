@@ -1211,7 +1211,7 @@ def get_unplayed_matches_in_round(round_number: int) -> list[dict]:
             FROM matches m
             LEFT JOIN users u1 ON m.player1_id = u1.telegram_id
             LEFT JOIN users u2 ON m.player2_id = u2.telegram_id
-            WHERE m.round_number = ? AND m.status != 'completed'
+            WHERE m.round_number = ? AND m.status = 'pending'
             ORDER BY m.id ASC
         """, (round_number,))
         return [dict(row) for row in cursor.fetchall()]
