@@ -14,26 +14,40 @@ logger = logging.getLogger(__name__)
 
 async def handle_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Обработчик свободных сообщений. Реагирует, если сообщение начинается со слова "темшик".
+    Обработчик свободных сообщений и голосовых сообщений для ИИ Темшика.
     Подтягивает турнирную таблицу и информацию об игроке в качестве контекста.
     """
-    if not update.message or not update.message.text:
+    if not update.message:
         return
 
-    user_text = update.message.text.strip()
+    is_voice_input = bool(update.message.voice)
+    user_text = update.message.text.strip() if update.message.text else ""
+    audio_input_bytes = None
 
-    # Если сообщение НЕ начинается с "темшик"
-    if not user_text.lower().startswith("темшик"):
-        # Проверяем, похож ли ввод на дату дедлайна (например, "27.07.2026 23:59")
-        # Если да, но сообщение попало сюда, значит FSM-сессия сбросилась при рестарте
-        import re
-        if re.match(r"^\d{2}\.\d{2}\.\d{4}\s+\d{2}:\d{2}$", user_text):
-            await update.message.reply_text(
-                "⚠️ **Сессия ввода прервана из-за перезапуска бота.**\n\n"
-                "Пожалуйста, откройте админ-панель заново и повторите ввод дедлайна.",
-                parse_mode="Markdown"
-            )
-        return
+    if is_voice_input:
+        wants_voice = True
+        try:
+            vfile = await update.message.voice.get_file()
+            audio_input_bytes = bytes(await vfile.download_as_bytearray())
+            user_text = "(Голосовое сообщение)"
+        except Exception as e:
+            logger.error(f"Failed to download user voice message: {e}")
+    else:
+        if not user_text:
+            return
+        # Если текстовое сообщение НЕ начинается с "темшик"
+        if not user_text.lower().startswith("темшик"):
+            import re
+            if re.match(r"^\d{2}\.\d{2}\.\d{4}\s+\d{2}:\d{2}$", user_text):
+                await update.message.reply_text(
+                    "⚠️ **Сессия ввода прервана из-за перезапуска бота.**\n\n"
+                    "Пожалуйста, откройте админ-панель заново и повторите ввод дедлайна.",
+                    parse_mode="Markdown"
+                )
+            return
+
+        voice_keywords = ["голос", "озвучь", "проговори", "аудио", "скажи голосом", "поговори"]
+        wants_voice = any(kw in user_text.lower() for kw in voice_keywords)
 
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
@@ -208,7 +222,15 @@ async def handle_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_history = context.user_data["chat_history"]
 
     # 3. Call AI non-blocking via thread
-    reply_text = await asyncio.to_thread(ai_chat.generate_chat_reply, user_id, user_text, chat_history, context_data)
+    reply_text = await asyncio.to_thread(
+        ai_chat.generate_chat_reply, 
+        user_id, 
+        user_text, 
+        chat_history, 
+        context_data,
+        audio_input_bytes,
+        "audio/ogg"
+    )
 
     # 4. Save to history
     chat_history.append({"role": "user", "text": user_text})

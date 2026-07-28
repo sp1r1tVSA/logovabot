@@ -573,8 +573,8 @@ def register_all_handlers(application: Application) -> None:
     _register_cabinet_handlers(application)
     _register_admin_handlers(application)
 
-    # 3. И ТОЛЬКО В САМОМ КОНЦЕ перехватчик случайного текста для ИИ Темшика!
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_ai_chat))
+    # 3. И ТОЛЬКО В САМОМ КОНЦЕ перехватчик текста и голосовых сообщений для ИИ Темшика!
+    application.add_handler(MessageHandler((filters.TEXT | filters.VOICE) & ~filters.COMMAND, handle_ai_chat))
 
     # Final catch-all for inline button clicks in development
     application.add_handler(CallbackQueryHandler(handle_placeholders, pattern=".*"))

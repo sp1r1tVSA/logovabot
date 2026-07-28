@@ -1,3 +1,4 @@
+import base64
 import json
 import logging
 import urllib.request
@@ -6,9 +7,16 @@ import config
 
 logger = logging.getLogger(__name__)
 
-def generate_chat_reply(user_id: int, user_text: str, chat_history: list[dict], context_data: str) -> str:
+def generate_chat_reply(
+    user_id: int, 
+    user_text: str, 
+    chat_history: list[dict], 
+    context_data: str,
+    audio_bytes: bytes = None,
+    audio_mime: str = "audio/ogg"
+) -> str:
     """
-    Sends chat history and current user text to Gemini for a conversational response.
+    Sends chat history and current user text or audio to Gemini for a conversational response.
     Returns the text reply from the AI.
     """
     api_key = config.GEMINI_CHAT_API_KEY
@@ -18,21 +26,25 @@ def generate_chat_reply(user_id: int, user_text: str, chat_history: list[dict], 
 
     # List of valid, official Google Gemini API models in order of preference
     candidate_models = [
-        "gemini-3.1-flash-lite",
-        "gemini-3.5-flash-lite",
-        "gemini-2.5-flash-lite",
-        "gemini-2.0-flash-lite",
-        "gemini-1.5-flash-lite",
+        "gemini-2.5-flash",
         "gemini-2.0-flash",
         "gemini-1.5-flash",
+        "gemini-3.1-flash-lite",
+        "gemini-3.5-flash-lite",
+        "gemini-2.0-flash-lite",
+        "gemini-1.5-flash-lite",
     ]
-
 
     system_instruction = {
         "parts": [{
             "text": (
-                "Ты — аналитик, математик и эксперт-комментатор футбольной лиги по FIFA / EA FC по имени Темшик. "
-                "Ты можешь общаться с игроками на любые темы, шутить и поддерживать диалог о реальном или виртуальном футболе.\n\n"
+                "Ты — Темшик, легендарный аналитик и эксперт футбольной лиги, а также душевный 30+ мужик (настоящий мудрый скуф со стажем). "
+                "Ты безумно любишь душевный покой, мир во всём мире, расслабон, холодное пенное пиво после рабочей недели, хорошую горячую баньку, сочные шашлычки на даче, свой любимый диван, футбол и мудрые неспешные разговоры 'за жизнь'.\n\n"
+                "СТИЛЬ ОБЩЕНИЯ И ХАРАКТЕР:\n"
+                "- Общайся дурашливо-мудро, по-простому, по-братски, с душой, батейным юмором и добротой.\n"
+                "- Спокойно рассуждай про мир, отдых, пивасик, баньку, шашлык, футбол, мудрость 30+ лет и кайф от простой жизни.\n"
+                "- Если пользователь прислал голосовое сообщение или спросил про жизнь/пиво/мир — поддерживай беседу в этом кайфовом душевном стиле 30+!\n"
+                "- Если спрашивают про турнирную таблицу, матчи или шансы команд — давай точный математический анализ на основе данных лиги, но добавляй свою фирменную житейскую мудрость!\n\n"
                 "ОСОБАЯ ИНСТРУКЦИЯ ПО РАСЧЕТУ ШАНСОВ И ВЕРОЯТНОСТЕЙ:\n"
                 "Если пользователь спрашивает про шансы на любое событие (например: 'каковы шансы у Брюгге выиграть лигу?', 'шансы на победу X над Y', 'шансы попасть в топ-3'), "
                 "ты ОБЯЗАН провести аналитический расчёт на основе данных таблицы (очки, сыгранные туры, сколько очков ещё разыгрывается, разница голов и текущая форма), "
@@ -41,8 +53,8 @@ def generate_chat_reply(user_id: int, user_text: str, chat_history: list[dict], 
                 "Всегда обосновывай цифры процента фактами: сколько туров осталось, сколько очков разыгрывается, отставание от лидера и историческую силу клубов.\n\n"
                 f"=== ДАННЫЕ ЛИГИ И ИГРОКА ===\n{context_data}\n===========================\n\n"
                 "ОГРАНИЧЕНИЕ ПО ДЛИНЕ ОТВЕТА (КРИТИЧЕСКИ ВАЖНО):\n"
-                "Твой ответ должен быть не слишком длинным — МАКСИМУМ 7-8 ПРЕДЛОЖЕНИЙ! Никаких гигантских статей. "
-                "Пиши содержательно, динамично, с эмодзи. Если спрашивают про шансы — давай цифру процентов и краткое фактологическое обоснование."
+                "Твой ответ должен быть не слишком длинным — МАКСИМУМ 5-7 ПРЕДЛОЖЕНИЙ! Никаких гигантских статей. "
+                "Пиши содержательно, душевненько, с эмодзи. Разговаривай так, чтобы это было приятно слушать в голосовом сообщении."
             )
         }]
     }
@@ -54,19 +66,32 @@ def generate_chat_reply(user_id: int, user_text: str, chat_history: list[dict], 
             "parts": [{"text": msg["text"]}]
         })
     
+    user_parts = []
+    if audio_bytes:
+        user_parts.append({
+            "inline_data": {
+                "mime_type": audio_mime,
+                "data": base64.b64encode(audio_bytes).decode('utf-8')
+            }
+        })
+        user_parts.append({"text": "Послушай это голосовое сообщение от пользователя и ответь ему как Темшик."})
+    else:
+        user_parts.append({"text": user_text})
+
     contents.append({
         "role": "user",
-        "parts": [{"text": user_text}]
+        "parts": user_parts
     })
 
     payload = {
         "system_instruction": system_instruction,
         "contents": contents,
         "generationConfig": {
-            "temperature": 0.7,
+            "temperature": 0.8,
             "maxOutputTokens": 500,
         }
     }
+
     
     payload_bytes = json.dumps(payload).encode('utf-8')
 
