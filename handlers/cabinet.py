@@ -1693,27 +1693,34 @@ async def save_report_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     context.user_data["report_photo_id"] = photo_id
     context.user_data.pop("awaiting_report_photo", None)
 
-    hg = context.user_data.get("report_home_goals", 0)
-    ag = context.user_data.get("report_away_goals", 0)
+    h_goals = context.user_data.get("home_goals_count", {})
+    a_goals = context.user_data.get("away_goals_count", {})
+    h_assists = context.user_data.get("home_assists_count", {})
+    a_assists = context.user_data.get("away_assists_count", {})
 
-    goals_dict = context.user_data.get("home_goals_count", {})
-    assists_dict = context.user_data.get("home_assists_count", {})
-
-    goals_summary = ", ".join([f"{p} ({c})" for p, c in goals_dict.items()]) if goals_dict else "Не указано"
-    assists_summary = ", ".join([f"{p} ({c})" for p, c in assists_dict.items()]) if assists_dict else "Нет"
+    h_goals_summary = ", ".join([f"{p} ({c})" for p, c in h_goals.items()]) if h_goals else "Нет"
+    a_goals_summary = ", ".join([f"{p} ({c})" for p, c in a_goals.items()]) if a_goals else "Нет"
+    h_assists_summary = ", ".join([f"{p} ({c})" for p, c in h_assists.items()]) if h_assists else "Нет"
+    a_assists_summary = ", ".join([f"{p} ({c})" for p, c in a_assists.items()]) if a_assists else "Нет"
 
     text = (
-        f"📊 <b>Проверьте данные перед отправкой:</b>\n\n"
+        f"📊 <b>Проверьте данные перед сохранением:</b>\n\n"
         f"🏟 <b>Матч #{match_id}</b>\n"
         f"🏠 <b>{safe_escape(home_team)}</b> {hg} : {ag} <b>{safe_escape(away_team)}</b> ✈️\n\n"
-        f"⚽ <b>Голы ({safe_escape(home_team)}):</b> {safe_escape(goals_summary)}\n"
-        f"🎯 <b>Ассисты ({safe_escape(home_team)}):</b> {safe_escape(assists_summary)}\n\n"
+        f"⚽ <b>Голы ({safe_escape(home_team)}):</b> {safe_escape(h_goals_summary)}\n"
+        f"🎯 <b>Ассисты ({safe_escape(home_team)}):</b> {safe_escape(h_assists_summary)}\n\n"
+        f"⚽ <b>Голы ({safe_escape(away_team)}):</b> {safe_escape(a_goals_summary)}\n"
+        f"🎯 <b>Ассисты ({safe_escape(away_team)}):</b> {safe_escape(a_assists_summary)}\n\n"
         f"📸 <i>Скриншот прикреплен.</i>"
     )
 
+    is_admin_user = is_admin(update.effective_user.id) or context.user_data.get("is_admin_reporting", False)
+    cancel_cb = f"admin_view_match_{match_id}" if is_admin_user else f"cabinet_view_match_{match_id}"
+    confirm_text = "✅ Сохранить и занести результат" if is_admin_user else "✅ Подтвердить и занести результат"
+
     keyboard = [
-        [InlineKeyboardButton("✅ Отправить гостям", callback_data=f"cb_submit_report_to_guest_{match_id}")],
-        [InlineKeyboardButton("❌ Отмена", callback_data=f"cabinet_view_match_{match_id}")]
+        [InlineKeyboardButton(confirm_text, callback_data=f"cb_submit_report_to_guest_{match_id}")],
+        [InlineKeyboardButton("❌ Отмена", callback_data=cancel_cb)]
     ]
     markup = InlineKeyboardMarkup(keyboard)
 
@@ -1968,15 +1975,24 @@ async def submit_report_to_guest(update: Update, context: ContextTypes.DEFAULT_T
     ag = context.user_data.get("report_away_goals", 0)
     photo_id = context.user_data.get("report_photo_id")
 
-    # Build events list for database
-    events = []
-    goals_dict = context.user_data.get("home_goals_count" if is_submitter_home else "away_goals_count", {})
-    assists_dict = context.user_data.get("home_assists_count" if is_submitter_home else "away_assists_count", {})
+    home_team = match['player1_team'] or match['player1_nickname']
+    away_team = match['player2_team'] or match['player2_nickname']
 
-    for p, c in goals_dict.items():
-        events.append((submitter_team, p, "goal", c))
-    for p, c in assists_dict.items():
-        events.append((submitter_team, p, "assist", c))
+    # Build events list for database (collects goals/assists for both teams if present)
+    events = []
+    h_goals = context.user_data.get("home_goals_count", {})
+    a_goals = context.user_data.get("away_goals_count", {})
+    h_assists = context.user_data.get("home_assists_count", {})
+    a_assists = context.user_data.get("away_assists_count", {})
+
+    for p, c in h_goals.items():
+        events.append((home_team, p, "goal", c))
+    for p, c in a_goals.items():
+        events.append((away_team, p, "goal", c))
+    for p, c in h_assists.items():
+        events.append((home_team, p, "assist", c))
+    for p, c in a_assists.items():
+        events.append((away_team, p, "assist", c))
 
     # Instant Match Finalization in DB
     await asyncio.to_thread(database.confirm_and_finalize_match, match_id, hg, ag, events, reporter_id=submitter_id, photo_id=photo_id)
@@ -1991,30 +2007,31 @@ async def submit_report_to_guest(update: Update, context: ContextTypes.DEFAULT_T
         except Exception:
             await context.bot.send_message(chat_id=submitter_id, text=submitter_msg, parse_mode="HTML")
 
-    # 2. Informative notification to Opponent (Recipient) - NO buttons attached
-    home_team = match['player1_team'] or match['player1_nickname']
-    away_team = match['player2_team'] or match['player2_nickname']
+    # 2. Informative notification to players
+    h_summary = ", ".join([f"{p} ({c})" for p, c in h_goals.items()]) if h_goals else "Нет"
+    a_summary = ", ".join([f"{p} ({c})" for p, c in a_goals.items()]) if a_goals else "Нет"
+    h_ast_summary = ", ".join([f"{p} ({c})" for p, c in h_assists.items()]) if h_assists else "Нет"
+    a_ast_summary = ", ".join([f"{p} ({c})" for p, c in a_assists.items()]) if a_assists else "Нет"
 
-    goals_summary = ", ".join([f"{p} ({c})" for p, c in goals_dict.items()]) if goals_dict else "Не указано"
-    assists_summary = ", ".join([f"{p} ({c})" for p, c in assists_dict.items()]) if assists_dict else "Нет"
-
-    recipient_text = (
+    notify_text = (
         f"🔔 <b>Результат матча #{match_id} зафиксирован!</b>\n"
-        f"Участник <b>{html.escape(submitter_team)}</b> внёс результат:\n"
         f"🏠 <b>{html.escape(home_team)}</b> {hg} : {ag} <b>{html.escape(away_team)}</b> ✈️\n\n"
-        f"⚽ <b>Голы ({html.escape(submitter_team)}):</b> {html.escape(goals_summary)}\n"
-        f"🎯 <b>Ассисты ({html.escape(submitter_team)}):</b> {html.escape(assists_summary)}\n\n"
+        f"⚽ <b>Голы ({html.escape(home_team)}):</b> {html.escape(h_summary)}\n"
+        f"🎯 <b>Ассисты ({html.escape(home_team)}):</b> {html.escape(h_ast_summary)}\n\n"
+        f"⚽ <b>Голы ({html.escape(away_team)}):</b> {html.escape(a_summary)}\n"
+        f"🎯 <b>Ассисты ({html.escape(away_team)}):</b> {html.escape(a_ast_summary)}\n\n"
         f"📊 Данные внесены в турнирную таблицу."
     )
 
-    if recipient_id:
+    players_to_notify = [p_id for p_id in (match['player1_id'], match['player2_id']) if p_id and p_id != submitter_id]
+    for p_id in players_to_notify:
         try:
             if photo_id:
-                await context.bot.send_photo(chat_id=recipient_id, photo=photo_id, caption=recipient_text, parse_mode="HTML")
+                await context.bot.send_photo(chat_id=p_id, photo=photo_id, caption=notify_text, parse_mode="HTML")
             else:
-                await context.bot.send_message(chat_id=recipient_id, text=recipient_text, parse_mode="HTML")
+                await context.bot.send_message(chat_id=p_id, text=notify_text, parse_mode="HTML")
         except Exception as e:
-            logger.warning(f"Failed to send match notification to recipient {recipient_id}: {e}")
+            logger.warning(f"Failed to send match notification to player {p_id}: {e}")
 
     # 3. Post to Main Group & Update Standings Graphic
     await notify_match_confirmed(context, match_id)
