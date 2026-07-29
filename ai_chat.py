@@ -26,12 +26,14 @@ def generate_chat_reply(
 
     # List of valid, official Google Gemini API models in order of preference
     candidate_models = [
-        "gemini-2.0-flash",
-        "gemini-2.0-flash-lite",
-        "gemini-flash-latest",
-        "gemini-flash-lite-latest",
         "gemini-3.1-flash-lite",
         "gemini-3.5-flash-lite",
+        "gemini-2.5-flash-lite",
+        "gemini-3.6-flash",
+        "gemini-3.5-flash",
+        "gemini-2.5-flash",
+        "gemini-2.0-flash",
+        "gemini-2.0-flash-lite",
     ]
 
     system_instruction = {
@@ -111,10 +113,8 @@ def generate_chat_reply(
                 return "\n".join(cleaned_lines).strip()
                 
         except urllib.error.HTTPError as e:
-            if e.code == 429:
-                logger.warning(f"AI Chat: Model '{model_name}' rate-limited (429). Trying fallback model...")
-            elif e.code == 404:
-                logger.warning(f"AI Chat: Model '{model_name}' not found (404). Trying fallback model...")
+            if e.code in (400, 404, 429):
+                logger.warning(f"AI Chat: Model '{model_name}' HTTP {e.code} (rate-limit / location / 404). Trying fallback model...")
             else:
                 logger.warning(f"AI Chat: Model '{model_name}' HTTP Error {e.code}: {e}")
             continue
