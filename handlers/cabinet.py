@@ -674,7 +674,7 @@ async def cabinet_view_match(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 "📌 <b>Инструкция по внесению результата:</b>\n"
                 "1. Нажмите кнопку <b>📝 Ввести результат</b>.\n"
                 "2. Выберите <b>⚡ Автоматический ввод (по фото)</b>.\n"
-                "3. Отправьте боту 1 или 2 скриншота статистики из игры.\n"
+                "3. Отправьте боту от 1 до 3 скриншотов статистики из игры.\n"
                 "4. ИИ автоматически распознает счёт, авторов голов и ассистов.\n"
                 "5. Проверьте данные и нажмите <b>✅ Всё верно</b> — результат сразу автоматически подтверждается и заносится в турнирную таблицу лиги!"
             )
@@ -1261,8 +1261,8 @@ async def cb_report_choice_auto(update: Update, context: ContextTypes.DEFAULT_TY
 
     text = (
         "📸 <b>Автоматический ввод по фото</b>\n\n"
-        "Пожалуйста, отправьте <b>1 или 2 скриншота</b> матча строго с статистикой(голы и ассисты).\n\n"
-        "💡 <i>Вы можете отправить 1 фото или сразу 2 фото альбомом.</i>"
+        "Пожалуйста, отправьте <b>от 1 до 3 скриншотов</b> матча строго с статистикой(голы и ассисты).\n\n"
+        "💡 <i>Вы можете отправить от 1 до 3 фото сразу альбомом.</i>"
     )
     keyboard = [[InlineKeyboardButton("❌ Отмена", callback_data=f"cabinet_view_match_{match_id}")]]
     await safe_edit_or_reply(query, context, text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
@@ -1571,12 +1571,15 @@ async def save_report_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     media_group_id = update.message.media_group_id
     if media_group_id:
         processed_groups = context.user_data.setdefault("processed_media_groups", set())
+        photos_list = context.user_data.get("ai_photos_list", [])
+        if photo_id not in photos_list:
+            photos_list.append(photo_id)
+        context.user_data["ai_photos_list"] = photos_list
+
         if media_group_id in processed_groups:
-            photos_list = context.user_data.get("ai_photos_list", [])
-            if photo_id not in photos_list:
-                photos_list.append(photo_id)
             return REPORT_SCORE_PHOTO
         processed_groups.add(media_group_id)
+        await asyncio.sleep(0.6)
 
     match_id = context.user_data.get("reporting_match_id")
     match = await asyncio.to_thread(database.get_match, match_id) if match_id else None
@@ -1597,7 +1600,7 @@ async def save_report_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             status_msg = await update.message.reply_text("🤖 <i>ИИ распознаёт результат со скриншота(ов)...</i>", parse_mode="HTML")
 
             downloaded_bytes = []
-            for p_id in photos_list[:2]:
+            for p_id in photos_list[:3]:
                 f_obj = await context.bot.get_file(p_id)
                 img_b = await f_obj.download_as_bytearray()
                 downloaded_bytes.append(bytes(img_b))
@@ -2349,7 +2352,7 @@ async def handle_dispute_score(update: Update, context: ContextTypes.DEFAULT_TYP
 
     text = (
         f"⚠️ **Оспаривание результата матча #{match_id}**\n\n"
-        f"Пожалуйста, отправьте **от 1 до 2 скриншотов** со статистикой вашего матча.\n"
+        f"Пожалуйста, отправьте **от 1 до 3 скриншотов** со статистикой вашего матча.\n"
         f"После отправки фото нажмите кнопку **«✅ Завершить отправку»**."
     )
     keyboard = [[InlineKeyboardButton("✅ Завершить отправку (0 фото)", callback_data="cb_finish_dispute_photos")]]
@@ -2370,8 +2373,8 @@ async def save_guest_dispute_photo(update: Update, context: ContextTypes.DEFAULT
         return GUEST_DISPUTE_PHOTOS
 
     photos = context.user_data.get("dispute_photos", [])
-    if len(photos) >= 2:
-        await update.message.reply_text("⚠️ Вы уже прикрепили максимально допустимое количество фото (2 шт). Нажмите «✅ Завершить отправку».")
+    if len(photos) >= 3:
+        await update.message.reply_text("⚠️ Вы уже прикрепили максимально допустимое количество фото (3 шт). Нажмите «✅ Завершить отправку».")
         return GUEST_DISPUTE_PHOTOS
 
     photo_id = update.message.photo[-1].file_id
@@ -2382,7 +2385,7 @@ async def save_guest_dispute_photo(update: Update, context: ContextTypes.DEFAULT
     markup = InlineKeyboardMarkup(keyboard)
 
     await update.message.reply_text(
-        f"✅ Фото #{len(photos)} получено! Можете отправить еще одно фото или завершить отправку.",
+        f"✅ Фото #{len(photos)} получено! Можете отправить еще фото (до 3) или завершить отправку.",
         reply_markup=markup
     )
     return GUEST_DISPUTE_PHOTOS
