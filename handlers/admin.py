@@ -6,7 +6,7 @@ from telegram.ext import ContextTypes, ConversationHandler
 import html
 import database
 from handlers.base import is_admin, admin_only, post_league_table_to_reports
-from handlers.cabinet import notify_match_confirmed, safe_send_notification
+from handlers.cabinet import notify_match_confirmed, safe_send_notification, cb_report_choice_manual
 import config
 from config import CLUBS
 
@@ -885,7 +885,7 @@ async def admin_view_match(update: Update, context: ContextTypes.DEFAULT_TYPE, m
     keyboard = [
         [InlineKeyboardButton("📜 Правила турнира", url="https://t.me/fifulatyrniru/3405")],
         [InlineKeyboardButton("⚡ Внести результат по фото (ИИ)", callback_data=f"admin_report_score_auto_{match_id}")],
-        [InlineKeyboardButton("✏️ Установить счет вручную", callback_data=f"admin_set_score_start_{match_id}")],
+        [InlineKeyboardButton("✍️ Внести результат вручную", callback_data=f"cb_report_choice_manual_{match_id}")],
         [InlineKeyboardButton("🚫 ТП 3:0 (Хозяева)", callback_data=f"admin_tp_home_{match_id}"), InlineKeyboardButton("🚫 ТП 0:3 (Гости)", callback_data=f"admin_tp_away_{match_id}")],
         [InlineKeyboardButton("🤝 ТН 0:0 (Ничья)", callback_data=f"admin_tp_draw_{match_id}"), InlineKeyboardButton("🔄 Сбросить результат", callback_data=f"admin_reset_match_execute_{match_id}")],
         [InlineKeyboardButton("« Назад к туру", callback_data=f"admin_round_matches_{match['round_number']}")]
@@ -1323,49 +1323,18 @@ async def admin_receive_schedule_input(update: Update, context: ContextTypes.DEF
     return ConversationHandler.END
 
 @admin_only
-@admin_only
 async def admin_set_score_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Start manual match score override flow."""
+    """Redirect admin to full interactive manual match result entry (score + goal scorers + assists)."""
     query = update.callback_query
     if not query or not is_admin(query.from_user.id):
         return ConversationHandler.END
     await query.answer()
     
     match_id = int(query.data.replace("admin_set_score_start_", ""))
-    match = await asyncio.to_thread(database.get_match, match_id)
-    
-    if not match:
-        await context.bot.send_message(chat_id=query.from_user.id, text="❌ Матч не найден.")
-        return ConversationHandler.END
-        
-    context.user_data["admin_set_match_id"] = match_id
-    
-    text = (
-        f"✏️ **Ввод счета матча #{match_id}**\n\n"
-        f"⚔️ {match['player1_nickname']} vs {match['player2_nickname']}\n\n"
-        f"Введите итоговый результат в формате `хозяева:гости` (например, `3:1`):"
-    )
-    keyboard = [[InlineKeyboardButton("❌ Отмена", callback_data=f"admin_view_match_{match_id}")]]
-    markup = InlineKeyboardMarkup(keyboard)
-
-    # Безопасное удаление сообщения с фото, если вызов пришел из карточки ИИ
-    if query.message and (query.message.photo or query.message.caption or query.message.document):
-        try:
-            await query.message.delete()
-        except Exception:
-            pass
-        await context.bot.send_message(chat_id=query.from_user.id, text=text, parse_mode="Markdown", reply_markup=markup)
-    else:
-        try:
-            await query.edit_message_text(text, reply_markup=markup, parse_mode="Markdown")
-        except Exception:
-            try:
-                await query.message.delete()
-            except Exception:
-                pass
-            await context.bot.send_message(chat_id=query.from_user.id, text=text, parse_mode="Markdown", reply_markup=markup)
-
-    return ADMIN_EXPECT_MATCH_SCORE
+    context.user_data["is_admin_reporting"] = True
+    query.data = f"cb_report_choice_manual_{match_id}"
+    await cb_report_choice_manual(update, context)
+    return ConversationHandler.END
 
 @admin_only
 async def admin_set_score_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
