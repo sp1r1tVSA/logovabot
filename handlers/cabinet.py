@@ -1373,19 +1373,56 @@ async def cb_report_away_goals(update: Update, context: ContextTypes.DEFAULT_TYP
     hg = context.user_data.get("report_home_goals", 0)
     home_team = context.user_data.get("report_home_team")
 
-    # If home goals > 0, pick goalscorers for home team
+    # Clear previous selections
+    context.user_data["home_goals_count"] = {}
+    context.user_data["home_assists_count"] = {}
+    context.user_data["away_goals_count"] = {}
+    context.user_data["away_assists_count"] = {}
+
     if hg > 0:
+        context.user_data["current_picking_phase"] = "home_goals"
         context.user_data["goals_to_pick"] = hg
-        context.user_data["home_goals_count"] = {}
         await render_squad_goals_picker(update, context, home_team)
     else:
-        # Move directly to assists
-        await start_assists_picker(update, context, home_team)
+        await start_home_assists_picker(update, context)
+
+async def start_home_assists_picker(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    hg = context.user_data.get("report_home_goals", 0)
+    home_team = context.user_data.get("report_home_team")
+    if hg > 0:
+        context.user_data["current_picking_phase"] = "home_assists"
+        context.user_data["assists_to_pick"] = hg
+        await render_squad_assists_picker(update, context, home_team)
+    else:
+        await start_away_goals_picker(update, context)
+
+async def start_away_goals_picker(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    ag = context.user_data.get("report_away_goals", 0)
+    away_team = context.user_data.get("report_away_team")
+    if ag > 0:
+        context.user_data["current_picking_phase"] = "away_goals"
+        context.user_data["goals_to_pick"] = ag
+        await render_squad_goals_picker(update, context, away_team)
+    else:
+        await start_away_assists_picker(update, context)
+
+async def start_away_assists_picker(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    ag = context.user_data.get("report_away_goals", 0)
+    away_team = context.user_data.get("report_away_team")
+    if ag > 0:
+        context.user_data["current_picking_phase"] = "away_assists"
+        context.user_data["assists_to_pick"] = ag
+        await render_squad_assists_picker(update, context, away_team)
+    else:
+        await prompt_photo_upload(update, context)
 
 async def render_squad_goals_picker(update: Update, context: ContextTypes.DEFAULT_TYPE, team_name: str) -> None:
     query = update.callback_query
+    phase = context.user_data.get("current_picking_phase", "home_goals")
     left = context.user_data.get("goals_to_pick", 0)
-    picked_dict = context.user_data.get("home_goals_count", {})
+
+    dict_key = "home_goals_count" if "home" in phase else "away_goals_count"
+    picked_dict = context.user_data.get(dict_key, {})
 
     squad = await asyncio.to_thread(database.get_squad, team_name)
 
@@ -1394,15 +1431,15 @@ async def render_squad_goals_picker(update: Update, context: ContextTypes.DEFAUL
         summary_str = "\n\n⚽ **Уже выбрано:**\n" + "\n".join([f"• {p}: {c}" for p, c in picked_dict.items()])
 
     text = (
-        f"⚽ **Авторы голов вашей команды ({html.escape(team_name)})**\n"
-        f"Осталось распределить голов: **{left}**{summary_str}\n\n"
-        f"Нажимайте на кнопки с игроками вашего состава:"
+        f"⚽ <b>Авторы голов команды ({html.escape(team_name)})</b>\n"
+        f"Осталось распределить голов: <b>{left}</b>{summary_str}\n\n"
+        f"Нажимайте на кнопки с игроками состава:"
     )
 
     keyboard = []
-    context.user_data["temp_home_squad_goals"] = squad
+    context.user_data["temp_active_squad_goals"] = squad
     if not squad:
-        text += "\n\n⚠️ *Состав вашей команды пока не добавлен в систему.*"
+        text += "\n\n⚠️ <i>Состав команды пока не добавлен в систему.</i>"
         keyboard.append([InlineKeyboardButton("⏩ Пропустить ввод авторов голов", callback_data="cb_skip_goals")])
     else:
         row = []
@@ -1431,22 +1468,27 @@ async def cb_pick_goal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await query.answer()
 
     idx = int(query.data.replace("cb_pick_goal_idx_", ""))
-    squad = context.user_data.get("temp_home_squad_goals", [])
+    squad = context.user_data.get("temp_active_squad_goals", [])
     player = squad[idx] if idx < len(squad) else "Unknown"
-    left = context.user_data.get("goals_to_pick", 0)
-    dict_goals = context.user_data.get("home_goals_count", {})
+
+    phase = context.user_data.get("current_picking_phase", "home_goals")
+    dict_key = "home_goals_count" if "home" in phase else "away_goals_count"
+    dict_goals = context.user_data.get(dict_key, {})
 
     dict_goals[player] = dict_goals.get(player, 0) + 1
-    left -= 1
+    left = context.user_data.get("goals_to_pick", 0) - 1
     context.user_data["goals_to_pick"] = left
-    context.user_data["home_goals_count"] = dict_goals
+    context.user_data[dict_key] = dict_goals
 
-    home_team = context.user_data.get("report_home_team")
+    team_name = context.user_data.get("report_home_team") if "home" in phase else context.user_data.get("report_away_team")
+
     if left > 0:
-        await render_squad_goals_picker(update, context, home_team)
+        await render_squad_goals_picker(update, context, team_name)
     else:
-        # Done with goals -> Move to assists
-        await start_assists_picker(update, context, home_team)
+        if phase == "home_goals":
+            await start_home_assists_picker(update, context)
+        else:
+            await start_away_assists_picker(update, context)
 
 async def cb_skip_goals(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
@@ -1454,19 +1496,22 @@ async def cb_skip_goals(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
     await query.answer()
 
-    home_team = context.user_data.get("report_home_team")
-    await start_assists_picker(update, context, home_team)
-
-async def start_assists_picker(update: Update, context: ContextTypes.DEFAULT_TYPE, team_name: str) -> None:
-    hg = context.user_data.get("report_home_goals", 0)
-    context.user_data["assists_to_pick"] = hg
-    context.user_data["home_assists_count"] = {}
-    await render_squad_assists_picker(update, context, team_name)
+    phase = context.user_data.get("current_picking_phase", "home_goals")
+    if phase == "home_goals":
+        await start_home_assists_picker(update, context)
+    else:
+        await start_away_assists_picker(update, context)
 
 async def render_squad_assists_picker(update: Update, context: ContextTypes.DEFAULT_TYPE, team_name: str) -> None:
     query = update.callback_query
+    phase = context.user_data.get("current_picking_phase", "home_assists")
     left = context.user_data.get("assists_to_pick", 0)
-    picked_dict = context.user_data.get("home_assists_count", {})
+
+    dict_key = "home_assists_count" if "home" in phase else "away_assists_count"
+    goals_key = "report_home_goals" if "home" in phase else "report_away_goals"
+    max_assists = context.user_data.get(goals_key, 0)
+
+    picked_dict = context.user_data.get(dict_key, {})
 
     squad = await asyncio.to_thread(database.get_squad, team_name)
 
@@ -1475,13 +1520,13 @@ async def render_squad_assists_picker(update: Update, context: ContextTypes.DEFA
         summary_str = "\n\n🎯 **Уже выбрано:**\n" + "\n".join([f"• {p}: {c}" for p, c in picked_dict.items()])
 
     text = (
-        f"🎯 **Авторы ассистов вашей команды ({html.escape(team_name)})**\n"
-        f"Осталось ассистов (макс {context.user_data.get('report_home_goals', 0)}): **{left}**{summary_str}\n\n"
-        f"Нажимайте на кнопки с игроками или пропустите:"
+        f"🎯 <b>Авторы ассистов команды ({html.escape(team_name)})</b>\n"
+        f"Осталось ассистов (макс {max_assists}): <b>{left}</b>{summary_str}\n\n"
+        f"Нажимайте на кнопки с игроками состава или пропустите:"
     )
 
     keyboard = []
-    context.user_data["temp_home_squad_assists"] = squad
+    context.user_data["temp_active_squad_assists"] = squad
     if squad and left > 0:
         row = []
         for idx, player in enumerate(squad):
@@ -1509,21 +1554,27 @@ async def cb_pick_assist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await query.answer()
 
     idx = int(query.data.replace("cb_pick_assist_idx_", ""))
-    squad = context.user_data.get("temp_home_squad_assists", [])
+    squad = context.user_data.get("temp_active_squad_assists", [])
     player = squad[idx] if idx < len(squad) else "Unknown"
-    left = context.user_data.get("assists_to_pick", 0)
-    dict_assists = context.user_data.get("home_assists_count", {})
+
+    phase = context.user_data.get("current_picking_phase", "home_assists")
+    dict_key = "home_assists_count" if "home" in phase else "away_assists_count"
+    dict_assists = context.user_data.get(dict_key, {})
 
     dict_assists[player] = dict_assists.get(player, 0) + 1
-    left -= 1
+    left = context.user_data.get("assists_to_pick", 0) - 1
     context.user_data["assists_to_pick"] = left
-    context.user_data["home_assists_count"] = dict_assists
+    context.user_data[dict_key] = dict_assists
 
-    home_team = context.user_data.get("report_home_team")
+    team_name = context.user_data.get("report_home_team") if "home" in phase else context.user_data.get("report_away_team")
+
     if left > 0:
-        await render_squad_assists_picker(update, context, home_team)
+        await render_squad_assists_picker(update, context, team_name)
     else:
-        await prompt_photo_upload(update, context)
+        if phase == "home_assists":
+            await start_away_goals_picker(update, context)
+        else:
+            await prompt_photo_upload(update, context)
 
 async def cb_skip_assists(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
@@ -1531,7 +1582,11 @@ async def cb_skip_assists(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
     await query.answer()
 
-    await prompt_photo_upload(update, context)
+    phase = context.user_data.get("current_picking_phase", "home_assists")
+    if phase == "home_assists":
+        await start_away_goals_picker(update, context)
+    else:
+        await prompt_photo_upload(update, context)
 
 async def prompt_photo_upload(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
