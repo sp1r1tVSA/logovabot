@@ -1542,7 +1542,7 @@ async def prompt_photo_upload(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     text = (
         "📸 **Прикрепление скриншота результата**\n\n"
-        "Пожалуйста, отправьте **1 скриншот/фотография** результата сыгранной игры."
+        "Пожалуйста, отправьте **от 1 до 3 скриншотов** результата сыгранной игры."
     )
     keyboard = [[InlineKeyboardButton("❌ Отмена", callback_data=cancel_cb)]]
     markup = InlineKeyboardMarkup(keyboard)
@@ -1706,15 +1706,18 @@ async def save_report_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     h_assists_summary = ", ".join([f"{p} ({c})" for p, c in h_assists.items()]) if h_assists else "Нет"
     a_assists_summary = ", ".join([f"{p} ({c})" for p, c in a_assists.items()]) if a_assists else "Нет"
 
+    h_score = context.user_data.get("report_home_goals", 0)
+    a_score = context.user_data.get("report_away_goals", 0)
+
     text = (
         f"📊 <b>Проверьте данные перед сохранением:</b>\n\n"
         f"🏟 <b>Матч #{match_id}</b>\n"
-        f"🏠 <b>{safe_escape(home_team)}</b> {hg} : {ag} <b>{safe_escape(away_team)}</b> ✈️\n\n"
+        f"🏠 <b>{safe_escape(home_team)}</b> {h_score} : {a_score} <b>{safe_escape(away_team)}</b> ✈️\n\n"
         f"⚽ <b>Голы ({safe_escape(home_team)}):</b> {safe_escape(h_goals_summary)}\n"
         f"🎯 <b>Ассисты ({safe_escape(home_team)}):</b> {safe_escape(h_assists_summary)}\n\n"
         f"⚽ <b>Голы ({safe_escape(away_team)}):</b> {safe_escape(a_goals_summary)}\n"
         f"🎯 <b>Ассисты ({safe_escape(away_team)}):</b> {safe_escape(a_assists_summary)}\n\n"
-        f"📸 <i>Скриншот прикреплен.</i>"
+        f"📸 <i>Скриншот(ы) прикреплены.</i>"
     )
 
     is_admin_user = is_admin(update.effective_user.id) or context.user_data.get("is_admin_reporting", False)
