@@ -648,7 +648,10 @@ async def cb_refresh_league_table_topic(update: Update, context: ContextTypes.DE
             reply_markup=markup
         )
     except Exception as e:
-        logger.exception("Failed to refresh graphic table")
+        if "Message is not modified" in str(e):
+            await query.answer("✅ Данные таблицы уже актуальны!", show_alert=True)
+        else:
+            logger.exception("Failed to refresh graphic table")
 
 async def show_support(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query

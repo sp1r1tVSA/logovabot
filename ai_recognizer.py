@@ -10,14 +10,11 @@ import config
 logger = logging.getLogger(__name__)
 
 GEMINI_MODELS = [
-    "gemini-3.1-flash-lite",
-    "gemini-3.5-flash-lite",
-    "gemini-2.5-flash-lite",
-    "gemini-3.6-flash",
-    "gemini-3.5-flash",
-    "gemini-2.5-flash",
     "gemini-2.0-flash",
     "gemini-2.0-flash-lite",
+    "gemini-1.5-flash",
+    "gemini-1.5-flash-8b",
+    "gemini-1.5-pro",
 ]
 
 PROMPT_TEXT = """
@@ -169,6 +166,9 @@ def recognize_match_screenshots_bytes(images_bytes_list: list[bytes], mime_type:
             error_body = e.read().decode("utf-8", errors="ignore")
             if e.code in (400, 404, 429):
                 logger.warning(f"Gemini model '{m_name}' HTTP {e.code} (rate-limit / location / 404). Trying next fallback model...")
+                if e.code == 429:
+                    import time
+                    time.sleep(1.0)
             else:
                 logger.error(f"Gemini model '{m_name}' HTTP Error {e.code}: {error_body}")
             continue
