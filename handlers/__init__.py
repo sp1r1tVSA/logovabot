@@ -184,6 +184,8 @@ from handlers.admin import (
     admin_manage_cup,
     admin_init_cup_execute,
     admin_remind_cup_execute,
+    admin_broadcast_menu,
+    admin_broadcast_all_debts_execute,
 )
 
 logger = logging.getLogger(__name__)
@@ -572,9 +574,10 @@ def _register_admin_handlers(app: Application) -> None:
     app.add_handler(CallbackQueryHandler(admin_manage_cup, pattern="^admin_cup_stage_.*$"))
     app.add_handler(CallbackQueryHandler(admin_init_cup_execute, pattern="^admin_init_cup_execute$"))
     app.add_handler(CallbackQueryHandler(admin_remind_cup_execute, pattern="^admin_remind_cup_.*$"))
+    app.add_handler(CallbackQueryHandler(admin_broadcast_menu, pattern="^admin_broadcast_menu$"))
+    app.add_handler(CallbackQueryHandler(admin_broadcast_all_debts_execute, pattern="^admin_broadcast_all_debts_execute$"))
     app.add_handler(CallbackQueryHandler(admin_fetch_photos, pattern="^admin_fetch_photos_cb$"))
     app.add_handler(CallbackQueryHandler(admin_stub, pattern="^admin_matches_stub$"))
-    app.add_handler(CallbackQueryHandler(admin_broadcast_stub_handler if 'admin_broadcast_stub_handler' in locals() else admin_stub, pattern="^admin_broadcast_stub$"))
 
 def register_all_handlers(application: Application) -> None:
     """Register all command, message, and callback handlers to the application."""

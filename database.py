@@ -1683,8 +1683,45 @@ def _check_and_advance_stage(conn, current_stage: str) -> str | None:
                 INSERT INTO matches (round_number, player1_id, player2_id, player1_team, player2_team, status, tournament_type, cup_stage, cup_series_id, game_num_in_series)
                 VALUES (0, ?, ?, ?, ?, 'pending', 'cup', ?, ?, 1)
             """, (p1_id, p2_id, w1, w2, next_stage, s_id))
-            
-    return next_stage
+def get_all_unplayed_league_matches() -> list[dict]:
+    """Retrieve all pending matches across open league rounds."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT 
+                m.id, m.round_number, m.player1_id, m.player2_id,
+                m.player1_team, m.player2_team,
+                u1.username AS p1_username, u1.team_name AS p1_team,
+                u2.username AS p2_username, u2.team_name AS p2_team
+            FROM matches m
+            JOIN rounds r ON m.round_number = r.round_number
+            LEFT JOIN users u1 ON m.player1_id = u1.telegram_id
+            LEFT JOIN users u2 ON m.player2_id = u2.telegram_id
+            WHERE r.is_open = 1 
+              AND (m.tournament_type IS NULL OR m.tournament_type = 'league')
+              AND m.status = 'pending'
+            ORDER BY m.round_number ASC, m.id ASC
+        """)
+        return [dict(row) for row in cursor.fetchall()]
+
+def get_all_unplayed_cup_matches() -> list[dict]:
+    """Retrieve all pending matches across active cup series."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT 
+                m.id, m.cup_stage, m.cup_series_id, m.game_num_in_series,
+                m.player1_id, m.player2_id, m.player1_team, m.player2_team,
+                s.team1_name, s.team2_name, s.team1_wins, s.team2_wins,
+                u1.username AS p1_username, u2.username AS p2_username
+            FROM matches m
+            JOIN cup_series s ON m.cup_series_id = s.id
+            LEFT JOIN users u1 ON m.player1_id = u1.telegram_id
+            LEFT JOIN users u2 ON m.player2_id = u2.telegram_id
+            WHERE m.tournament_type = 'cup' AND m.status = 'pending' AND s.status = 'active'
+            ORDER BY s.series_num ASC, m.game_num_in_series ASC
+        """)
+        return [dict(row) for row in cursor.fetchall()]
 
 
 
