@@ -337,6 +337,67 @@ async def admin_init_cup_execute(update: Update, context: ContextTypes.DEFAULT_T
 
     await admin_manage_cup(update, context)
 
+@admin_only
+async def admin_test_ai(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Run interactive diagnostic check for WARP proxy and Gemini AI models."""
+    msg = update.message or (update.callback_query.message if update.callback_query else None)
+    if not msg:
+        return
+
+    status_msg = await msg.reply_text("🔄 **Запуск диагностики связи с WARP и Gemini AI...**", parse_mode="Markdown")
+
+    import socket
+    import urllib.request
+    from ai_recognizer import GEMINI_MODELS, _check_proxy_alive
+    import config
+
+    warp_alive = _check_proxy_alive("http://127.0.0.1:4001")
+    warp_status_str = "✅ **Доступен (127.0.0.1:4001)**" if warp_alive else "❌ **Не прослушивается (прямой режим)**"
+
+    lines = [
+        "🤖 **РЕЗУЛЬТАТЫ ДИАГНОСТИКИ AI & WARP**\n",
+        f"📡 **WARP Proxy Status:** {warp_status_str}\n",
+        "🧪 **Статус моделей Gemini:**"
+    ]
+
+    target_api_key = (getattr(config, "GEMINI_API_KEY", "") or "").strip()
+    if not target_api_key:
+        lines.append("❌ `GEMINI_API_KEY не установлен в config.py!`")
+        await status_msg.edit_text("\n".join(lines), parse_mode="Markdown")
+        return
+
+    proxy_url = "http://127.0.0.1:4001" if warp_alive else None
+
+    for m_name in GEMINI_MODELS:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{m_name}:generateContent?key={target_api_key}"
+        payload = {"contents": [{"parts": [{"text": "Reply OK"}]}]}
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"}
+        )
+
+        if proxy_url:
+            handler = urllib.request.ProxyHandler({"http": proxy_url, "https": proxy_url})
+            opener = urllib.request.build_opener(handler)
+        else:
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+        try:
+            with opener.open(req, timeout=8) as res:
+                res_data = json.loads(res.read().decode("utf-8"))
+                if res_data.get("candidates"):
+                    lines.append(f"• `{m_name}`: ✅ 200 OK")
+                else:
+                    lines.append(f"• `{m_name}`: ⚠️ Нет ответа")
+        except urllib.error.HTTPError as e:
+            err_text = e.read().decode("utf-8", errors="ignore")[:60].replace("\n", " ")
+            lines.append(f"• `{m_name}`: ❌ HTTP {e.code} ({err_text})")
+        except Exception as e:
+            lines.append(f"• `{m_name}`: ❌ {e}")
+
+    await status_msg.edit_text("\n".join(lines), parse_mode="Markdown")
+
 # --- Broadcast Handlers (Debt Notifications) ---
 
 @admin_only

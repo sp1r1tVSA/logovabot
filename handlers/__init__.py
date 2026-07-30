@@ -186,6 +186,7 @@ from handlers.admin import (
     admin_remind_cup_execute,
     admin_broadcast_menu,
     admin_broadcast_all_debts_execute,
+    admin_test_ai,
 )
 
 logger = logging.getLogger(__name__)
@@ -574,6 +575,7 @@ def _register_admin_handlers(app: Application) -> None:
     app.add_handler(CallbackQueryHandler(admin_manage_cup, pattern="^admin_cup_stage_.*$"))
     app.add_handler(CallbackQueryHandler(admin_init_cup_execute, pattern="^admin_init_cup_execute$"))
     app.add_handler(CallbackQueryHandler(admin_remind_cup_execute, pattern="^admin_remind_cup_.*$"))
+    app.add_handler(CommandHandler("test_ai", admin_test_ai))
     app.add_handler(CallbackQueryHandler(admin_broadcast_menu, pattern="^admin_broadcast_menu$"))
     app.add_handler(CallbackQueryHandler(admin_broadcast_all_debts_execute, pattern="^admin_broadcast_all_debts_execute$"))
     app.add_handler(CallbackQueryHandler(admin_fetch_photos, pattern="^admin_fetch_photos_cb$"))
