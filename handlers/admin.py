@@ -73,6 +73,7 @@ async def show_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         [InlineKeyboardButton("👥 Управление игроками", callback_data="admin_manage_players")],
         [InlineKeyboardButton("📋 Составы команд", callback_data="admin_manage_squads")],
         [InlineKeyboardButton("⚔️ Управление матчами", callback_data="admin_manage_matches_info")],
+        [InlineKeyboardButton("🏆 Управление Кубком КПЛ", callback_data="admin_manage_cup")],
         [InlineKeyboardButton("📢 Рассылка", callback_data="admin_broadcast_stub")],
         [InlineKeyboardButton("« Назад в меню", callback_data="main_menu")]
     ]
@@ -118,6 +119,81 @@ async def admin_list_players(update: Update, context: ContextTypes.DEFAULT_TYPE)
         lines.append(f"{i}. {username_str}{team_str} `ID: {p['telegram_id']}`")
 
     await query.edit_message_text("\n".join(lines), parse_mode="Markdown", reply_markup=markup)
+
+# --- KPL Cup Admin Management ---
+
+@admin_only
+async def admin_manage_cup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query or not is_admin(query.from_user.id):
+        return
+    await query.answer()
+
+    stage = "1/8"
+    if query.data.startswith("admin_cup_stage_"):
+        stage = query.data.replace("admin_cup_stage_", "")
+
+    series_list = await asyncio.to_thread(database.get_cup_series_list, stage)
+
+    text = f"🏆 <b>Админ-панель: Управление Кубком КПЛ ({stage})</b>\n\n"
+
+    if not series_list:
+        text += "⚠️ Сетка Кубка для этой стадии еще не инициализирована.\n\nНажмите кнопку ниже, чтобы сформировать 8 серий 1/8 финала по утвержденным парам."
+        keyboard = [
+            [InlineKeyboardButton("🚀 Запустить 1/8 Финала Кубка (8 серий)", callback_data="admin_init_cup_execute")],
+            [InlineKeyboardButton("« Назад в админку", callback_data="admin_main_menu")]
+        ]
+    else:
+        for s in series_list:
+            t1 = html.escape(s['team1_name'])
+            t2 = html.escape(s['team2_name'])
+            w1 = s['team1_wins']
+            w2 = s['team2_wins']
+            s_num = s['series_num']
+
+            if s['status'] == 'completed':
+                text += f"⚔️ <b>Серия {s_num}:</b> {t1} ({w1}) 🆚 ({w2}) {t2} ➔ 🏆 <b>{html.escape(s['winner_name'] or 'Победитель')}</b>\n\n"
+            else:
+                text += f"⚔️ <b>Серия {s_num}:</b> <b>{t1}</b> ({w1}) 🆚 ({w2}) <b>{t2}</b>\n"
+                matches = s.get("matches", [])
+                for m in matches:
+                    g_num = m['game_num_in_series']
+                    p1 = html.escape(m['player1_team'] or t1)
+                    p2 = html.escape(m['player2_team'] or t2)
+                    if m['status'] == 'confirmed':
+                        text += f"   • Игра {g_num} (ID #{m['id']}): {p1} {m['player1_score']}:{m['player2_score']} {p2} ✅\n"
+                    else:
+                        text += f"   • Игра {g_num} (ID #{m['id']}): {p1} 🆚 {p2} ⏳\n"
+                text += "\n"
+
+        keyboard = [
+            [
+                InlineKeyboardButton("1/8", callback_data="admin_cup_stage_1/8"),
+                InlineKeyboardButton("1/4", callback_data="admin_cup_stage_1/4"),
+                InlineKeyboardButton("1/2", callback_data="admin_cup_stage_1/2"),
+                InlineKeyboardButton("Финал", callback_data="admin_cup_stage_final"),
+            ],
+            [InlineKeyboardButton("🔄 Обновить", callback_data=f"admin_cup_stage_{stage}")],
+            [InlineKeyboardButton("« Назад в админку", callback_data="admin_main_menu")]
+        ]
+
+    markup = InlineKeyboardMarkup(keyboard)
+    await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
+
+@admin_only
+async def admin_init_cup_execute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query or not is_admin(query.from_user.id):
+        return
+    await query.answer()
+
+    created_count = await asyncio.to_thread(database.init_kpl_cup_1_8)
+    if created_count > 0:
+        await query.answer(f"✅ Сформировано {created_count} серий 1/8 финала!", show_alert=True)
+    else:
+        await query.answer("⚠️ Сетка 1/8 финала уже сформирована!", show_alert=True)
+
+    await admin_manage_cup(update, context)
 
 # --- Match Generation Handlers ---
 

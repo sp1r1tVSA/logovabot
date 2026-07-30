@@ -366,13 +366,42 @@ async def show_tournaments(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if query:
         await query.answer()
 
+    text = (
+        "🏆 <b>Турниры КПЛ 2026</b>\n\n"
+        "Выберите интересующий соревновательный раздел:"
+    )
+
+    keyboard = [
+        [InlineKeyboardButton("⚽ Чемпионат КПЛ (Лига)", callback_data="tournaments_league_rounds")],
+        [InlineKeyboardButton("🏆 Кубок КПЛ (Плей-офф Best-of-3)", callback_data="tournaments_cup_menu")],
+        [InlineKeyboardButton("« Назад в меню", callback_data="main_menu")]
+    ]
+    markup = InlineKeyboardMarkup(keyboard)
+
+    if query:
+        try:
+            await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
+        except Exception:
+            try:
+                await query.message.delete()
+            except Exception:
+                pass
+            await context.bot.send_message(chat_id=query.from_user.id, text=text, parse_mode="HTML", reply_markup=markup)
+    elif update.message:
+        await update.message.reply_text(text, parse_mode="HTML", reply_markup=markup)
+
+async def show_league_rounds(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if query:
+        await query.answer()
+
     rounds = await asyncio.to_thread(database.get_all_rounds)
-    
+
     keyboard = []
     if not rounds:
-        text = "🏆 **Турниры**\n\nРасписание еще не сформировано."
+        text = "⚽ <b>Чемпионат КПЛ</b>\n\nРасписание туров еще не сформировано."
     else:
-        text = "🏆 **Турниры**\n\nВыберите тур для просмотра расписания:"
+        text = "⚽ <b>Чемпионат КПЛ</b>\n\nВыберите тур для просмотра расписания:"
         row = []
         for r in rounds:
             row.append(InlineKeyboardButton(f"{r} Тур", callback_data=f"show_round_matches_{r}"))
@@ -381,21 +410,112 @@ async def show_tournaments(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 row = []
         if row:
             keyboard.append(row)
-            
-    keyboard.append([InlineKeyboardButton("« Назад в меню", callback_data="main_menu")])
+
+    keyboard.append([InlineKeyboardButton("« Назад к турнирам", callback_data="menu_tournaments")])
     markup = InlineKeyboardMarkup(keyboard)
-    
+
+    await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
+
+async def show_cup_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
     if query:
-        try:
-            await query.edit_message_text(text, parse_mode="Markdown", reply_markup=markup)
-        except Exception:
-            try:
-                await query.message.delete()
-            except Exception:
-                pass
-            await context.bot.send_message(chat_id=query.from_user.id, text=text, parse_mode="Markdown", reply_markup=markup)
-    elif update.message:
-        await update.message.reply_text(text, parse_mode="Markdown", reply_markup=markup)
+        await query.answer()
+
+    stage = "1/8"
+    if query and query.data.startswith("show_cup_stage_"):
+        stage = query.data.replace("show_cup_stage_", "")
+
+    series_list = await asyncio.to_thread(database.get_cup_series_list, stage)
+
+    stage_title_map = {
+        '1/8': '1/8 Финала',
+        '1/4': '1/4 Финала',
+        '1/2': '1/2 Финала (Полуфинал)',
+        'final': '🏆 ФИНАЛ КУБКА КПЛ'
+    }
+    title = stage_title_map.get(stage, stage)
+
+    text = f"🏆 <b>КУБОК КПЛ | {title}</b>\n"
+    text += f"<i>Формат: Серии до 2-х побед (Best-of-3)</i>\n\n"
+
+    if not series_list:
+        text += "Матчи данной стадии пока не сформированы."
+    else:
+        for s in series_list:
+            t1 = html.escape(s['team1_name'])
+            t2 = html.escape(s['team2_name'])
+            w1 = s['team1_wins']
+            w2 = s['team2_wins']
+            s_num = s['series_num']
+
+            if s['status'] == 'completed':
+                text += f"⚔️ <b>Серия {s_num}:</b> <b>{t1}</b> ({w1}) 🆚 ({w2}) <b>{t2}</b>\n"
+                text += f"   🏆 <b>Победитель серии:</b> <b>{html.escape(s['winner_name'])}</b>\n\n"
+            else:
+                text += f"⚔️ <b>Серия {s_num}:</b> <b>{t1}</b> ({w1}) 🆚 ({w2}) <b>{t2}</b>\n"
+                matches = s.get("matches", [])
+                for m in matches:
+                    g_num = m['game_num_in_series']
+                    p1 = html.escape(m['player1_team'] or m['player1_nickname'] or t1)
+                    p2 = html.escape(m['player2_team'] or m['player2_nickname'] or t2)
+                    if m['status'] == 'confirmed':
+                        text += f"   • Игра {g_num}: {p1} {m['player1_score']} : {m['player2_score']} {p2} ✅\n"
+                    else:
+                        text += f"   • Игра {g_num}: {p1} 🆚 {p2} ⏳ (Ожидается)\n"
+                text += "\n"
+
+    keyboard = [
+        [
+            InlineKeyboardButton("1/8 Финала", callback_data="show_cup_stage_1/8"),
+            InlineKeyboardButton("1/4 Финала", callback_data="show_cup_stage_1/4"),
+        ],
+        [
+            InlineKeyboardButton("1/2 Финала", callback_data="show_cup_stage_1/2"),
+            InlineKeyboardButton("🏆 Финал", callback_data="show_cup_stage_final"),
+        ],
+        [InlineKeyboardButton("📊 Бомбардиры и Ассистенты Кубка", callback_data="show_cup_stats")],
+        [InlineKeyboardButton("« Назад к турнирам", callback_data="menu_tournaments")]
+    ]
+    markup = InlineKeyboardMarkup(keyboard)
+
+    await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
+
+async def show_cup_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if query:
+        await query.answer()
+
+    top_goals, top_assists = await asyncio.gather(
+        asyncio.to_thread(database.get_cup_top_scorers, 10),
+        asyncio.to_thread(database.get_cup_top_assists, 10)
+    )
+
+    text = "🏆 <b>СТАТИСТИКА КУБКА КПЛ 2026</b>\n\n"
+
+    text += "⚽ <b>ТОП-10 БОМБАРДИРОВ КУБКА:</b>\n"
+    if not top_goals:
+        text += "<i>Пока нет забитых голов в кубке.</i>\n\n"
+    else:
+        for idx, item in enumerate(top_goals, 1):
+            medals = {1: "🥇", 2: "🥈", 3: "🥉"}
+            prefix = medals.get(idx, f"<b>{idx}.</b>")
+            text += f"{prefix} <b>{html.escape(item['player_name'])}</b> ({html.escape(item['team_name'])}) — <b>{item['total_goals']}</b> ⚽\n"
+        text += "\n"
+
+    text += "🎯 <b>ТОП-10 АССИСТЕНТОВ КУБКА:</b>\n"
+    if not top_assists:
+        text += "<i>Пока нет голевых передач в кубке.</i>\n\n"
+    else:
+        for idx, item in enumerate(top_assists, 1):
+            medals = {1: "🥇", 2: "🥈", 3: "🥉"}
+            prefix = medals.get(idx, f"<b>{idx}.</b>")
+            text += f"{prefix} <b>{html.escape(item['player_name'])}</b> ({html.escape(item['team_name'])}) — <b>{item['total_assists']}</b> 🎯\n"
+        text += "\n"
+
+    keyboard = [[InlineKeyboardButton("« Назад к Кубку", callback_data="tournaments_cup_menu")]]
+    markup = InlineKeyboardMarkup(keyboard)
+
+    await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
 
 async def show_round_matches(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query

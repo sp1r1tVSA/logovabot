@@ -20,6 +20,9 @@ from handlers.base import (
     start,
     show_main_menu,
     show_tournaments,
+    show_league_rounds,
+    show_cup_menu,
+    show_cup_stats,
     show_league_table,
     show_league_menu,
     show_top_scorers,
@@ -178,6 +181,8 @@ from handlers.admin import (
     ADMIN_EXPECT_SQUAD_TEXT,
     admin_stub,
     admin_fetch_photos,
+    admin_manage_cup,
+    admin_init_cup_execute,
 )
 
 logger = logging.getLogger(__name__)
@@ -232,6 +237,10 @@ def _register_user_handlers(app: Application) -> None:
     app.add_handler(CallbackQueryHandler(send_top_assisters_image, pattern="^img_top_assisters$"))
     app.add_handler(CallbackQueryHandler(show_support, pattern="^menu_support$"))
     app.add_handler(CallbackQueryHandler(show_main_menu, pattern="^main_menu$"))
+    app.add_handler(CallbackQueryHandler(show_league_rounds, pattern="^tournaments_league_rounds$"))
+    app.add_handler(CallbackQueryHandler(show_cup_menu, pattern="^tournaments_cup_menu$"))
+    app.add_handler(CallbackQueryHandler(show_cup_menu, pattern="^show_cup_stage_.*$"))
+    app.add_handler(CallbackQueryHandler(show_cup_stats, pattern="^show_cup_stats$"))
     app.add_handler(CallbackQueryHandler(show_round_matches, pattern="^show_round_matches_\\d+$"))
 
 def _register_cabinet_handlers(app: Application) -> None:
@@ -558,9 +567,12 @@ def _register_admin_handlers(app: Application) -> None:
     app.add_handler(CallbackQueryHandler(admin_manage_squads, pattern="^admin_manage_squads$"))
     app.add_handler(CallbackQueryHandler(admin_view_squad, pattern="^admin_squad_view_.*$"))
     app.add_handler(CallbackQueryHandler(admin_squad_clear, pattern="^admin_squad_clear_.*$"))
+    app.add_handler(CallbackQueryHandler(admin_manage_cup, pattern="^admin_manage_cup$"))
+    app.add_handler(CallbackQueryHandler(admin_manage_cup, pattern="^admin_cup_stage_.*$"))
+    app.add_handler(CallbackQueryHandler(admin_init_cup_execute, pattern="^admin_init_cup_execute$"))
     app.add_handler(CallbackQueryHandler(admin_fetch_photos, pattern="^admin_fetch_photos_cb$"))
     app.add_handler(CallbackQueryHandler(admin_stub, pattern="^admin_matches_stub$"))
-    app.add_handler(CallbackQueryHandler(admin_stub, pattern="^admin_broadcast_stub$"))
+    app.add_handler(CallbackQueryHandler(admin_broadcast_stub_handler if 'admin_broadcast_stub_handler' in locals() else admin_stub, pattern="^admin_broadcast_stub$"))
 
 def register_all_handlers(application: Application) -> None:
     """Register all command, message, and callback handlers to the application."""

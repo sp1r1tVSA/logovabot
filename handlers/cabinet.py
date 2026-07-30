@@ -577,16 +577,21 @@ async def show_my_matches(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     user_id = query.from_user.id
     matches = await asyncio.to_thread(database.get_pending_matches, user_id)
     
-    text = "📋 **Ваши матчи в открытых турах:**\n\n"
+    text = "📋 **Ваши открытые матчи:**\n\n"
     keyboard = []
     
     if not matches:
-        text += "У вас нет несыгранных матчей в открытых турах."
+        text += "У вас нет несыгранных матчей на данный момент."
     else:
         text += "Выберите матч для просмотра и ввода результата:"
         for m in matches:
-            opp = m['opponent_team'] or m['opponent_username']
-            btn_text = f"Тур {m['round_number']}: 🆚 {opp}"
+            opp = m['opponent_team'] or m['opponent_username'] or "Соперник"
+            if m.get('tournament_type') == 'cup':
+                stage = m.get('cup_stage', 'Кубок')
+                g_num = m.get('game_num_in_series', 1)
+                btn_text = f"🏆 {stage} (Игра {g_num}): 🆚 {opp}"
+            else:
+                btn_text = f"⚽ Тур {m['round_number']}: 🆚 {opp}"
             keyboard.append([InlineKeyboardButton(btn_text, callback_data=f"cabinet_view_match_{m['id']}")])
             
     keyboard.append([InlineKeyboardButton("« Назад в кабинет", callback_data="menu_cabinet")])

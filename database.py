@@ -114,6 +114,20 @@ def init_db() -> None:
         except sqlite3.OperationalError:
             pass
             
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS cup_series (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                stage TEXT NOT NULL,
+                series_num INTEGER NOT NULL,
+                team1_name TEXT NOT NULL,
+                team2_name TEXT NOT NULL,
+                team1_wins INTEGER DEFAULT 0,
+                team2_wins INTEGER DEFAULT 0,
+                winner_name TEXT,
+                status TEXT DEFAULT 'active'
+            )
+        """)
+
         # Safely migration-add new columns to matches using predefined SAFE_COLUMNS tuple.
         # Note: String interpolation is safe here as column names/types are hardcoded internal constants, not user input.
         SAFE_COLUMNS = (
@@ -123,6 +137,12 @@ def init_db() -> None:
             ("proposed_time", "TEXT"),
             ("proposed_by", "INTEGER"),
             ("time_status", "TEXT DEFAULT 'none'"),
+            ("tournament_type", "TEXT DEFAULT 'league'"),
+            ("cup_stage", "TEXT"),
+            ("cup_series_id", "INTEGER"),
+            ("game_num_in_series", "INTEGER DEFAULT 1"),
+            ("player1_team", "TEXT"),
+            ("player2_team", "TEXT"),
         )
         for col_name, col_type in SAFE_COLUMNS:
             try:
@@ -135,6 +155,7 @@ def init_db() -> None:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_matches_p2 ON matches(player2_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_matches_round ON matches(round_number)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_matches_status ON matches(status)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_matches_tourn ON matches(tournament_type)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_match ON match_events(match_id)")
 
         logger.info("Database tables initialized successfully.")
@@ -239,25 +260,47 @@ def get_player_stats(telegram_id: int) -> dict:
         }
 
 def get_pending_matches(telegram_id: int) -> list[dict]:
-    """Retrieve active matches for a user in OPEN rounds only, including opponent details."""
+    """Retrieve active matches for a user in OPEN rounds or active Cup matches, including opponent details."""
     with transaction() as conn:
         cursor = conn.cursor()
+        cursor.execute("SELECT team_name FROM users WHERE telegram_id = ?", (telegram_id,))
+        u_row = cursor.fetchone()
+        u_team = u_row["team_name"] if u_row and u_row["team_name"] else ""
+
         cursor.execute("""
             SELECT 
-                m.id, m.round_number, m.status,
-                o.telegram_id AS opponent_id,
-                o.username AS opponent_username,
-                o.team_name AS opponent_team
+                m.id, m.round_number, m.status, m.tournament_type, m.cup_stage, m.cup_series_id, m.game_num_in_series,
+                m.player1_team, m.player2_team, m.player1_id, m.player2_id,
+                u1.username AS p1_username, u1.team_name AS p1_team,
+                u2.username AS p2_username, u2.team_name AS p2_team
             FROM matches m
-            JOIN users o ON (
-                (m.player1_id = ? AND m.player2_id = o.telegram_id) OR
-                (m.player2_id = ? AND m.player1_id = o.telegram_id)
+            LEFT JOIN users u1 ON m.player1_id = u1.telegram_id
+            LEFT JOIN users u2 ON m.player2_id = u2.telegram_id
+            LEFT JOIN rounds r ON m.round_number = r.round_number
+            WHERE (
+                (m.player1_id = ? OR m.player2_id = ?)
+                OR (LOWER(m.player1_team) = LOWER(?) AND ? != '')
+                OR (LOWER(m.player2_team) = LOWER(?) AND ? != '')
             )
-            JOIN rounds r ON m.round_number = r.round_number
-            WHERE r.is_open = 1 AND m.status IN ('pending', 'reported', 'disputed')
-            ORDER BY m.round_number ASC
-        """, (telegram_id, telegram_id))
-        return [dict(row) for row in cursor.fetchall()]
+            AND (
+                (m.tournament_type = 'cup' AND m.status IN ('pending', 'reported', 'disputed'))
+                OR
+                ((m.tournament_type IS NULL OR m.tournament_type = 'league') AND r.is_open = 1 AND m.status IN ('pending', 'reported', 'disputed'))
+            )
+            ORDER BY m.id ASC
+        """, (telegram_id, telegram_id, u_team, u_team, u_team, u_team))
+        
+        matches = []
+        for row in cursor.fetchall():
+            d = dict(row)
+            if d['player1_id'] == telegram_id or (u_team and d['player1_team'] and d['player1_team'].lower() == u_team.lower()):
+                d['opponent_team'] = d['player2_team'] or d['p2_team']
+                d['opponent_username'] = d['p2_username']
+            else:
+                d['opponent_team'] = d['player1_team'] or d['p1_team']
+                d['opponent_username'] = d['p1_username']
+            matches.append(d)
+        return matches
 
 def get_match_history(telegram_id: int) -> list[dict]:
     """Retrieve played (confirmed) matches for a user, including opponent profile details."""
@@ -321,9 +364,9 @@ def get_standings() -> list[dict]:
             for row in cursor.fetchall()
         }
 
-        # Get all confirmed matches
+        # Get all confirmed matches (League matches only)
         cursor.execute(
-            "SELECT player1_id, player2_id, player1_score, player2_score FROM matches WHERE status = 'confirmed'"
+            "SELECT player1_id, player2_id, player1_score, player2_score FROM matches WHERE status = 'confirmed' AND (tournament_type IS NULL OR tournament_type = 'league')"
         )
         matches = cursor.fetchall()
 
@@ -438,6 +481,7 @@ def confirm_match(match_id: int) -> None:
             "UPDATE matches SET status = 'confirmed', played_at = CURRENT_TIMESTAMP WHERE id = ?",
             (match_id,)
         )
+    process_cup_match_completion(match_id)
 
 def confirm_and_finalize_match(match_id: int, p1_score: int, p2_score: int, events: list, reporter_id: int = None, photo_id: str = None) -> None:
     """Instantly save and confirm a match with events in database."""
@@ -462,6 +506,7 @@ def confirm_and_finalize_match(match_id: int, p1_score: int, p2_score: int, even
             "UPDATE matches SET player1_score = ?, player2_score = ?, reported_by = ?, photo_id = ?, status = 'confirmed', played_at = CURRENT_TIMESTAMP WHERE id = ?",
             (p1_score, p2_score, reporter_id, photo_id, match_id)
         )
+    process_cup_match_completion(match_id)
 
 def dispute_match(match_id: int) -> None:
     """Set match status to 'disputed'."""
@@ -1197,7 +1242,9 @@ def set_technical_result(match_id: int, p1_score: int, p2_score: int) -> bool:
             "UPDATE matches SET status = 'confirmed', player1_score = ?, player2_score = ?, played_at = CURRENT_TIMESTAMP WHERE id = ?",
             (p1_score, p2_score, match_id)
         )
-        return cursor.rowcount > 0
+        res = cursor.rowcount > 0
+    process_cup_match_completion(match_id)
+    return res
 
 
 def get_unplayed_matches_in_round(round_number: int) -> list[dict]:
@@ -1394,6 +1441,246 @@ def rename_player(old_name: str, new_name: str, team_name: str | None = None) ->
             )
             c2 = cursor.rowcount
         return (c1, c2)
+
+
+# --- KPL Cup Management ---
+
+KPL_CUP_1_8_PAIRS = [
+    ("Расинг", "Спортинг"),
+    ("Копенгаген", "Рейнджерс"),
+    ("Порту", "Селтик"),
+    ("Аякс", "Будё Глимпт"),
+    ("Бенфика", "Брюгге"),
+    ("Фейеноорд", "ПСВ"),
+    ("АЕК", "Ривер Плейт"),
+    ("Бока Хуниорс", "Брага"),
+]
+
+def init_kpl_cup_1_8() -> int:
+    """
+    Initialize 1/8 Finals KPL Cup series and create Game 1 for each series.
+    Returns count of created series.
+    """
+    created_count = 0
+    with transaction() as conn:
+        cursor = conn.cursor()
+        
+        # Check if 1/8 series already exists
+        cursor.execute("SELECT COUNT(*) FROM cup_series WHERE stage = '1/8'")
+        if cursor.fetchone()[0] > 0:
+            return 0  # Already initialized
+            
+        for i, (t1, t2) in enumerate(KPL_CUP_1_8_PAIRS, 1):
+            cursor.execute(
+                "INSERT INTO cup_series (stage, series_num, team1_name, team2_name, team1_wins, team2_wins, status) VALUES ('1/8', ?, ?, ?, 0, 0, 'active')",
+                (i, t1, t2)
+            )
+            series_id = cursor.lastrowid
+            created_count += 1
+            
+            # Find player1_id and player2_id by team_name
+            cursor.execute("SELECT telegram_id FROM users WHERE LOWER(team_name) = LOWER(?)", (t1.strip(),))
+            r1 = cursor.fetchone()
+            p1_id = r1[0] if r1 else None
+            
+            cursor.execute("SELECT telegram_id FROM users WHERE LOWER(team_name) = LOWER(?)", (t2.strip(),))
+            r2 = cursor.fetchone()
+            p2_id = r2[0] if r2 else None
+            
+            # Create Game 1 match
+            cursor.execute("""
+                INSERT INTO matches (round_number, player1_id, player2_id, player1_team, player2_team, status, tournament_type, cup_stage, cup_series_id, game_num_in_series)
+                VALUES (0, ?, ?, ?, ?, 'pending', 'cup', '1/8', ?, 1)
+            """, (p1_id, p2_id, t1, t2, series_id))
+            
+    return created_count
+
+def get_cup_series_list(stage: str = '1/8') -> list[dict]:
+    """Retrieve all series for a given cup stage with match details."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, stage, series_num, team1_name, team2_name, team1_wins, team2_wins, winner_name, status
+            FROM cup_series
+            WHERE stage = ?
+            ORDER BY series_num ASC
+        """, (stage,))
+        series_rows = [dict(r) for r in cursor.fetchall()]
+        
+        for s in series_rows:
+            # Fetch matches for this series
+            cursor.execute("""
+                SELECT id, game_num_in_series, player1_team, player2_team, player1_score, player2_score, status, photo_id
+                FROM matches
+                WHERE cup_series_id = ?
+                ORDER BY game_num_in_series ASC
+            """, (s["id"],))
+            s["matches"] = [dict(r) for r in cursor.fetchall()]
+            
+        return series_rows
+
+def get_cup_top_scorers(limit: int = 20) -> list[dict]:
+    """Get top goalscorers in the KPL Cup aggregated from match_events."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT me.player_name, me.team_name, SUM(me.count) AS total_goals
+            FROM match_events me
+            JOIN matches m ON me.match_id = m.id
+            WHERE me.event_type = 'goal' AND m.tournament_type = 'cup'
+            GROUP BY me.player_name, me.team_name
+            ORDER BY total_goals DESC, me.player_name ASC
+            LIMIT ?
+        """, (limit,))
+        return [dict(row) for row in cursor.fetchall()]
+
+def get_cup_top_assists(limit: int = 20) -> list[dict]:
+    """Get top assist providers in the KPL Cup aggregated from match_events."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT me.player_name, me.team_name, SUM(me.count) AS total_assists
+            FROM match_events me
+            JOIN matches m ON me.match_id = m.id
+            WHERE me.event_type = 'assist' AND m.tournament_type = 'cup'
+            GROUP BY me.player_name, me.team_name
+            ORDER BY total_assists DESC, me.player_name ASC
+            LIMIT ?
+        """, (limit,))
+        return [dict(row) for row in cursor.fetchall()]
+
+def process_cup_match_completion(match_id: int) -> None:
+    """
+    Called whenever a Cup match status changes to 'confirmed'.
+    Updates wins count in cup_series, generates Game 2 or 3 if needed, or completes the series
+    and advances the winner to the next stage if all series in the stage are finished!
+    """
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, cup_series_id, cup_stage, game_num_in_series, player1_team, player2_team, player1_score, player2_score, status FROM matches WHERE id = ?", (match_id,))
+        m = cursor.fetchone()
+        if not m or m["status"] != "confirmed" or not m["cup_series_id"]:
+            return
+            
+        s_id = m["cup_series_id"]
+        p1_team = m["player1_team"]
+        p2_team = m["player2_team"]
+        s1 = m["player1_score"] or 0
+        s2 = m["player2_score"] or 0
+        
+        if s1 == s2:
+            return  # Cup matches should have a winner
+            
+        cursor.execute("SELECT * FROM cup_series WHERE id = ?", (s_id,))
+        series = cursor.fetchone()
+        if not series or series["status"] == "completed":
+            return
+            
+        t1_name = series["team1_name"]
+        t2_name = series["team2_name"]
+        
+        # Calculate current wins in this series
+        cursor.execute("SELECT player1_team, player2_team, player1_score, player2_score FROM matches WHERE cup_series_id = ? AND status = 'confirmed'", (s_id,))
+        confirmed_matches = cursor.fetchall()
+        
+        t1_wins = 0
+        t2_wins = 0
+        for cm in confirmed_matches:
+            c1, c2 = cm["player1_score"] or 0, cm["player2_score"] or 0
+            if c1 > c2:
+                winner = cm["player1_team"]
+            elif c2 > c1:
+                winner = cm["player2_team"]
+            else:
+                continue
+            if winner and winner.lower() == t1_name.lower():
+                t1_wins += 1
+            elif winner and winner.lower() == t2_name.lower():
+                t2_wins += 1
+                
+        cursor.execute("UPDATE cup_series SET team1_wins = ?, team2_wins = ? WHERE id = ?", (t1_wins, t2_wins, s_id))
+        
+        stage = series["stage"]
+        if t1_wins >= 2 or t2_wins >= 2:
+            series_winner = t1_name if t1_wins >= 2 else t2_name
+            cursor.execute("UPDATE cup_series SET winner_name = ?, status = 'completed' WHERE id = ?", (series_winner, s_id))
+            
+            # Check if all series in current stage are completed, and auto-advance to next stage!
+            _check_and_advance_stage(conn, stage)
+        else:
+            # Need next game (Game 2 or Game 3)
+            current_game_num = len(confirmed_matches)
+            next_game_num = current_game_num + 1
+            if next_game_num <= 3:
+                cursor.execute("SELECT COUNT(*) FROM matches WHERE cup_series_id = ? AND game_num_in_series = ?", (s_id, next_game_num))
+                if cursor.fetchone()[0] == 0:
+                    if next_game_num % 2 == 0:
+                        hp_team, ap_team = t2_name, t1_name
+                    else:
+                        hp_team, ap_team = t1_name, t2_name
+                        
+                    cursor.execute("SELECT telegram_id FROM users WHERE LOWER(team_name) = LOWER(?)", (hp_team.strip(),))
+                    r1 = cursor.fetchone()
+                    hp_id = r1[0] if r1 else None
+                    
+                    cursor.execute("SELECT telegram_id FROM users WHERE LOWER(team_name) = LOWER(?)", (ap_team.strip(),))
+                    r2 = cursor.fetchone()
+                    ap_id = r2[0] if r2 else None
+                    
+                    cursor.execute("""
+                        INSERT INTO matches (round_number, player1_id, player2_id, player1_team, player2_team, status, tournament_type, cup_stage, cup_series_id, game_num_in_series)
+                        VALUES (0, ?, ?, ?, ?, 'pending', 'cup', ?, ?, ?)
+                    """, (hp_id, ap_id, hp_team, ap_team, stage, s_id, next_game_num))
+
+def _check_and_advance_stage(conn, current_stage: str) -> None:
+    """Helper to check if all series in stage are done and generate next stage."""
+    NEXT_STAGE_MAP = {
+        '1/8': '1/4',
+        '1/4': '1/2',
+        '1/2': 'final'
+    }
+    next_stage = NEXT_STAGE_MAP.get(current_stage)
+    if not next_stage:
+        return
+        
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM cup_series WHERE stage = ? AND status != 'completed'", (current_stage,))
+    incomplete = cursor.fetchone()[0]
+    if incomplete > 0:
+        return # Not all finished yet
+        
+    cursor.execute("SELECT COUNT(*) FROM cup_series WHERE stage = ?", (next_stage,))
+    if cursor.fetchone()[0] > 0:
+        return # Next stage already generated
+        
+    # Get winners of current stage ordered by series_num
+    cursor.execute("SELECT series_num, winner_name FROM cup_series WHERE stage = ? ORDER BY series_num ASC", (current_stage,))
+    winners = [r["winner_name"] for r in cursor.fetchall()]
+    
+    # Pair winners 1&2, 3&4, 5&6, 7&8
+    for i in range(0, len(winners), 2):
+        if i + 1 < len(winners):
+            w1 = winners[i]
+            w2 = winners[i+1]
+            series_num = (i // 2) + 1
+            cursor.execute(
+                "INSERT INTO cup_series (stage, series_num, team1_name, team2_name, team1_wins, team2_wins, status) VALUES (?, ?, ?, ?, 0, 0, 'active')",
+                (next_stage, series_num, w1, w2)
+            )
+            s_id = cursor.lastrowid
+            
+            cursor.execute("SELECT telegram_id FROM users WHERE LOWER(team_name) = LOWER(?)", (w1.strip(),))
+            r1 = cursor.fetchone()
+            p1_id = r1[0] if r1 else None
+            
+            cursor.execute("SELECT telegram_id FROM users WHERE LOWER(team_name) = LOWER(?)", (w2.strip(),))
+            r2 = cursor.fetchone()
+            p2_id = r2[0] if r2 else None
+            
+            cursor.execute("""
+                INSERT INTO matches (round_number, player1_id, player2_id, player1_team, player2_team, status, tournament_type, cup_stage, cup_series_id, game_num_in_series)
+                VALUES (0, ?, ?, ?, ?, 'pending', 'cup', ?, ?, 1)
+            """, (p1_id, p2_id, w1, w2, next_stage, s_id))
 
 
 
