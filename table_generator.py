@@ -227,6 +227,140 @@ def generate_league_table_image(standings: list[dict] = None, form_map: dict[int
     return buffer
 
 
+def generate_cup_bracket_image(stage: str = "1/8") -> io.BytesIO:
+    """
+    Generate a 2x supersampled high-res graphic image of the KPL Cup stage bracket.
+    Returns io.BytesIO PNG buffer.
+    """
+    series_list = database.get_cup_series_list(stage)
+
+    stage_title_map = {
+        '1/8': '1/8 ФИНАЛА',
+        '1/4': '1/4 ФИНАЛА',
+        '1/2': '1/2 ФИНАЛА',
+        'final': '🏆 ФИНАЛ КУБКА'
+    }
+    stage_name = stage_title_map.get(stage, f"{stage.upper()} ФИНАЛА")
+
+    num_series = len(series_list) if series_list else 1
+
+    # Base Dimensions
+    width_1x = 1120
+    card_height_1x = 115
+    header_height_1x = 110
+    card_gap_1x = 15
+
+    # 2 Columns for 1/8 and 1/4; 1 Column for 1/2 and final
+    cols = 2 if num_series > 1 else 1
+    rows = (num_series + cols - 1) // cols
+
+    content_height_1x = rows * card_height_1x + (rows - 1) * card_gap_1x
+    height_1x = header_height_1x + content_height_1x + 70
+
+    # 2x Scaled Canvas
+    width = width_1x * SCALE
+    height = height_1x * SCALE
+
+    # Colors
+    bg_color = (20, 20, 22)           # #141416
+    card_bg = (26, 26, 30)            # #1A1A1E
+    card_border = (42, 42, 48)        # #2A2A30
+    winner_gold = (245, 158, 11)      # #F59E0B
+    red_accent = (239, 68, 68)        # #EF4444
+    text_primary = (255, 255, 255)
+    text_muted = (156, 163, 175)     # #9CA3AF
+
+    img = Image.new("RGBA", (width, height), bg_color)
+    draw = ImageDraw.Draw(img)
+
+    font_title = load_font(24 * SCALE, bold=True)
+    font_subtitle = load_font(13 * SCALE)
+    font_card_title = load_font(12 * SCALE, bold=True)
+    font_team = load_font(15 * SCALE, bold=True)
+    font_score = load_font(18 * SCALE, bold=True)
+    font_subtext = load_font(11 * SCALE)
+
+    # Draw Header
+    draw.text((35 * SCALE, 22 * SCALE), "КУБОК КПЛ 2026", fill=red_accent, font=font_title)
+    draw.text((35 * SCALE, 58 * SCALE), f"{stage_name}  •  СЕРИИ ДО 2-Х ПОБЕД (BEST-OF-3)", fill=text_muted, font=font_subtitle)
+
+    # Draw Header Accent Line
+    draw.rectangle([35 * SCALE, 92 * SCALE, (width_1x - 35) * SCALE, 94 * SCALE], fill=card_border)
+
+    # Draw Cards
+    start_y = 115 * SCALE
+    card_w_1x = (width_1x - (70) - (card_gap_1x if cols > 1 else 0)) // cols
+    card_w = card_w_1x * SCALE
+    card_h = card_height_1x * SCALE
+
+    for i, s in enumerate(series_list):
+        r = i // cols
+        c = i % cols
+
+        cx = (35 * SCALE) + c * (card_w + (card_gap_1x * SCALE))
+        cy = start_y + r * (card_h + (card_gap_1x * SCALE))
+
+        is_completed = s.get("status") == "completed"
+        border_col = winner_gold if is_completed else card_border
+
+        # Card Box
+        draw.rectangle([cx, cy, cx + card_w, cy + card_h], fill=card_bg, outline=border_col, width=2 * SCALE)
+
+        # Card Header: Series Num & Winner status
+        s_num = s.get("series_num", i + 1)
+        t1_name = s.get("team1_name", "TBD")
+        t2_name = s.get("team2_name", "TBD")
+        w1 = s.get("team1_wins", 0)
+        w2 = s.get("team2_wins", 0)
+        winner_name = s.get("winner_name", "")
+
+        header_text = f"СЕРИЯ {s_num}" if stage != "final" else "🏆 ФИНАЛЬНАЯ СЕРИЯ"
+        draw.text((cx + 15 * SCALE, cy + 12 * SCALE), header_text, fill=text_muted, font=font_card_title)
+
+        if is_completed and winner_name:
+            draw.text((cx + card_w - 15 * SCALE, cy + 12 * SCALE), f"🏆 {winner_name}", fill=winner_gold, font=font_card_title, anchor="ra")
+
+        # Teams & Series Score
+        mid_y = cy + 50 * SCALE
+
+        # Team 1 (Left)
+        draw.text((cx + 20 * SCALE, mid_y), t1_name, fill=text_primary if w1 >= w2 else text_muted, font=font_team, anchor="lm")
+
+        # Score (Center)
+        score_text = f"{w1}  :  {w2}"
+        draw.text((cx + card_w // 2, mid_y), score_text, fill=winner_gold if is_completed else text_primary, font=font_score, anchor="mm")
+
+        # Team 2 (Right)
+        draw.text((cx + card_w - 20 * SCALE, mid_y), t2_name, fill=text_primary if w2 >= w1 else text_muted, font=font_team, anchor="rm")
+
+        # Individual Matches Breakdown
+        matches = s.get("matches", [])
+        match_str_list = []
+        for m in matches:
+            g_n = m.get("game_num_in_series", 1)
+            p1_s = m.get("player1_score", 0)
+            p2_s = m.get("player2_score", 0)
+            st = m.get("status")
+            if st == "confirmed":
+                match_str_list.append(f"И{g_n}: {p1_s}-{p2_s}")
+            else:
+                match_str_list.append(f"И{g_n}: ⏳")
+
+        matches_line = "   •   ".join(match_str_list) if match_str_list else "Ожидается начало серии"
+        draw.text((cx + card_w // 2, cy + card_h - 16 * SCALE), matches_line, fill=text_muted, font=font_subtext, anchor="mm")
+
+    # Footer
+    footer_y = height - 35 * SCALE
+    draw.text((35 * SCALE, footer_y), "ОФИЦИАЛЬНЫЙ БОТ КПЛ • @LOGOVABOT", fill=text_muted, font=font_subtitle)
+
+    # Resample LANCZOS to 1x
+    resampled = img.resize((width_1x, height_1x), Image.Resampling.LANCZOS)
+    buf = io.BytesIO()
+    resampled.save(buf, format="PNG", quality=95)
+    buf.seek(0)
+    return buf
+
+
 if __name__ == "__main__":
     buf = generate_league_table_image()
     with open("test_league_table.png", "wb") as f:

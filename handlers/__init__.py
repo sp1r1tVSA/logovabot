@@ -33,6 +33,7 @@ from handlers.base import (
     group_table_command,
     show_round_matches,
     cb_refresh_league_table_topic,
+    cb_show_cup_graphic,
 )
 
 # Import cabinet handlers
@@ -244,6 +245,7 @@ def _register_user_handlers(app: Application) -> None:
     app.add_handler(CallbackQueryHandler(show_league_rounds, pattern="^tournaments_league_rounds$"))
     app.add_handler(CallbackQueryHandler(show_cup_menu, pattern="^tournaments_cup_menu$"))
     app.add_handler(CallbackQueryHandler(show_cup_menu, pattern="^show_cup_stage_.*$"))
+    app.add_handler(CallbackQueryHandler(cb_show_cup_graphic, pattern="^show_cup_graphic_.*$"))
     app.add_handler(CallbackQueryHandler(show_cup_stats, pattern="^show_cup_stats$"))
     app.add_handler(CallbackQueryHandler(show_round_matches, pattern="^show_round_matches_\\d+$"))
 

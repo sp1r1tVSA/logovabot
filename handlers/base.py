@@ -473,12 +473,36 @@ async def show_cup_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             InlineKeyboardButton("1/2 Финала", callback_data="show_cup_stage_1/2"),
             InlineKeyboardButton("🏆 Финал", callback_data="show_cup_stage_final"),
         ],
+        [InlineKeyboardButton("🖼 Графическая сетка", callback_data=f"show_cup_graphic_{stage}")],
         [InlineKeyboardButton("📊 Бомбардиры и Ассистенты Кубка", callback_data="show_cup_stats")],
         [InlineKeyboardButton("« Назад к турнирам", callback_data="menu_tournaments")]
     ]
     markup = InlineKeyboardMarkup(keyboard)
 
     await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
+
+async def cb_show_cup_graphic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+
+    stage = "1/8"
+    if query.data.startswith("show_cup_graphic_"):
+        stage = query.data.replace("show_cup_graphic_", "")
+
+    from table_generator import generate_cup_bracket_image
+    img_buf = await asyncio.to_thread(generate_cup_bracket_image, stage)
+
+    from telegram import InputFile
+    stage_title_map = {'1/8': '1/8 Финала', '1/4': '1/4 Финала', '1/2': '1/2 Финала', 'final': '🏆 Финал'}
+    title = stage_title_map.get(stage, stage)
+
+    await query.message.reply_photo(
+        photo=InputFile(img_buf, filename=f"cup_bracket_{stage}.png"),
+        caption=f"🏆 <b>КУБОК КПЛ 2026 | {title}</b>\n<i>Графическая сетка турнира</i>",
+        parse_mode="HTML"
+    )
 
 async def show_cup_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query

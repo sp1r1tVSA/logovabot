@@ -314,12 +314,25 @@ async def notify_cup_stage_opened(bot, stage: str) -> None:
     lines.append("\n📋 Матчи доступны для игры в вашем кабинете (раздел «Мои открытые матчи»). Удачи участникам!")
 
     try:
+        from table_generator import generate_cup_bracket_image
+        from telegram import InputFile
+        img_buf = await asyncio.to_thread(generate_cup_bracket_image, stage)
+
+        kwargs = {
+            "chat_id": main_group_id,
+            "photo": InputFile(img_buf, filename=f"cup_bracket_{stage}.png"),
+            "caption": "\n".join(lines),
+            "parse_mode": "HTML"
+        }
+        if reports_topic_id:
+            kwargs["message_thread_id"] = int(reports_topic_id)
+        await bot.send_photo(**kwargs)
+    except Exception as e:
+        logger.exception("Failed to post cup stage opening photo, fallback to text")
         kwargs = {"chat_id": main_group_id, "text": "\n".join(lines), "parse_mode": "HTML"}
         if reports_topic_id:
             kwargs["message_thread_id"] = int(reports_topic_id)
         await bot.send_message(**kwargs)
-    except Exception as e:
-        logger.exception("Failed to post cup stage opening notification to group")
 
 @admin_only
 async def admin_init_cup_execute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
