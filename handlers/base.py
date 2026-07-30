@@ -479,7 +479,24 @@ async def show_cup_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     ]
     markup = InlineKeyboardMarkup(keyboard)
 
-    await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
+    if query:
+        if query.message and query.message.photo:
+            try:
+                await query.message.delete()
+            except Exception:
+                pass
+            await context.bot.send_message(chat_id=query.from_user.id, text=text, reply_markup=markup, parse_mode="HTML")
+        else:
+            try:
+                await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
+            except Exception:
+                try:
+                    await query.message.delete()
+                except Exception:
+                    pass
+                await context.bot.send_message(chat_id=query.from_user.id, text=text, reply_markup=markup, parse_mode="HTML")
+    elif update.message:
+        await update.message.reply_text(text, reply_markup=markup, parse_mode="HTML")
 
 async def cb_show_cup_graphic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
@@ -545,7 +562,24 @@ async def show_cup_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     ]
     markup = InlineKeyboardMarkup(keyboard)
 
-    await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
+    if query:
+        if query.message and query.message.photo:
+            try:
+                await query.message.delete()
+            except Exception:
+                pass
+            await context.bot.send_message(chat_id=query.from_user.id, text=text, reply_markup=markup, parse_mode="HTML")
+        else:
+            try:
+                await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
+            except Exception:
+                try:
+                    await query.message.delete()
+                except Exception:
+                    pass
+                await context.bot.send_message(chat_id=query.from_user.id, text=text, reply_markup=markup, parse_mode="HTML")
+    elif update.message:
+        await update.message.reply_text(text, reply_markup=markup, parse_mode="HTML")
 
 async def send_cup_scorers_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Generate and send PNG graphics card for Cup Top Scorers."""
