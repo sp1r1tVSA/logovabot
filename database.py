@@ -260,12 +260,17 @@ def get_player_stats(telegram_id: int) -> dict:
         }
 
 def get_pending_matches(telegram_id: int) -> list[dict]:
-    """Retrieve active matches for a user in OPEN rounds or active Cup matches, including opponent details."""
+    """Retrieve active matches for a user from Round 1 up to the highest OPEN round number, plus active Cup matches."""
     with transaction() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT team_name FROM users WHERE telegram_id = ?", (telegram_id,))
         u_row = cursor.fetchone()
         u_team = u_row["team_name"] if u_row and u_row["team_name"] else ""
+
+        # Get highest open round number
+        cursor.execute("SELECT MAX(round_number) FROM rounds WHERE is_open = 1")
+        max_open_row = cursor.fetchone()
+        max_open_round = max_open_row[0] if max_open_row and max_open_row[0] is not None else 0
 
         cursor.execute("""
             SELECT 
@@ -276,7 +281,6 @@ def get_pending_matches(telegram_id: int) -> list[dict]:
             FROM matches m
             LEFT JOIN users u1 ON m.player1_id = u1.telegram_id
             LEFT JOIN users u2 ON m.player2_id = u2.telegram_id
-            LEFT JOIN rounds r ON m.round_number = r.round_number
             WHERE (
                 (m.player1_id = ? OR m.player2_id = ?)
                 OR (LOWER(m.player1_team) = LOWER(?) AND ? != '')
@@ -285,10 +289,15 @@ def get_pending_matches(telegram_id: int) -> list[dict]:
             AND (
                 (m.tournament_type = 'cup' AND m.status IN ('pending', 'reported', 'disputed'))
                 OR
-                ((m.tournament_type IS NULL OR m.tournament_type = 'league') AND r.is_open = 1 AND m.status IN ('pending', 'reported', 'disputed'))
+                (
+                    (m.tournament_type IS NULL OR m.tournament_type = 'league') 
+                    AND m.round_number >= 1 
+                    AND m.round_number <= ? 
+                    AND m.status IN ('pending', 'reported', 'disputed')
+                )
             )
-            ORDER BY m.id ASC
-        """, (telegram_id, telegram_id, u_team, u_team, u_team, u_team))
+            ORDER BY m.round_number ASC, m.id ASC
+        """, (telegram_id, telegram_id, u_team, u_team, u_team, u_team, max_open_round))
         
         matches = []
         for row in cursor.fetchall():
@@ -1684,9 +1693,16 @@ def _check_and_advance_stage(conn, current_stage: str) -> str | None:
                 VALUES (0, ?, ?, ?, ?, 'pending', 'cup', ?, ?, 1)
             """, (p1_id, p2_id, w1, w2, next_stage, s_id))
 def get_all_unplayed_league_matches() -> list[dict]:
-    """Retrieve all pending matches across open league rounds."""
+    """Retrieve all pending league matches from Round 1 up to the highest OPEN round number."""
     with transaction() as conn:
         cursor = conn.cursor()
+        cursor.execute("SELECT MAX(round_number) FROM rounds WHERE is_open = 1")
+        max_open_row = cursor.fetchone()
+        max_open_round = max_open_row[0] if max_open_row and max_open_row[0] is not None else 0
+
+        if max_open_round <= 0:
+            return []
+
         cursor.execute("""
             SELECT 
                 m.id, m.round_number, m.player1_id, m.player2_id,
@@ -1694,14 +1710,14 @@ def get_all_unplayed_league_matches() -> list[dict]:
                 u1.username AS p1_username, u1.team_name AS p1_team,
                 u2.username AS p2_username, u2.team_name AS p2_team
             FROM matches m
-            JOIN rounds r ON m.round_number = r.round_number
             LEFT JOIN users u1 ON m.player1_id = u1.telegram_id
             LEFT JOIN users u2 ON m.player2_id = u2.telegram_id
-            WHERE r.is_open = 1 
-              AND (m.tournament_type IS NULL OR m.tournament_type = 'league')
+            WHERE (m.tournament_type IS NULL OR m.tournament_type = 'league')
+              AND m.round_number >= 1
+              AND m.round_number <= ?
               AND m.status = 'pending'
             ORDER BY m.round_number ASC, m.id ASC
-        """)
+        """, (max_open_round,))
         return [dict(row) for row in cursor.fetchall()]
 
 def get_all_unplayed_cup_matches() -> list[dict]:
