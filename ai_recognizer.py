@@ -84,16 +84,31 @@ def clean_json_response(raw_text: str) -> str:
     text = re.sub(r"\s*```$", "", text)
     return text.strip()
 
+def _check_proxy_alive(proxy_url: str) -> bool:
+    """Check if proxy host:port is accepting connections."""
+    import socket
+    from urllib.parse import urlparse
+    try:
+        parsed = urlparse(proxy_url if "://" in proxy_url else f"http://{proxy_url}")
+        host = parsed.hostname or "127.0.0.1"
+        port = parsed.port or 4001
+        with socket.create_connection((host, port), timeout=0.5):
+            return True
+    except Exception:
+        return False
+
 def _get_gemini_opener():
-    """Returns a urllib opener with proxy support (WARP on 127.0.0.1:4001 or system proxy)."""
+    """Returns a urllib opener with proxy support if alive, or direct opener."""
     proxy_url = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY") or os.environ.get("WARP_PROXY", "http://127.0.0.1:4001")
-    if proxy_url:
+    if proxy_url and _check_proxy_alive(proxy_url):
         try:
+            logger.info(f"AI Vision: Using proxy {proxy_url}")
             handler = urllib.request.ProxyHandler({"http": proxy_url, "https": proxy_url})
             return urllib.request.build_opener(handler)
         except Exception:
             pass
-    return urllib.request.build_opener()
+    # Explicitly disable proxy for direct connection if proxy is inactive/down
+    return urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 def recognize_match_screenshots_bytes(images_bytes_list: list[bytes], mime_type: str = "image/jpeg", api_key: str = None) -> dict | None:
     target_api_key = (api_key or config.GEMINI_API_KEY).strip()
@@ -133,17 +148,7 @@ def recognize_match_screenshots_bytes(images_bytes_list: list[bytes], mime_type:
                 headers={"Content-Type": "application/json"}
             )
 
-            # Try request through proxy opener first, fallback to direct urlopen if proxy is unreachable
-            try:
-                response = opener.open(req, timeout=30)
-            except urllib.error.URLError as proxy_err:
-                # Proxy connection failed, try direct connection
-                if not isinstance(proxy_err, urllib.error.HTTPError):
-                    response = urllib.request.urlopen(req, timeout=30)
-                else:
-                    raise proxy_err
-
-            with response:
+            with opener.open(req, timeout=30) as response:
                 res_json = json.loads(response.read().decode("utf-8"))
 
                 candidates = res_json.get("candidates", [])
