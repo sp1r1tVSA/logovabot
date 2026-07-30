@@ -1850,24 +1850,69 @@ def build_formatted_match_post(
 
     events_block = ("\n\n" + "\n".join(lines)) if lines else ""
 
-    if is_pm:
-        match_id_str = f" #{match_id}" if match_id else ""
-        header = (
-            f"{pm_title}\n\n"
-            f"🏟 <b>Матч{match_id_str} (Тур {round_number})</b>\n"
-            f"🏠 <b>{home_team_esc}</b> <b>{h_score} : {a_score}</b> <b>{away_team_esc}</b> ✈️"
-        )
-        footer = "\n\n📊 <i>Турнирная таблица и статистика игроков обновлены.</i>"
+    match_info = database.get_match(match_id) if match_id else None
+    is_cup = match_info and match_info.get("tournament_type") == "cup"
+
+    cup_stage = match_info.get("cup_stage", "1/8") if match_info else "1/8"
+    g_num = match_info.get("game_num_in_series", 1) if match_info else 1
+    series_info_text = ""
+
+    if is_cup and match_info.get("cup_series_id"):
+        s_id = match_info["cup_series_id"]
+        with database.transaction() as conn:
+            c = conn.cursor()
+            c.execute("SELECT team1_name, team2_name, team1_wins, team2_wins, winner_name, status FROM cup_series WHERE id = ?", (s_id,))
+            s_row = c.fetchone()
+            if s_row:
+                t1 = safe_escape(s_row["team1_name"])
+                t2 = safe_escape(s_row["team2_name"])
+                w1 = s_row["team1_wins"]
+                w2 = s_row["team2_wins"]
+                series_info_text = f"\n📊 <b>Счёт серии (Best-of-3):</b> {t1} {w1} : {w2} {t2}"
+                if s_row["winner_name"]:
+                    series_info_text += f"\n🏆 <b>Победитель серии: {safe_escape(s_row['winner_name'])}! Проходит в следующий раунд!</b>"
+
+    if is_cup:
+        title_stage = f"{cup_stage} Финала" if cup_stage != "final" else "ФИНАЛ"
+        if is_pm:
+            match_id_str = f" #{match_id}" if match_id else ""
+            header = (
+                f"🏆 <b>Результат кубкового матча занесен!</b>\n\n"
+                f"🏟 <b>Кубок КПЛ | {title_stage} (Игра {g_num})</b>{match_id_str}\n"
+                f"🏠 <b>{home_team_esc}</b> <b>{h_score} : {a_score}</b> <b>{away_team_esc}</b> ✈️"
+                f"{series_info_text}"
+            )
+            footer = "\n\n📊 <i>Сетка Кубка и статистика игроков обновлены.</i>"
+        else:
+            p1_clean = safe_escape(p1_username.lstrip('@')) if p1_username else ""
+            p2_clean = safe_escape(p2_username.lstrip('@')) if p2_username else ""
+            p1_str = f" (@{p1_clean})" if p1_clean else ""
+            p2_str = f" (@{p2_clean})" if p2_clean else ""
+            header = (
+                f"🏆 <b>КУБОК КПЛ | {title_stage} (Игра {g_num})</b>\n\n"
+                f"🏠 <b>{home_team_esc}</b>{p1_str} <b>{h_score} : {a_score}</b> <b>{away_team_esc}</b>{p2_str} ✈️"
+                f"{series_info_text}"
+            )
+            footer = "\n\n📸 <i>Результат официально занесен в сетку Кубка КПЛ.</i>"
     else:
-        p1_clean = safe_escape(p1_username.lstrip('@')) if p1_username else ""
-        p2_clean = safe_escape(p2_username.lstrip('@')) if p2_username else ""
-        p1_str = f" (@{p1_clean})" if p1_clean else ""
-        p2_str = f" (@{p2_clean})" if p2_clean else ""
-        header = (
-            f"🏆 <b>РЕЗУЛЬТАТ МАТЧА | Тур {round_number}</b>\n\n"
-            f"🏠 <b>{home_team_esc}</b>{p1_str} <b>{h_score} : {a_score}</b> <b>{away_team_esc}</b>{p2_str} ✈️"
-        )
-        footer = "\n\n📸 <i>Результат официально занесен в турнирную таблицу.</i>"
+        if is_pm:
+            match_id_str = f" #{match_id}" if match_id else ""
+            header = (
+                f"{pm_title}\n\n"
+                f"🏟 <b>Матч{match_id_str} (Тур {round_number})</b>\n"
+                f"🏠 <b>{home_team_esc}</b> <b>{h_score} : {a_score}</b> <b>{away_team_esc}</b> ✈️"
+            )
+            footer = "\n\n📊 <i>Турнирная таблица и статистика игроков обновлены.</i>"
+        else:
+            p1_clean = safe_escape(p1_username.lstrip('@')) if p1_username else ""
+            p2_clean = safe_escape(p2_username.lstrip('@')) if p2_username else ""
+            p1_str = f" (@{p1_clean})" if p1_clean else ""
+            p2_str = f" (@{p2_clean})" if p2_clean else ""
+            header = (
+                f"🏆 <b>РЕЗУЛЬТАТ МАТЧА | Тур {round_number}</b>\n\n"
+                f"🏠 <b>{home_team_esc}</b>{p1_str} <b>{h_score} : {a_score}</b> <b>{away_team_esc}</b>{p2_str} ✈️"
+            )
+            footer = "\n\n📸 <i>Результат официально занесен в турнирную таблицу.</i>"
 
     return f"{header}{events_block}{footer}"
 

@@ -173,12 +173,99 @@ async def admin_manage_cup(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 InlineKeyboardButton("1/2", callback_data="admin_cup_stage_1/2"),
                 InlineKeyboardButton("Финал", callback_data="admin_cup_stage_final"),
             ],
+            [InlineKeyboardButton("📢 Напомнить участникам Кубка в тему отчётов", callback_data=f"admin_remind_cup_{stage}")],
             [InlineKeyboardButton("🔄 Обновить", callback_data=f"admin_cup_stage_{stage}")],
             [InlineKeyboardButton("« Назад в админку", callback_data="admin_main_menu")]
         ]
 
     markup = InlineKeyboardMarkup(keyboard)
     await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
+
+@admin_only
+async def admin_remind_cup_execute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query or not is_admin(query.from_user.id):
+        return
+    await query.answer()
+
+    stage = "1/8"
+    if query.data.startswith("admin_remind_cup_"):
+        stage = query.data.replace("admin_remind_cup_", "")
+
+    series_list = await asyncio.to_thread(database.get_cup_series_list, stage)
+
+    unplayed_matches = []
+    for s in series_list:
+        if s["status"] != "completed":
+            for m in s.get("matches", []):
+                if m["status"] == "pending":
+                    unplayed_matches.append((s, m))
+
+    if not unplayed_matches:
+        await query.answer(f"✅ В стадии {stage} нет несыгранных матчей!", show_alert=True)
+        return
+
+    # 1. PM reminders
+    pm_sent = 0
+    for s, m in unplayed_matches:
+        t1, t2 = s["team1_name"], s["team2_name"]
+        w1, w2 = s["team1_wins"], s["team2_wins"]
+        g_num = m["game_num_in_series"]
+
+        p1_id = None
+        p2_id = None
+        with database.transaction() as conn:
+            c = conn.cursor()
+            c.execute("SELECT telegram_id FROM users WHERE LOWER(team_name) = LOWER(?)", (t1.strip(),))
+            r1 = c.fetchone()
+            if r1: p1_id = r1[0]
+            c.execute("SELECT telegram_id FROM users WHERE LOWER(team_name) = LOWER(?)", (t2.strip(),))
+            r2 = c.fetchone()
+            if r2: p2_id = r2[0]
+
+        pm_text = (
+            f"🏆 <b>НАПОМИНАНИЕ О КУБКОВОМ МАТЧЕ!</b>\n\n"
+            f"⚔️ <b>Стадия:</b> {stage} Финала (Игра {g_num})\n"
+            f"🏠 <b>{html.escape(t1)}</b> 🆚 <b>{html.escape(t2)}</b> ✈️\n"
+            f"📊 <b>Счёт серии (Best-of-3):</b> {w1} : {w2}\n\n"
+            f"Пожалуйста, сыграйте свой кубковый матч! Каждая игра до победы (с доп. временем и пенальти)."
+        )
+        kb = [[InlineKeyboardButton("📋 Внести результат", callback_data=f"cabinet_report_score_{m['id']}")]]
+
+        if p1_id and p1_id > 0:
+            if await safe_send_notification(context.bot, p1_id, pm_text, InlineKeyboardMarkup(kb)):
+                pm_sent += 1
+        if p2_id and p2_id > 0:
+            if await safe_send_notification(context.bot, p2_id, pm_text, InlineKeyboardMarkup(kb)):
+                pm_sent += 1
+
+    # 2. Group post to Reports Topic
+    main_group_id = await asyncio.to_thread(database.get_group_id)
+    reports_topic_id = await asyncio.to_thread(database.get_config, "reports_topic_id")
+
+    if main_group_id:
+        lines = [
+            f"🏆 <b>НАПОМИНАНИЕ О КУБКЕ КПЛ | {stage} Финала</b>\n",
+            f"Несыгранные кубковые матчи ({len(unplayed_matches)}):"
+        ]
+        for s, m in unplayed_matches:
+            t1_esc, t2_esc = html.escape(s["team1_name"]), html.escape(s["team2_name"])
+            w1, w2 = s["team1_wins"], s["team2_wins"]
+            g_num = m["game_num_in_series"]
+            lines.append(f"• ⚔️ <b>Игра {g_num}:</b> <b>{t1_esc}</b> 🆚 <b>{t2_esc}</b> (Счёт серии: {w1} : {w2})")
+
+        lines.append("\n⚠️ Напоминаем: в каждом кубковом матче обязательно доп. время и пенальти (ничьих нет).")
+        lines.append("Пожалуйста, внесите результаты в бота!")
+
+        try:
+            kwargs = {"chat_id": main_group_id, "text": "\n".join(lines), "parse_mode": "HTML"}
+            if reports_topic_id:
+                kwargs["message_thread_id"] = int(reports_topic_id)
+            await context.bot.send_message(**kwargs)
+        except Exception as e:
+            logger.exception("Failed to post cup reminder summary to group")
+
+    await query.answer(f"🚀 Напоминания отправлены! (ЛС: {pm_sent}, Тема отчетов: ✅)", show_alert=True)
 
 @admin_only
 async def admin_init_cup_execute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
