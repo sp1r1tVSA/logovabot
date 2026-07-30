@@ -314,24 +314,60 @@ def generate_cup_bracket_image(stage: str = "1/8") -> io.BytesIO:
         w2 = s.get("team2_wins", 0)
         winner_name = s.get("winner_name", "")
 
-        header_text = f"СЕРИЯ {s_num}" if stage != "final" else "🏆 ФИНАЛЬНАЯ СЕРИЯ"
+        header_text = f"СЕРИЯ {s_num}" if stage != "final" else "ФИНАЛЬНАЯ СЕРИЯ"
         draw.text((cx + 15 * SCALE, cy + 12 * SCALE), header_text, fill=text_muted, font=font_card_title)
 
         if is_completed and winner_name:
-            draw.text((cx + card_w - 15 * SCALE, cy + 12 * SCALE), f"🏆 {winner_name}", fill=winner_gold, font=font_card_title, anchor="ra")
+            draw.text((cx + card_w - 15 * SCALE, cy + 12 * SCALE), f"ПОБЕДИТЕЛЬ: {winner_name}", fill=winner_gold, font=font_card_title, anchor="ra")
 
         # Teams & Series Score
-        mid_y = cy + 50 * SCALE
+        mid_y = cy + 52 * SCALE
+
+        # Draw Club Logos
+        badge_d = 26 * SCALE
+        inner_s = 20 * SCALE
+
+        # Team 1 Logo
+        t1_x_offset = 20 * SCALE
+        logo1 = TEAM_LOGO_MAP.get(t1_name)
+        if logo1:
+            l_path1 = os.path.join(LOGOS_DIR, logo1)
+            if os.path.exists(l_path1):
+                try:
+                    l_img1 = Image.open(l_path1).convert("RGBA").resize((inner_s, inner_s), Image.Resampling.LANCZOS)
+                    bx1 = cx + 15 * SCALE
+                    by1 = mid_y - (badge_d // 2)
+                    draw.ellipse([bx1, by1, bx1 + badge_d, by1 + badge_d], fill=(35, 35, 42))
+                    img.paste(l_img1, (bx1 + (badge_d - inner_s) // 2, by1 + (badge_d - inner_s) // 2), l_img1)
+                    t1_x_offset = 48 * SCALE
+                except Exception:
+                    pass
+
+        # Team 2 Logo
+        t2_x_offset = 20 * SCALE
+        logo2 = TEAM_LOGO_MAP.get(t2_name)
+        if logo2:
+            l_path2 = os.path.join(LOGOS_DIR, logo2)
+            if os.path.exists(l_path2):
+                try:
+                    l_img2 = Image.open(l_path2).convert("RGBA").resize((inner_s, inner_s), Image.Resampling.LANCZOS)
+                    bx2 = cx + card_w - 15 * SCALE - badge_d
+                    by2 = mid_y - (badge_d // 2)
+                    draw.ellipse([bx2, by2, bx2 + badge_d, by2 + badge_d], fill=(35, 35, 42))
+                    img.paste(l_img2, (bx2 + (badge_d - inner_s) // 2, by2 + (badge_d - inner_s) // 2), l_img2)
+                    t2_x_offset = 48 * SCALE
+                except Exception:
+                    pass
 
         # Team 1 (Left)
-        draw.text((cx + 20 * SCALE, mid_y), t1_name, fill=text_primary if w1 >= w2 else text_muted, font=font_team, anchor="lm")
+        draw.text((cx + t1_x_offset, mid_y), t1_name, fill=text_primary if w1 >= w2 else text_muted, font=font_team, anchor="lm")
 
         # Score (Center)
         score_text = f"{w1}  :  {w2}"
         draw.text((cx + card_w // 2, mid_y), score_text, fill=winner_gold if is_completed else text_primary, font=font_score, anchor="mm")
 
         # Team 2 (Right)
-        draw.text((cx + card_w - 20 * SCALE, mid_y), t2_name, fill=text_primary if w2 >= w1 else text_muted, font=font_team, anchor="rm")
+        draw.text((cx + card_w - t2_x_offset, mid_y), t2_name, fill=text_primary if w2 >= w1 else text_muted, font=font_team, anchor="rm")
 
         # Individual Matches Breakdown
         matches = s.get("matches", [])

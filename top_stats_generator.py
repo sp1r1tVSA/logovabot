@@ -51,29 +51,32 @@ def _draw_rounded_rect(draw: ImageDraw.ImageDraw, xy: tuple, radius: int, fill: 
     draw.rounded_rectangle(xy, radius=radius, fill=fill, outline=outline, width=width)
 
 
-def generate_top_stats_image(mode: str = "goals", limit: int = 10) -> io.BytesIO:
+def generate_top_stats_image(mode: str = "goals", limit: int = 10, tournament_type: str = "league") -> io.BytesIO:
     """
     Generate a high-res graphic image for Top Scorers ("goals") or Top Assisters ("assists")
     with 2x supersampling for razor-sharp typography and borders.
 
     Returns io.BytesIO PNG buffer.
     """
+    is_cup = (tournament_type == "cup")
+    sub_suffix = "КУБОК КПЛ 2026" if is_cup else "СЕЗОН 2026"
+
     if mode == "goals":
-        title_text = "ТОП БОМБАРДИРОВ"
-        subtitle_text = "ГОНКА БОМБАРДИРОВ  •  СЕЗОН 2026"
+        title_text = "ТОП БОМБАРДИРОВ КУБКА" if is_cup else "ТОП БОМБАРДИРОВ"
+        subtitle_text = f"ГОНКА БОМБАРДИРОВ  •  {sub_suffix}"
         stat_label_str = "ГОЛОВ"
         stat_color = GOAL_COLOR
         badge_bg = GOAL_BG
         badge_border = GOAL_BORDER
-        raw_data = database.get_top_scorers(limit)
+        raw_data = database.get_cup_top_scorers(limit) if is_cup else database.get_top_scorers(limit)
     else:
-        title_text = "ТОП АССИСТЕНТОВ"
-        subtitle_text = "ЛУЧШИЕ АССИСТЕНТЫ  •  СЕЗОН 2026"
+        title_text = "ТОП АССИСТЕНТОВ КУБКА" if is_cup else "ТОП АССИСТЕНТОВ"
+        subtitle_text = f"ЛУЧШИЕ АССИСТЕНТЫ  •  {sub_suffix}"
         stat_label_str = "ПАСОВ"
         stat_color = ASSIST_COLOR
         badge_bg = ASSIST_BG
         badge_border = ASSIST_BORDER
-        raw_data = database.get_top_assists(limit)
+        raw_data = database.get_cup_top_assists(limit) if is_cup else database.get_top_assists(limit)
 
     # ── 2x Scaled Fonts ────────────────────────────────────────────────────
     font_title    = load_font(26 * SCALE, bold=True)

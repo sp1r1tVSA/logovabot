@@ -536,10 +536,76 @@ async def show_cup_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             text += f"{prefix} <b>{html.escape(item['player_name'])}</b> ({html.escape(item['team_name'])}) — <b>{item['total_assists']}</b> 🎯\n"
         text += "\n"
 
-    keyboard = [[InlineKeyboardButton("« Назад к Кубку", callback_data="tournaments_cup_menu")]]
+    keyboard = [
+        [
+            InlineKeyboardButton("⚽ Бомбардиры (Графика)", callback_data="img_cup_scorers"),
+            InlineKeyboardButton("🎯 Ассистенты (Графика)", callback_data="img_cup_assisters")
+        ],
+        [InlineKeyboardButton("« Назад к Кубку", callback_data="tournaments_cup_menu")]
+    ]
     markup = InlineKeyboardMarkup(keyboard)
 
     await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
+
+async def send_cup_scorers_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Generate and send PNG graphics card for Cup Top Scorers."""
+    query = update.callback_query
+    if query:
+        await query.answer()
+
+    import top_stats_generator
+    buf = await asyncio.to_thread(top_stats_generator.generate_top_stats_image, "goals", 10, "cup")
+
+    keyboard = [
+        [InlineKeyboardButton("🎯 Ассистенты Кубка (Графика)", callback_data="img_cup_assisters")],
+        [InlineKeyboardButton("🏆 Назад к Кубку", callback_data="tournaments_cup_menu")]
+    ]
+    markup = InlineKeyboardMarkup(keyboard)
+
+    if query and query.message:
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
+
+    from telegram import InputFile
+    await context.bot.send_photo(
+        chat_id=update.effective_user.id,
+        photo=InputFile(buf, filename="cup_top_scorers.png"),
+        caption="<b>⚽ ТОП БОМБАРДИРОВ КУБКА КПЛ 2026</b>",
+        parse_mode="HTML",
+        reply_markup=markup
+    )
+
+async def send_cup_assisters_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Generate and send PNG graphics card for Cup Top Assisters."""
+    query = update.callback_query
+    if query:
+        await query.answer()
+
+    import top_stats_generator
+    buf = await asyncio.to_thread(top_stats_generator.generate_top_stats_image, "assists", 10, "cup")
+
+    keyboard = [
+        [InlineKeyboardButton("⚽ Бомбардиры Кубка (Графика)", callback_data="img_cup_scorers")],
+        [InlineKeyboardButton("🏆 Назад к Кубку", callback_data="tournaments_cup_menu")]
+    ]
+    markup = InlineKeyboardMarkup(keyboard)
+
+    if query and query.message:
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
+
+    from telegram import InputFile
+    await context.bot.send_photo(
+        chat_id=update.effective_user.id,
+        photo=InputFile(buf, filename="cup_top_assisters.png"),
+        caption="<b>🎯 ТОП АССИСТЕНТОВ КУБКА КПЛ 2026</b>",
+        parse_mode="HTML",
+        reply_markup=markup
+    )
 
 async def show_round_matches(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query

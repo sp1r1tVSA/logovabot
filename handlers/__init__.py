@@ -34,6 +34,8 @@ from handlers.base import (
     show_round_matches,
     cb_refresh_league_table_topic,
     cb_show_cup_graphic,
+    send_cup_scorers_image,
+    send_cup_assisters_image,
 )
 
 # Import cabinet handlers
@@ -247,6 +249,8 @@ def _register_user_handlers(app: Application) -> None:
     app.add_handler(CallbackQueryHandler(show_cup_menu, pattern="^show_cup_stage_.*$"))
     app.add_handler(CallbackQueryHandler(cb_show_cup_graphic, pattern="^show_cup_graphic_.*$"))
     app.add_handler(CallbackQueryHandler(show_cup_stats, pattern="^show_cup_stats$"))
+    app.add_handler(CallbackQueryHandler(send_cup_scorers_image, pattern="^img_cup_scorers$"))
+    app.add_handler(CallbackQueryHandler(send_cup_assisters_image, pattern="^img_cup_assisters$"))
     app.add_handler(CallbackQueryHandler(show_round_matches, pattern="^show_round_matches_\\d+$"))
 
 def _register_cabinet_handlers(app: Application) -> None:
