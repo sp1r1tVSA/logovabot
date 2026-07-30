@@ -473,7 +473,7 @@ def save_dispute_evidence(match_id: int, dispute_photos_json: str) -> None:
             (dispute_photos_json, match_id)
         )
 
-def confirm_match(match_id: int) -> None:
+def confirm_match(match_id: int) -> str | None:
     """Confirm the match score and set status to 'confirmed'."""
     with transaction() as conn:
         cursor = conn.cursor()
@@ -481,9 +481,9 @@ def confirm_match(match_id: int) -> None:
             "UPDATE matches SET status = 'confirmed', played_at = CURRENT_TIMESTAMP WHERE id = ?",
             (match_id,)
         )
-    process_cup_match_completion(match_id)
+    return process_cup_match_completion(match_id)
 
-def confirm_and_finalize_match(match_id: int, p1_score: int, p2_score: int, events: list, reporter_id: int = None, photo_id: str = None) -> None:
+def confirm_and_finalize_match(match_id: int, p1_score: int, p2_score: int, events: list, reporter_id: int = None, photo_id: str = None) -> str | None:
     """Instantly save and confirm a match with events in database."""
     with transaction() as conn:
         cursor = conn.cursor()
@@ -506,7 +506,7 @@ def confirm_and_finalize_match(match_id: int, p1_score: int, p2_score: int, even
             "UPDATE matches SET player1_score = ?, player2_score = ?, reported_by = ?, photo_id = ?, status = 'confirmed', played_at = CURRENT_TIMESTAMP WHERE id = ?",
             (p1_score, p2_score, reporter_id, photo_id, match_id)
         )
-    process_cup_match_completion(match_id)
+    return process_cup_match_completion(match_id)
 
 def dispute_match(match_id: int) -> None:
     """Set match status to 'disputed'."""
@@ -1549,18 +1549,19 @@ def get_cup_top_assists(limit: int = 20) -> list[dict]:
         """, (limit,))
         return [dict(row) for row in cursor.fetchall()]
 
-def process_cup_match_completion(match_id: int) -> None:
+def process_cup_match_completion(match_id: int) -> str | None:
     """
     Called whenever a Cup match status changes to 'confirmed'.
     Updates wins count in cup_series, generates Game 2 or 3 if needed, or completes the series
     and advances the winner to the next stage if all series in the stage are finished!
+    Returns next_stage (e.g. '1/4', '1/2', 'final') if a new stage was generated.
     """
     with transaction() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT id, cup_series_id, cup_stage, game_num_in_series, player1_team, player2_team, player1_score, player2_score, status FROM matches WHERE id = ?", (match_id,))
         m = cursor.fetchone()
         if not m or m["status"] != "confirmed" or not m["cup_series_id"]:
-            return
+            return None
             
         s_id = m["cup_series_id"]
         p1_team = m["player1_team"]
@@ -1569,12 +1570,12 @@ def process_cup_match_completion(match_id: int) -> None:
         s2 = m["player2_score"] or 0
         
         if s1 == s2:
-            return  # Cup matches should have a winner
+            return None  # Cup matches should have a winner
             
         cursor.execute("SELECT * FROM cup_series WHERE id = ?", (s_id,))
         series = cursor.fetchone()
         if not series or series["status"] == "completed":
-            return
+            return None
             
         t1_name = series["team1_name"]
         t2_name = series["team2_name"]
@@ -1606,7 +1607,7 @@ def process_cup_match_completion(match_id: int) -> None:
             cursor.execute("UPDATE cup_series SET winner_name = ?, status = 'completed' WHERE id = ?", (series_winner, s_id))
             
             # Check if all series in current stage are completed, and auto-advance to next stage!
-            _check_and_advance_stage(conn, stage)
+            return _check_and_advance_stage(conn, stage)
         else:
             # Need next game (Game 2 or Game 3)
             current_game_num = len(confirmed_matches)
@@ -1631,8 +1632,9 @@ def process_cup_match_completion(match_id: int) -> None:
                         INSERT INTO matches (round_number, player1_id, player2_id, player1_team, player2_team, status, tournament_type, cup_stage, cup_series_id, game_num_in_series)
                         VALUES (0, ?, ?, ?, ?, 'pending', 'cup', ?, ?, ?)
                     """, (hp_id, ap_id, hp_team, ap_team, stage, s_id, next_game_num))
+            return None
 
-def _check_and_advance_stage(conn, current_stage: str) -> None:
+def _check_and_advance_stage(conn, current_stage: str) -> str | None:
     """Helper to check if all series in stage are done and generate next stage."""
     NEXT_STAGE_MAP = {
         '1/8': '1/4',
@@ -1641,17 +1643,17 @@ def _check_and_advance_stage(conn, current_stage: str) -> None:
     }
     next_stage = NEXT_STAGE_MAP.get(current_stage)
     if not next_stage:
-        return
+        return None
         
     cursor = conn.cursor()
     cursor.execute("SELECT COUNT(*) FROM cup_series WHERE stage = ? AND status != 'completed'", (current_stage,))
     incomplete = cursor.fetchone()[0]
     if incomplete > 0:
-        return # Not all finished yet
+        return None # Not all finished yet
         
     cursor.execute("SELECT COUNT(*) FROM cup_series WHERE stage = ?", (next_stage,))
     if cursor.fetchone()[0] > 0:
-        return # Next stage already generated
+        return None # Next stage already generated
         
     # Get winners of current stage ordered by series_num
     cursor.execute("SELECT series_num, winner_name FROM cup_series WHERE stage = ? ORDER BY series_num ASC", (current_stage,))
@@ -1681,6 +1683,8 @@ def _check_and_advance_stage(conn, current_stage: str) -> None:
                 INSERT INTO matches (round_number, player1_id, player2_id, player1_team, player2_team, status, tournament_type, cup_stage, cup_series_id, game_num_in_series)
                 VALUES (0, ?, ?, ?, ?, 'pending', 'cup', ?, ?, 1)
             """, (p1_id, p2_id, w1, w2, next_stage, s_id))
+            
+    return next_stage
 
 
 

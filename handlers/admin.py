@@ -267,6 +267,48 @@ async def admin_remind_cup_execute(update: Update, context: ContextTypes.DEFAULT
 
     await query.answer(f"🚀 Напоминания отправлены! (ЛС: {pm_sent}, Тема отчетов: ✅)", show_alert=True)
 
+async def notify_cup_stage_opened(bot, stage: str) -> None:
+    """Post an announcement for the newly opened Cup stage to Reports Topic."""
+    main_group_id = await asyncio.to_thread(database.get_group_id)
+    reports_topic_id = await asyncio.to_thread(database.get_config, "reports_topic_id")
+    if not main_group_id:
+        return
+
+    series_list = await asyncio.to_thread(database.get_cup_series_list, stage)
+    if not series_list:
+        return
+
+    stage_title_map = {
+        '1/8': '1/8 ФИНАЛА',
+        '1/4': '1/4 ФИНАЛА',
+        '1/2': '1/2 ФИНАЛА (ПОЛУФИНАЛ)',
+        'final': '🏆 ФИНАЛ КУБКА КПЛ 2026'
+    }
+    title = stage_title_map.get(stage, f"СТАДИЯ {stage}")
+
+    lines = [
+        f"🚀 <b>ОТКРЫТИЕ СТАДИИ | КУБОК КПЛ — {title}</b>\n",
+        f"<i>Формат: Серии до 2-х побед (Best-of-3)</i>",
+        f"<i>Каждая игра проводится с возможным доп. временем и пенальти (ничьих нет).</i>\n",
+        f"⚔️ <b>Пары участников:</b>"
+    ]
+
+    for s in series_list:
+        t1 = html.escape(s["team1_name"])
+        t2 = html.escape(s["team2_name"])
+        s_num = s["series_num"]
+        lines.append(f"• <b>Серия {s_num}:</b> <b>{t1}</b> 🆚 <b>{t2}</b>")
+
+    lines.append("\n📋 Матчи доступны для игры в вашем кабинете (раздел «Мои открытые матчи»). Удачи участникам!")
+
+    try:
+        kwargs = {"chat_id": main_group_id, "text": "\n".join(lines), "parse_mode": "HTML"}
+        if reports_topic_id:
+            kwargs["message_thread_id"] = int(reports_topic_id)
+        await bot.send_message(**kwargs)
+    except Exception as e:
+        logger.exception("Failed to post cup stage opening notification to group")
+
 @admin_only
 async def admin_init_cup_execute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
@@ -277,6 +319,7 @@ async def admin_init_cup_execute(update: Update, context: ContextTypes.DEFAULT_T
     created_count = await asyncio.to_thread(database.init_kpl_cup_1_8)
     if created_count > 0:
         await query.answer(f"✅ Сформировано {created_count} серий 1/8 финала!", show_alert=True)
+        await notify_cup_stage_opened(context.bot, '1/8')
     else:
         await query.answer("⚠️ Сетка 1/8 финала уже сформирована!", show_alert=True)
 

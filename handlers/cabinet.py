@@ -1956,7 +1956,10 @@ async def cb_confirm_ai_final(update: Update, context: ContextTypes.DEFAULT_TYPE
     for p, c in a_assists.items():
         events.append((away_team, p, "assist", c))
 
-    await asyncio.to_thread(database.confirm_and_finalize_match, match_id, h_score, a_score, events, reporter_id=user_id, photo_id=photo_id)
+    next_stage = await asyncio.to_thread(database.confirm_and_finalize_match, match_id, h_score, a_score, events, reporter_id=user_id, photo_id=photo_id)
+    if next_stage:
+        from handlers.admin import notify_cup_stage_opened
+        await notify_cup_stage_opened(context.bot, next_stage)
 
     # 1. PM to reporter
     reporter_text = build_formatted_match_post(
@@ -2106,7 +2109,10 @@ async def submit_report_to_guest(update: Update, context: ContextTypes.DEFAULT_T
         events.append((away_team, p, "assist", c))
 
     # Instant Match Finalization in DB
-    await asyncio.to_thread(database.confirm_and_finalize_match, match_id, hg, ag, events, reporter_id=submitter_id, photo_id=photo_id)
+    next_stage = await asyncio.to_thread(database.confirm_and_finalize_match, match_id, hg, ag, events, reporter_id=submitter_id, photo_id=photo_id)
+    if next_stage:
+        from handlers.admin import notify_cup_stage_opened
+        await notify_cup_stage_opened(context.bot, next_stage)
 
     # 1. Respond to Submitter
     submitter_msg = f"🎉 <b>Результат матча #{match_id} ({hg}:{ag}) успешно занесён в турнирную таблицу!</b>"
@@ -2357,7 +2363,10 @@ async def finalize_guest_confirmation(update: Update, context: ContextTypes.DEFA
     if events:
         await asyncio.to_thread(database.save_match_events, match_id, events, team_name=away_team)
 
-    await asyncio.to_thread(database.confirm_match, match_id)
+    next_stage = await asyncio.to_thread(database.confirm_match, match_id)
+    if next_stage:
+        from handlers.admin import notify_cup_stage_opened
+        await notify_cup_stage_opened(context.bot, next_stage)
     await notify_match_confirmed(context, match_id)
 
 async def notify_match_confirmed(context: ContextTypes.DEFAULT_TYPE, match_id: int) -> None:
