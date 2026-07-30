@@ -445,7 +445,7 @@ def batch_insert_matches(matches_list: list[tuple[int, int, int]]) -> None:
         )
 
 def get_match(match_id: int) -> dict | None:
-    """Retrieve a single match by ID with player nicknames and team names."""
+    """Retrieve a single match by ID with player nicknames, team names, and cup details."""
     with transaction() as conn:
         cursor = conn.cursor()
         cursor.execute("""
@@ -454,15 +454,22 @@ def get_match(match_id: int) -> dict | None:
                 m.player1_score, m.player2_score, m.status, m.played_at, m.is_extended,
                 m.photo_id, m.dispute_photos, m.reported_by,
                 m.proposed_time, m.proposed_by, m.time_status,
-                u1.username AS player1_nickname, u1.team_name AS player1_team, u1.username AS player1_username,
-                u2.username AS player2_nickname, u2.team_name AS player2_team, u2.username AS player2_username
+                m.tournament_type, m.cup_stage, m.cup_series_id, m.game_num_in_series,
+                m.player1_team AS direct_p1_team, m.player2_team AS direct_p2_team,
+                u1.username AS player1_nickname, u1.team_name AS u1_team, u1.username AS player1_username,
+                u2.username AS player2_nickname, u2.team_name AS u2_team, u2.username AS player2_username
             FROM matches m
             LEFT JOIN users u1 ON m.player1_id = u1.telegram_id
             LEFT JOIN users u2 ON m.player2_id = u2.telegram_id
             WHERE m.id = ?
         """, (match_id,))
         row = cursor.fetchone()
-        return dict(row) if row else None
+        if not row:
+            return None
+        d = dict(row)
+        d['player1_team'] = d['direct_p1_team'] or d['u1_team']
+        d['player2_team'] = d['direct_p2_team'] or d['u2_team']
+        return d
 
 def report_match_score(match_id: int, player1_score: int, player2_score: int, reporter_id: int = None, photo_id: str = None) -> None:
     """Set the proposed scores, reporter, photo and update status to 'reported'."""
@@ -526,15 +533,52 @@ def dispute_match(match_id: int) -> None:
             (match_id,)
         )
 
-def reset_match_report(match_id: int) -> None:
-    """Reset match status to pending and clear reported values."""
+def set_technical_result(match_id: int, p1_score: int, p2_score: int) -> str | None:
+    """Set technical result for match and update cup series if applicable."""
     with transaction() as conn:
         cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE matches SET player1_score = ?, player2_score = ?, status = 'confirmed', played_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (p1_score, p2_score, match_id)
+        )
+        cursor.execute("DELETE FROM match_events WHERE match_id = ?", (match_id,))
+    return process_cup_match_completion(match_id)
+
+def reset_match(match_id: int) -> None:
+    """Reset match status to pending, clear scores/events, and update cup series if cup match."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT cup_series_id, status FROM matches WHERE id = ?", (match_id,))
+        m = cursor.fetchone()
+        s_id = m["cup_series_id"] if m else None
+
         cursor.execute(
             "UPDATE matches SET status = 'pending', player1_score = NULL, player2_score = NULL, reported_by = NULL, photo_id = NULL, dispute_photos = NULL WHERE id = ?",
             (match_id,)
         )
         cursor.execute("DELETE FROM match_events WHERE match_id = ?", (match_id,))
+
+        if s_id:
+            # Recalculate cup_series wins
+            cursor.execute("SELECT player1_team, player2_team, player1_score, player2_score FROM matches WHERE cup_series_id = ? AND status = 'confirmed'", (s_id,))
+            confirmed = cursor.fetchall()
+            cursor.execute("SELECT team1_name, team2_name FROM cup_series WHERE id = ?", (s_id,))
+            s_row = cursor.fetchone()
+            if s_row:
+                t1, t2 = s_row["team1_name"], s_row["team2_name"]
+                t1_wins = 0
+                t2_wins = 0
+                for cm in confirmed:
+                    c1, c2 = cm["player1_score"] or 0, cm["player2_score"] or 0
+                    if c1 > c2 and cm["player1_team"] and cm["player1_team"].lower() == t1.lower(): t1_wins += 1
+                    elif c2 > c1 and cm["player2_team"] and cm["player2_team"].lower() == t2.lower(): t2_wins += 1
+                    elif c1 > c2 and cm["player1_team"] and cm["player1_team"].lower() == t2.lower(): t2_wins += 1
+                    elif c2 > c1 and cm["player2_team"] and cm["player2_team"].lower() == t1.lower(): t1_wins += 1
+                cursor.execute("UPDATE cup_series SET team1_wins = ?, team2_wins = ?, winner_name = NULL, status = 'active' WHERE id = ?", (t1_wins, t2_wins, s_id))
+
+def reset_match_report(match_id: int) -> None:
+    """Reset match status to pending and clear reported values."""
+    reset_match(match_id)
 
 def propose_match_time(match_id: int, user_id: int, time_str: str) -> None:
     """Propose or update match time by player."""

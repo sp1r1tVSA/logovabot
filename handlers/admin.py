@@ -172,11 +172,23 @@ async def admin_manage_cup(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 InlineKeyboardButton("1/4", callback_data="admin_cup_stage_1/4"),
                 InlineKeyboardButton("1/2", callback_data="admin_cup_stage_1/2"),
                 InlineKeyboardButton("Финал", callback_data="admin_cup_stage_final"),
-            ],
-            [InlineKeyboardButton("📢 Напомнить участникам Кубка в тему отчётов", callback_data=f"admin_remind_cup_{stage}")],
-            [InlineKeyboardButton("🔄 Обновить", callback_data=f"admin_cup_stage_{stage}")],
-            [InlineKeyboardButton("« Назад в админку", callback_data="admin_main_menu")]
+            ]
         ]
+
+        # Add match management buttons for all matches in current stage
+        for s in series_list:
+            for m in s.get("matches", []):
+                g_num = m['game_num_in_series']
+                t1 = m['player1_team'] or s['team1_name']
+                t2 = m['player2_team'] or s['team2_name']
+                st_icon = "✅" if m['status'] == 'confirmed' else "⏳"
+                score_part = f"({m['player1_score']}:{m['player2_score']})" if m['status'] == 'confirmed' else "vs"
+                btn_label = f"⚙️ Игра {g_num}: {t1} {score_part} {t2} {st_icon}"
+                keyboard.append([InlineKeyboardButton(btn_label, callback_data=f"admin_view_match_{m['id']}")])
+
+        keyboard.append([InlineKeyboardButton("📢 Напомнить участникам Кубка в тему отчётов", callback_data=f"admin_remind_cup_{stage}")])
+        keyboard.append([InlineKeyboardButton("🔄 Обновить", callback_data=f"admin_cup_stage_{stage}")])
+        keyboard.append([InlineKeyboardButton("« Назад в админку", callback_data="admin_main_menu")])
 
     markup = InlineKeyboardMarkup(keyboard)
     await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
@@ -1199,6 +1211,18 @@ async def admin_view_match(update: Update, context: ContextTypes.DEFAULT_TYPE, m
         await query.edit_message_text("❌ Матч не найден.", reply_markup=InlineKeyboardMarkup(keyboard))
         return
         
+    is_cup = match.get("tournament_type") == "cup"
+    cup_stage = match.get("cup_stage", "1/8")
+    g_num = match.get("game_num_in_series", 1)
+
+    if is_cup:
+        title_stage = f"{cup_stage} Финала" if cup_stage != "final" else "ФИНАЛ"
+        header_title = f"🏆 <b>Карточка кубкового матча #{match['id']} | Кубок КПЛ — {title_stage} (Игра {g_num})</b>"
+        back_button = InlineKeyboardButton("« Назад к Кубку", callback_data=f"admin_cup_stage_{cup_stage}")
+    else:
+        header_title = f"⚽️ <b>Карточка матча #{match['id']} (Тур {match['round_number']})</b>"
+        back_button = InlineKeyboardButton("« Назад к туру", callback_data=f"admin_round_matches_{match['round_number']}")
+
     status_map = {
         "pending": "⚔️ Ожидает игры",
         "reported": "⏳ На подтверждении",
@@ -1208,12 +1232,12 @@ async def admin_view_match(update: Update, context: ContextTypes.DEFAULT_TYPE, m
     
     club1 = f" [{html.escape(match['player1_team'])}]" if match['player1_team'] else ""
     club2 = f" [{html.escape(match['player2_team'])}]" if match['player2_team'] else ""
-    p1_name = html.escape(str(match['player1_nickname'] or ""))
-    p2_name = html.escape(str(match['player2_nickname'] or ""))
+    p1_name = html.escape(str(match['player1_nickname'] or match['player1_team'] or ""))
+    p2_name = html.escape(str(match['player2_nickname'] or match['player2_team'] or ""))
     score_str = f"<code>{match['player1_score']} : {match['player2_score']}</code>" if match['player1_score'] is not None else "Не сыгран"
     
     text = (
-        f"⚽️ <b>Карточка матча #{match['id']} (Тур {match['round_number']})</b>\n\n"
+        f"{header_title}\n\n"
         f"⚔️ <b>{p1_name}</b>{club1}\n"
         f" 🆚 <b>{p2_name}</b>{club2}\n\n"
         f"• <b>Текущий счет:</b> {score_str}\n"
@@ -1226,9 +1250,13 @@ async def admin_view_match(update: Update, context: ContextTypes.DEFAULT_TYPE, m
         [InlineKeyboardButton("⚡ Внести результат по фото (ИИ)", callback_data=f"admin_report_score_auto_{match_id}")],
         [InlineKeyboardButton("✍️ Внести результат вручную", callback_data=f"cb_report_choice_manual_{match_id}")],
         [InlineKeyboardButton("🚫 ТП 3:0 (Хозяева)", callback_data=f"admin_tp_home_{match_id}"), InlineKeyboardButton("🚫 ТП 0:3 (Гости)", callback_data=f"admin_tp_away_{match_id}")],
-        [InlineKeyboardButton("🤝 ТН 0:0 (Ничья)", callback_data=f"admin_tp_draw_{match_id}"), InlineKeyboardButton("🔄 Сбросить результат", callback_data=f"admin_reset_match_execute_{match_id}")],
-        [InlineKeyboardButton("« Назад к туру", callback_data=f"admin_round_matches_{match['round_number']}")]
     ]
+    if not is_cup:
+        keyboard.append([InlineKeyboardButton("🤝 ТН 0:0 (Ничья)", callback_data=f"admin_tp_draw_{match_id}"), InlineKeyboardButton("🔄 Сбросить результат", callback_data=f"admin_reset_match_execute_{match_id}")])
+    else:
+        keyboard.append([InlineKeyboardButton("🔄 Сбросить результат", callback_data=f"admin_reset_match_execute_{match_id}")])
+    keyboard.append([back_button])
+
     if query.message and query.message.photo:
         try:
             await query.message.delete()
@@ -1281,7 +1309,9 @@ async def admin_set_tp_home_execute(update: Update, context: ContextTypes.DEFAUL
     if not query or not is_admin(query.from_user.id): return
     await query.answer()
     match_id = int(query.data.replace("admin_tp_home_", ""))
-    await asyncio.to_thread(database.set_technical_result, match_id, 3, 0)
+    next_stage = await asyncio.to_thread(database.set_technical_result, match_id, 3, 0)
+    if next_stage:
+        await notify_cup_stage_opened(context.bot, next_stage)
     await query.answer("✅ Назначено ТП 3:0 (Победа Хозяев)", show_alert=True)
     await admin_view_match(update, context, match_id=match_id)
 
@@ -1291,7 +1321,9 @@ async def admin_set_tp_away_execute(update: Update, context: ContextTypes.DEFAUL
     if not query or not is_admin(query.from_user.id): return
     await query.answer()
     match_id = int(query.data.replace("admin_tp_away_", ""))
-    await asyncio.to_thread(database.set_technical_result, match_id, 0, 3)
+    next_stage = await asyncio.to_thread(database.set_technical_result, match_id, 0, 3)
+    if next_stage:
+        await notify_cup_stage_opened(context.bot, next_stage)
     await query.answer("✅ Назначено ТП 0:3 (Победа Гостей)", show_alert=True)
     await admin_view_match(update, context, match_id=match_id)
 
