@@ -84,6 +84,17 @@ def clean_json_response(raw_text: str) -> str:
     text = re.sub(r"\s*```$", "", text)
     return text.strip()
 
+def _get_gemini_opener():
+    """Returns a urllib opener with proxy support (WARP on 127.0.0.1:4001 or system proxy)."""
+    proxy_url = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY") or os.environ.get("WARP_PROXY", "http://127.0.0.1:4001")
+    if proxy_url:
+        try:
+            handler = urllib.request.ProxyHandler({"http": proxy_url, "https": proxy_url})
+            return urllib.request.build_opener(handler)
+        except Exception:
+            pass
+    return urllib.request.build_opener()
+
 def recognize_match_screenshots_bytes(images_bytes_list: list[bytes], mime_type: str = "image/jpeg", api_key: str = None) -> dict | None:
     target_api_key = (api_key or config.GEMINI_API_KEY).strip()
 
@@ -93,6 +104,8 @@ def recognize_match_screenshots_bytes(images_bytes_list: list[bytes], mime_type:
 
     if not images_bytes_list:
         return None
+
+    opener = _get_gemini_opener()
 
     for m_name in GEMINI_MODELS:
         try:
@@ -120,7 +133,17 @@ def recognize_match_screenshots_bytes(images_bytes_list: list[bytes], mime_type:
                 headers={"Content-Type": "application/json"}
             )
 
-            with urllib.request.urlopen(req, timeout=30) as response:
+            # Try request through proxy opener first, fallback to direct urlopen if proxy is unreachable
+            try:
+                response = opener.open(req, timeout=30)
+            except urllib.error.URLError as proxy_err:
+                # Proxy connection failed, try direct connection
+                if not isinstance(proxy_err, urllib.error.HTTPError):
+                    response = urllib.request.urlopen(req, timeout=30)
+                else:
+                    raise proxy_err
+
+            with response:
                 res_json = json.loads(response.read().decode("utf-8"))
 
                 candidates = res_json.get("candidates", [])
@@ -170,13 +193,10 @@ def recognize_match_screenshots_bytes(images_bytes_list: list[bytes], mime_type:
 
         except urllib.error.HTTPError as e:
             error_body = e.read().decode("utf-8", errors="ignore")
-            if e.code in (400, 404, 429):
-                logger.warning(f"Gemini model '{m_name}' HTTP {e.code} (rate-limit / location / 404). Trying next fallback model...")
-                if e.code == 429:
-                    import time
-                    time.sleep(1.0)
-            else:
-                logger.error(f"Gemini model '{m_name}' HTTP Error {e.code}: {error_body}")
+            logger.warning(f"Gemini model '{m_name}' HTTP {e.code}: {error_body[:300]}")
+            if e.code == 429:
+                import time
+                time.sleep(1.0)
             continue
         except Exception as e:
             logger.exception(f"Gemini model '{m_name}' recognition error: {e}")
