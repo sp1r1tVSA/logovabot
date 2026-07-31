@@ -478,26 +478,22 @@ async def show_cup_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         [InlineKeyboardButton("« Назад к турнирам", callback_data="menu_tournaments")]
     ]
     markup = InlineKeyboardMarkup(keyboard)
-
-    if query:
-        if query.message and query.message.photo:
-            try:
-                await query.message.delete()
-            except Exception:
-                pass
-            await context.bot.send_message(chat_id=query.from_user.id, text=text, reply_markup=markup, parse_mode="HTML")
-        else:
-            try:
-                await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
-            except Exception:
-                try:
-                    await query.message.delete()
-                except Exception:
-                    pass
-                await context.bot.send_message(chat_id=query.from_user.id, text=text, reply_markup=markup, parse_mode="HTML")
-    elif update.message:
-        await update.message.reply_text(text, reply_markup=markup, parse_mode="HTML")
-
+    if query.message and (query.message.photo or query.message.document):
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
+        await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text=text,
+            parse_mode="HTML",
+            reply_markup=markup
+        )
+    else:
+        try:
+            await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
+        except Exception as e:
+            logger.warning(f"Failed to edit message in show_cup_menu: {e}")
 async def cb_show_cup_graphic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     if not query:
@@ -561,26 +557,22 @@ async def show_cup_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         [InlineKeyboardButton("« Назад к Кубку", callback_data="tournaments_cup_menu")]
     ]
     markup = InlineKeyboardMarkup(keyboard)
-
-    if query:
-        if query.message and query.message.photo:
-            try:
-                await query.message.delete()
-            except Exception:
-                pass
-            await context.bot.send_message(chat_id=query.from_user.id, text=text, reply_markup=markup, parse_mode="HTML")
-        else:
-            try:
-                await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
-            except Exception:
-                try:
-                    await query.message.delete()
-                except Exception:
-                    pass
-                await context.bot.send_message(chat_id=query.from_user.id, text=text, reply_markup=markup, parse_mode="HTML")
-    elif update.message:
-        await update.message.reply_text(text, reply_markup=markup, parse_mode="HTML")
-
+    if query.message and (query.message.photo or query.message.document):
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
+        await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text=text,
+            parse_mode="HTML",
+            reply_markup=markup
+        )
+    else:
+        try:
+            await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
+        except Exception as e:
+            logger.warning(f"Failed to edit message in show_cup_stats: {e}")
 async def send_cup_scorers_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Generate and send PNG graphics card for Cup Top Scorers."""
     query = update.callback_query
