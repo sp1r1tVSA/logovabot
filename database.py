@@ -1772,7 +1772,8 @@ def get_all_unplayed_cup_matches() -> list[dict]:
                 m.id, m.cup_stage, m.cup_series_id, m.game_num_in_series,
                 m.player1_id, m.player2_id, m.player1_team, m.player2_team,
                 s.team1_name, s.team2_name, s.team1_wins, s.team2_wins,
-                u1.username AS p1_username, u2.username AS p2_username
+                u1.username AS p1_username, u2.username AS p2_username,
+                u1.team_name AS p1_team, u2.team_name AS p2_team
             FROM matches m
             JOIN cup_series s ON m.cup_series_id = s.id
             LEFT JOIN users u1 ON m.player1_id = u1.telegram_id

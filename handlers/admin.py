@@ -512,8 +512,8 @@ async def admin_broadcast_all_debts_execute(update: Update, context: ContextType
             for m in league_unplayed:
                 t1 = html.escape(m['player1_team'] or m['p1_team'] or 'неизвестно')
                 t2 = html.escape(m['player2_team'] or m['p2_team'] or 'неизвестно')
-                u1 = f" (@{html.escape(m['p1_username'])})" if m['p1_username'] else ""
-                u2 = f" (@{html.escape(m['p2_username'])})" if m['p2_username'] else ""
+                u1 = f" (@{html.escape(m['p1_username'])})" if m['p1_username'] else (" (Пока нет участника)" if m.get('p1_team') is None else "")
+                u2 = f" (@{html.escape(m['p2_username'])})" if m['p2_username'] else (" (Пока нет участника)" if m.get('p2_team') is None else "")
                 group_lines.append(f"• Тур {m['round_number']}: 🏠 <b>{t1}</b>{u1} -:- <b>{t2}</b>{u2} ✈️")
             group_lines.append("")
 
@@ -522,8 +522,8 @@ async def admin_broadcast_all_debts_execute(update: Update, context: ContextType
             for m in cup_unplayed:
                 t1 = html.escape(m['player1_team'] or m['team1_name'] or 'неизвестно')
                 t2 = html.escape(m['player2_team'] or m['team2_name'] or 'неизвестно')
-                u1 = f" (@{html.escape(m['p1_username'])})" if m['p1_username'] else ""
-                u2 = f" (@{html.escape(m['p2_username'])})" if m['p2_username'] else ""
+                u1 = f" (@{html.escape(m['p1_username'])})" if m['p1_username'] else (" (Пока нет участника)" if m.get('p1_team') is None else "")
+                u2 = f" (@{html.escape(m['p2_username'])})" if m['p2_username'] else (" (Пока нет участника)" if m.get('p2_team') is None else "")
                 stage = m.get('cup_stage', '1/8')
                 g_num = m.get('game_num_in_series', 1)
                 w1 = m.get('team1_wins', 0)
