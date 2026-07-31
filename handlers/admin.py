@@ -138,9 +138,9 @@ async def admin_manage_cup(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     text = f"🏆 <b>Админ-панель: Управление Кубком КПЛ ({stage})</b>\n\n"
 
     if not series_list:
-        text += "⚠️ Сетка Кубка для этой стадии еще не инициализирована.\n\nНажмите кнопку ниже, чтобы сформировать 8 серий 1/8 финала по утвержденным парам."
+        text += "⚠️ Сетка Кубка еще не инициализирована.\n\nНажмите кнопку ниже, чтобы сформировать сразу все стадии (1/8, 1/4, 1/2 и Финал)."
         keyboard = [
-            [InlineKeyboardButton("🚀 Запустить 1/8 Финала Кубка (8 серий)", callback_data="admin_init_cup_execute")],
+            [InlineKeyboardButton("🚀 Сформировать сетку Кубка (Все стадии)", callback_data="admin_init_cup_execute")],
             [InlineKeyboardButton("« Назад в админку", callback_data="admin_main_menu")]
         ]
     else:
@@ -341,7 +341,7 @@ async def admin_init_cup_execute(update: Update, context: ContextTypes.DEFAULT_T
         return
     await query.answer()
 
-    created_count = await asyncio.to_thread(database.init_kpl_cup_1_8)
+    created_count = await asyncio.to_thread(database.init_kpl_cup_all_stages)
     if created_count > 0:
         await query.answer(f"✅ Сформировано {created_count} серий 1/8 финала!", show_alert=True)
         await notify_cup_stage_opened(context.bot, '1/8')
