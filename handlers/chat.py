@@ -7,7 +7,6 @@ from telegram.ext import ContextTypes
 from telegram.error import BadRequest
 import database
 import ai_chat
-import tts
 
 
 logger = logging.getLogger(__name__)
@@ -243,34 +242,6 @@ async def handle_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 5. Send reply
     await update.message.reply_text(reply_text)
 
-    # 6. Check if user requested voice output
-    voice_keywords = ["голос", "озвучь", "проговори", "аудио", "скажи голосом", "поговори"]
-    wants_voice = any(kw in user_text.lower() for kw in voice_keywords)
 
-    if wants_voice:
-        try:
-            thread_id = update.effective_message.message_thread_id if update.effective_message else None
-            if thread_id:
-                await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.RECORD_VOICE, message_thread_id=thread_id)
-            else:
-                await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.RECORD_VOICE)
-
-            audio_bytes = await tts.generate_voice_audio(reply_text)
-            if audio_bytes:
-                kwargs = {
-                    "chat_id": chat_id,
-                    "voice": io.BytesIO(audio_bytes),
-                    "caption": "🎙 Голосовой ответ от Темшика"
-                }
-                if thread_id:
-                    kwargs["message_thread_id"] = thread_id
-
-                try:
-                    await context.bot.send_voice(**kwargs, reply_to_message_id=update.message.message_id)
-                except BadRequest as br:
-                    logger.warning(f"Could not send voice with reply_to_message_id ({br}), sending without reply_to")
-                    await context.bot.send_voice(**kwargs)
-        except Exception as e:
-            logger.error(f"Failed to generate or send voice reply: {e}", exc_info=True)
 
 
