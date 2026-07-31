@@ -26,7 +26,6 @@ def generate_chat_reply(
 
     # List of valid, official Google Gemini API models in order of preference
     candidate_models = [
-        "gemini-3.1-pro",
         "gemini-3.1-flash-lite",
         "gemini-3.5-flash-lite",
         "gemini-2.5-flash-lite",
