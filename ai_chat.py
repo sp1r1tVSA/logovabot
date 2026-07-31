@@ -26,6 +26,7 @@ def generate_chat_reply(
 
     # List of valid, official Google Gemini API models in order of preference
     candidate_models = [
+        "gemini-3.1-pro",
         "gemini-3.1-flash-lite",
         "gemini-3.5-flash-lite",
         "gemini-2.5-flash-lite",
@@ -96,11 +97,14 @@ def generate_chat_reply(
     
     payload_bytes = json.dumps(payload).encode('utf-8')
 
+    from ai_recognizer import _get_gemini_opener
+    opener = _get_gemini_opener()
+
     for model_name in candidate_models:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
         req = urllib.request.Request(url, data=payload_bytes, headers={'Content-Type': 'application/json'})
         try:
-            with urllib.request.urlopen(req, timeout=25) as response:
+            with opener.open(req, timeout=25) as response:
                 result = json.loads(response.read().decode('utf-8'))
                 
                 if "candidates" not in result or not result["candidates"]:
