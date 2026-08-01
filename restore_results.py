@@ -1,7 +1,5 @@
 import sqlite3
-import os
-
-DB_PATH = os.getenv("LEAGUE_SQLITE_PATH", "league.db")
+from config import DB_PATH
 
 RESULTS = [
     {
