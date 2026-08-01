@@ -348,12 +348,16 @@ def get_standings() -> list[dict]:
     with transaction() as conn:
         cursor = conn.cursor()
         
-        # Get all distinct teams in the league matches
+        # Get all distinct teams in the league matches (supporting both old matches via player_id and new matches via player_team)
         cursor.execute("""
             SELECT DISTINCT team_name FROM (
-                SELECT player1_team AS team_name FROM matches WHERE tournament_type IS NULL OR tournament_type = 'league'
+                SELECT COALESCE(m.player1_team, u1.team_name) AS team_name 
+                FROM matches m LEFT JOIN users u1 ON m.player1_id = u1.telegram_id 
+                WHERE m.tournament_type IS NULL OR m.tournament_type = 'league'
                 UNION
-                SELECT player2_team AS team_name FROM matches WHERE tournament_type IS NULL OR tournament_type = 'league'
+                SELECT COALESCE(m.player2_team, u2.team_name) AS team_name 
+                FROM matches m LEFT JOIN users u2 ON m.player2_id = u2.telegram_id 
+                WHERE m.tournament_type IS NULL OR m.tournament_type = 'league'
             ) WHERE team_name IS NOT NULL AND team_name != ''
         """)
         all_teams = [row["team_name"] for row in cursor.fetchall()]
@@ -379,9 +383,17 @@ def get_standings() -> list[dict]:
             }
 
         # Get all confirmed matches (League matches only)
-        cursor.execute(
-            "SELECT player1_team, player2_team, player1_score, player2_score FROM matches WHERE status = 'confirmed' AND (tournament_type IS NULL OR tournament_type = 'league')"
-        )
+        cursor.execute("""
+            SELECT 
+                COALESCE(m.player1_team, u1.team_name) AS player1_team, 
+                COALESCE(m.player2_team, u2.team_name) AS player2_team, 
+                m.player1_score, 
+                m.player2_score 
+            FROM matches m
+            LEFT JOIN users u1 ON m.player1_id = u1.telegram_id
+            LEFT JOIN users u2 ON m.player2_id = u2.telegram_id
+            WHERE m.status = 'confirmed' AND (m.tournament_type IS NULL OR m.tournament_type = 'league')
+        """)
         matches = cursor.fetchall()
 
         for match in matches:
@@ -1011,15 +1023,9 @@ def remove_player(player_ref: str) -> tuple[bool, str]:
             
         p_id, team, uname = row[0], row[1], row[2]
         
-        # Delete match_events & matches for this player first to satisfy FK constraints
-        cursor.execute("""
-            DELETE FROM match_events WHERE match_id IN (
-                SELECT id FROM matches WHERE player1_id = ? OR player2_id = ?
-            )
-        """, (p_id, p_id))
-        cursor.execute("DELETE FROM matches WHERE player1_id = ? OR player2_id = ?", (p_id, p_id))
-        
-        # Delete user
+        # Unlink player from matches instead of deleting them to preserve league history
+        cursor.execute("UPDATE matches SET player1_id = NULL WHERE player1_id = ?", (p_id,))
+        cursor.execute("UPDATE matches SET player2_id = NULL WHERE player2_id = ?", (p_id,))
         cursor.execute("DELETE FROM users WHERE telegram_id = ?", (p_id,))
         
         display_name = f"@{uname}" if uname else f"ID {p_id}"

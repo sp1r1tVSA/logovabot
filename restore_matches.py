@@ -8,11 +8,13 @@ def restore():
     
     # Получаем все команды, которые есть в таблице матчей
     cursor.execute("""
-        SELECT DISTINCT team_name FROM (
-            SELECT player1_team AS team_name FROM matches WHERE tournament_type IS NULL OR tournament_type = 'league'
+        SELECT DISTINCT team_name FROM users 
+        WHERE team_name IS NOT NULL AND team_name != ''
+        AND telegram_id IN (
+            SELECT player1_id FROM matches WHERE tournament_type IS NULL OR tournament_type = 'league'
             UNION
-            SELECT player2_team AS team_name FROM matches WHERE tournament_type IS NULL OR tournament_type = 'league'
-        ) WHERE team_name IS NOT NULL AND team_name != ''
+            SELECT player2_id FROM matches WHERE tournament_type IS NULL OR tournament_type = 'league'
+        )
     """)
     teams = set([row[0] for row in cursor.fetchall()])
     
@@ -25,7 +27,13 @@ def restore():
     restored_count = 0
     # Проходим по всем 30 турам
     for round_num in range(1, 31):
-        cursor.execute("SELECT player1_team, player2_team FROM matches WHERE round_number = ? AND (tournament_type IS NULL OR tournament_type = 'league')", (round_num,))
+        cursor.execute("""
+            SELECT COALESCE(m.player1_team, u1.team_name), COALESCE(m.player2_team, u2.team_name)
+            FROM matches m
+            LEFT JOIN users u1 ON m.player1_id = u1.telegram_id
+            LEFT JOIN users u2 ON m.player2_id = u2.telegram_id
+            WHERE m.round_number = ? AND (m.tournament_type IS NULL OR m.tournament_type = 'league')
+        """, (round_num,))
         matches = cursor.fetchall()
         
         round_teams = set()
