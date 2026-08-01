@@ -321,15 +321,15 @@ def get_match_history(telegram_id: int) -> list[dict]:
                 m.player1_id, m.player2_id,
                 o.telegram_id AS opponent_id,
                 o.username AS opponent_username,
-                o.team_name AS opponent_team
+                COALESCE(o.team_name, CASE WHEN m.player1_id = ? THEN m.player2_team ELSE m.player1_team END) AS opponent_team
             FROM matches m
-            JOIN users o ON (
+            LEFT JOIN users o ON (
                 (m.player1_id = ? AND m.player2_id = o.telegram_id) OR
                 (m.player2_id = ? AND m.player1_id = o.telegram_id)
             )
-            WHERE m.status = 'confirmed'
+            WHERE (m.player1_id = ? OR m.player2_id = ?) AND m.status = 'confirmed'
             ORDER BY m.played_at DESC, m.round_number DESC
-        """, (telegram_id, telegram_id))
+        """, (telegram_id, telegram_id, telegram_id, telegram_id, telegram_id))
         return [dict(row) for row in cursor.fetchall()]
 
 def update_single_field(telegram_id: int, field_name: str, value: str) -> None:
