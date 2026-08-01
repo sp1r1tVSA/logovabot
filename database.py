@@ -160,6 +160,16 @@ def init_db() -> None:
 
         logger.info("Database tables initialized successfully.")
 
+def get_team_owner(team_name: str) -> int | None:
+    """Return the telegram_id of the user who owns the given team."""
+    if not team_name:
+        return None
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT telegram_id FROM users WHERE LOWER(team_name) = LOWER(?)", (team_name,))
+        row = cursor.fetchone()
+        return row['telegram_id'] if row else None
+
 def get_user(telegram_id: int) -> sqlite3.Row | None:
     """Retrieve a user record by Telegram ID."""
     with transaction() as conn:
@@ -211,10 +221,14 @@ def get_player_stats(telegram_id: int) -> dict:
     """Calculate and return match statistics for a player using a single aggregated SQL query."""
     with transaction() as conn:
         cursor = conn.cursor()
+        cursor.execute("SELECT team_name FROM users WHERE telegram_id = ?", (telegram_id,))
+        u_row = cursor.fetchone()
+        u_team = u_row["team_name"] if u_row and u_row["team_name"] else ""
+
         cursor.execute("""
             SELECT
                 SUM(CASE 
-                    WHEN (player1_id = ? AND player1_score > player2_score) OR (player2_id = ? AND player2_score > player1_score) THEN 1 
+                    WHEN (player1_team = ? AND player1_score > player2_score) OR (player2_team = ? AND player2_score > player1_score) THEN 1 
                     ELSE 0 
                 END) AS wins,
                 SUM(CASE 
@@ -222,22 +236,22 @@ def get_player_stats(telegram_id: int) -> dict:
                     ELSE 0 
                 END) AS draws,
                 SUM(CASE 
-                    WHEN (player1_id = ? AND player1_score < player2_score) OR (player2_id = ? AND player2_score < player1_score) THEN 1 
+                    WHEN (player1_team = ? AND player1_score < player2_score) OR (player2_team = ? AND player2_score < player1_score) THEN 1 
                     ELSE 0 
                 END) AS losses,
                 SUM(CASE 
-                    WHEN player1_id = ? THEN COALESCE(player1_score, 0)
-                    WHEN player2_id = ? THEN COALESCE(player2_score, 0)
+                    WHEN player1_team = ? THEN COALESCE(player1_score, 0)
+                    WHEN player2_team = ? THEN COALESCE(player2_score, 0)
                     ELSE 0 
                 END) AS goals_scored,
                 SUM(CASE 
-                    WHEN player1_id = ? THEN COALESCE(player2_score, 0)
-                    WHEN player2_id = ? THEN COALESCE(player1_score, 0)
+                    WHEN player1_team = ? THEN COALESCE(player2_score, 0)
+                    WHEN player2_team = ? THEN COALESCE(player1_score, 0)
                     ELSE 0 
                 END) AS goals_conceded
             FROM matches
-            WHERE status = 'confirmed' AND (player1_id = ? OR player2_id = ?)
-        """, (telegram_id, telegram_id, telegram_id, telegram_id, telegram_id, telegram_id, telegram_id, telegram_id, telegram_id, telegram_id))
+            WHERE status = 'confirmed' AND (player1_team = ? OR player2_team = ?)
+        """, (u_team, u_team, u_team, u_team, u_team, u_team, u_team, u_team, u_team, u_team))
         
         row = cursor.fetchone()
         wins = row["wins"] or 0 if row else 0
@@ -275,15 +289,14 @@ def get_pending_matches(telegram_id: int) -> list[dict]:
         cursor.execute("""
             SELECT 
                 m.id, m.round_number, m.status, m.tournament_type, m.cup_stage, m.cup_series_id, m.game_num_in_series,
-                m.player1_team, m.player2_team, m.player1_id, m.player2_id,
+                m.player1_team, m.player2_team, u1.telegram_id AS player1_id, u2.telegram_id AS player2_id,
                 u1.username AS p1_username, u1.team_name AS p1_team,
                 u2.username AS p2_username, u2.team_name AS p2_team
             FROM matches m
-            LEFT JOIN users u1 ON m.player1_id = u1.telegram_id
-            LEFT JOIN users u2 ON m.player2_id = u2.telegram_id
+            LEFT JOIN users u1 ON LOWER(m.player1_team) = LOWER(u1.team_name)
+            LEFT JOIN users u2 ON LOWER(m.player2_team) = LOWER(u2.team_name)
             WHERE (
-                (m.player1_id = ? OR m.player2_id = ?)
-                OR (LOWER(m.player1_team) = LOWER(?) AND ? != '')
+                (LOWER(m.player1_team) = LOWER(?) AND ? != '')
                 OR (LOWER(m.player2_team) = LOWER(?) AND ? != '')
             )
             AND (
@@ -297,12 +310,12 @@ def get_pending_matches(telegram_id: int) -> list[dict]:
                 )
             )
             ORDER BY m.round_number ASC, m.id ASC
-        """, (telegram_id, telegram_id, u_team, u_team, u_team, u_team, max_open_round))
+        """, (u_team, u_team, u_team, u_team, max_open_round))
         
         matches = []
         for row in cursor.fetchall():
             d = dict(row)
-            if d['player1_id'] == telegram_id or (u_team and d['player1_team'] and d['player1_team'].lower() == u_team.lower()):
+            if u_team and d['player1_team'] and d['player1_team'].lower() == u_team.lower():
                 d['opponent_team'] = d['player2_team'] or d['p2_team']
                 d['opponent_username'] = d['p2_username']
             else:
@@ -315,21 +328,28 @@ def get_match_history(telegram_id: int) -> list[dict]:
     """Retrieve played (confirmed) matches for a user, including opponent profile details."""
     with transaction() as conn:
         cursor = conn.cursor()
+        cursor.execute("SELECT team_name FROM users WHERE telegram_id = ?", (telegram_id,))
+        u_row = cursor.fetchone()
+        u_team = u_row["team_name"] if u_row and u_row["team_name"] else ""
+        if not u_team:
+            return []
+
         cursor.execute("""
             SELECT 
                 m.id, m.round_number, m.player1_score, m.player2_score,
-                m.player1_id, m.player2_id,
+                u1.telegram_id AS player1_id, u2.telegram_id AS player2_id,
+                m.player1_team, m.player2_team,
                 o.telegram_id AS opponent_id,
                 o.username AS opponent_username,
-                COALESCE(o.team_name, CASE WHEN m.player1_id = ? THEN m.player2_team ELSE m.player1_team END) AS opponent_team
+                COALESCE(o.team_name, CASE WHEN LOWER(m.player1_team) = LOWER(?) THEN m.player2_team ELSE m.player1_team END) AS opponent_team
             FROM matches m
             LEFT JOIN users o ON (
-                (m.player1_id = ? AND m.player2_id = o.telegram_id) OR
-                (m.player2_id = ? AND m.player1_id = o.telegram_id)
+                (LOWER(m.player1_team) = LOWER(?) AND LOWER(m.player2_team) = LOWER(o.team_name)) OR
+                (LOWER(m.player2_team) = LOWER(?) AND LOWER(m.player1_team) = LOWER(o.team_name))
             )
-            WHERE (m.player1_id = ? OR m.player2_id = ?) AND m.status = 'confirmed'
+            WHERE (LOWER(m.player1_team) = LOWER(?) OR LOWER(m.player2_team) = LOWER(?)) AND m.status = 'confirmed'
             ORDER BY m.played_at DESC, m.round_number DESC
-        """, (telegram_id, telegram_id, telegram_id, telegram_id, telegram_id))
+        """, (u_team, u_team, u_team, u_team, u_team))
         return [dict(row) for row in cursor.fetchall()]
 
 def update_single_field(telegram_id: int, field_name: str, value: str) -> None:
@@ -378,8 +398,8 @@ def get_standings() -> list[dict]:
                 m.player1_score, 
                 m.player2_score 
             FROM matches m
-            LEFT JOIN users u1 ON m.player1_id = u1.telegram_id
-            LEFT JOIN users u2 ON m.player2_id = u2.telegram_id
+            LEFT JOIN users u1 ON LOWER(m.player1_team) = LOWER(u1.team_name)
+            LEFT JOIN users u2 ON LOWER(m.player2_team) = LOWER(u2.team_name)
             WHERE m.status = 'confirmed' AND (m.tournament_type IS NULL OR m.tournament_type = 'league')
         """)
         matches = cursor.fetchall()
@@ -455,7 +475,7 @@ def get_match(match_id: int) -> dict | None:
         cursor = conn.cursor()
         cursor.execute("""
             SELECT 
-                m.id, m.round_number, m.player1_id, m.player2_id,
+                m.id, m.round_number, u1.telegram_id AS player1_id, u2.telegram_id AS player2_id,
                 m.player1_score, m.player2_score, m.status, m.played_at, m.is_extended,
                 m.photo_id, m.dispute_photos, m.reported_by,
                 m.proposed_time, m.proposed_by, m.time_status,
@@ -464,8 +484,8 @@ def get_match(match_id: int) -> dict | None:
                 u1.username AS player1_nickname, u1.team_name AS u1_team, u1.username AS player1_username,
                 u2.username AS player2_nickname, u2.team_name AS u2_team, u2.username AS player2_username
             FROM matches m
-            LEFT JOIN users u1 ON m.player1_id = u1.telegram_id
-            LEFT JOIN users u2 ON m.player2_id = u2.telegram_id
+            LEFT JOIN users u1 ON LOWER(m.player1_team) = LOWER(u1.team_name)
+            LEFT JOIN users u2 ON LOWER(m.player2_team) = LOWER(u2.team_name)
             WHERE m.id = ?
         """, (match_id,))
         row = cursor.fetchone()
@@ -650,12 +670,12 @@ def get_matches_in_rounds(round_numbers: list[int]) -> list[dict]:
         cursor = conn.cursor()
         cursor.execute(f"""
             SELECT 
-                m.id, m.round_number, m.player1_id, m.player2_id, m.status,
+                m.id, m.round_number, u1.telegram_id AS player1_id, u2.telegram_id AS player2_id, m.status,
                 u1.username AS player1_username, u1.team_name AS player1_team,
                 u2.username AS player2_username, u2.team_name AS player2_team
             FROM matches m
-            LEFT JOIN users u1 ON m.player1_id = u1.telegram_id
-            LEFT JOIN users u2 ON m.player2_id = u2.telegram_id
+            LEFT JOIN users u1 ON LOWER(m.player1_team) = LOWER(u1.team_name)
+            LEFT JOIN users u2 ON LOWER(m.player2_team) = LOWER(u2.team_name)
             WHERE m.round_number IN ({placeholders})
             ORDER BY m.round_number ASC, m.id ASC
         """, tuple(round_numbers))
@@ -667,12 +687,12 @@ def get_unplayed_matches_by_round(round_number: int) -> list[dict]:
         cursor = conn.cursor()
         cursor.execute("""
             SELECT 
-                m.id, m.round_number, m.player1_id, m.player2_id, m.status,
+                m.id, m.round_number, u1.telegram_id AS player1_id, u2.telegram_id AS player2_id, m.status,
                 u1.username AS player1_username, u1.team_name AS player1_team,
                 u2.username AS player2_username, u2.team_name AS player2_team
             FROM matches m
-            LEFT JOIN users u1 ON m.player1_id = u1.telegram_id
-            LEFT JOIN users u2 ON m.player2_id = u2.telegram_id
+            LEFT JOIN users u1 ON LOWER(m.player1_team) = LOWER(u1.team_name)
+            LEFT JOIN users u2 ON LOWER(m.player2_team) = LOWER(u2.team_name)
             WHERE m.round_number = ? AND m.status = 'pending'
             ORDER BY m.id ASC
         """, (round_number,))
@@ -785,13 +805,13 @@ def get_disputed_matches() -> list[dict]:
         cursor = conn.cursor()
         cursor.execute("""
             SELECT 
-                m.id, m.round_number, m.player1_id, m.player2_id,
+                m.id, m.round_number, u1.telegram_id AS player1_id, u2.telegram_id AS player2_id,
                 m.player1_score, m.player2_score, m.status,
                 u1.username AS player1_nickname, u1.team_name AS player1_team,
                 u2.username AS player2_nickname, u2.team_name AS player2_team
             FROM matches m
-            LEFT JOIN users u1 ON m.player1_id = u1.telegram_id
-            LEFT JOIN users u2 ON m.player2_id = u2.telegram_id
+            LEFT JOIN users u1 ON LOWER(m.player1_team) = LOWER(u1.team_name)
+            LEFT JOIN users u2 ON LOWER(m.player2_team) = LOWER(u2.team_name)
             WHERE m.status = 'disputed'
             ORDER BY m.round_number ASC
         """)
@@ -853,14 +873,14 @@ def get_open_pending_matches() -> list[dict]:
         cursor = conn.cursor()
         cursor.execute("""
             SELECT 
-                m.id, m.round_number, m.player1_id, m.player2_id, m.status, m.is_extended,
+                m.id, m.round_number, u1.telegram_id AS player1_id, u2.telegram_id AS player2_id, m.status, m.is_extended,
                 u1.username AS player1_nickname, u1.team_name AS player1_team,
                 u2.username AS player2_nickname, u2.team_name AS player2_team,
                 r.deadline
             FROM matches m
             JOIN rounds r ON m.round_number = r.round_number
-            LEFT JOIN users u1 ON m.player1_id = u1.telegram_id
-            LEFT JOIN users u2 ON m.player2_id = u2.telegram_id
+            LEFT JOIN users u1 ON LOWER(m.player1_team) = LOWER(u1.team_name)
+            LEFT JOIN users u2 ON LOWER(m.player2_team) = LOWER(u2.team_name)
             WHERE m.status = 'pending' 
               AND m.is_extended = 0
               AND r.is_open = 1
@@ -880,13 +900,13 @@ def get_matches_by_round(round_number: int) -> list[dict]:
         cursor = conn.cursor()
         cursor.execute("""
             SELECT 
-                m.id, m.round_number, m.player1_id, m.player2_id,
+                m.id, m.round_number, u1.telegram_id AS player1_id, u2.telegram_id AS player2_id,
                 m.player1_score, m.player2_score, m.status,
                 u1.username AS player1_nickname, u1.team_name AS player1_team,
                 u2.username AS player2_nickname, u2.team_name AS player2_team
             FROM matches m
-            LEFT JOIN users u1 ON m.player1_id = u1.telegram_id
-            LEFT JOIN users u2 ON m.player2_id = u2.telegram_id
+            LEFT JOIN users u1 ON LOWER(m.player1_team) = LOWER(u1.team_name)
+            LEFT JOIN users u2 ON LOWER(m.player2_team) = LOWER(u2.team_name)
             WHERE m.round_number = ?
             ORDER BY m.id ASC
         """, (round_number,))
@@ -1305,11 +1325,11 @@ def get_unplayed_matches_in_round(round_number: int) -> list[dict]:
         cursor = conn.cursor()
         cursor.execute("""
             SELECT m.id, m.round_number,
-                   m.player1_id, u1.username as p1_username, u1.team_name as p1_team,
-                   m.player2_id, u2.username as p2_username, u2.team_name as p2_team
+                   u1.telegram_id AS player1_id, u1.username as p1_username, u1.team_name as p1_team,
+                   u2.telegram_id AS player2_id, u2.username as p2_username, u2.team_name as p2_team
             FROM matches m
-            LEFT JOIN users u1 ON m.player1_id = u1.telegram_id
-            LEFT JOIN users u2 ON m.player2_id = u2.telegram_id
+            LEFT JOIN users u1 ON LOWER(m.player1_team) = LOWER(u1.team_name)
+            LEFT JOIN users u2 ON LOWER(m.player2_team) = LOWER(u2.team_name)
             WHERE m.round_number = ? AND m.status = 'pending'
             ORDER BY m.id ASC
         """, (round_number,))
@@ -1353,8 +1373,8 @@ def get_recent_confirmed_matches(limit: int = 15) -> list[dict]:
                 u1.team_name AS team1, u1.username AS user1,
                 u2.team_name AS team2, u2.username AS user2
             FROM matches m
-            LEFT JOIN users u1 ON m.player1_id = u1.telegram_id
-            LEFT JOIN users u2 ON m.player2_id = u2.telegram_id
+            LEFT JOIN users u1 ON LOWER(m.player1_team) = LOWER(u1.team_name)
+            LEFT JOIN users u2 ON LOWER(m.player2_team) = LOWER(u2.team_name)
             WHERE m.status = 'confirmed'
             ORDER BY m.id DESC
             LIMIT ?
@@ -1747,13 +1767,13 @@ def get_all_unplayed_league_matches() -> list[dict]:
 
         cursor.execute("""
             SELECT 
-                m.id, m.round_number, m.player1_id, m.player2_id,
+                m.id, m.round_number, u1.telegram_id AS player1_id, u2.telegram_id AS player2_id,
                 m.player1_team, m.player2_team,
                 u1.username AS p1_username, u1.team_name AS p1_team,
                 u2.username AS p2_username, u2.team_name AS p2_team
             FROM matches m
-            LEFT JOIN users u1 ON m.player1_id = u1.telegram_id
-            LEFT JOIN users u2 ON m.player2_id = u2.telegram_id
+            LEFT JOIN users u1 ON LOWER(m.player1_team) = LOWER(u1.team_name)
+            LEFT JOIN users u2 ON LOWER(m.player2_team) = LOWER(u2.team_name)
             WHERE (m.tournament_type IS NULL OR m.tournament_type = 'league')
               AND m.round_number >= 1
               AND m.round_number <= ?
@@ -1769,14 +1789,14 @@ def get_all_unplayed_cup_matches() -> list[dict]:
         cursor.execute("""
             SELECT 
                 m.id, m.cup_stage, m.cup_series_id, m.game_num_in_series,
-                m.player1_id, m.player2_id, m.player1_team, m.player2_team,
+                u1.telegram_id AS player1_id, u2.telegram_id AS player2_id, m.player1_team, m.player2_team,
                 s.team1_name, s.team2_name, s.team1_wins, s.team2_wins,
                 u1.username AS p1_username, u2.username AS p2_username,
                 u1.team_name AS p1_team, u2.team_name AS p2_team
             FROM matches m
             JOIN cup_series s ON m.cup_series_id = s.id
-            LEFT JOIN users u1 ON m.player1_id = u1.telegram_id
-            LEFT JOIN users u2 ON m.player2_id = u2.telegram_id
+            LEFT JOIN users u1 ON LOWER(m.player1_team) = LOWER(u1.team_name)
+            LEFT JOIN users u2 ON LOWER(m.player2_team) = LOWER(u2.team_name)
             WHERE m.tournament_type = 'cup' AND m.status = 'pending' AND s.status = 'active'
             ORDER BY s.series_num ASC, m.game_num_in_series ASC
         """)
