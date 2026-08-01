@@ -799,10 +799,23 @@ async def cb_request_admin_result(update: Update, context: ContextTypes.DEFAULT_
     query = update.callback_query
     if not query:
         return
-    await query.answer()  # Single answer() to dismiss loading spinner
 
     match_id = int(query.data.replace("cb_request_admin_result_", ""))
     user_id = query.from_user.id
+    
+    # Anti-spam check: See if we already changed the button on this message
+    if query.message and query.message.reply_markup:
+        is_already_sent = False
+        for row in query.message.reply_markup.inline_keyboard:
+            for btn in row:
+                if btn.callback_data == "ignore" and "Запрос отправлен" in btn.text:
+                    is_already_sent = True
+        if is_already_sent:
+            await query.answer("⏳ Запрос уже отправлен!", show_alert=False)
+            return
+            
+    await query.answer()  # Single answer() to dismiss loading spinner
+
     m = await asyncio.to_thread(database.get_match, match_id)
     if not m:
         await context.bot.send_message(chat_id=user_id, text="❌ Матч не найден.")
@@ -841,7 +854,10 @@ async def cb_request_admin_result(update: Update, context: ContextTypes.DEFAULT_
 
     sent_count = 0
     from config import ADMIN_IDS
-    for admin_id in ADMIN_IDS:
+    # Filter unique ADMIN_IDS in case of duplicates
+    unique_admins = list(set(ADMIN_IDS))
+    
+    for admin_id in unique_admins:
         try:
             await context.bot.send_message(
                 chat_id=admin_id,
@@ -855,6 +871,22 @@ async def cb_request_admin_result(update: Update, context: ContextTypes.DEFAULT_
 
     if sent_count > 0:
         await query.answer("✅ Запрос отправлен администратору!\nКак только он одобрит — бот пришлёт вам уведомление.", show_alert=True)
+        # Update button to prevent multiple clicks
+        if query.message and query.message.reply_markup:
+            keyboard = query.message.reply_markup.inline_keyboard
+            new_keyboard = []
+            for row in keyboard:
+                new_row = []
+                for btn in row:
+                    if btn.callback_data == query.data:
+                        new_row.append(InlineKeyboardButton("⏳ Запрос отправлен", callback_data="ignore"))
+                    else:
+                        new_row.append(btn)
+                new_keyboard.append(new_row)
+            try:
+                await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(new_keyboard))
+            except Exception as e:
+                pass
     else:
         await query.answer("⚠️ Не удалось уведомить администраторов. Напишите напрямую @antonv2801.", show_alert=True)
 
