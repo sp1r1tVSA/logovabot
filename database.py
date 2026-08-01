@@ -347,21 +347,28 @@ def get_standings() -> list[dict]:
     """Calculate the standings of all registered players dynamically."""
     with transaction() as conn:
         cursor = conn.cursor()
-        # Get all registered users and players with confirmed match history
+        
+        # Get all distinct teams in the league matches
         cursor.execute("""
-            SELECT telegram_id, COALESCE(NULLIF(team_name, ''), 'Бывший участник') AS team_name, COALESCE(username, '') AS username 
-            FROM users 
-            WHERE (team_name IS NOT NULL AND team_name != '') OR telegram_id IN (
-                SELECT player1_id FROM matches WHERE status = 'confirmed' AND player1_id IS NOT NULL
+            SELECT DISTINCT team_name FROM (
+                SELECT player1_team AS team_name FROM matches WHERE tournament_type IS NULL OR tournament_type = 'league'
                 UNION
-                SELECT player2_id FROM matches WHERE status = 'confirmed' AND player2_id IS NOT NULL
-            )
+                SELECT player2_team AS team_name FROM matches WHERE tournament_type IS NULL OR tournament_type = 'league'
+            ) WHERE team_name IS NOT NULL AND team_name != ''
         """)
-        users = {
-            row["telegram_id"]: {
-                "telegram_id": row["telegram_id"],
-                "team_name": row["team_name"],
-                "username": row["username"],
+        all_teams = [row["team_name"] for row in cursor.fetchall()]
+        
+        # Get current user info for those teams
+        cursor.execute("SELECT telegram_id, team_name, username FROM users")
+        user_map = {row["team_name"].lower(): row for row in cursor.fetchall() if row["team_name"]}
+        
+        teams = {}
+        for t in all_teams:
+            u = user_map.get(t.lower())
+            teams[t.lower()] = {
+                "telegram_id": u["telegram_id"] if u else None,
+                "team_name": t,
+                "username": u["username"] if u and u["username"] else "",
                 "played": 0,
                 "wins": 0,
                 "draws": 0,
@@ -370,26 +377,24 @@ def get_standings() -> list[dict]:
                 "goals_conceded": 0,
                 "points": 0,
             }
-            for row in cursor.fetchall()
-        }
 
         # Get all confirmed matches (League matches only)
         cursor.execute(
-            "SELECT player1_id, player2_id, player1_score, player2_score FROM matches WHERE status = 'confirmed' AND (tournament_type IS NULL OR tournament_type = 'league')"
+            "SELECT player1_team, player2_team, player1_score, player2_score FROM matches WHERE status = 'confirmed' AND (tournament_type IS NULL OR tournament_type = 'league')"
         )
         matches = cursor.fetchall()
 
         for match in matches:
-            p1_id = match["player1_id"]
-            p2_id = match["player2_id"]
+            t1 = (match["player1_team"] or "").lower()
+            t2 = (match["player2_team"] or "").lower()
             p1_score = match["player1_score"]
             p2_score = match["player2_score"]
 
             if p1_score is None or p2_score is None:
                 continue
 
-            if p1_id in users:
-                u1 = users[p1_id]
+            if t1 in teams:
+                u1 = teams[t1]
                 u1["played"] += 1
                 u1["goals_scored"] += p1_score
                 u1["goals_conceded"] += p2_score
@@ -402,8 +407,8 @@ def get_standings() -> list[dict]:
                     u1["draws"] += 1
                     u1["points"] += 1
 
-            if p2_id in users:
-                u2 = users[p2_id]
+            if t2 in teams:
+                u2 = teams[t2]
                 u2["played"] += 1
                 u2["goals_scored"] += p2_score
                 u2["goals_conceded"] += p1_score
@@ -417,7 +422,7 @@ def get_standings() -> list[dict]:
                     u2["points"] += 1
 
         # Convert to list and sort
-        standings_list = list(users.values())
+        standings_list = list(teams.values())
         standings_list.sort(
             key=lambda x: (
                 x["points"],
