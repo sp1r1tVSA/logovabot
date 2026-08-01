@@ -6,21 +6,11 @@ def restore():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
-    # Получаем все команды, которые есть в таблице матчей
-    cursor.execute("""
-        SELECT DISTINCT team_name FROM users 
-        WHERE team_name IS NOT NULL AND team_name != ''
-        AND telegram_id IN (
-            SELECT player1_id FROM matches WHERE tournament_type IS NULL OR tournament_type = 'league'
-            UNION
-            SELECT player2_id FROM matches WHERE tournament_type IS NULL OR tournament_type = 'league'
-        )
-    """)
-    teams = set([row[0] for row in cursor.fetchall()])
+    from config import KPL_TEAMS
     
-    # Добавляем удаленную команду
+    # Берем команды из конфига
+    teams = set(KPL_TEAMS)
     missing_team = "Ривер Плейт"
-    teams.add(missing_team)
     
     print(f"Всего команд: {len(teams)}")
     

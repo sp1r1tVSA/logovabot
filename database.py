@@ -348,26 +348,14 @@ def get_standings() -> list[dict]:
     with transaction() as conn:
         cursor = conn.cursor()
         
-        # Get all distinct teams in the league matches (supporting both old matches via player_id and new matches via player_team)
-        cursor.execute("""
-            SELECT DISTINCT team_name FROM (
-                SELECT COALESCE(m.player1_team, u1.team_name) AS team_name 
-                FROM matches m LEFT JOIN users u1 ON m.player1_id = u1.telegram_id 
-                WHERE m.tournament_type IS NULL OR m.tournament_type = 'league'
-                UNION
-                SELECT COALESCE(m.player2_team, u2.team_name) AS team_name 
-                FROM matches m LEFT JOIN users u2 ON m.player2_id = u2.telegram_id 
-                WHERE m.tournament_type IS NULL OR m.tournament_type = 'league'
-            ) WHERE team_name IS NOT NULL AND team_name != ''
-        """)
-        all_teams = [row["team_name"] for row in cursor.fetchall()]
+        from config import KPL_TEAMS
         
-        # Get current user info for those teams
+        # Get current user info for all teams
         cursor.execute("SELECT telegram_id, team_name, username FROM users")
         user_map = {row["team_name"].lower(): row for row in cursor.fetchall() if row["team_name"]}
         
         teams = {}
-        for t in all_teams:
+        for t in KPL_TEAMS:
             u = user_map.get(t.lower())
             teams[t.lower()] = {
                 "telegram_id": u["telegram_id"] if u else None,
