@@ -182,9 +182,12 @@ from handlers.admin import (
     admin_view_squad,
     admin_squad_upload_start,
     admin_squad_upload_text,
+    admin_squad_add_player_start,
+    admin_squad_add_player_text,
     admin_squad_clear,
     admin_squad_add_missing,
     ADMIN_EXPECT_SQUAD_TEXT,
+    ADMIN_EXPECT_SINGLE_PLAYER,
     admin_stub,
     admin_fetch_photos,
     admin_manage_cup,
@@ -530,10 +533,12 @@ def _register_admin_handlers(app: Application) -> None:
 
     admin_squad_conv = ConversationHandler(
         entry_points=[
-            CallbackQueryHandler(admin_squad_upload_start, pattern="^admin_squad_upload_.*$")
+            CallbackQueryHandler(admin_squad_upload_start, pattern="^admin_squad_upload_.*$"),
+            CallbackQueryHandler(admin_squad_add_player_start, pattern="^admin_squad_add_player_.*$")
         ],
         states={
             ADMIN_EXPECT_SQUAD_TEXT: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_squad_upload_text)],
+            ADMIN_EXPECT_SINGLE_PLAYER: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_squad_add_player_text)],
         },
         fallbacks=[
             CallbackQueryHandler(admin_manage_squads, pattern="^admin_manage_squads$"),

@@ -2291,6 +2291,7 @@ async def admin_list_players_command(update: Update, context: ContextTypes.DEFAU
 
 # --- Conversation state for squad upload ---
 ADMIN_EXPECT_SQUAD_TEXT = 201
+ADMIN_EXPECT_SINGLE_PLAYER = 202
 
 
 @admin_only
@@ -2627,6 +2628,7 @@ async def admin_view_squad(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     keyboard = [
         [InlineKeyboardButton("📊 Загрузить состав", callback_data=f"admin_squad_upload_{club}")],
+        [InlineKeyboardButton("➕ Добавить игрока", callback_data=f"admin_squad_add_player_{club}")],
         [InlineKeyboardButton("➕ Добавить игроков из матчей", callback_data=f"admin_squad_add_missing_{club}")],
         [InlineKeyboardButton("🗑️ Очистить состав", callback_data=f"admin_squad_clear_{club}")],
         [InlineKeyboardButton("« Назад к клубам", callback_data="admin_manage_squads")]
@@ -2679,6 +2681,53 @@ async def admin_squad_upload_text(update: Update, context: ContextTypes.DEFAULT_
     added = await asyncio.to_thread(database.add_squad, club, [line.strip() for line in lines if line.strip()])
 
     text = f"✅ Добавлено <b>{added}</b> футболистов в состав команды <b>{html.escape(club)}</b>."
+    keyboard = [[InlineKeyboardButton("👥 Просмотреть состав", callback_data=f"admin_squad_view_{club}")]]
+    await update.message.reply_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+    return ConversationHandler.END
+
+
+@admin_only
+async def admin_squad_add_player_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Start single-player add: ask admin for the player's name."""
+    query = update.callback_query
+    if not query:
+        return ConversationHandler.END
+    await query.answer()
+    if not is_admin(query.from_user.id):
+        await query.answer("⛔ Доступ запрещён", show_alert=True)
+        return ConversationHandler.END
+
+    club = query.data.replace("admin_squad_add_player_", "")
+    context.user_data["admin_squad_club"] = club
+
+    text = (
+        f"➕ <b>Добавление игрока в {html.escape(club)}</b>\n\n"
+        "Отправьте имя футболиста одним сообщением."
+    )
+    keyboard = [[InlineKeyboardButton("❌ Отмена", callback_data=f"admin_squad_view_{club}")]]
+    await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+    return ADMIN_EXPECT_SINGLE_PLAYER
+
+
+@admin_only
+async def admin_squad_add_player_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Receive a single player name and add it to the squad."""
+    club = context.user_data.pop("admin_squad_club", None)
+    if not club:
+        await update.message.reply_text("❌ Ошибка: не найден клуб. Попробуйте снова.")
+        return ConversationHandler.END
+
+    name = update.message.text.strip()
+    if not name:
+        await update.message.reply_text("❌ Имя пустое. Отправьте имя игрока.")
+        return ADMIN_EXPECT_SINGLE_PLAYER
+
+    added = await asyncio.to_thread(database.add_squad, club, [name])
+
+    if added:
+        text = f"✅ Игрок <b>{html.escape(name)}</b> добавлен в состав команды <b>{html.escape(club)}</b>."
+    else:
+        text = f"ℹ️ Игрок <b>{html.escape(name)}</b> уже есть в составе команды <b>{html.escape(club)}</b> или имя некорректно."
     keyboard = [[InlineKeyboardButton("👥 Просмотреть состав", callback_data=f"admin_squad_view_{club}")]]
     await update.message.reply_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
     return ConversationHandler.END
