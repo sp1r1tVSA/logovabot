@@ -2001,6 +2001,7 @@ async def cb_confirm_ai_final(update: Update, context: ContextTypes.DEFAULT_TYPE
     if next_stage:
         from handlers.admin import notify_cup_stage_opened
         await notify_cup_stage_opened(context.bot, next_stage)
+    await refresh_debts_summary(context)
 
     # 1. PM to reporter
     reporter_text = build_formatted_match_post(
@@ -2154,6 +2155,7 @@ async def submit_report_to_guest(update: Update, context: ContextTypes.DEFAULT_T
     if next_stage:
         from handlers.admin import notify_cup_stage_opened
         await notify_cup_stage_opened(context.bot, next_stage)
+    await refresh_debts_summary(context)
 
     # 1. Respond to Submitter
     submitter_msg = f"🎉 <b>Результат матча #{match_id} ({hg}:{ag}) успешно занесён в турнирную таблицу!</b>"
@@ -2409,6 +2411,15 @@ async def finalize_guest_confirmation(update: Update, context: ContextTypes.DEFA
         from handlers.admin import notify_cup_stage_opened
         await notify_cup_stage_opened(context.bot, next_stage)
     await notify_match_confirmed(context, match_id)
+    await refresh_debts_summary(context)
+
+async def refresh_debts_summary(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Refresh the debts summary in the ПРЕДЫ thread after a match result is recorded."""
+    try:
+        from handlers.admin import _post_or_update_debts_in_warns
+        await _post_or_update_debts_in_warns(context)
+    except Exception as e:
+        logger.warning(f"Failed to refresh debts summary: {e}")
 
 async def notify_match_confirmed(context: ContextTypes.DEFAULT_TYPE, match_id: int) -> None:
     match = await asyncio.to_thread(database.get_match, match_id)
