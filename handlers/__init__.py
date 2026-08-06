@@ -224,8 +224,8 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
         return
     if isinstance(context.error, telegram.error.BadRequest):
         err_str = str(context.error).lower()
-        if "query is too old" in err_str or "message is not modified" in err_str:
-            logger.warning(f"Telegram BadRequest (игнорируется): {context.error}")
+        if ("query is too old" in err_str or "message is not modified" in err_str):
+            logger.debug(f"Telegram BadRequest (игнорируется): {context.error}")
             return
     logger.exception("Исключение при обработке обновления:")
 

@@ -670,6 +670,10 @@ async def _post_or_update_debts_in_warns(context: ContextTypes.DEFAULT_TYPE) -> 
                     )
                     new_ids.append(existing_ids[i])
                     continue
+                except BadRequest as e:
+                    if "message is not modified" in str(e).lower():
+                        new_ids.append(existing_ids[i])
+                        continue
                 except (BadRequest, TelegramError):
                     pass  # Deleted/too old — resend
             msg = await context.bot.send_message(
