@@ -1822,6 +1822,8 @@ async def ai_recognize_now(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             context.user_data["away_goals_count"] = a_goals
             context.user_data["home_assists_count"] = h_assists
             context.user_data["away_assists_count"] = a_assists
+            context.user_data["is_single_timeline"] = bool(is_single_timeline)
+            context.user_data["report_photo_id"] = photos_list[0] if photos_list else context.user_data.get("report_photo_id")
 
             h_goals_summary = ", ".join([f"{p} ({c})" for p, c in h_goals.items()]) if h_goals else "Нет"
             a_goals_summary = ", ".join([f"{p} ({c})" for p, c in a_goals.items()]) if a_goals else "Нет"
@@ -1855,7 +1857,6 @@ async def ai_recognize_now(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
             photo_to_show = photos_list[0] if photos_list else context.user_data.get("report_photo_id")
             await context.bot.send_photo(chat_id=user_id, photo=photo_to_show, caption=text, parse_mode="HTML", reply_markup=markup)
-            context.user_data.pop("report_photo_id", None)
         else:
             context.user_data.pop("report_photo_id", None)
             cancel_cb = get_match_cancel_cb(context, user_id, match_id)
