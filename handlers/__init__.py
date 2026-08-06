@@ -70,6 +70,7 @@ from handlers.cabinet import (
     cb_skip_assists,
     prompt_photo_upload,
     save_report_photo,
+    ai_recognize_now,
     submit_report_to_guest,
     handle_confirm_score,
     guest_pick_goal,
@@ -388,6 +389,7 @@ def _register_cabinet_handlers(app: Application) -> None:
     app.add_handler(CallbackQueryHandler(cb_pick_assist, pattern="^cb_pick_assist_idx_\\d+$"))
     app.add_handler(CallbackQueryHandler(cb_skip_assists, pattern="^cb_skip_assists$"))
     app.add_handler(CallbackQueryHandler(submit_report_to_guest, pattern="^cb_submit_report_to_guest(_\\d+)?$"))
+    app.add_handler(CallbackQueryHandler(ai_recognize_now, pattern="^ai_recognize_now_\\d+$"))
     app.add_handler(CallbackQueryHandler(cabinet_cancel_report, pattern="^cabinet_cancel_report_\\d+$"))
 
     async def global_photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

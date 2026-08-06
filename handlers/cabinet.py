@@ -1696,103 +1696,24 @@ async def save_report_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         context.user_data["ai_photos_list"] = photos_list
         context.user_data["report_photo_id"] = photos_list[0]
 
-        status_msg = None
-        try:
-            status_msg = await update.message.reply_text("🤖 <i>ИИ распознаёт результат со скриншота(ов)...</i>", parse_mode="HTML")
-
-            downloaded_bytes = []
-            for p_id in photos_list[:3]:
-                f_obj = await context.bot.get_file(p_id)
-                img_b = await f_obj.download_as_bytearray()
-                downloaded_bytes.append(bytes(img_b))
-
-            ai_res = await asyncio.to_thread(ai_recognizer.recognize_match_screenshots_bytes, downloaded_bytes)
-
-            if ai_res and ("home_score" in ai_res) and ("away_score" in ai_res):
-                s1_goals = ai_res.get("side1_goals") or ai_res.get("home_goals") or []
-                s2_goals = ai_res.get("side2_goals") or ai_res.get("away_goals") or []
-                s1_assists = ai_res.get("side1_assists") or ai_res.get("home_assists") or []
-                s2_assists = ai_res.get("side2_assists") or ai_res.get("away_assists") or []
-
-                is_single_timeline = bool(ai_res.get("is_single_timeline", False))
-
-                h_goals, a_goals, h_assists, a_assists, is_side1_home = await asyncio.to_thread(match_and_enrich_squad, 
-                    s1_goals, s2_goals, s1_assists, s2_assists, home_team, away_team, is_single_timeline=is_single_timeline
-                )
-
-                if is_single_timeline:
-                    h_score = sum(h_goals.values())
-                    a_score = sum(a_goals.values())
-                else:
-                    if is_side1_home:
-                        h_score = int(ai_res.get("home_score", sum(h_goals.values())))
-                        a_score = int(ai_res.get("away_score", sum(a_goals.values())))
-                    else:
-                        h_score = int(ai_res.get("away_score", sum(h_goals.values())))
-                        a_score = int(ai_res.get("home_score", sum(a_goals.values())))
-
-                context.user_data["report_home_goals"] = h_score
-                context.user_data["report_away_goals"] = a_score
-                context.user_data["home_goals_count"] = h_goals
-                context.user_data["away_goals_count"] = a_goals
-                context.user_data["home_assists_count"] = h_assists
-                context.user_data["away_assists_count"] = a_assists
-
-                h_goals_summary = ", ".join([f"{p} ({c})" for p, c in h_goals.items()]) if h_goals else "Нет"
-                a_goals_summary = ", ".join([f"{p} ({c})" for p, c in a_goals.items()]) if a_goals else "Нет"
-                h_assists_summary = ", ".join([f"{p} ({c})" for p, c in h_assists.items()]) if h_assists else "Нет"
-                a_assists_summary = ", ".join([f"{p} ({c})" for p, c in a_assists.items()]) if a_assists else "Нет"
-
-                h_assists_str = safe_escape(h_assists_summary) if not is_single_timeline else "<i>не отображаются в данном формате скриншота</i>"
-                a_assists_str = safe_escape(a_assists_summary) if not is_single_timeline else "<i>не отображаются в данном формате скриншота</i>"
-
-                text = (
-                    f"🤖 <b>ИИ автоматически распознал результат со скриншота:</b>\n\n"
-                    f"🏟 <b>Матч #{match_id}</b>\n"
-                    f"🏠 <b>{safe_escape(home_team)}</b> {h_score} : {a_score} <b>{safe_escape(away_team)}</b> ✈️\n\n"
-                    f"⚽ <b>Голы ({safe_escape(home_team)}):</b> {safe_escape(h_goals_summary)}\n"
-                    f"🎯 <b>Ассисты ({safe_escape(home_team)}):</b> {h_assists_str}\n\n"
-                    f"⚽ <b>Голы ({safe_escape(away_team)}):</b> {safe_escape(a_goals_summary)}\n"
-                    f"🎯 <b>Ассисты ({safe_escape(away_team)}):</b> {a_assists_str}\n\n"
-                    f"📸 <i>Скриншот(ы) прикреплены.</i>"
-                )
-
-                is_admin_user = is_admin(update.effective_user.id) or context.user_data.get("is_admin_reporting", False)
-                cancel_cb = f"admin_view_match_{match_id}" if is_admin_user else f"cabinet_view_match_{match_id}"
-                manual_cb = f"cb_report_choice_manual_{match_id}"
-
-                keyboard = [
-                    [InlineKeyboardButton("✅ Всё верно (Сохранить и занести результат)", callback_data=f"cb_confirm_ai_final_{match_id}")],
-                    [InlineKeyboardButton("✏️ Изменить вручную", callback_data=manual_cb)],
-                    [InlineKeyboardButton("❌ Отмена", callback_data=cancel_cb)]
-                ]
-                markup = InlineKeyboardMarkup(keyboard)
-
-                await context.bot.send_photo(chat_id=update.effective_user.id, photo=photo_id, caption=text, parse_mode="HTML", reply_markup=markup)
-                return ConversationHandler.END
-            else:
-                context.user_data.pop("report_photo_id", None)
-                user_id = update.effective_user.id
-                cancel_cb = get_match_cancel_cb(context, user_id, match_id)
-                fail_text = (
-                    "⚠️ <b>Не удалось автоматически распознать результат со скриншота.</b>\n\n"
-                    "Пожалуйста, выберите способ внесения результата вручную:"
-                )
-                keyboard = [
-                    [InlineKeyboardButton("✍️ Ввести результат вручную", callback_data=f"cb_report_choice_manual_{match_id}")],
-                    [InlineKeyboardButton("❌ Отмена", callback_data=cancel_cb)]
-                ]
-                await update.message.reply_text(fail_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
-                return ConversationHandler.END
-        except Exception as e:
-            logger.exception("AI Vision processing error")
-            context.user_data.pop("report_photo_id", None)
-        finally:
-            if status_msg:
-                try:
-                    await status_msg.delete()
-                except Exception:
-                    pass
+        match_id = context.user_data.get("reporting_match_id")
+        n_photos = len(photos_list)
+        collected_text = (
+            f"📸 <b>Скриншот {n_photos}/3 принят.</b>\n\n"
+            f"Отправьте остальные скриншоты (вертикальная колонка голов и/или таблица статистики), "
+            f"затем нажмите кнопку распознавания."
+        )
+        keyboard = [
+            [InlineKeyboardButton(f"🔍 Распознать результат ({n_photos})", callback_data=f"ai_recognize_now_{match_id}")],
+            [InlineKeyboardButton("✏️ Ввести вручную", callback_data=f"cb_report_choice_manual_{match_id}")],
+        ]
+        await context.bot.send_message(
+            chat_id=update.effective_user.id,
+            text=collected_text,
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+        return REPORT_SCORE_PHOTO
 
     context.user_data["report_photo_id"] = photo_id
     context.user_data.pop("awaiting_report_photo", None)
@@ -1833,6 +1754,130 @@ async def save_report_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     await context.bot.send_photo(chat_id=update.effective_user.id, photo=photo_id, caption=text, parse_mode="HTML", reply_markup=markup)
     return ConversationHandler.END
+
+async def ai_recognize_now(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Run AI recognition on all collected screenshots and show the result for confirmation."""
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+    user_id = query.from_user.id
+
+    match_id = None
+    try:
+        match_id = int(query.data.replace("ai_recognize_now_", ""))
+    except (ValueError, TypeError):
+        match_id = context.user_data.get("reporting_match_id")
+
+    photos_list = context.user_data.get("ai_photos_list", [])
+    if not photos_list:
+        await query.message.reply_text("⚠️ Не найдено скриншотов. Отправьте фото заново.")
+        return
+
+    status_msg = None
+    try:
+        status_msg = await query.message.reply_text("🤖 <i>ИИ распознаёт результат со скриншотов...</i>", parse_mode="HTML")
+
+        downloaded_bytes = []
+        for p_id in photos_list[:3]:
+            f_obj = await context.bot.get_file(p_id)
+            img_b = await f_obj.download_as_bytearray()
+            downloaded_bytes.append(bytes(img_b))
+
+        ai_res = await asyncio.to_thread(ai_recognizer.recognize_match_screenshots_bytes, downloaded_bytes)
+
+        match = await asyncio.to_thread(database.get_match, match_id) if match_id else None
+        home_team = context.user_data.get("report_home_team") or (match.get("player1_team") if match else "Хозяева")
+        away_team = context.user_data.get("report_away_team") or (match.get("player2_team") if match else "Гости")
+
+        if ai_res and ("home_score" in ai_res) and ("away_score" in ai_res):
+            s1_goals = ai_res.get("side1_goals") or ai_res.get("home_goals") or []
+            s2_goals = ai_res.get("side2_goals") or ai_res.get("away_goals") or []
+            s1_assists = ai_res.get("side1_assists") or ai_res.get("home_assists") or []
+            s2_assists = ai_res.get("side2_assists") or ai_res.get("away_assists") or []
+
+            is_single_timeline = bool(ai_res.get("is_single_timeline", False))
+
+            h_goals, a_goals, h_assists, a_assists, is_side1_home = await asyncio.to_thread(
+                match_and_enrich_squad,
+                s1_goals, s2_goals, s1_assists, s2_assists,
+                home_team, away_team,
+                is_single_timeline=is_single_timeline,
+            )
+
+            if is_single_timeline:
+                h_score = sum(h_goals.values())
+                a_score = sum(a_goals.values())
+            else:
+                if is_side1_home:
+                    h_score = int(ai_res.get("home_score", sum(h_goals.values())))
+                    a_score = int(ai_res.get("away_score", sum(a_goals.values())))
+                else:
+                    h_score = int(ai_res.get("away_score", sum(h_goals.values())))
+                    a_score = int(ai_res.get("home_score", sum(a_goals.values())))
+
+            context.user_data["report_home_goals"] = h_score
+            context.user_data["report_away_goals"] = a_score
+            context.user_data["home_goals_count"] = h_goals
+            context.user_data["away_goals_count"] = a_goals
+            context.user_data["home_assists_count"] = h_assists
+            context.user_data["away_assists_count"] = a_assists
+
+            h_goals_summary = ", ".join([f"{p} ({c})" for p, c in h_goals.items()]) if h_goals else "Нет"
+            a_goals_summary = ", ".join([f"{p} ({c})" for p, c in a_goals.items()]) if a_goals else "Нет"
+            h_assists_summary = ", ".join([f"{p} ({c})" for p, c in h_assists.items()]) if h_assists else "Нет"
+            a_assists_summary = ", ".join([f"{p} ({c})" for p, c in a_assists.items()]) if a_assists else "Нет"
+
+            h_assists_str = safe_escape(h_assists_summary) if not is_single_timeline else "<i>не отображаются в данном формате скриншота</i>"
+            a_assists_str = safe_escape(a_assists_summary) if not is_single_timeline else "<i>не отображаются в данном формате скриншота</i>"
+
+            text = (
+                f"🤖 <b>ИИ автоматически распознал результат со скриншота:</b>\n\n"
+                f"🏟 <b>Матч #{match_id}</b>\n"
+                f"🏠 <b>{safe_escape(home_team)}</b> {h_score} : {a_score} <b>{safe_escape(away_team)}</b> ✈️\n\n"
+                f"⚽ <b>Голы ({safe_escape(home_team)}):</b> {safe_escape(h_goals_summary)}\n"
+                f"🎯 <b>Ассисты ({safe_escape(home_team)}):</b> {h_assists_str}\n\n"
+                f"⚽ <b>Голы ({safe_escape(away_team)}):</b> {safe_escape(a_goals_summary)}\n"
+                f"🎯 <b>Ассисты ({safe_escape(away_team)}):</b> {a_assists_str}\n\n"
+                f"📸 <i>Скриншот(ы) прикреплены.</i>"
+            )
+
+            is_admin_user = is_admin(user_id) or context.user_data.get("is_admin_reporting", False)
+            cancel_cb = f"admin_view_match_{match_id}" if is_admin_user else f"cabinet_view_match_{match_id}"
+            manual_cb = f"cb_report_choice_manual_{match_id}"
+
+            keyboard = [
+                [InlineKeyboardButton("✅ Всё верно (Сохранить и занести результат)", callback_data=f"cb_confirm_ai_final_{match_id}")],
+                [InlineKeyboardButton("✏️ Изменить вручную", callback_data=manual_cb)],
+                [InlineKeyboardButton("❌ Отмена", callback_data=cancel_cb)]
+            ]
+            markup = InlineKeyboardMarkup(keyboard)
+
+            photo_to_show = photos_list[0] if photos_list else context.user_data.get("report_photo_id")
+            await context.bot.send_photo(chat_id=user_id, photo=photo_to_show, caption=text, parse_mode="HTML", reply_markup=markup)
+            context.user_data.pop("report_photo_id", None)
+        else:
+            context.user_data.pop("report_photo_id", None)
+            cancel_cb = get_match_cancel_cb(context, user_id, match_id)
+            fail_text = (
+                "⚠️ <b>Не удалось автоматически распознать результат со скриншотов.</b>\n\n"
+                "Пожалуйста, выберите способ внесения результата вручную:"
+            )
+            keyboard = [
+                [InlineKeyboardButton("✍️ Ввести результат вручную", callback_data=f"cb_report_choice_manual_{match_id}")],
+                [InlineKeyboardButton("❌ Отмена", callback_data=cancel_cb)]
+            ]
+            await query.message.reply_text(fail_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+    except Exception as e:
+        logger.exception("AI Vision processing error")
+        context.user_data.pop("report_photo_id", None)
+        await query.message.reply_text("⚠️ Ошибка при распознавании скриншотов. Попробуйте ещё раз.")
+    finally:
+        if status_msg:
+            try:
+                await status_msg.delete()
+            except Exception:
+                pass
 
 def build_formatted_match_post(
     round_number: int | str,
