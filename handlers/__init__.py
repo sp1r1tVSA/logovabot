@@ -209,14 +209,16 @@ async def track_group_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Log the error that occurred during update handling."""
+    err_str = str(context.error).lower()
+    if "query is too old" in err_str or "message is not modified" in err_str:
+        logger.debug(f"Telegram ошибка, игнорируется: {context.error}")
+        return
     if isinstance(context.error, (telegram.error.TimedOut, telegram.error.NetworkError)):
         logger.warning(f"Сетевая задержка Telegram (TimedOut/NetworkError): {context.error}")
         return
     if isinstance(context.error, telegram.error.BadRequest):
-        err_str = str(context.error).lower()
-        if ("query is too old" in err_str or "message is not modified" in err_str):
-            logger.debug(f"Telegram BadRequest (игнорируется): {context.error}")
-            return
+        logger.debug(f"Telegram BadRequest (игнорируется): {context.error}")
+        return
     logger.exception("Исключение при обработке обновления:")
 
 def _register_user_handlers(app: Application) -> None:
