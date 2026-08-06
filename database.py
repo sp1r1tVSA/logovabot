@@ -1347,6 +1347,60 @@ def clear_squad(team_name: str) -> int:
         return cursor.rowcount
 
 
+def get_missing_squad_players(team_name: str) -> list[str]:
+    """Return player names that appear in match_events for a club but are absent from its squad."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT DISTINCT me.player_name
+            FROM match_events me
+            LEFT JOIN squad_players sp
+              ON LOWER(sp.player_name) = LOWER(me.player_name)
+             AND LOWER(sp.team_name) = LOWER(me.team_name)
+            WHERE LOWER(me.team_name) = LOWER(?)
+              AND me.player_name IS NOT NULL AND me.player_name != ''
+              AND sp.id IS NULL
+            ORDER BY me.player_name COLLATE NOCASE ASC
+        """, (team_name.strip(),))
+        return [row["player_name"] for row in cursor.fetchall()]
+
+
+def add_missing_squad_players(team_name: str | None = None) -> int:
+    """Add to club squads any players that appear in match_events but are not yet in the squad.
+
+    If team_name is given, only that club is processed; otherwise all clubs are processed.
+    Returns the total number of players added.
+    """
+    added = 0
+    with transaction() as conn:
+        cursor = conn.cursor()
+        if team_name:
+            cursor.execute(
+                "SELECT DISTINCT me.player_name, me.team_name FROM match_events me WHERE LOWER(me.team_name) = LOWER(?)",
+                (team_name.strip(),)
+            )
+        else:
+            cursor.execute(
+                "SELECT DISTINCT me.player_name, me.team_name FROM match_events me"
+            )
+        rows = cursor.fetchall()
+        for row in rows:
+            pname = row["player_name"]
+            tname = row["team_name"]
+            if not pname or not tname:
+                continue
+            try:
+                cursor.execute(
+                    "INSERT OR IGNORE INTO squad_players (team_name, player_name) VALUES (?, ?)",
+                    (tname.strip(), pname.strip())
+                )
+                if cursor.rowcount > 0:
+                    added += 1
+            except sqlite3.Error as e:
+                logger.warning(f"Failed to add player '{pname}' to {tname}: {e}")
+    return added
+
+
 def get_club_top_scorers(team_name: str) -> list[dict]:
     """Get top goal scorers for a club across all matches."""
     with transaction() as conn:

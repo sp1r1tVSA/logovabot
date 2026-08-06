@@ -183,6 +183,7 @@ from handlers.admin import (
     admin_squad_upload_start,
     admin_squad_upload_text,
     admin_squad_clear,
+    admin_squad_add_missing,
     ADMIN_EXPECT_SQUAD_TEXT,
     admin_stub,
     admin_fetch_photos,
@@ -587,6 +588,7 @@ def _register_admin_handlers(app: Application) -> None:
     app.add_handler(CallbackQueryHandler(admin_manage_squads, pattern="^admin_manage_squads$"))
     app.add_handler(CallbackQueryHandler(admin_view_squad, pattern="^admin_squad_view_.*$"))
     app.add_handler(CallbackQueryHandler(admin_squad_clear, pattern="^admin_squad_clear_.*$"))
+    app.add_handler(CallbackQueryHandler(admin_squad_add_missing, pattern="^admin_squad_add_missing_.*$"))
     app.add_handler(CallbackQueryHandler(admin_manage_cup, pattern="^admin_manage_cup$"))
     app.add_handler(CallbackQueryHandler(admin_manage_cup, pattern="^admin_cup_stage_.*$"))
     app.add_handler(CallbackQueryHandler(admin_init_cup_execute, pattern="^admin_init_cup_execute$"))

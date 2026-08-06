@@ -2596,6 +2596,7 @@ async def admin_manage_squads(update: Update, context: ContextTypes.DEFAULT_TYPE
     if row:
         keyboard.append(row)
     keyboard.append([InlineKeyboardButton("🖼 Загрузить фото игроков", callback_data="admin_fetch_photos_cb")])
+    keyboard.append([InlineKeyboardButton("➕ Добавить во все клубы игроков из матчей", callback_data="admin_squad_add_missing_all")])
     keyboard.append([InlineKeyboardButton("« Назад в админку", callback_data="admin_main_menu")])
 
     text = "📋 <b>Составы команд</b>\n\nВыберите клуб для просмотра и управления составом:"
@@ -2626,6 +2627,7 @@ async def admin_view_squad(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     keyboard = [
         [InlineKeyboardButton("📊 Загрузить состав", callback_data=f"admin_squad_upload_{club}")],
+        [InlineKeyboardButton("➕ Добавить игроков из матчей", callback_data=f"admin_squad_add_missing_{club}")],
         [InlineKeyboardButton("🗑️ Очистить состав", callback_data=f"admin_squad_clear_{club}")],
         [InlineKeyboardButton("« Назад к клубам", callback_data="admin_manage_squads")]
     ]
@@ -2698,6 +2700,41 @@ async def admin_squad_clear(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     text = f"🗑️ Состав команды <b>{html.escape(club)}</b> очищен. Удалено игроков: <b>{deleted}</b>."
     keyboard = [[InlineKeyboardButton("« Назад к клубам", callback_data="admin_manage_squads")]]
+    await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+@admin_only
+async def admin_squad_add_missing(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Add players that appear in match events but are missing from a club's squad."""
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+    if not is_admin(query.from_user.id):
+        await query.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    data = query.data
+    if data == "admin_squad_add_missing_all":
+        added = await asyncio.to_thread(database.add_missing_squad_players)
+        text = f"✅ Во все клубы добавлено игроков из матчей: <b>{added}</b>."
+        back_data = "admin_manage_squads"
+    else:
+        club = data.replace("admin_squad_add_missing_", "")
+        missing = await asyncio.to_thread(database.get_missing_squad_players, club)
+        if not missing:
+            text = f"✅ В составе <b>{html.escape(club)}</b> нет игроков из матчей, отсутствующих в составе."
+            keyboard = [[InlineKeyboardButton("« Назад к клубам", callback_data="admin_manage_squads")]]
+            await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+            return
+        added = await asyncio.to_thread(database.add_missing_squad_players, club)
+        lines = [f"➕ Добавлено <b>{added}</b> игроков из матчей в состав <b>{html.escape(club)}</b>:\n"]
+        for name in missing:
+            lines.append(f"• {html.escape(name)}")
+        text = "\n".join(lines)
+        back_data = f"admin_squad_view_{club}"
+
+    keyboard = [[InlineKeyboardButton("« Назад", callback_data=back_data)]]
     await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
 
 
