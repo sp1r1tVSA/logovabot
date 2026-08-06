@@ -5,7 +5,6 @@ import html
 import database
 from handlers.base import is_admin
 
-import json
 import logging
 logger = logging.getLogger(__name__)
 
@@ -174,7 +173,6 @@ GAME_NICKNAME, TEAM_NAME, LEAGUE_NAME, EDITING_FIELD = range(4)
 WAITING_FOR_SCORE = 100
 SQUAD_PHOTO = 101
 REPORT_SCORE_PHOTO = 102
-GUEST_DISPUTE_PHOTOS = 103
 MATCH_CUSTOM_TIME = 104
 
 async def show_cabinet(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -645,9 +643,7 @@ async def cabinet_view_match(update: Update, context: ContextTypes.DEFAULT_TYPE)
         score_str = f"{m['player2_score']}:{m['player1_score']}" if m['player1_score'] is not None else "-:-"
         
     status_text = "⏳ Ожидает ввода результата"
-    if m['status'] == 'reported':
-        status_text = "⚖️ Проверка"
-    elif m['status'] == 'disputed':
+    if m['status'] == 'disputed':
         status_text = "⚠️ Спорный"
     elif m['status'] == 'confirmed':
         status_text = "✅ Завершен"
@@ -692,11 +688,6 @@ async def cabinet_view_match(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 "4. ИИ автоматически распознает счёт, авторов голов и ассистов.\n"
                 "5. Проверьте данные и нажмите <b>✅ Всё верно</b> — результат сразу автоматически подтверждается и заносится в турнирную таблицу лиги!"
             )
-    elif m['status'] == 'reported':
-        if m.get('reported_by') == user_id:
-            text += "⏳ Результат отправлен сопернику. Ожидайте подтверждения."
-        else:
-            text += "🔔 <b>Соперник ввёл результат.</b> Проверьте сообщения от бота для подтверждения."
     elif m['status'] == 'disputed':
         text += "⚠️ <b>Матч оспорен.</b> Ожидайте решения администратора."
     elif m['status'] == 'confirmed':
@@ -735,23 +726,10 @@ async def cabinet_view_match(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if m['status'] == 'pending' and is_overdue and not m.get('is_extended') and user_id in (m['player1_id'], m['player2_id']):
         keyboard.append([InlineKeyboardButton("📨 Запросить ввод через админа", callback_data=f"cb_request_admin_result_{match_id}")])
         
-    if m['status'] == 'reported' and m.get('reported_by') == user_id:
-        keyboard.append([InlineKeyboardButton("✏️ Отменить отправку", callback_data=f"cabinet_cancel_report_{match_id}")])
-        
     keyboard.append([InlineKeyboardButton("📜 Правила турнира", url="https://t.me/fifulatyrniru/3405")])
     keyboard.append([InlineKeyboardButton("🔙 К списку матчей", callback_data="cabinet_my_matches")])
     
     await safe_edit_or_reply(query, context, text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
-
-async def cabinet_cancel_report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    query = update.callback_query
-    if not query:
-        return
-    await safe_query_answer(query, "Отправка результата отменена.")
-    match_id = int(query.data.replace("cabinet_cancel_report_", ""))
-    await asyncio.to_thread(database.reset_match_report, match_id)
-    query.data = f"cabinet_view_match_{match_id}"
-    await cabinet_view_match(update, context)
 
 async def cancel_score_report_and_navigate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """FSM fallback: clears all score-reporting state and routes user to the appropriate screen.
@@ -776,13 +754,6 @@ async def cancel_score_report_and_navigate(update: Update, context: ContextTypes
         "is_admin_reporting",
         "ai_photos_list",
         "processed_media_groups",
-        "guest_reporting_match_id",
-        "guest_home_goals",
-        "guest_away_goals",
-        "guest_home_goal_players",
-        "guest_away_goal_players",
-        "guest_home_assist_players",
-        "guest_away_assist_players",
     ):
         context.user_data.pop(key, None)
 
@@ -1858,7 +1829,7 @@ async def ai_recognize_now(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             photo_to_show = photos_list[0] if photos_list else context.user_data.get("report_photo_id")
             await context.bot.send_photo(chat_id=user_id, photo=photo_to_show, caption=text, parse_mode="HTML", reply_markup=markup)
         else:
-            context.user_data.pop("report_photo_id", None)
+            context.user_data["report_photo_id"] = photos_list[0] if photos_list else context.user_data.get("report_photo_id")
             cancel_cb = get_match_cancel_cb(context, user_id, match_id)
             fail_text = (
                 "⚠️ <b>Не удалось автоматически распознать результат со скриншотов.</b>\n\n"
@@ -1871,7 +1842,7 @@ async def ai_recognize_now(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             await query.message.reply_text(fail_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
     except Exception as e:
         logger.exception("AI Vision processing error")
-        context.user_data.pop("report_photo_id", None)
+        context.user_data["report_photo_id"] = photos_list[0] if photos_list else context.user_data.get("report_photo_id")
         await query.message.reply_text("⚠️ Ошибка при распознавании скриншотов. Попробуйте ещё раз.")
     finally:
         if status_msg:
@@ -2242,223 +2213,6 @@ async def submit_report_to_guest(update: Update, context: ContextTypes.DEFAULT_T
     # 3. Post to Main Group & Update Standings Graphic
     await notify_match_confirmed(context, match_id)
 
-async def handle_confirm_score(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-
-    query = update.callback_query
-    if not query:
-        return
-    await query.answer()
-
-    match_id = int(query.data.replace("confirm_score_", ""))
-    match = await asyncio.to_thread(database.get_match, match_id)
-    if not match:
-        await query.edit_message_text("❌ Матч не найден.")
-        return
-
-    if match['status'] == 'confirmed':
-        await query.answer("Результат уже зафиксирован!", show_alert=True)
-        return
-
-    user_id = query.from_user.id
-    reporter_id = match.get('reported_by') or match['player1_id']
-    expected_confirmer_id = match['player2_id'] if reporter_id == match['player1_id'] else match['player1_id']
-
-    if user_id != expected_confirmer_id:
-        await query.answer("⛔ Только соперник может подтвердить данный результат.", show_alert=True)
-        return
-
-    is_confirmer_home = (user_id == match['player1_id'])
-    confirmer_team = match['player1_team'] or match['player1_nickname'] if is_confirmer_home else match['player2_team'] or match['player2_nickname']
-    confirmer_goals = match['player1_score'] if is_confirmer_home else match['player2_score']
-    confirmer_goals = confirmer_goals or 0
-
-    # If confirmer's team scored > 0, prompt to pick their goalscorers
-    if confirmer_goals > 0:
-        context.user_data["guest_confirm_match_id"] = match_id
-        context.user_data["guest_away_team"] = confirmer_team
-        context.user_data["guest_goals_to_pick"] = confirmer_goals
-        context.user_data["guest_goals_count"] = {}
-        await render_guest_goals_picker(update, context, confirmer_team)
-    else:
-        # 0 goals -> confirm immediately
-        await asyncio.to_thread(database.confirm_match, match_id)
-        await notify_match_confirmed(context, match_id)
-
-
-async def render_guest_goals_picker(update: Update, context: ContextTypes.DEFAULT_TYPE, team_name: str) -> None:
-    query = update.callback_query
-    left = context.user_data.get("guest_goals_to_pick", 0)
-    picked_dict = context.user_data.get("guest_goals_count", {})
-
-    squad = await asyncio.to_thread(database.get_squad, team_name)
-    summary_str = ""
-    if picked_dict:
-        summary_str = "\n\n⚽ **Уже выбрано:**\n" + "\n".join([f"• {p}: {c}" for p, c in picked_dict.items()])
-
-    text = (
-        f"⚽ **Авторы голов вашей команды ({html.escape(team_name)})**\n"
-        f"Осталось распределить голов: **{left}**{summary_str}\n\n"
-        f"Нажимайте на кнопки с игроками вашего состава:"
-    )
-
-    keyboard = []
-    context.user_data["temp_guest_squad_goals"] = squad
-    if not squad:
-        text += "\n\n⚠️ *Состав вашей команды пока не добавлен в систему.*"
-        keyboard.append([InlineKeyboardButton("⏩ Пропустить авторов голов", callback_data="guest_skip_goals")])
-    else:
-        row = []
-        for idx, player in enumerate(squad):
-            row.append(InlineKeyboardButton(f"🏃‍♂️ {player}", callback_data=f"guest_pick_goal_idx_{idx}"))
-            if len(row) == 2:
-                keyboard.append(row)
-                row = []
-        if row:
-            keyboard.append(row)
-        keyboard.append([InlineKeyboardButton("⏩ Пропустить", callback_data="guest_skip_goals")])
-
-    markup = InlineKeyboardMarkup(keyboard)
-    if query.message.caption:
-        await query.edit_message_caption(caption=text, parse_mode="HTML", reply_markup=markup)
-    else:
-        await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
-
-async def guest_pick_goal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    query = update.callback_query
-    if not query:
-        return
-    await query.answer()
-
-    idx = int(query.data.replace("guest_pick_goal_idx_", ""))
-    squad = context.user_data.get("temp_guest_squad_goals", [])
-    player = squad[idx] if idx < len(squad) else "Unknown"
-    left = context.user_data.get("guest_goals_to_pick", 0)
-    dict_goals = context.user_data.get("guest_goals_count", {})
-
-    dict_goals[player] = dict_goals.get(player, 0) + 1
-    left -= 1
-    context.user_data["guest_goals_to_pick"] = left
-    context.user_data["guest_goals_count"] = dict_goals
-
-    away_team = context.user_data.get("guest_away_team")
-    if left > 0:
-        await render_guest_goals_picker(update, context, away_team)
-    else:
-        await start_guest_assists_picker(update, context, away_team)
-
-async def guest_skip_goals(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    query = update.callback_query
-    if not query:
-        return
-    await query.answer()
-
-    away_team = context.user_data.get("guest_away_team")
-    await start_guest_assists_picker(update, context, away_team)
-
-async def start_guest_assists_picker(update: Update, context: ContextTypes.DEFAULT_TYPE, team_name: str) -> None:
-    match_id = context.user_data.get("guest_confirm_match_id")
-    match = await asyncio.to_thread(database.get_match, match_id)
-    ag = match['player2_score'] if match else 1
-    context.user_data["guest_assists_to_pick"] = ag
-    context.user_data["guest_assists_count"] = {}
-    await render_guest_assists_picker(update, context, team_name)
-
-async def render_guest_assists_picker(update: Update, context: ContextTypes.DEFAULT_TYPE, team_name: str) -> None:
-    query = update.callback_query
-    left = context.user_data.get("guest_assists_to_pick", 0)
-    picked_dict = context.user_data.get("guest_assists_count", {})
-
-    squad = await asyncio.to_thread(database.get_squad, team_name)
-    summary_str = ""
-    if picked_dict:
-        summary_str = "\n\n🎯 **Уже выбрано:**\n" + "\n".join([f"• {p}: {c}" for p, c in picked_dict.items()])
-
-    text = (
-        f"🎯 **Авторы ассистов вашей команды ({html.escape(team_name)})**\n"
-        f"Осталось ассистов: **{left}**{summary_str}\n\n"
-        f"Нажимайте на кнопки или пропустите:"
-    )
-
-    keyboard = []
-    context.user_data["temp_guest_squad_assists"] = squad
-    if squad and left > 0:
-        row = []
-        for idx, player in enumerate(squad):
-            row.append(InlineKeyboardButton(f"🎯 {player}", callback_data=f"guest_pick_assist_idx_{idx}"))
-            if len(row) == 2:
-                keyboard.append(row)
-                row = []
-        if row:
-            keyboard.append(row)
-
-    keyboard.append([InlineKeyboardButton("⏩ Пропустить ассисты", callback_data="guest_skip_assists")])
-    markup = InlineKeyboardMarkup(keyboard)
-
-    if query.message.caption:
-        await query.edit_message_caption(caption=text, parse_mode="HTML", reply_markup=markup)
-    else:
-        await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
-
-async def guest_pick_assist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    query = update.callback_query
-    if not query:
-        return
-    await query.answer()
-
-    idx = int(query.data.replace("guest_pick_assist_idx_", ""))
-    squad = context.user_data.get("temp_guest_squad_assists", [])
-    player = squad[idx] if idx < len(squad) else "Unknown"
-    left = context.user_data.get("guest_assists_to_pick", 0)
-    dict_assists = context.user_data.get("guest_assists_count", {})
-
-    dict_assists[player] = dict_assists.get(player, 0) + 1
-    left -= 1
-    context.user_data["guest_assists_to_pick"] = left
-    context.user_data["guest_assists_count"] = dict_assists
-
-    away_team = context.user_data.get("guest_away_team")
-    if left > 0:
-        await render_guest_assists_picker(update, context, away_team)
-    else:
-        await finalize_guest_confirmation(update, context)
-
-async def guest_skip_assists(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    query = update.callback_query
-    if not query:
-        return
-    await query.answer()
-
-    await finalize_guest_confirmation(update, context)
-
-async def finalize_guest_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    match_id = context.user_data.get("guest_confirm_match_id")
-    match = await asyncio.to_thread(database.get_match, match_id) if match_id else None
-    if match and match['status'] == 'confirmed':
-        if update.callback_query:
-            await update.callback_query.answer("Результат уже зафиксирован!", show_alert=True)
-        return
-
-    away_team = context.user_data.get("guest_away_team")
-
-    goals_dict = context.user_data.get("guest_goals_count", {})
-    assists_dict = context.user_data.get("guest_assists_count", {})
-
-    events = []
-    for p, c in goals_dict.items():
-        events.append((away_team, p, "goal", c))
-    for p, c in assists_dict.items():
-        events.append((away_team, p, "assist", c))
-
-    if events:
-        await asyncio.to_thread(database.save_match_events, match_id, events, team_name=away_team)
-
-    next_stage = await asyncio.to_thread(database.confirm_match, match_id)
-    if next_stage:
-        from handlers.admin import notify_cup_stage_opened
-        await notify_cup_stage_opened(context.bot, next_stage)
-    await notify_match_confirmed(context, match_id)
-    await refresh_debts_summary(context)
-
 async def refresh_debts_summary(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Refresh the debts summary in the ПРЕДЫ thread after a match result is recorded."""
     try:
@@ -2541,104 +2295,7 @@ async def notify_match_confirmed(context: ContextTypes.DEFAULT_TYPE, match_id: i
         except Exception as e:
             logger.exception("Failed to post result to topic/group")
 
-# ==========================================
-# ОСПОРАРИВАНИЕ МАТЧА ГОСТЕМ (ФОТО ДОКАЗАТЕЛЬСТВА)
-# ==========================================
-
-async def handle_dispute_score(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    if not query:
-        return ConversationHandler.END
-    await query.answer()
-
-    match_id = int(query.data.replace("dispute_score_", ""))
-    match = await asyncio.to_thread(database.get_match, match_id)
-    if not match:
-        await query.edit_message_text("❌ Матч не найден.")
-        return ConversationHandler.END
-
-    user_id = query.from_user.id
-    if match['player2_id'] != user_id:
-        await query.answer("⛔ Только гостевой игрок может оспорить результат.", show_alert=True)
-        return ConversationHandler.END
-
-    context.user_data["dispute_match_id"] = match_id
-    context.user_data["dispute_photos"] = []
-
-    text = (
-        f"⚠️ **Оспаривание результата матча #{match_id}**\n\n"
-        f"Пожалуйста, отправьте **от 1 до 3 скриншотов** со статистикой вашего матча.\n"
-        f"После отправки фото нажмите кнопку **«✅ Завершить отправку»**."
-    )
-    keyboard = [[InlineKeyboardButton("✅ Завершить отправку (0 фото)", callback_data="cb_finish_dispute_photos")]]
-    markup = InlineKeyboardMarkup(keyboard)
-
-    if query.message.caption:
-        await query.message.reply_text(text, parse_mode="Markdown", reply_markup=markup)
-    else:
-        await query.edit_message_text(text, parse_mode="Markdown", reply_markup=markup)
-
-    return GUEST_DISPUTE_PHOTOS
-
-async def save_guest_dispute_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if not update.message or (update.effective_chat and update.effective_chat.type != "private"):
-        return GUEST_DISPUTE_PHOTOS
-    if not update.message.photo and not update.message.document:
-        await update.message.reply_text("❌ Пожалуйста, отправьте фото-скриншот.")
-        return GUEST_DISPUTE_PHOTOS
-
-    photos = context.user_data.get("dispute_photos", [])
-    if len(photos) >= 3:
-        await update.message.reply_text("⚠️ Вы уже прикрепили максимально допустимое количество фото (3 шт). Нажмите «✅ Завершить отправку».")
-        return GUEST_DISPUTE_PHOTOS
-
-    photo_id = update.message.photo[-1].file_id
-    photos.append(photo_id)
-    context.user_data["dispute_photos"] = photos
-
-    keyboard = [[InlineKeyboardButton(f"✅ Завершить отправку ({len(photos)} фото)", callback_data="cb_finish_dispute_photos")]]
-    markup = InlineKeyboardMarkup(keyboard)
-
-    await update.message.reply_text(
-        f"✅ Фото #{len(photos)} получено! Можете отправить еще фото (до 3) или завершить отправку.",
-        reply_markup=markup
-    )
-    return GUEST_DISPUTE_PHOTOS
-
-async def cb_finish_dispute_photos(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    if query:
-        await query.answer()
-
-    match_id = context.user_data.get("dispute_match_id")
-    photos = context.user_data.get("dispute_photos", [])
-
-    photos_json = json.dumps(photos)
-    await asyncio.to_thread(database.save_dispute_evidence, match_id, photos_json)
-
-    text = "❌ **Результат матча оспорен.** Спорное досье передано администраторам для проверки."
-    if query:
-        try:
-            await query.edit_message_text(text, parse_mode="Markdown")
-        except Exception:
-            await query.message.reply_text(text, parse_mode="Markdown")
-    else:
-        await update.message.reply_text(text, parse_mode="Markdown")
-
-    match = await asyncio.to_thread(database.get_match, match_id)
-    if match:
-        try:
-            await context.bot.send_message(
-                chat_id=match['player1_id'],
-                text=f"⚠️ **Соперник оспорил результат матча #{match_id}.** Ожидайте решения администраторов.",
-                parse_mode="Markdown"
-            )
-        except Exception:
-            pass
-
-    return ConversationHandler.END
-
-SQUAD_PHOTO = 100
+SQUAD_PHOTO = 101
 
 async def show_my_squad(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query

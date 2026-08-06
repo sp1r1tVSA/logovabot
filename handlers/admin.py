@@ -1,6 +1,5 @@
 import asyncio
 import datetime
-import re
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.error import BadRequest, TelegramError, Forbidden
 from telegram.ext import ContextTypes, ConversationHandler
@@ -16,9 +15,6 @@ import player_photos
 import logging
 
 logger = logging.getLogger(__name__)
-
-# State for dispute resolution conversation
-ADMIN_WAITING_FOR_DISPUTE_SCORE = 200
 
 WARN_REASONS = [
     "🔴 Долг (1 несыгранный матч / тур)",
@@ -761,123 +757,6 @@ async def admin_generate_matches_execute(update: Update, context: ContextTypes.D
         except Exception as e:
             logger.exception("Не удалось отправить уведомление о генерации в группу")
 
-# --- Disputed Matches & Resolution Flow ---
-
-@admin_only
-async def admin_list_disputed(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    query = update.callback_query
-    if not query or not is_admin(query.from_user.id):
-        return
-    await query.answer()
-    
-    matches = await asyncio.to_thread(database.get_disputed_matches)
-    if not matches:
-        text = "⚖️ **Спорные матчи**\n\nВ данный момент нет нерассмотренных спорных матчей."
-        keyboard = [[InlineKeyboardButton("« Назад в админку", callback_data="admin_main_menu")]]
-        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
-        return
-
-    text = f"⚖️ **Спорные матчи ({len(matches)}):**\n\n"
-    keyboard = []
-    for m in matches:
-        p1 = m['player1_team'] or m['player1_nickname']
-        p2 = m['player2_team'] or m['player2_nickname']
-        text += f"• **Тур {m['round_number']}**: {p1} vs {p2} (Счет: {m['player1_score']}:{m['player2_score']})\n"
-        keyboard.append([
-            InlineKeyboardButton(f"⚖️ Спор #{m['id']} ({p1} vs {p2})", callback_data=f"admin_resolve_dispute_{m['id']}"),
-            InlineKeyboardButton(f"🔄 Сбросить #{m['id']}", callback_data=f"admin_reset_dispute_{m['id']}")
-        ])
-    keyboard.append([InlineKeyboardButton("« Назад в админку", callback_data="admin_main_menu")])
-    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
-
-@admin_only
-async def admin_reset_dispute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    query = update.callback_query
-    if not query or not is_admin(query.from_user.id):
-        return
-    await query.answer()
-
-    match_id = int(query.data.replace("admin_reset_dispute_", ""))
-    await asyncio.to_thread(database.reset_match_report, match_id)
-
-    await query.edit_message_text(f"✅ Результат матча #{match_id} сброшен. Хозяева поля могут ввести его заново.")
-
-@admin_only
-async def admin_start_resolve_dispute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    if not query or not is_admin(query.from_user.id):
-        return ConversationHandler.END
-    await query.answer()
-
-    match_id = int(query.data.replace("admin_resolve_dispute_", ""))
-    context.user_data["admin_resolve_match_id"] = match_id
-
-    match = await asyncio.to_thread(database.get_match, match_id)
-    if not match:
-        await query.edit_message_text("Матч не найден.")
-        return ConversationHandler.END
-
-    await query.edit_message_text(
-        f"⚖️ **Разрешение спора по матчу #{match_id}**\n\n"
-        f"🏆 **Тур {match['round_number']}**\n"
-        f"⚔️ **{match['player1_nickname']}** vs **{match['player2_nickname']}**\n"
-        f"Введенный счет: `{match['player1_score']} : {match['player2_score']}`\n\n"
-        f"Пожалуйста, отправьте правильный счет матча в формате `счет1:счет2` (например, `2:0`):"
-    )
-    return ADMIN_WAITING_FOR_DISPUTE_SCORE
-
-@admin_only
-async def admin_save_dispute_score(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    text = update.message.text.strip()
-    match_id = context.user_data.get("admin_resolve_match_id")
-    user = update.effective_user
-
-    if not match_id or not user or not is_admin(user.id):
-        await update.message.reply_text("Ошибка доступа или сессии.")
-        return ConversationHandler.END
-
-    match = await asyncio.to_thread(database.get_match, match_id)
-    if not match:
-        await update.message.reply_text("Матч не найден.")
-        return ConversationHandler.END
-
-    pattern = r"^\s*(\d+)\s*[:.-]\s*(\d+)\s*$"
-    m = re.match(pattern, text)
-    if not m:
-        await update.message.reply_text(
-            "❌ Неверный формат. Пожалуйста, введите результат в формате `счет1:счет2` (например, `2:1`):"
-        )
-        return ADMIN_WAITING_FOR_DISPUTE_SCORE
-
-    p1_score = int(m.group(1))
-    p2_score = int(m.group(2))
-
-    if p1_score < 0 or p2_score < 0 or p1_score > config.MAX_MATCH_GOALS or p2_score > config.MAX_MATCH_GOALS:
-        await update.message.reply_text(
-            f"❌ Некорректный счёт. Максимальное количество голов: {config.MAX_MATCH_GOALS}."
-        )
-        return ADMIN_WAITING_FOR_DISPUTE_SCORE
-
-    # Save to database (confirms match)
-    await asyncio.to_thread(database.admin_set_match_score, match_id, p1_score, p2_score)
-
-    context.user_data.pop("admin_resolve_match_id", None)
-
-    await update.message.reply_text(
-        f"✅ Счет матча #{match_id} успешно установлен: **{p1_score}:{p2_score}**."
-    )
-
-    await notify_match_confirmed(context, match_id)
-    await show_admin_panel(update, context)
-    return ConversationHandler.END
-
-@admin_only
-async def admin_cancel_dispute_resolve(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data.pop("admin_resolve_match_id", None)
-    await update.message.reply_text("Разрешение спора отменено.")
-    await show_admin_panel(update, context)
-    return ConversationHandler.END
-
 # Conversation States for Admin Player management
 ADMIN_EXPECT_PLAYER_USERNAME = 201
 ADMIN_EXPECT_PLAYER_CLUB = 202
@@ -1078,8 +957,7 @@ async def admin_manage_matches_info(update: Update, context: ContextTypes.DEFAUL
     keyboard = [
         [InlineKeyboardButton("📝 Создание матчей", callback_data="admin_create_matches_start")],
         [InlineKeyboardButton("📅 Открыть туры (массово)", callback_data="admin_open_batch_prompt")],
-        [InlineKeyboardButton("⚠️ Спорные матчи", callback_data="admin_list_disputed"),
-         InlineKeyboardButton("⏰ Просроченные", callback_data="admin_list_overdue")]
+        [InlineKeyboardButton("⏰ Просроченные", callback_data="admin_list_overdue")]
     ]
     
     rounds = await asyncio.to_thread(database.get_all_rounds)
@@ -1387,8 +1265,6 @@ async def admin_round_matches(update: Update, context: ContextTypes.DEFAULT_TYPE
         
         if m["status"] == "confirmed":
             status_lbl = f"{m['player1_score']}:{m['player2_score']}"
-        elif m["status"] == "reported":
-            status_lbl = f"⏳ {m['player1_score']}:{m['player2_score']}?"
         elif m["status"] == "disputed":
             status_lbl = "⚠️ спор"
         else:
@@ -1447,7 +1323,6 @@ async def admin_view_match(update: Update, context: ContextTypes.DEFAULT_TYPE, m
 
     status_map = {
         "pending": "⚔️ Ожидает игры",
-        "reported": "⏳ На подтверждении",
         "confirmed": "✅ Завершен",
         "disputed": "⚠️ Оспорен (Спор)"
     }

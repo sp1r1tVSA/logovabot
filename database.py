@@ -544,34 +544,6 @@ def get_match(match_id: int) -> dict | None:
         d['player2_team'] = d['direct_p2_team'] or d['u2_team']
         return d
 
-def report_match_score(match_id: int, player1_score: int, player2_score: int, reporter_id: int = None, photo_id: str = None) -> None:
-    """Set the proposed scores, reporter, photo and update status to 'reported'."""
-    with transaction() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "UPDATE matches SET player1_score = ?, player2_score = ?, reported_by = ?, photo_id = ?, status = 'reported' WHERE id = ?",
-            (player1_score, player2_score, reporter_id, photo_id, match_id)
-        )
-
-def save_dispute_evidence(match_id: int, dispute_photos_json: str) -> None:
-    """Save dispute photos from guest and set status to 'disputed'."""
-    with transaction() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "UPDATE matches SET dispute_photos = ?, status = 'disputed' WHERE id = ?",
-            (dispute_photos_json, match_id)
-        )
-
-def confirm_match(match_id: int) -> str | None:
-    """Confirm the match score and set status to 'confirmed'."""
-    with transaction() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "UPDATE matches SET status = 'confirmed', played_at = CURRENT_TIMESTAMP WHERE id = ?",
-            (match_id,)
-        )
-    return process_cup_match_completion(match_id)
-
 def confirm_and_finalize_match(match_id: int, p1_score: int, p2_score: int, events: list, reporter_id: int = None, photo_id: str = None) -> str | None:
     """Instantly save and confirm a match with events in database."""
     with transaction() as conn:
@@ -596,15 +568,6 @@ def confirm_and_finalize_match(match_id: int, p1_score: int, p2_score: int, even
             (p1_score, p2_score, reporter_id, photo_id, match_id)
         )
     return process_cup_match_completion(match_id)
-
-def dispute_match(match_id: int) -> None:
-    """Set match status to 'disputed'."""
-    with transaction() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "UPDATE matches SET status = 'disputed' WHERE id = ?",
-            (match_id,)
-        )
 
 def set_technical_result(match_id: int, p1_score: int, p2_score: int) -> str | None:
     """Set technical result for match and update cup series if applicable."""
@@ -648,10 +611,6 @@ def reset_match(match_id: int) -> None:
                     elif c1 > c2 and cm["player1_team"] and cm["player1_team"].lower() == t2.lower(): t2_wins += 1
                     elif c2 > c1 and cm["player2_team"] and cm["player2_team"].lower() == t1.lower(): t1_wins += 1
                 cursor.execute("UPDATE cup_series SET team1_wins = ?, team2_wins = ?, winner_name = NULL, status = 'active' WHERE id = ?", (t1_wins, t2_wins, s_id))
-
-def reset_match_report(match_id: int) -> None:
-    """Reset match status to pending and clear reported values."""
-    reset_match(match_id)
 
 def propose_match_time(match_id: int, user_id: int, time_str: str) -> None:
     """Propose or update match time by player."""
@@ -846,24 +805,6 @@ def record_reminder_sent(round_number: int, reminder_type: str) -> None:
             "INSERT OR REPLACE INTO round_reminders (round_number, reminder_type) VALUES (?, ?)",
             (round_number, reminder_type)
         )
-
-def get_disputed_matches() -> list[dict]:
-    """Retrieve all disputed matches with player details."""
-    with transaction() as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT 
-                m.id, m.round_number, u1.telegram_id AS player1_id, u2.telegram_id AS player2_id,
-                m.player1_score, m.player2_score, m.status,
-                u1.username AS player1_nickname, u1.team_name AS player1_team,
-                u2.username AS player2_nickname, u2.team_name AS player2_team
-            FROM matches m
-            LEFT JOIN users u1 ON LOWER(m.player1_team) = LOWER(u1.team_name)
-            LEFT JOIN users u2 ON LOWER(m.player2_team) = LOWER(u2.team_name)
-            WHERE m.status = 'disputed'
-            ORDER BY m.round_number ASC
-        """)
-        return [dict(row) for row in cursor.fetchall()]
 
 def admin_set_match_score(match_id: int, player1_score: int, player2_score: int) -> None:
     """Manually set match score and confirm it by admin, clearing any previous match events."""

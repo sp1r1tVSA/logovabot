@@ -55,7 +55,6 @@ from handlers.cabinet import (
     cabinet_view_squad,
     show_game_history,
     cancel_registration,
-    cabinet_cancel_report,
     TEAM_NAME,
     EDITING_FIELD,
     start_score_reporting,
@@ -72,16 +71,7 @@ from handlers.cabinet import (
     save_report_photo,
     ai_recognize_now,
     submit_report_to_guest,
-    handle_confirm_score,
-    guest_pick_goal,
-    guest_skip_goals,
-    guest_pick_assist,
-    guest_skip_assists,
-    handle_dispute_score,
-    cb_finish_dispute_photos,
-    save_guest_dispute_photo,
     REPORT_SCORE_PHOTO,
-    GUEST_DISPUTE_PHOTOS,
     SQUAD_PHOTO,
     MATCH_CUSTOM_TIME,
     start_upload_squad,
@@ -104,12 +94,6 @@ from handlers.admin import (
     admin_list_players,
     admin_generate_matches_confirm,
     admin_generate_matches_execute,
-    admin_list_disputed,
-    admin_reset_dispute,
-    admin_start_resolve_dispute,
-    admin_save_dispute_score,
-    admin_cancel_dispute_resolve,
-    ADMIN_WAITING_FOR_DISPUTE_SCORE,
     admin_manage_players_info,
     admin_list_players_page,
     admin_view_player,
@@ -309,26 +293,6 @@ def _register_cabinet_handlers(app: Application) -> None:
     )
     app.add_handler(score_report_conv)
 
-    dispute_conv = ConversationHandler(
-        entry_points=[
-            CallbackQueryHandler(handle_dispute_score, pattern="^dispute_score_\\d+$")
-        ],
-        states={
-            GUEST_DISPUTE_PHOTOS: [MessageHandler(filters.PHOTO | filters.Document.ALL, save_guest_dispute_photo)]
-        },
-        fallbacks=[
-            CallbackQueryHandler(cb_finish_dispute_photos, pattern="^cb_finish_dispute_photos$"),
-            CallbackQueryHandler(cancel_score_report_and_navigate, pattern="^cabinet_my_matches$"),
-            CallbackQueryHandler(cancel_score_report_and_navigate, pattern="^main_menu$"),
-            CallbackQueryHandler(cancel_score_report_and_navigate, pattern="^menu_cabinet$"),
-            CommandHandler("cancel", cancel_registration)
-        ],
-        allow_reentry=True,
-        per_message=False,
-        conversation_timeout=300
-    )
-    app.add_handler(dispute_conv)
-
     squad_conv = ConversationHandler(
         entry_points=[
             CallbackQueryHandler(start_upload_squad, pattern="^cabinet_upload_squad$")
@@ -390,7 +354,6 @@ def _register_cabinet_handlers(app: Application) -> None:
     app.add_handler(CallbackQueryHandler(cb_skip_assists, pattern="^cb_skip_assists$"))
     app.add_handler(CallbackQueryHandler(submit_report_to_guest, pattern="^cb_submit_report_to_guest(_\\d+)?$"))
     app.add_handler(CallbackQueryHandler(ai_recognize_now, pattern="^ai_recognize_now_\\d+$"))
-    app.add_handler(CallbackQueryHandler(cabinet_cancel_report, pattern="^cabinet_cancel_report_\\d+$"))
 
     async def global_photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not update.message or update.effective_chat.type != "private":
@@ -400,14 +363,6 @@ def _register_cabinet_handlers(app: Application) -> None:
 
     app.add_handler(MessageHandler(filters.ChatType.PRIVATE & (filters.PHOTO | filters.Document.ALL), global_photo_handler))
 
-    app.add_handler(CallbackQueryHandler(handle_confirm_score, pattern="^confirm_score_\\d+$"))
-    app.add_handler(CallbackQueryHandler(guest_pick_goal, pattern="^guest_pick_goal_idx_\\d+$"))
-    app.add_handler(CallbackQueryHandler(guest_skip_goals, pattern="^guest_skip_goals$"))
-    app.add_handler(CallbackQueryHandler(guest_pick_assist, pattern="^guest_pick_assist_idx_\\d+$"))
-    app.add_handler(CallbackQueryHandler(guest_skip_assists, pattern="^guest_skip_assists$"))
-    app.add_handler(CallbackQueryHandler(handle_dispute_score, pattern="^dispute_score_\\d+$"))
-    app.add_handler(CallbackQueryHandler(cb_finish_dispute_photos, pattern="^cb_finish_dispute_photos$"))
-
     app.add_handler(CallbackQueryHandler(show_club_stats, pattern="^cabinet_club_stats$"))
     app.add_handler(CallbackQueryHandler(show_my_squad, pattern="^cabinet_my_squad$"))
     app.add_handler(CallbackQueryHandler(show_game_history, pattern="^cabinet_game_history$"))
@@ -415,23 +370,6 @@ def _register_cabinet_handlers(app: Application) -> None:
 
 def _register_admin_handlers(app: Application) -> None:
     """Register administrator panel, tournament management, and dispute resolution handlers."""
-    admin_dispute_conv = ConversationHandler(
-        entry_points=[
-            CallbackQueryHandler(admin_start_resolve_dispute, pattern="^admin_resolve_dispute_\\d+$")
-        ],
-        states={
-            ADMIN_WAITING_FOR_DISPUTE_SCORE: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_save_dispute_score)]
-        },
-        fallbacks=[
-            CommandHandler("cancel", admin_cancel_dispute_resolve),
-            MessageHandler(filters.Regex("^Отмена$"), admin_cancel_dispute_resolve)
-        ],
-        allow_reentry=True,
-        per_message=False,
-        conversation_timeout=300
-    )
-    app.add_handler(admin_dispute_conv)
-
     admin_player_conv = ConversationHandler(
         entry_points=[
             CallbackQueryHandler(admin_add_player_start, pattern="^admin_add_player_start$"),
@@ -558,11 +496,9 @@ def _register_admin_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("set_results_topic", admin_set_results_topic))
     app.add_handler(CommandHandler("set_warns_topic", admin_set_warns_topic))
 
-    app.add_handler(CallbackQueryHandler(admin_reset_dispute, pattern="^admin_reset_dispute_\\d+$"))
     app.add_handler(CallbackQueryHandler(show_admin_panel, pattern="^admin_main_menu$"))
     app.add_handler(CallbackQueryHandler(admin_generate_matches_confirm, pattern="^admin_generate_matches_confirm$"))
     app.add_handler(CallbackQueryHandler(admin_generate_matches_execute, pattern="^admin_generate_matches_execute$"))
-    app.add_handler(CallbackQueryHandler(admin_list_disputed, pattern="^admin_list_disputed$"))
     app.add_handler(CallbackQueryHandler(admin_manage_matches_info, pattern="^admin_manage_matches_info$"))
     app.add_handler(CallbackQueryHandler(admin_manage_players_menu, pattern="^admin_manage_players$"))
     app.add_handler(CallbackQueryHandler(admin_manage_players_menu, pattern="^admin_manage_players_info$"))
