@@ -6,7 +6,7 @@ from telegram.ext import ContextTypes, ConversationHandler
 import html
 import database
 from handlers.base import is_admin, admin_only, post_league_table_to_reports
-from handlers.cabinet import notify_match_confirmed, safe_send_notification, cb_report_choice_manual
+from handlers.cabinet import notify_match_confirmed, safe_send_notification, cb_report_choice_manual, safe_edit_or_reply
 import config
 from config import CLUBS, MAX_WARNS_LIMIT, GROUP_ID
 
@@ -1352,6 +1352,8 @@ async def admin_view_match(update: Update, context: ContextTypes.DEFAULT_TYPE, m
         keyboard.append([InlineKeyboardButton("🤝 ТН 0:0 (Ничья)", callback_data=f"admin_tp_draw_{match_id}"), InlineKeyboardButton("🔄 Сбросить результат", callback_data=f"admin_reset_match_execute_{match_id}")])
     else:
         keyboard.append([InlineKeyboardButton("🔄 Сбросить результат", callback_data=f"admin_reset_match_execute_{match_id}")])
+    if match.get("photo_id"):
+        keyboard.append([InlineKeyboardButton("📸 Просмотр скриншота матча", callback_data=f"admin_view_match_photo_{match_id}")])
     keyboard.append([back_button])
 
     if query.message and query.message.photo:
@@ -1369,6 +1371,43 @@ async def admin_view_match(update: Update, context: ContextTypes.DEFAULT_TYPE, m
             except Exception:
                 pass
             await context.bot.send_message(chat_id=query.from_user.id, text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+
+@admin_only
+async def admin_view_match_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show the uploaded screenshot of a match to the admin."""
+    query = update.callback_query
+    if not query or not is_admin(query.from_user.id):
+        return
+    await query.answer()
+
+    match_id = int(query.data.replace("admin_view_match_photo_", ""))
+    match = await asyncio.to_thread(database.get_match, match_id)
+
+    if not match:
+        await safe_edit_or_reply(query, context, "❌ Матч не найден.")
+        return
+
+    photo_id = match.get("photo_id")
+    if not photo_id:
+        await safe_edit_or_reply(query, context, "📸 Скриншот для этого матча не был загружен.")
+        return
+
+    p1 = html.escape(str(match['player1_nickname'] or match['player1_team'] or ""))
+    p2 = html.escape(str(match['player2_nickname'] or match['player2_team'] or ""))
+    score_str = f"{match['player1_score']} : {match['player2_score']}" if match['player1_score'] is not None else "Не сыгран"
+    title = "🏆 Кубок" if match.get("tournament_type") == "cup" else f"Тур {match['round_number']}"
+
+    caption = (
+        f"📸 <b>Скриншот матча #{match_id} ({title})</b>\n"
+        f"⚔️ <b>{p1}</b> {score_str} <b>{p2}</b>"
+    )
+    back_button = InlineKeyboardMarkup([[InlineKeyboardButton("« Назад к карточке матча", callback_data=f"admin_view_match_{match_id}")]])
+
+    try:
+        await context.bot.send_photo(chat_id=query.from_user.id, photo=photo_id, caption=caption, parse_mode="HTML", reply_markup=back_button)
+    except BadRequest as e:
+        logger.warning(f"Failed to resend screenshot for match #{match_id}: {e}")
+        await safe_edit_or_reply(query, context, "📸 Не удалось отобразить скриншот (файл недоступен).")
 
 @admin_only
 async def admin_report_score_auto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
