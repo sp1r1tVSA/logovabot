@@ -1,5 +1,6 @@
 import logging
 import sqlite3
+import datetime
 from typing import Generator
 from contextlib import contextmanager
 from config import DB_PATH
@@ -1850,17 +1851,33 @@ def process_cup_match_completion(match_id: int) -> str | None:
                     """, (hp_id, ap_id, hp_team, ap_team, stage, s_id, next_game_num))
             return None
 def get_all_unplayed_league_matches() -> list[dict]:
-    """Retrieve all pending league matches from Round 1 up to the highest OPEN round number."""
+    """Retrieve all pending league matches whose round deadline has already passed.
+
+    Only rounds with an expired deadline count as debts; rounds without a deadline
+    or with a deadline still in the future are excluded.
+    """
     with transaction() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT MAX(round_number) FROM rounds WHERE is_open = 1")
-        max_open_row = cursor.fetchone()
-        max_open_round = max_open_row[0] if max_open_row and max_open_row[0] is not None else 0
 
-        if max_open_round <= 0:
+        # Collect round numbers whose deadline has already passed
+        now = datetime.datetime.now()
+        cursor.execute("SELECT round_number, deadline FROM rounds WHERE is_open = 1")
+        expired_rounds: set[int] = set()
+        for r_num, dl_str in cursor.fetchall():
+            if not dl_str:
+                continue
+            try:
+                dl_dt = datetime.datetime.strptime(dl_str, "%d.%m.%Y %H:%M")
+            except ValueError:
+                continue
+            if dl_dt <= now:
+                expired_rounds.add(r_num)
+
+        if not expired_rounds:
             return []
 
-        cursor.execute("""
+        placeholders = ",".join("?" * len(expired_rounds))
+        cursor.execute(f"""
             SELECT 
                 m.id, m.round_number, u1.telegram_id AS player1_id, u2.telegram_id AS player2_id,
                 m.player1_team, m.player2_team,
@@ -1870,11 +1887,10 @@ def get_all_unplayed_league_matches() -> list[dict]:
             LEFT JOIN users u1 ON LOWER(m.player1_team) = LOWER(u1.team_name)
             LEFT JOIN users u2 ON LOWER(m.player2_team) = LOWER(u2.team_name)
             WHERE (m.tournament_type IS NULL OR m.tournament_type = 'league')
-              AND m.round_number >= 1
-              AND m.round_number <= ?
+              AND m.round_number IN ({placeholders})
               AND m.status = 'pending'
             ORDER BY m.round_number ASC, m.id ASC
-        """, (max_open_round,))
+        """, sorted(expired_rounds))
         return [dict(row) for row in cursor.fetchall()]
 
 def get_all_unplayed_cup_matches() -> list[dict]:
