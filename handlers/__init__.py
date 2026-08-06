@@ -193,6 +193,7 @@ from handlers.admin import (
     admin_broadcast_all_debts_execute,
     admin_send_debts_to_warns,
     admin_test_ai,
+    admin_warn_confirm,
     admin_warn_execute,
     admin_warn_remove_execute,
     admin_warn_history,
