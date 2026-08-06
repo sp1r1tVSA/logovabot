@@ -3,7 +3,7 @@ from telegram.ext import ApplicationBuilder, Application, PicklePersistence
 from telegram import BotCommand
 from config import TOKEN
 from database import init_db
-from handlers import register_all_handlers, job_check_deadlines_and_remind
+from handlers import register_all_handlers, job_check_deadlines_and_remind, job_post_debts_to_warns
 
 # Configure logging
 logging.basicConfig(
@@ -16,6 +16,13 @@ async def post_init(application: Application) -> None:
     await application.bot.set_my_commands([
         BotCommand("start", "Открыть главное меню")
     ])
+
+def register_jobs(application: Application) -> None:
+    """Register periodic background jobs."""
+    # Check round deadlines & send reminders every 30 minutes
+    application.job_queue.run_repeating(job_check_deadlines_and_remind, interval=1800, first=30)
+    # Post/update debts summary in ПРЕДЫ thread every 12 hours
+    application.job_queue.run_repeating(job_post_debts_to_warns, interval=12 * 3600, first=60)
 
 def main() -> None:
     """Initialize and run the Telegram bot application."""
@@ -36,6 +43,9 @@ def main() -> None:
 
     # Register all handlers (modular registration)
     register_all_handlers(application)
+
+    # Register periodic background jobs
+    register_jobs(application)
 
     # Start the bot
     logger.info("Starting Telegram bot...")

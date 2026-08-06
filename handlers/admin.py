@@ -423,6 +423,93 @@ async def admin_test_ai(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 # --- Broadcast Handlers (Debt Notifications) ---
 
+async def _build_debts_summary() -> tuple[str | None, int]:
+    """
+    Build a full HTML summary of outstanding debts (League + Cup) grouped by participant (club).
+    Returns (text, total_debts_count). text is None when there are no debts.
+    """
+    league_unplayed, cup_unplayed, users = await asyncio.gather(
+        asyncio.to_thread(database.get_all_unplayed_league_matches),
+        asyncio.to_thread(database.get_all_unplayed_cup_matches),
+        asyncio.to_thread(database.list_users),
+    )
+
+    if not league_unplayed and not cup_unplayed:
+        return None, 0
+
+    # Map club name (lowercased) -> user info to group debts by participant
+    user_by_team: dict[str, dict] = {}
+    for u in users:
+        team = (u["team_name"] or "").strip()
+        if team:
+            user_by_team.setdefault(team.lower(), {"telegram_id": u["telegram_id"], "username": u["username"], "team_name": team})
+
+    participants: dict[str, dict] = {}
+
+    def ensure_participant(team: str | None) -> dict | None:
+        if not team:
+            return None
+        info = user_by_team.get(team.strip().lower())
+        p = participants.setdefault(
+            team.strip().lower(),
+            {
+                "team_name": team,
+                "username": info["username"] if info else None,
+                "lines": [],
+            },
+        )
+        return p
+
+    for m in league_unplayed:
+        p1 = ensure_participant(m.get("player1_team") or m.get("p1_team"))
+        p2 = ensure_participant(m.get("player2_team") or m.get("p2_team"))
+        t1 = html.escape(m['player1_team'] or m['p1_team'] or 'неизвестно')
+        t2 = html.escape(m['player2_team'] or m['p2_team'] or 'неизвестно')
+        u1 = f" (@{html.escape(m['p1_username'])})" if m['p1_username'] else ""
+        u2 = f" (@{html.escape(m['p2_username'])})" if m['p2_username'] else ""
+        line = f"Тур {m['round_number']}: 🏠 <b>{t1}</b>{u1} -:- <b>{t2}</b>{u2} ✈️"
+        if p1:
+            p1["lines"].append(line)
+        if p2:
+            p2["lines"].append(line)
+
+    for m in cup_unplayed:
+        stage = m.get('cup_stage', '1/8')
+        g_num = m.get('game_num_in_series', 1)
+        w1 = m.get('team1_wins', 0)
+        w2 = m.get('team2_wins', 0)
+        t1 = html.escape(m['player1_team'] or m['team1_name'] or 'неизвестно')
+        t2 = html.escape(m['player2_team'] or m['team2_name'] or 'неизвестно')
+        u1 = f" (@{html.escape(m['p1_username'])})" if m['p1_username'] else ""
+        u2 = f" (@{html.escape(m['p2_username'])})" if m['p2_username'] else ""
+        match_line = f"{stage} Финала (Игра {g_num}): 🏠 <b>{t1}</b>{u1} 🆚 <b>{t2}</b>{u2} ✈️ <i>(Счёт серии: {w1}:{w2})</i>"
+
+        p1 = ensure_participant(m.get("player1_team") or m.get("p1_team"))
+        p2 = ensure_participant(m.get("player2_team") or m.get("p2_team"))
+        if p1:
+            p1["lines"].append(match_line)
+        if p2:
+            p2["lines"].append(match_line)
+
+    total_debts = len(league_unplayed) + len(cup_unplayed)
+
+    now_str = datetime.datetime.now().strftime("%d.%m.%Y %H:%M")
+    lines = [
+        "📋 <b>ДОЛГИ УЧАСТНИКОВ | ЛИГА И КУБОК КПЛ</b>\n",
+        f"<i>Обновлено: {now_str}</i>\n",
+    ]
+
+    for p in participants.values():
+        uname_str = f"@{p['username']}" if p['username'] else p['team_name']
+        lines.append(f"👤 <b>{html.escape(uname_str)}</b> [{html.escape(p['team_name'])}] — {len(p['lines'])} матч(а):")
+        for line in p["lines"]:
+            lines.append(f"   • {line}")
+        lines.append("")
+
+    lines.append("⏰ Пожалуйста, согласуйте время и сыграйте матчи! Несыгранные игры ведут к предупреждениям.")
+
+    return "\n".join(lines), total_debts
+
 @admin_only
 async def admin_broadcast_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
@@ -440,6 +527,7 @@ async def admin_broadcast_menu(update: Update, context: ContextTypes.DEFAULT_TYP
 
     keyboard = [
         [InlineKeyboardButton("🚀 Запустить рассылку всех долгов (Лига + Кубок)", callback_data="admin_broadcast_all_debts_execute")],
+        [InlineKeyboardButton("📋 Отправить сводку долгов в тему «ПРЕДЫ»", callback_data="admin_send_debts_to_warns")],
         [InlineKeyboardButton("« Назад в админку", callback_data="admin_main_menu")]
     ]
     markup = InlineKeyboardMarkup(keyboard)
@@ -553,6 +641,50 @@ async def admin_broadcast_all_debts_execute(update: Update, context: ContextType
 
     await query.answer(f"🚀 Рассылка успешно выполнена! (ЛС: {pm_sent} из {notified_users_count}, Тема отчетов: ✅)", show_alert=True)
     await admin_broadcast_menu(update, context)
+
+
+@admin_only
+async def admin_send_debts_to_warns(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Send/update the debts summary in the ПРЕДЫ thread."""
+    query = update.callback_query
+    if not query or not is_admin(query.from_user.id):
+        return
+    await query.answer()
+
+    await _post_or_update_debts_in_warns(context)
+
+    await admin_broadcast_menu(update, context)
+
+
+async def _post_or_update_debts_in_warns(context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """
+    Send debts summary to ПРЕДЫ thread, or edit the previously sent message if it exists.
+    Returns True if posted/updated, False otherwise (no debts or thread not configured).
+    """
+    text, total_debts = await _build_debts_summary()
+    group_id = GROUP_ID or await asyncio.to_thread(database.get_group_id)
+    warns_topic_id = await asyncio.to_thread(database.get_config, "warns_topic_id")
+    if not group_id or not warns_topic_id:
+        return False
+
+    kwargs = {"chat_id": group_id, "text": text, "parse_mode": "HTML", "message_thread_id": int(warns_topic_id)}
+    existing_id = await asyncio.to_thread(database.get_config, "warns_debts_msg_id")
+
+    try:
+        if existing_id:
+            try:
+                await context.bot.edit_message_text(
+                    chat_id=group_id, message_id=int(existing_id), text=text, parse_mode="HTML"
+                )
+                return True
+            except (BadRequest, TelegramError):
+                pass  # Message deleted/too old — resend
+        msg = await context.bot.send_message(**kwargs)
+        await asyncio.to_thread(database.set_config, "warns_debts_msg_id", str(msg.message_id))
+        return True
+    except (BadRequest, TelegramError) as e:
+        logger.warning(f"Failed to post debts to ПРЕДЫ thread: {e}")
+        return False
 
 # --- Match Generation Handlers ---
 
@@ -2983,6 +3115,11 @@ async def job_check_deadlines_and_remind(context: ContextTypes.DEFAULT_TYPE) -> 
             if not (await asyncio.to_thread(database.has_reminder_been_sent, r_num, "1h")):
                 await send_round_reminders(context, r_num, time_left_str="1 час! 🚨")
                 await asyncio.to_thread(database.record_reminder_sent, r_num, "1h")
+
+async def job_post_debts_to_warns(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Periodic job (every 12 hours) posting/updating the debts summary in the ПРЕДЫ thread."""
+    await _post_or_update_debts_in_warns(context)
+
 
 @admin_only
 async def admin_set_squad_topic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

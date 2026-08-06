@@ -173,6 +173,7 @@ from handlers.admin import (
     admin_toggle_remind_all,
     admin_send_selected_reminders,
     job_check_deadlines_and_remind,
+    job_post_debts_to_warns,
     admin_set_squad_topic,
     admin_set_reports_topic,
     admin_set_results_topic,
@@ -190,8 +191,8 @@ from handlers.admin import (
     admin_remind_cup_execute,
     admin_broadcast_menu,
     admin_broadcast_all_debts_execute,
+    admin_send_debts_to_warns,
     admin_test_ai,
-    admin_warn_confirm,
     admin_warn_execute,
     admin_warn_remove_execute,
     admin_warn_history,
@@ -592,6 +593,7 @@ def _register_admin_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("test_ai", admin_test_ai))
     app.add_handler(CallbackQueryHandler(admin_broadcast_menu, pattern="^admin_broadcast_menu$"))
     app.add_handler(CallbackQueryHandler(admin_broadcast_all_debts_execute, pattern="^admin_broadcast_all_debts_execute$"))
+    app.add_handler(CallbackQueryHandler(admin_send_debts_to_warns, pattern="^admin_send_debts_to_warns$"))
     app.add_handler(CallbackQueryHandler(admin_fetch_photos, pattern="^admin_fetch_photos_cb$"))
     app.add_handler(CallbackQueryHandler(admin_stub, pattern="^admin_matches_stub$"))
 
