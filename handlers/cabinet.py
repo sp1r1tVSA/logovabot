@@ -11,8 +11,10 @@ logger = logging.getLogger(__name__)
 
 import asyncio
 import telegram.error
+from telegram.error import Forbidden
 import ai_recognizer
 import config
+from config import MAX_WARNS_LIMIT
 import player_card_generator
 
 def match_squad_player_names(raw_players: list[str], squad_list: list[str]) -> dict[str, int]:
@@ -206,6 +208,12 @@ async def show_cabinet(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     stats = await asyncio.to_thread(database.get_player_stats, user.id)
     username_display = f"@{html.escape(user.username)}" if user.username else html.escape(user.first_name)
 
+    # Get warn count
+    user_record = await asyncio.to_thread(database.get_user, user.id)
+    warn_count = user_record['warn_count'] if user_record and user_record['warn_count'] else 0
+
+    warn_line = f"\n⚠️ <b>Предупреждения:</b> {warn_count} / {MAX_WARNS_LIMIT}"
+
     text = (
         f"👤 <b>Личный кабинет участника</b>\n\n"
         f"• <b>Telegram:</b> {username_display}\n"
@@ -216,6 +224,7 @@ async def show_cabinet(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         f"• <b>Победы:</b> {stats['wins']} | <b>Ничьи:</b> {stats['draws']} | <b>Поражения:</b> {stats['losses']}\n"
         f"• <b>Забито/Пропущено:</b> {stats['goals_scored']} / {stats['goals_conceded']}\n"
         f"• <b>Очки:</b> {stats['points']}"
+        f"{warn_line}"
     )
 
     keyboard = [

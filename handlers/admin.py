@@ -2,13 +2,14 @@ import asyncio
 import datetime
 import re
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram.error import BadRequest, TelegramError, Forbidden
 from telegram.ext import ContextTypes, ConversationHandler
 import html
 import database
 from handlers.base import is_admin, admin_only, post_league_table_to_reports
 from handlers.cabinet import notify_match_confirmed, safe_send_notification, cb_report_choice_manual
 import config
-from config import CLUBS
+from config import CLUBS, MAX_WARNS_LIMIT, GROUP_ID
 
 from schedule_parser import parse_schedule_text, create_matches_from_parsed_schedule
 import player_photos
@@ -18,6 +19,15 @@ logger = logging.getLogger(__name__)
 
 # State for dispute resolution conversation
 ADMIN_WAITING_FOR_DISPUTE_SCORE = 200
+
+WARN_REASONS = [
+    "🔴 Долг (1 несыгранный матч / тур)",
+    "Несвоевременный отчет",
+    "Оскорбления / Неспортивное поведение",
+    "Игнорирование соперника",
+    "Нарушение регламента составов"
+]
+_warn_action_locks: set[int] = set()
 
 def generate_round_robin_fixtures(player_ids: list[int]) -> list[tuple[int, int, int]]:
     """
@@ -2170,6 +2180,7 @@ async def admin_manage_players_menu(update: Update, context: ContextTypes.DEFAUL
         [InlineKeyboardButton("📋 Список участников", callback_data="admin_list_players_page_0")],
         [InlineKeyboardButton("➕ Добавить игрока", callback_data="admin_add_player_start")],
         [InlineKeyboardButton("📥 Массовый импорт (списком)", callback_data="admin_import_players_start")],
+        [InlineKeyboardButton("🔄 Сбросить варны (новый сезон)", callback_data="admin_reset_season_warns")],
         [InlineKeyboardButton("🗑 Очистить всю лигу", callback_data="admin_clear_league_start")],
         [InlineKeyboardButton("« Назад в админ-панель", callback_data="admin_main_menu")]
     ]
@@ -2257,6 +2268,7 @@ async def admin_view_player(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     username_str = f"@{player['username']}" if player['username'] else "(без юзернейма)"
     team_str = player['team_name'] or 'Без клуба'
     role_str = "Администратор" if player['role'] == 'admin' else "Игрок"
+    warn_count = player.get('warn_count', 0) if isinstance(player, dict) else player['warn_count']
 
     text = (
         f"👤 <b>Карточка участника:</b>\n\n"
@@ -2264,11 +2276,20 @@ async def admin_view_player(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         f"• <b>Клуб:</b> {html.escape(team_str)}\n"
         f"• <b>Telegram ID:</b> <code>{player['telegram_id']}</code>\n"
         f"• <b>Роль:</b> {role_str}\n"
+        f"• <b>Варны:</b> {warn_count} / {MAX_WARNS_LIMIT}\n"
     )
 
     keyboard = [
         [InlineKeyboardButton("✏️ Изменить клуб", callback_data=f"admin_edit_club_select_{p_id}")],
         [InlineKeyboardButton("✏️ Изменить юзернейм", callback_data=f"admin_edit_username_start_{p_id}")],
+        [
+            InlineKeyboardButton("➕ Выдать варн", callback_data=f"warn_add_{p_id}"),
+            InlineKeyboardButton("➖ Снять варн", callback_data=f"warn_remove_{p_id}")
+        ],
+        [
+            InlineKeyboardButton("📜 История варнов", callback_data=f"warn_hist_{p_id}"),
+            InlineKeyboardButton("🕊 Амнистия", callback_data=f"warn_amnesty_{p_id}")
+        ],
         [InlineKeyboardButton("🗑 Исключить из лиги", callback_data=f"admin_delete_player_confirm_{p_id}")],
         [InlineKeyboardButton("« К списку участников", callback_data="admin_list_players_page_0")]
     ]
@@ -3013,6 +3034,23 @@ async def admin_set_results_topic(update: Update, context: ContextTypes.DEFAULT_
 
 
 @admin_only
+async def admin_set_warns_topic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Set the topic for warnings (ПРЕДЫ)."""
+    user_id = update.effective_user.id
+    if not is_admin(user_id):
+        await update.message.reply_text("❌ Нет прав.")
+        return
+
+    thread_id = update.message.message_thread_id
+    if not thread_id:
+        await update.message.reply_text("⚠️ Вызовите команду внутри топика «ПРЕДЫ», куда хотите получать уведомления о варнах.")
+        return
+
+    await asyncio.to_thread(database.set_config, "warns_topic_id", str(thread_id))
+    await update.message.reply_text(f"✅ Тема «ПРЕДЫ» успешно установлена (ID: {thread_id}). Уведомления о предупреждениях будут присылаться сюда!")
+
+
+@admin_only
 async def admin_fetch_photos(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     /fetch_photos or admin_fetch_photos_cb — download and cache player portraits
@@ -3087,3 +3125,357 @@ async def admin_fetch_photos(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await status_msg.edit_text(result_text, parse_mode="HTML")
     except Exception:
         pass
+
+
+# ===================== WARNS SYSTEM =====================
+
+async def _send_to_warns_thread(context: ContextTypes.DEFAULT_TYPE, text: str) -> None:
+    """Send a message to the ПРЕДЫ thread in the group. Falls back silently."""
+    group_id = GROUP_ID or await asyncio.to_thread(database.get_group_id)
+    if not group_id:
+        return
+    warns_topic_id = await asyncio.to_thread(database.get_config, "warns_topic_id")
+    kwargs = {"chat_id": group_id, "text": text, "parse_mode": "HTML"}
+    if warns_topic_id:
+        kwargs["message_thread_id"] = int(warns_topic_id)
+    try:
+        await context.bot.send_message(**kwargs)
+    except Exception:
+        logger.exception("Failed to send message to ПРЕДЫ thread")
+
+
+async def _auto_kick_player(context: ContextTypes.DEFAULT_TYPE, user_id: int, username: str | None, team_name: str | None) -> None:
+    """Ban player from league and soft-kick from group when warn limit exceeded."""
+    await asyncio.to_thread(database.ban_and_remove_from_league, user_id)
+
+    # Soft kick from Telegram group
+    group_id = GROUP_ID or await asyncio.to_thread(database.get_group_id)
+    if group_id:
+        try:
+            await context.bot.ban_chat_member(chat_id=group_id, user_id=user_id)
+            await context.bot.unban_chat_member(chat_id=group_id, user_id=user_id)
+        except (BadRequest, TelegramError) as e:
+            logger.warning(f"Could not kick user {user_id} from group: {e}")
+
+    # DM to player
+    uname = f"@{username}" if username else f"ID {user_id}"
+    team_display = html.escape(team_name or "без клуба")
+    dm_text = (
+        f"🚨 <b>Вы исключены из лиги!</b>\n\n"
+        f"Вы получили {MAX_WARNS_LIMIT}/{MAX_WARNS_LIMIT} предупреждений.\n"
+        f"Клуб <b>{team_display}</b> освобожден.\n\n"
+        f"Для возвращения обратитесь к администратору."
+    )
+    try:
+        await context.bot.send_message(chat_id=user_id, text=dm_text, parse_mode="HTML")
+    except (Forbidden, TelegramError):
+        logger.warning(f"Cannot DM user {user_id} about auto-kick.")
+
+    # Public notice in ПРЕДЫ thread
+    thread_text = (
+        f"🚨 Игрок <b>{html.escape(uname)}</b> [{team_display}] получил "
+        f"<b>{MAX_WARNS_LIMIT}/{MAX_WARNS_LIMIT}</b> предупреждений и автоматически удален из лиги и группы! Клуб освобожден."
+    )
+    await _send_to_warns_thread(context, thread_text)
+
+
+@admin_only
+async def admin_warn_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show warn reason presets before issuing a warn."""
+    query = update.callback_query
+    if not query:
+        return
+    try:
+        await query.answer()
+    except BadRequest:
+        pass
+
+    p_id = int(query.data.replace("warn_add_", ""))
+    player = await asyncio.to_thread(database.get_user, p_id)
+    if not player:
+        await query.edit_message_text("❌ Игрок не найден.")
+        return
+
+    warn_count = player['warn_count'] or 0
+    username_str = f"@{player['username']}" if player['username'] else f"ID {p_id}"
+    team_str = player['team_name'] or 'Без клуба'
+
+    text = (
+        f"⚠️ <b>Выдача предупреждения</b>\n\n"
+        f"Игрок: <b>{html.escape(username_str)}</b> [{html.escape(team_str)}]\n"
+        f"Текущий счётчик: <b>{warn_count} / {MAX_WARNS_LIMIT}</b>\n\n"
+        f"Выберите причину:"
+    )
+
+    keyboard = []
+    for idx, reason in enumerate(WARN_REASONS):
+        keyboard.append([InlineKeyboardButton(reason, callback_data=f"warn_exec_{p_id}_{idx}")])
+    keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data=f"admin_view_player_{p_id}")])
+
+    await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+@admin_only
+async def admin_warn_execute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Execute warn issuance with debounce protection."""
+    query = update.callback_query
+    if not query:
+        return
+    try:
+        await query.answer()
+    except BadRequest:
+        pass
+
+    # Parse: warn_exec_{p_id}_{reason_idx}
+    parts = query.data.replace("warn_exec_", "").rsplit("_", 1)
+    if len(parts) != 2:
+        return
+    p_id = int(parts[0])
+    reason_idx = int(parts[1])
+
+    # Debounce
+    if p_id in _warn_action_locks:
+        await query.answer("⏳ Действие уже выполняется...", show_alert=True)
+        return
+    _warn_action_locks.add(p_id)
+
+    try:
+        player = await asyncio.to_thread(database.get_user, p_id)
+        if not player:
+            await query.edit_message_text("❌ Игрок не найден.")
+            return
+
+        reason = WARN_REASONS[reason_idx] if 0 <= reason_idx < len(WARN_REASONS) else WARN_REASONS[0]
+        admin_id = query.from_user.id
+        admin_username = query.from_user.username or str(admin_id)
+
+        new_count, is_exceeded = await asyncio.to_thread(database.add_warn, p_id, admin_id, reason)
+
+        username_str = f"@{player['username']}" if player['username'] else f"ID {p_id}"
+        team_str = player['team_name'] or 'Без клуба'
+
+        if is_exceeded:
+            # Auto-kick
+            await _auto_kick_player(context, p_id, player['username'], player['team_name'])
+            result_text = (
+                f"🚨 Игрок <b>{html.escape(username_str)}</b> [{html.escape(team_str)}] получил "
+                f"<b>{new_count}/{MAX_WARNS_LIMIT}</b> предупреждений!\n\n"
+                f"⛔ Автоматически исключен из лиги и группы. Клуб освобожден."
+            )
+        else:
+            # DM to player
+            dm_text = (
+                f"⚠️ <b>Вам выдано предупреждение!</b>\n\n"
+                f"Причина: {html.escape(reason)}\n"
+                f"Счётчик: <b>{new_count} / {MAX_WARNS_LIMIT}</b>\n\n"
+                f"Администратор: @{html.escape(admin_username)}"
+            )
+            try:
+                await context.bot.send_message(chat_id=p_id, text=dm_text, parse_mode="HTML")
+            except (Forbidden, TelegramError):
+                logger.warning(f"Cannot DM user {p_id} about warn.")
+
+            # Thread notification
+            thread_text = (
+                f"⚠️ Игроку <b>{html.escape(username_str)}</b> [{html.escape(team_str)}] "
+                f"выдан варн (<b>{new_count}/{MAX_WARNS_LIMIT}</b>).\n"
+                f"Причина: {html.escape(reason)}\n"
+                f"Администратор: @{html.escape(admin_username)}"
+            )
+            await _send_to_warns_thread(context, thread_text)
+
+            result_text = (
+                f"✅ Варн выдан игроку <b>{html.escape(username_str)}</b>.\n"
+                f"Счётчик: <b>{new_count} / {MAX_WARNS_LIMIT}</b>"
+            )
+
+        keyboard = [[InlineKeyboardButton("« К карточке игрока", callback_data=f"admin_view_player_{p_id}")]]
+        await query.edit_message_text(result_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+
+    finally:
+        _warn_action_locks.discard(p_id)
+
+
+@admin_only
+async def admin_warn_remove_execute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Remove a warn from a player."""
+    query = update.callback_query
+    if not query:
+        return
+    try:
+        await query.answer()
+    except BadRequest:
+        pass
+
+    p_id = int(query.data.replace("warn_remove_", ""))
+
+    # Debounce
+    if p_id in _warn_action_locks:
+        await query.answer("⏳ Действие уже выполняется...", show_alert=True)
+        return
+    _warn_action_locks.add(p_id)
+
+    try:
+        player = await asyncio.to_thread(database.get_user, p_id)
+        if not player:
+            await query.edit_message_text("❌ Игрок не найден.")
+            return
+
+        warn_count = player['warn_count'] or 0
+        if warn_count <= 0:
+            await query.answer("У игрока нет активных предупреждений.", show_alert=True)
+            _warn_action_locks.discard(p_id)
+            return
+
+        admin_id = query.from_user.id
+        admin_username = query.from_user.username or str(admin_id)
+        reason = "Снятие варна администратором"
+
+        new_count, success = await asyncio.to_thread(database.remove_warn, p_id, admin_id, reason)
+
+        if not success:
+            await query.answer("У игрока нет активных предупреждений.", show_alert=True)
+            _warn_action_locks.discard(p_id)
+            return
+
+        username_str = f"@{player['username']}" if player['username'] else f"ID {p_id}"
+        team_str = player['team_name'] or 'Без клуба'
+
+        # DM to player
+        dm_text = (
+            f"🟢 <b>Предупреждение снято!</b>\n\n"
+            f"Ваш счётчик: <b>{new_count} / {MAX_WARNS_LIMIT}</b>\n"
+            f"Администратор: @{html.escape(admin_username)}"
+        )
+        try:
+            await context.bot.send_message(chat_id=p_id, text=dm_text, parse_mode="HTML")
+        except (Forbidden, TelegramError):
+            pass
+
+        # Thread notification
+        thread_text = (
+            f"🟢 Игроку <b>{html.escape(username_str)}</b> [{html.escape(team_str)}] "
+            f"снят варн (<b>{new_count}/{MAX_WARNS_LIMIT}</b>).\n"
+            f"Администратор: @{html.escape(admin_username)}"
+        )
+        await _send_to_warns_thread(context, thread_text)
+
+        result_text = f"✅ Варн снят. Счётчик: <b>{new_count} / {MAX_WARNS_LIMIT}</b>"
+        keyboard = [[InlineKeyboardButton("« К карточке игрока", callback_data=f"admin_view_player_{p_id}")]]
+        await query.edit_message_text(result_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+
+    finally:
+        _warn_action_locks.discard(p_id)
+
+
+@admin_only
+async def admin_warn_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show warn history for a player."""
+    query = update.callback_query
+    if not query:
+        return
+    try:
+        await query.answer()
+    except BadRequest:
+        pass
+
+    p_id = int(query.data.replace("warn_hist_", ""))
+    player = await asyncio.to_thread(database.get_user, p_id)
+    if not player:
+        await query.edit_message_text("❌ Игрок не найден.")
+        return
+
+    warns = await asyncio.to_thread(database.get_user_warns, p_id)
+    username_str = f"@{player['username']}" if player['username'] else f"ID {p_id}"
+    warn_count = player['warn_count'] or 0
+
+    text = (
+        f"📜 <b>История варнов</b>\n"
+        f"Игрок: <b>{html.escape(username_str)}</b>\n"
+        f"Текущий счётчик: <b>{warn_count} / {MAX_WARNS_LIMIT}</b>\n\n"
+    )
+
+    if not warns:
+        text += "<i>История пуста.</i>"
+    else:
+        for w in warns[:20]:
+            w_type = w['type']
+            if w_type == 'WARN_ADD':
+                icon = "⚠️"
+            elif w_type == 'WARN_REMOVE':
+                icon = "🟢"
+            elif w_type == 'AUTO_KICK':
+                icon = "🚨"
+            else:
+                icon = "❓"
+
+            date_str = str(w['created_at'])[:16] if w['created_at'] else "?"
+            reason_str = html.escape(w['reason'] or '-')
+            text += f"{icon} <code>{date_str}</code> — {reason_str}\n"
+
+    keyboard = [[InlineKeyboardButton("« К карточке игрока", callback_data=f"admin_view_player_{p_id}")]]
+    await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+@admin_only
+async def admin_amnesty_execute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Reset all warns for a player (amnesty)."""
+    query = update.callback_query
+    if not query:
+        return
+    try:
+        await query.answer()
+    except BadRequest:
+        pass
+
+    p_id = int(query.data.replace("warn_amnesty_", ""))
+    player = await asyncio.to_thread(database.get_user, p_id)
+    if not player:
+        await query.edit_message_text("❌ Игрок не найден.")
+        return
+
+    admin_id = query.from_user.id
+    await asyncio.to_thread(database.amnesty_player, p_id, admin_id)
+
+    username_str = f"@{player['username']}" if player['username'] else f"ID {p_id}"
+    team_str = player['team_name'] or 'Без клуба'
+
+    # DM
+    try:
+        await context.bot.send_message(
+            chat_id=p_id,
+            text="🕊 <b>Амнистия!</b>\n\nВаши предупреждения сброшены до 0.",
+            parse_mode="HTML"
+        )
+    except (Forbidden, TelegramError):
+        pass
+
+    # Thread
+    thread_text = (
+        f"🕊 Игроку <b>{html.escape(username_str)}</b> [{html.escape(team_str)}] "
+        f"применена амнистия. Счётчик варнов сброшен до 0.\n"
+        f"Администратор: @{html.escape(query.from_user.username or str(admin_id))}"
+    )
+    await _send_to_warns_thread(context, thread_text)
+
+    result_text = f"✅ Амнистия применена к <b>{html.escape(username_str)}</b>. Счётчик: <b>0 / {MAX_WARNS_LIMIT}</b>"
+    keyboard = [[InlineKeyboardButton("« К карточке игрока", callback_data=f"admin_view_player_{p_id}")]]
+    await query.edit_message_text(result_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+@admin_only
+async def admin_reset_season_warns(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Reset all warns for all players (new season)."""
+    query = update.callback_query
+    if not query:
+        return
+    try:
+        await query.answer()
+    except BadRequest:
+        pass
+
+    await asyncio.to_thread(database.reset_season_warns)
+    await query.edit_message_text(
+        "✅ Все предупреждения сброшены (новый сезон).",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Назад в админку", callback_data="admin_main_menu")]])
+    )

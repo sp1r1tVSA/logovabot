@@ -82,6 +82,7 @@ async def handle_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_team = user_data["team_name"] if user_data else "Не зарегистрирован"
     username = user_data["username"] if user_data else update.effective_user.username or str(user_id)
+    user_warn_count = user_data["warn_count"] if user_data and user_data["warn_count"] else 0
     
     # Standings
     standings_text = "🏆 ТУРНИРНАЯ ТАБЛИЦА:\n"
@@ -202,6 +203,8 @@ async def handle_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     context_data = (
         f"Пользователь, который с тобой говорит: {username} (тренер команды '{user_team}').\n"
+        f"Предупреждения (варны) у этого пользователя: {user_warn_count}/4."
+        f"{' ⚠️ ВНИМАНИЕ: у игрока 3/4 варна! Следующий варн (например, ещё один долг по матчу) приведёт к автоматическому лишению клуба и кику из группы!' if user_warn_count == 3 else ''}\n"
         f"Всего туров в турнире: {total_rounds}.\n\n"
         f"{standings_text}\n"
         f"{form_text}\n"

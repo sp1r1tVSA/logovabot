@@ -103,11 +103,26 @@ def init_db() -> None:
                 PRIMARY KEY(round_number, reminder_type)
             )
         """)
-        # Add pending_notification column if missing (safe for existing DBs)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS user_warns (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                admin_id INTEGER,
+                reason TEXT,
+                type TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(user_id) REFERENCES users(telegram_id) ON DELETE CASCADE
+            )
+        """)
         try:
-            cursor.execute("ALTER TABLE users ADD COLUMN pending_notification INTEGER DEFAULT 0")
+            cursor.execute("ALTER TABLE users ADD COLUMN warn_count INTEGER DEFAULT 0")
         except sqlite3.OperationalError:
-            pass  # Column already exists
+            pass
+
+        try:
+            cursor.execute("ALTER TABLE users ADD COLUMN squad_photo_id TEXT")
+        except sqlite3.OperationalError:
+            pass
             
         try:
             cursor.execute("ALTER TABLE matches ADD COLUMN is_extended INTEGER DEFAULT 0")
@@ -174,10 +189,9 @@ def get_user(telegram_id: int) -> sqlite3.Row | None:
     """Retrieve a user record by Telegram ID."""
     with transaction() as conn:
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT telegram_id, username, team_name, league_name, role, registered_at, squad_photo_id FROM users WHERE telegram_id = ?",
-            (telegram_id,)
-        )
+        cursor.execute("""
+            SELECT telegram_id, username, team_name, league_name, role, registered_at, squad_photo_id, warn_count FROM users WHERE telegram_id = ?
+        """, (telegram_id,))
         return cursor.fetchone()
 
 def upsert_user(telegram_id: int, username: str | None, role: str = 'user') -> None:
@@ -1171,6 +1185,87 @@ def get_user_team(telegram_id: int) -> str | None:
         cursor.execute("SELECT team_name FROM users WHERE telegram_id = ?", (telegram_id,))
         row = cursor.fetchone()
         return row["team_name"] if row else None
+
+
+def add_warn(user_id: int, admin_id: int, reason: str) -> tuple[int, bool]:
+    from config import MAX_WARNS_LIMIT
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT warn_count FROM users WHERE telegram_id = ?", (user_id,))
+        row = cursor.fetchone()
+        current_count = row["warn_count"] if row and row["warn_count"] is not None else 0
+        new_count = current_count + 1
+        
+        cursor.execute("UPDATE users SET warn_count = ? WHERE telegram_id = ?", (new_count, user_id))
+        cursor.execute(
+            "INSERT INTO user_warns (user_id, admin_id, reason, type) VALUES (?, ?, ?, 'WARN_ADD')",
+            (user_id, admin_id, reason)
+        )
+        is_exceeded = new_count >= MAX_WARNS_LIMIT
+        return new_count, is_exceeded
+
+
+def remove_warn(user_id: int, admin_id: int, reason: str) -> tuple[int, bool]:
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT warn_count FROM users WHERE telegram_id = ?", (user_id,))
+        row = cursor.fetchone()
+        current_count = row["warn_count"] if row and row["warn_count"] is not None else 0
+        
+        if current_count <= 0:
+            return 0, False
+            
+        new_count = max(0, current_count - 1)
+        cursor.execute("UPDATE users SET warn_count = ? WHERE telegram_id = ?", (new_count, user_id))
+        cursor.execute(
+            "INSERT INTO user_warns (user_id, admin_id, reason, type) VALUES (?, ?, ?, 'WARN_REMOVE')",
+            (user_id, admin_id, reason)
+        )
+        return new_count, True
+
+
+def get_user_warns(user_id: int) -> list[dict]:
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, user_id, admin_id, reason, type, created_at
+            FROM user_warns
+            WHERE user_id = ?
+            ORDER BY created_at DESC
+        """, (user_id,))
+        return [dict(row) for row in cursor.fetchall()]
+
+
+def ban_and_remove_from_league(user_id: int) -> str | None:
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT team_name FROM users WHERE telegram_id = ?", (user_id,))
+        row = cursor.fetchone()
+        team_name = row["team_name"] if row else None
+        
+        cursor.execute("UPDATE users SET team_name = NULL WHERE telegram_id = ?", (user_id,))
+        cursor.execute(
+            "INSERT INTO user_warns (user_id, admin_id, reason, type) VALUES (?, NULL, 'Превышен лимит варнов (4/4). Авто-удаление из клуба.', 'AUTO_KICK')",
+            (user_id,)
+        )
+        return team_name
+
+
+def reset_season_warns() -> None:
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE users SET warn_count = 0")
+        cursor.execute("DELETE FROM user_warns")
+
+
+def amnesty_player(user_id: int, admin_id: int) -> None:
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE users SET warn_count = 0 WHERE telegram_id = ?", (user_id,))
+        cursor.execute(
+            "INSERT INTO user_warns (user_id, admin_id, reason, type) VALUES (?, ?, 'Амнистия (сброс варнов)', 'WARN_REMOVE')",
+            (user_id, admin_id)
+        )
 
 
 # --- Squad management ---

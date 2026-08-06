@@ -176,6 +176,7 @@ from handlers.admin import (
     admin_set_squad_topic,
     admin_set_reports_topic,
     admin_set_results_topic,
+    admin_set_warns_topic,
     admin_manage_squads,
     admin_view_squad,
     admin_squad_upload_start,
@@ -190,6 +191,12 @@ from handlers.admin import (
     admin_broadcast_menu,
     admin_broadcast_all_debts_execute,
     admin_test_ai,
+    admin_warn_confirm,
+    admin_warn_execute,
+    admin_warn_remove_execute,
+    admin_warn_history,
+    admin_amnesty_execute,
+    admin_reset_season_warns,
 )
 
 logger = logging.getLogger(__name__)
@@ -539,6 +546,7 @@ def _register_admin_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("set_squad_topic", admin_set_squad_topic))
     app.add_handler(CommandHandler("set_reports_topic", admin_set_reports_topic))
     app.add_handler(CommandHandler("set_results_topic", admin_set_results_topic))
+    app.add_handler(CommandHandler("set_warns_topic", admin_set_warns_topic))
 
     app.add_handler(CallbackQueryHandler(admin_reset_dispute, pattern="^admin_reset_dispute_\\d+$"))
     app.add_handler(CallbackQueryHandler(show_admin_panel, pattern="^admin_main_menu$"))
@@ -586,6 +594,14 @@ def _register_admin_handlers(app: Application) -> None:
     app.add_handler(CallbackQueryHandler(admin_broadcast_all_debts_execute, pattern="^admin_broadcast_all_debts_execute$"))
     app.add_handler(CallbackQueryHandler(admin_fetch_photos, pattern="^admin_fetch_photos_cb$"))
     app.add_handler(CallbackQueryHandler(admin_stub, pattern="^admin_matches_stub$"))
+
+    # Warns system
+    app.add_handler(CallbackQueryHandler(admin_warn_confirm, pattern="^warn_add_-?\\d+$"))
+    app.add_handler(CallbackQueryHandler(admin_warn_execute, pattern="^warn_exec_-?\\d+_\\d+$"))
+    app.add_handler(CallbackQueryHandler(admin_warn_remove_execute, pattern="^warn_remove_-?\\d+$"))
+    app.add_handler(CallbackQueryHandler(admin_warn_history, pattern="^warn_hist_-?\\d+$"))
+    app.add_handler(CallbackQueryHandler(admin_amnesty_execute, pattern="^warn_amnesty_-?\\d+$"))
+    app.add_handler(CallbackQueryHandler(admin_reset_season_warns, pattern="^admin_reset_season_warns$"))
 
 def register_all_handlers(application: Application) -> None:
     """Register all command, message, and callback handlers to the application."""
