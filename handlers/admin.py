@@ -656,9 +656,29 @@ async def admin_send_debts_to_warns(update: Update, context: ContextTypes.DEFAUL
     await admin_broadcast_menu(update, context)
 
 
+MAX_DEBTS_MSG_LEN = 4000
+
+
+def _chunk_debts_text(text: str) -> list[str]:
+    """Split a (possibly too long) HTML debts summary into Telegram-safe chunks on line boundaries."""
+    chunks: list[str] = []
+    current = ""
+    for paragraph in text.split("\n"):
+        piece = paragraph + "\n"
+        if current and len(current) + len(piece) > MAX_DEBTS_MSG_LEN:
+            chunks.append(current.rstrip())
+            current = piece
+        else:
+            current += piece
+    if current:
+        chunks.append(current.rstrip())
+    return chunks or [""]
+
+
 async def _post_or_update_debts_in_warns(context: ContextTypes.DEFAULT_TYPE) -> bool:
     """
-    Send debts summary to ПРЕДЫ thread, or edit the previously sent message if it exists.
+    Send debts summary to ПРЕДЫ thread, or edit the previously sent messages if they exist.
+    Splits the summary into multiple messages (<= MAX_DEBTS_MSG_LEN chars each) when needed.
     Returns True if posted/updated, False otherwise (no debts or thread not configured).
     """
     text, total_debts = await _build_debts_summary()
@@ -667,20 +687,45 @@ async def _post_or_update_debts_in_warns(context: ContextTypes.DEFAULT_TYPE) -> 
     if not group_id or not warns_topic_id:
         return False
 
-    kwargs = {"chat_id": group_id, "text": text, "parse_mode": "HTML", "message_thread_id": int(warns_topic_id)}
-    existing_id = await asyncio.to_thread(database.get_config, "warns_debts_msg_id")
+    existing_raw = await asyncio.to_thread(database.get_config, "warns_debts_msg_id")
+    existing_ids = [int(x) for x in str(existing_raw or "").split(",") if str(x).strip().isdigit()]
 
-    try:
-        if existing_id:
+    # No outstanding debts — remove the old summary posts so the thread stays clean
+    if text is None:
+        for extra in existing_ids:
             try:
-                await context.bot.edit_message_text(
-                    chat_id=group_id, message_id=int(existing_id), text=text, parse_mode="HTML"
-                )
-                return True
+                await context.bot.delete_message(chat_id=group_id, message_id=extra)
             except (BadRequest, TelegramError):
-                pass  # Message deleted/too old — resend
-        msg = await context.bot.send_message(**kwargs)
-        await asyncio.to_thread(database.set_config, "warns_debts_msg_id", str(msg.message_id))
+                pass
+        if existing_ids:
+            await asyncio.to_thread(database.set_config, "warns_debts_msg_id", "")
+        return True
+
+    chunks = _chunk_debts_text(text)
+
+    new_ids: list[int] = []
+    try:
+        for i, chunk in enumerate(chunks):
+            if i < len(existing_ids):
+                try:
+                    await context.bot.edit_message_text(
+                        chat_id=group_id, message_id=existing_ids[i], text=chunk, parse_mode="HTML"
+                    )
+                    new_ids.append(existing_ids[i])
+                    continue
+                except (BadRequest, TelegramError):
+                    pass  # Deleted/too old — resend
+            msg = await context.bot.send_message(
+                chat_id=group_id, text=chunk, parse_mode="HTML", message_thread_id=int(warns_topic_id)
+            )
+            new_ids.append(msg.message_id)
+        # Clean up leftover previously posted messages that are no longer needed
+        for extra in existing_ids[len(chunks):]:
+            try:
+                await context.bot.delete_message(chat_id=group_id, message_id=extra)
+            except (BadRequest, TelegramError):
+                pass
+        await asyncio.to_thread(database.set_config, "warns_debts_msg_id", ",".join(map(str, new_ids)))
         return True
     except (BadRequest, TelegramError) as e:
         logger.warning(f"Failed to post debts to ПРЕДЫ thread: {e}")
