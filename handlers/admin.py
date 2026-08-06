@@ -559,7 +559,7 @@ async def admin_broadcast_all_debts_execute(update: Update, context: ContextType
         if not uid or uid <= 0:
             continue
 
-        u_matches = await asyncio.to_thread(database.get_pending_matches, uid)
+        u_matches = await asyncio.to_thread(database.get_pending_matches, uid, True)
         if not u_matches:
             continue
 

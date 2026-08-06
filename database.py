@@ -288,8 +288,12 @@ def get_player_stats(telegram_id: int) -> dict:
             "points": points
         }
 
-def get_pending_matches(telegram_id: int) -> list[dict]:
-    """Retrieve active matches for a user from Round 1 up to the highest OPEN round number, plus active Cup matches."""
+def get_pending_matches(telegram_id: int, only_expired_deadlines: bool = False) -> list[dict]:
+    """Retrieve active matches for a user from Round 1 up to the highest OPEN round number, plus active Cup matches.
+
+    When only_expired_deadlines is True, league matches are restricted to rounds whose
+    deadline has already passed (used for debt reminders). Cup matches are never filtered.
+    """
     with transaction() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT team_name FROM users WHERE telegram_id = ?", (telegram_id,))
@@ -301,7 +305,41 @@ def get_pending_matches(telegram_id: int) -> list[dict]:
         max_open_row = cursor.fetchone()
         max_open_round = max_open_row[0] if max_open_row and max_open_row[0] is not None else 0
 
-        cursor.execute("""
+        # Collect round numbers whose deadline has already passed (for debt filtering)
+        expired_rounds: set[int] = set()
+        if only_expired_deadlines:
+            now = datetime.datetime.now()
+            cursor.execute("SELECT round_number, deadline FROM rounds WHERE is_open = 1")
+            for r_num, dl_str in cursor.fetchall():
+                if not dl_str:
+                    continue
+                try:
+                    dl_dt = datetime.datetime.strptime(dl_str, "%d.%m.%Y %H:%M")
+                except ValueError:
+                    continue
+                if dl_dt <= now:
+                    expired_rounds.add(r_num)
+
+        league_condition = (
+            "(m.tournament_type IS NULL OR m.tournament_type = 'league') "
+            f"AND m.round_number IN ({','.join('?' * len(expired_rounds))}) "
+            "AND m.status IN ('pending', 'reported', 'disputed')"
+            if only_expired_deadlines and expired_rounds
+            else (
+                "(m.tournament_type IS NULL OR m.tournament_type = 'league') "
+                "AND m.round_number >= 1 "
+                "AND m.round_number <= ? "
+                "AND m.status IN ('pending', 'reported', 'disputed')"
+            )
+        )
+
+        params: list = [u_team, u_team, u_team, u_team]
+        if only_expired_deadlines and expired_rounds:
+            params.extend(sorted(expired_rounds))
+        else:
+            params.append(max_open_round)
+
+        cursor.execute(f"""
             SELECT 
                 m.id, m.round_number, m.status, m.tournament_type, m.cup_stage, m.cup_series_id, m.game_num_in_series,
                 m.player1_team, m.player2_team, u1.telegram_id AS player1_id, u2.telegram_id AS player2_id,
@@ -317,15 +355,10 @@ def get_pending_matches(telegram_id: int) -> list[dict]:
             AND (
                 (m.tournament_type = 'cup' AND m.status IN ('pending', 'reported', 'disputed'))
                 OR
-                (
-                    (m.tournament_type IS NULL OR m.tournament_type = 'league') 
-                    AND m.round_number >= 1 
-                    AND m.round_number <= ? 
-                    AND m.status IN ('pending', 'reported', 'disputed')
-                )
+                {league_condition}
             )
             ORDER BY m.round_number ASC, m.id ASC
-        """, (u_team, u_team, u_team, u_team, max_open_round))
+        """, params)
         
         matches = []
         for row in cursor.fetchall():
