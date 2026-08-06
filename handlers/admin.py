@@ -499,7 +499,7 @@ async def _build_debts_summary() -> tuple[str | None, int]:
         f"<i>Обновлено: {now_str}</i>\n",
     ]
 
-    for p in participants.values():
+    for p in sorted(participants.values(), key=lambda x: len(x["lines"]), reverse=True):
         uname_str = f"@{p['username']}" if p['username'] else p['team_name']
         lines.append(f"👤 <b>{html.escape(uname_str)}</b> [{html.escape(p['team_name'])}] — {len(p['lines'])} матч(а):")
         for line in p["lines"]:
