@@ -521,7 +521,7 @@ async def admin_broadcast_menu(update: Update, context: ContextTypes.DEFAULT_TYP
         "📢 <b>Управление Рассылкой Задолженностей</b>\n\n"
         "Данный инструмент формирует и рассылает <b>полный список долгов (Лига + Кубок КПЛ)</b>:\n\n"
         "1. 📩 <b>Персональные ЛС всем должникам:</b> Список несыгранных матчей каждого участника с кнопками прямого перехода к вводу результата.\n"
-        "2. 💬 <b>Общий сводный пост в Тему Отчётов:</b> Единый список всех открытых матчей Лиги и Кубка для всей группы.\n\n"
+        "2. 💬 <b>Сводка долгов в Тему ПРЕДЫ</b> (кнопкой ниже).\n\n"
         "Нажмите кнопку ниже для старта рассылки:"
     )
 
@@ -596,50 +596,7 @@ async def admin_broadcast_all_debts_execute(update: Update, context: ContextType
         if await safe_send_notification(context.bot, uid, "\n".join(lines), markup):
             pm_sent += 1
 
-    # 2. Public Summary to Reports Topic
-    main_group_id = await asyncio.to_thread(database.get_group_id)
-    reports_topic_id = await asyncio.to_thread(database.get_config, "reports_topic_id")
-
-    if main_group_id:
-        group_lines = [
-            "📋 <b>ОБЩИЙ СВОДНЫЙ СПИСОК ДОЛГОВ | ЛИГА И КУБОК КПЛ</b>\n"
-        ]
-
-        if league_unplayed:
-            group_lines.append(f"⚽ <b>ЧЕМПИОНАТ КПЛ ({len(league_unplayed)} несыгранных матчей):</b>")
-            for m in league_unplayed:
-                t1 = html.escape(m['player1_team'] or m['p1_team'] or 'неизвестно')
-                t2 = html.escape(m['player2_team'] or m['p2_team'] or 'неизвестно')
-                u1 = f" (@{html.escape(m['p1_username'])})" if m['p1_username'] else (" (Пока нет участника)" if m.get('p1_team') is None else "")
-                u2 = f" (@{html.escape(m['p2_username'])})" if m['p2_username'] else (" (Пока нет участника)" if m.get('p2_team') is None else "")
-                group_lines.append(f"• Тур {m['round_number']}: 🏠 <b>{t1}</b>{u1} -:- <b>{t2}</b>{u2} ✈️")
-            group_lines.append("")
-
-        if cup_unplayed:
-            group_lines.append(f"🏆 <b>КУБОК КПЛ ({len(cup_unplayed)} активных кубковых матчей):</b>")
-            for m in cup_unplayed:
-                t1 = html.escape(m['player1_team'] or m['team1_name'] or 'неизвестно')
-                t2 = html.escape(m['player2_team'] or m['team2_name'] or 'неизвестно')
-                u1 = f" (@{html.escape(m['p1_username'])})" if m['p1_username'] else (" (Пока нет участника)" if m.get('p1_team') is None else "")
-                u2 = f" (@{html.escape(m['p2_username'])})" if m['p2_username'] else (" (Пока нет участника)" if m.get('p2_team') is None else "")
-                stage = m.get('cup_stage', '1/8')
-                g_num = m.get('game_num_in_series', 1)
-                w1 = m.get('team1_wins', 0)
-                w2 = m.get('team2_wins', 0)
-                group_lines.append(f"• {stage} Финала (Игра {g_num}): 🏠 <b>{t1}</b>{u1} 🆚 <b>{t2}</b>{u2} ✈️ <i>(Счёт серии: {w1}:{w2})</i>")
-            group_lines.append("")
-
-        group_lines.append("⏰ Уважаемые участники, пожалуйста, согласуйте время и сыграйте ваши матчи!")
-
-        try:
-            kwargs = {"chat_id": main_group_id, "text": "\n".join(group_lines), "parse_mode": "HTML"}
-            if reports_topic_id:
-                kwargs["message_thread_id"] = int(reports_topic_id)
-            await context.bot.send_message(**kwargs)
-        except Exception as e:
-            logger.exception("Failed to post general debt summary to reports topic")
-
-    await query.answer(f"🚀 Рассылка успешно выполнена! (ЛС: {pm_sent} из {notified_users_count}, Тема отчетов: ✅)", show_alert=True)
+    await query.answer(f"🚀 Рассылка успешно выполнена! (ЛС: {pm_sent} из {notified_users_count})", show_alert=True)
     await admin_broadcast_menu(update, context)
 
 
