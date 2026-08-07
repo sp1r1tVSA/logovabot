@@ -34,8 +34,15 @@ async def handle_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         if not user_text:
             return
-        # Если текстовое сообщение НЕ начинается с "темшик"
-        if not user_text.lower().startswith("темшик"):
+        # Сообщение приходит как ответ (reply) на сообщение бота
+        is_reply_to_bot = False
+        if update.message.reply_to_message and update.message.reply_to_message.from_user:
+            try:
+                is_reply_to_bot = update.message.reply_to_message.from_user.id == context.bot.id
+            except Exception:
+                is_reply_to_bot = False
+        # Если текстовое сообщение НЕ начинается с "темшик" и НЕ является ответом на бота
+        if not user_text.lower().startswith("темшик") and not is_reply_to_bot:
             import re
             if re.match(r"^\d{2}\.\d{2}\.\d{4}\s+\d{2}:\d{2}$", user_text):
                 await update.message.reply_text(
