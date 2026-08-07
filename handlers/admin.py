@@ -573,31 +573,37 @@ async def admin_broadcast_all_debts_execute(update: Update, context: ContextType
             continue
 
         notified_users_count += 1
-        lines = [
-            f"🚨 <b>НАПОМИНАНИЕ О ЗАДОЛЖЕННОСТЯХ МАТЧЕЙ</b>\n",
-            f"У вас есть несыгранные матчи ({len(u_matches)}):\n"
-        ]
-
+        total = len(u_matches)
         league_matches = [m for m in u_matches if m.get("tournament_type") != "cup"]
         cup_matches = [m for m in u_matches if m.get("tournament_type") == "cup"]
 
+        bar = "━━━━━━━━━━━━━━━━━━━━━━"
+        lines = [
+            "🚨 <b>НАПОМИНАНИЕ О ЗАДОЛЖЕННОСТЯХ</b>\n",
+            f"У вас <b>{total}</b> несыгранн{'ый' if total == 1 else 'ых'} матч{'а' if total in (2, 3, 4) else 'ей'} 🕒\n",
+        ]
+
         if league_matches:
-            lines.append("⚽ <b>Чемпионат КПЛ:</b>")
-            for m in league_matches:
+            lines.append(bar)
+            lines.append("⚽ <b>ЧЕМПИОНАТ КПЛ</b>")
+            for i, m in enumerate(league_matches, 1):
                 opp = m['opponent_team'] or m['opponent_username'] or "Соперник"
-                lines.append(f"• Тур {m['round_number']}: 🆚 <b>{html.escape(opp)}</b>")
+                lines.append(f"   {i}. Тур {m['round_number']}: 🆚 <b>{html.escape(opp)}</b>")
+            lines.append(bar)
             lines.append("")
 
         if cup_matches:
-            lines.append("🏆 <b>Кубок КПЛ (Best-of-3):</b>")
-            for m in cup_matches:
+            lines.append(bar)
+            lines.append("🏆 <b>КУБОК КПЛ · Best-of-3</b>")
+            for i, m in enumerate(cup_matches, 1):
                 opp = m['opponent_team'] or m['opponent_username'] or "Соперник"
                 stage = m.get('cup_stage', '1/8')
                 g_num = m.get('game_num_in_series', 1)
-                lines.append(f"• {stage} Финала (Игра {g_num}): 🆚 <b>{html.escape(opp)}</b>")
+                lines.append(f"   {i}. {stage} Финала (Игра {g_num}): 🆚 <b>{html.escape(opp)}</b>")
+            lines.append(bar)
             lines.append("")
 
-        lines.append("Пожалуйста, свяжитесь с соперниками и внесите результаты через ваш кабинет.")
+        lines.append("📅 Согласуйте время с соперниками и внесите результаты через кабинет — иначе последуют ⚠️ предупреждения!")
 
         keyboard = [[InlineKeyboardButton("📋 Мои матчи в кабинете", callback_data="cabinet_my_matches")]]
         markup = InlineKeyboardMarkup(keyboard)
