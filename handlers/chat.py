@@ -208,12 +208,27 @@ async def handle_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• Кубок и Награды: Есть Кубок КПЛ (стадия 1/8). В конце сезона вручается премия 'Золотой Мяч'. Красивые голы отправлять @antonv2801.\n"
     )
 
+    # Opponents list: club -> coach username (from registered users)
+    all_players = await asyncio.to_thread(database.list_users)
+    opponents_text = ""
+    if all_players:
+        for p in all_players:
+            team = p["team_name"]
+            uname = p["username"]
+            if team and uname:
+                opponents_text += f"• {team} — @{uname}\n"
+        if not opponents_text:
+            opponents_text = "Информация о тренерах ещё не занесена.\n"
+    else:
+        opponents_text = "Информация о тренерах ещё не занесена.\n"
+
     context_data = (
         f"Пользователь, который с тобой говорит: {username} (тренер команды '{user_team}').\n"
         f"СНИКИ ЛИ ЭТО? {'ДА! Это сам @Snikers2121 (sniki) — великий! Относись к нему максимально уважительно и по-братски, защищай его, называй великим.' if (username or '').lower() == 'snikers2121' else 'НЕТ, это не сники — это обычный собеседник, можешь его троллить и подкалывать.'}\n"
         f"Предупреждения (варны) у этого пользователя: {user_warn_count}/4."
         f"{' ⚠️ ВНИМАНИЕ: у игрока 3/4 варна! Следующий варн (например, ещё один долг по матчу) приведёт к автоматическому лишению клуба и кику из группы!' if user_warn_count == 3 else ''}\n"
         f"Всего туров в турнире: {total_rounds}.\n\n"
+        f"СОПЕРНИКИ ПО ЛИГЕ (клуб — тренер):\n{opponents_text}\n\n"
         f"{standings_text}\n"
         f"{form_text}\n"
         f"{schedule_text}\n"
