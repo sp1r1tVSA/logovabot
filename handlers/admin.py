@@ -451,7 +451,8 @@ async def _build_debts_summary() -> tuple[str | None, int]:
             {
                 "team_name": team,
                 "username": info["username"] if info else None,
-                "lines": [],
+                "league": [],
+                "cup": [],
             },
         )
         return p
@@ -465,9 +466,9 @@ async def _build_debts_summary() -> tuple[str | None, int]:
         u2 = f" (@{html.escape(m['p2_username'])})" if m['p2_username'] else ""
         line = f"Тур {m['round_number']}: 🏠 <b>{t1}</b>{u1} -:- <b>{t2}</b>{u2} ✈️"
         if p1:
-            p1["lines"].append(line)
+            p1["league"].append(line)
         if p2:
-            p2["lines"].append(line)
+            p2["league"].append(line)
 
     for m in cup_unplayed:
         stage = m.get('cup_stage', '1/8')
@@ -478,28 +479,40 @@ async def _build_debts_summary() -> tuple[str | None, int]:
         t2 = html.escape(m['player2_team'] or m['team2_name'] or 'неизвестно')
         u1 = f" (@{html.escape(m['p1_username'])})" if m['p1_username'] else ""
         u2 = f" (@{html.escape(m['p2_username'])})" if m['p2_username'] else ""
-        match_line = f"{stage} Финала (Игра {g_num}): 🏠 <b>{t1}</b>{u1} 🆚 <b>{t2}</b>{u2} ✈️ <i>(Счёт серии: {w1}:{w2})</i>"
+        match_line = f"{stage} Финала (игра {g_num}): 🏠 <b>{t1}</b>{u1} 🆚 <b>{t2}</b>{u2} ✈️ <i>(Счёт серии: {w1}:{w2})</i>"
 
         p1 = ensure_participant(m.get("player1_team") or m.get("p1_team"))
         p2 = ensure_participant(m.get("player2_team") or m.get("p2_team"))
         if p1:
-            p1["lines"].append(match_line)
+            p1["cup"].append(match_line)
         if p2:
-            p2["lines"].append(match_line)
+            p2["cup"].append(match_line)
 
     total_debts = len(league_unplayed) + len(cup_unplayed)
 
     now_str = datetime.datetime.now().strftime("%d.%m.%Y %H:%M")
     lines = [
-        "📋 <b>ДОЛГИ УЧАСТНИКОВ | ЛИГА И КУБОК КПЛ</b>\n",
+        "🗂 <b>ДОЛГИ УЧАСТНИКОВ | ЛИГА И КУБОК КПЛ</b>\n",
         f"<i>Обновлено: {now_str}</i>\n",
     ]
 
-    for p in sorted(participants.values(), key=lambda x: len(x["lines"]), reverse=True):
+    bar = "━━━━━━━━━━━━━━━━━━━━━━"
+
+    for idx, p in enumerate(sorted(participants.values(), key=lambda x: len(x["league"]) + len(x["cup"]), reverse=True), 1):
         uname_str = f"@{p['username']}" if p['username'] else p['team_name']
-        lines.append(f"👤 <b>{html.escape(uname_str)}</b> [{html.escape(p['team_name'])}] — {len(p['lines'])} матч(а):")
-        for line in p["lines"]:
-            lines.append(f"   • {line}")
+        total_n = len(p["league"]) + len(p["cup"])
+        card: list[str] = [bar]
+        card.append(f"{idx}. 👤 <b>{html.escape(uname_str)}</b> [{html.escape(p['team_name'])}] — {total_n} матч.")
+        if p["league"]:
+            card.append("⚙️ <b>ЛИГА:</b>")
+            for line in p["league"]:
+                card.append(f"   • {line}")
+        if p["cup"]:
+            card.append("🏆 <b>КУБОК:</b>")
+            for line in p["cup"]:
+                card.append(f"   • {line}")
+        card.append(bar)
+        lines.extend(card)
         lines.append("")
 
     lines.append("⏰ Пожалуйста, согласуйте время и сыграйте матчи! Несыгранные игры ведут к предупреждениям.")
@@ -613,18 +626,41 @@ MAX_DEBTS_MSG_LEN = 4000
 
 
 def _chunk_debts_text(text: str) -> list[str]:
-    """Split a (possibly too long) HTML debts summary into Telegram-safe chunks on line boundaries."""
+    """
+    Split a (possibly too long) HTML debts summary into Telegram-safe chunks.
+    Cuts only on participant-block boundaries (blank-line separated blocks), so every
+    message shows complete, correctly ordered participant blocks. The summary header
+    is repeated in each chunk and the closing reminder goes into the last one.
+    """
+    blocks = text.split("\n\n")
+    if not blocks:
+        return [""]
+
+    header = blocks[0]
+    footer = blocks[-1]
+    body = blocks[1:-1]
+
     chunks: list[str] = []
-    current = ""
-    for paragraph in text.split("\n"):
-        piece = paragraph + "\n"
-        if current and len(current) + len(piece) > MAX_DEBTS_MSG_LEN:
+    current = header + "\n\n"
+    for block in body:
+        piece = block + "\n\n"
+        if len(piece) > MAX_DEBTS_MSG_LEN:
+            for line in block.split("\n"):
+                lp = line + "\n"
+                if len(current) + len(lp) > MAX_DEBTS_MSG_LEN and len(current) > len(header):
+                    chunks.append(current.rstrip())
+                    current = header + "\n\n" + lp
+                else:
+                    current += lp
+            current += "\n"
+            continue
+        if len(current) + len(piece) > MAX_DEBTS_MSG_LEN and len(current) > len(header):
             chunks.append(current.rstrip())
-            current = piece
+            current = header + "\n\n" + piece
         else:
             current += piece
-    if current:
-        chunks.append(current.rstrip())
+    current += footer
+    chunks.append(current.rstrip())
     return chunks or [""]
 
 
