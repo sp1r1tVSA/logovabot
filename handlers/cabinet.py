@@ -2019,6 +2019,7 @@ async def cb_confirm_ai_final(update: Update, context: ContextTypes.DEFAULT_TYPE
         from handlers.admin import notify_cup_stage_opened
         await notify_cup_stage_opened(context.bot, next_stage)
     await refresh_debts_summary(context)
+    await refresh_league_table(context)
 
     # 1. PM to reporter
     reporter_text = build_formatted_match_post(
@@ -2173,6 +2174,7 @@ async def submit_report_to_guest(update: Update, context: ContextTypes.DEFAULT_T
         from handlers.admin import notify_cup_stage_opened
         await notify_cup_stage_opened(context.bot, next_stage)
     await refresh_debts_summary(context)
+    await refresh_league_table(context)
 
     # 1. Respond to Submitter
     submitter_msg = f"🎉 <b>Результат матча #{match_id} ({hg}:{ag}) успешно занесён в турнирную таблицу!</b>"
@@ -2220,6 +2222,15 @@ async def refresh_debts_summary(context: ContextTypes.DEFAULT_TYPE) -> None:
         await _post_or_update_debts_in_warns(context)
     except Exception as e:
         logger.warning(f"Failed to refresh debts summary: {e}")
+
+
+async def refresh_league_table(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Refresh the graphic league table in the reports topic after a match result is recorded."""
+    try:
+        from handlers.base import post_league_table_to_reports
+        await post_league_table_to_reports(context)
+    except Exception as e:
+        logger.warning(f"Failed to refresh league table: {e}")
 
 async def notify_match_confirmed(context: ContextTypes.DEFAULT_TYPE, match_id: int) -> None:
     match = await asyncio.to_thread(database.get_match, match_id)

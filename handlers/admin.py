@@ -1966,7 +1966,12 @@ async def admin_set_score_text(update: Update, context: ContextTypes.DEFAULT_TYP
             await context.bot.send_message(chat_id=group_id, text=group_text, parse_mode="Markdown")
         except Exception as e:
             logger.exception("Не удалось отправить сообщение в группу")
-            
+
+    try:
+        await post_league_table_to_reports(context)
+    except Exception:
+        logger.exception("Failed to refresh league table after manual score")
+
     return ConversationHandler.END
 
 @admin_only
