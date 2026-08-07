@@ -726,6 +726,12 @@ async def format_league_table_text() -> str:
     return "\n".join(lines)
 
 async def post_league_table_to_reports(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Post or update the graphic league table in the reports topic.
+    Edits the previously posted table image (message id kept in config `league_table_msg_id`)
+    so the topic does not fill up with duplicates. Falls back to posting a new one if the old
+    message is gone. Also refreshes the saved message id after any change."""
+    from telegram.error import BadRequest, TelegramError
+
     reports_topic_id, group_id = await asyncio.gather(
         asyncio.to_thread(database.get_config, "reports_topic_id"),
         asyncio.to_thread(database.get_group_id)
@@ -738,12 +744,32 @@ async def post_league_table_to_reports(context: ContextTypes.DEFAULT_TYPE) -> No
     keyboard = [[InlineKeyboardButton("🔄 Обновить таблицу", callback_data="refresh_league_table_topic")]]
     markup = InlineKeyboardMarkup(keyboard)
 
+    existing_raw = await asyncio.to_thread(database.get_config, "league_table_msg_id")
+    existing_id = int(existing_raw) if str(existing_raw or "").strip().isdigit() else None
+
+    if existing_id:
+        try:
+            from telegram import InputMediaPhoto
+            await context.bot.edit_message_media(
+                chat_id=group_id,
+                message_id=existing_id,
+                media=InputMediaPhoto(media=img_buf, caption=caption, parse_mode="HTML"),
+                reply_markup=markup,
+            )
+            return
+        except BadRequest as e:
+            if "message is not modified" in str(e).lower():
+                return
+        except (BadRequest, TelegramError):
+            pass  # Deleted / too old — repost a fresh table
+
     try:
         kwargs = {"chat_id": group_id, "photo": img_buf, "caption": caption, "parse_mode": "HTML", "reply_markup": markup}
         if reports_topic_id:
             kwargs["message_thread_id"] = int(reports_topic_id)
-        await context.bot.send_photo(**kwargs)
-    except Exception as e:
+        msg = await context.bot.send_photo(**kwargs)
+        await asyncio.to_thread(database.set_config, "league_table_msg_id", str(msg.message_id))
+    except Exception:
         logger.exception("Failed to post graphic league table to reports topic")
 
 async def cb_refresh_league_table_topic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
