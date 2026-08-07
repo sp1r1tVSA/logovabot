@@ -91,6 +91,7 @@ from handlers.cabinet import (
 # Import admin handlers
 from handlers.admin import (
     show_admin_panel,
+    admin_toggle_chat_mode,
     admin_list_players,
     admin_generate_matches_confirm,
     admin_generate_matches_execute,
@@ -500,6 +501,7 @@ def _register_admin_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("set_warns_topic", admin_set_warns_topic))
 
     app.add_handler(CallbackQueryHandler(show_admin_panel, pattern="^admin_main_menu$"))
+    app.add_handler(CallbackQueryHandler(admin_toggle_chat_mode, pattern="^admin_toggle_chat_mode$"))
     app.add_handler(CallbackQueryHandler(admin_generate_matches_confirm, pattern="^admin_generate_matches_confirm$"))
     app.add_handler(CallbackQueryHandler(admin_generate_matches_execute, pattern="^admin_generate_matches_execute$"))
     app.add_handler(CallbackQueryHandler(admin_manage_matches_info, pattern="^admin_manage_matches_info$"))

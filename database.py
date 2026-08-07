@@ -174,6 +174,18 @@ def init_db() -> None:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_matches_tourn ON matches(tournament_type)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_match ON match_events(match_id)")
 
+        # Persistent chat history for AI mode
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS chat_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                role TEXT NOT NULL,
+                text TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_chat_history_user ON chat_history(user_id, id)")
+
         logger.info("Database tables initialized successfully.")
 
 def get_team_owner(team_name: str) -> int | None:
@@ -840,6 +852,43 @@ def get_group_id() -> int | None:
         return int(val) if val else None
     except ValueError:
         return None
+
+
+def get_chat_history(user_id: int, limit: int = 10) -> list[dict]:
+    """Retrieve recent AI chat history for a user (oldest first)."""
+    with transaction() as conn:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT role, text FROM ("
+            "  SELECT id, role, text FROM chat_history WHERE user_id = ? ORDER BY id DESC LIMIT ?"
+            ") ORDER BY id ASC",
+            (user_id, limit)
+        )
+        rows = cursor.fetchall()
+        return [{"role": r["role"], "text": r["text"]} for r in rows]
+
+
+def append_chat_history(user_id: int, role: str, text: str) -> None:
+    """Append one message to the AI chat history."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO chat_history (user_id, role, text) VALUES (?, ?, ?)",
+            (user_id, role, text)
+        )
+
+
+def trim_chat_history(user_id: int, keep: int = 10) -> None:
+    """Delete oldest AI chat history rows beyond the newest `keep` for a user."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "DELETE FROM chat_history WHERE user_id = ? AND id NOT IN ("
+            "  SELECT id FROM chat_history WHERE user_id = ? ORDER BY id DESC LIMIT ?"
+            ")",
+            (user_id, user_id, keep)
+        )
 
 
 def open_rounds_batch(start_round: int, end_round: int, deadline: str) -> None:

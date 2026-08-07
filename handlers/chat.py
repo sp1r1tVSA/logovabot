@@ -217,13 +217,11 @@ async def handle_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"{league_rules_text}"
     )
 
-    # 2. History Management
-    if "chat_history" not in context.user_data:
-        context.user_data["chat_history"] = []
-        
-    chat_history = context.user_data["chat_history"]
+    # 2. History Management (persistent in DB)
+    chat_history = database.get_chat_history(user_id, limit=10)
 
     # 3. Call AI non-blocking via thread
+    chat_mode = database.get_config("chat_mode") or "temshik"
     reply_text = await asyncio.to_thread(
         ai_chat.generate_chat_reply, 
         user_id, 
@@ -231,16 +229,15 @@ async def handle_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_history, 
         context_data,
         audio_input_bytes,
-        "audio/ogg"
+        "audio/ogg",
+        chat_mode
     )
 
     # 4. Save to history
-    chat_history.append({"role": "user", "text": user_text})
-    chat_history.append({"role": "model", "text": reply_text})
-    
+    await asyncio.to_thread(database.append_chat_history, user_id, "user", user_text)
+    await asyncio.to_thread(database.append_chat_history, user_id, "model", reply_text)
     # Keep only last 10 messages (5 pairs) to avoid context bloat
-    if len(chat_history) > 10:
-        context.user_data["chat_history"] = chat_history[-10:]
+    await asyncio.to_thread(database.trim_chat_history, user_id, keep=10)
 
     # 5. Send reply
     await update.message.reply_text(reply_text)
