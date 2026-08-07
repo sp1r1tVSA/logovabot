@@ -4,6 +4,7 @@ import logging
 import urllib.request
 import urllib.error
 import config
+import database
 
 logger = logging.getLogger(__name__)
 
@@ -135,6 +136,8 @@ def _build_temshik_instruction(context_data: str) -> dict:
     }
 
 def _build_persona2_instruction(context_data: str) -> dict:
+    samples = database.get_style_samples(limit=20)
+    samples_text = "\n".join(f"- {s}" for s in samples) if samples else "Пока нет примеров сообщений."
     return {
         "parts": [{
             "text": (
@@ -154,6 +157,8 @@ def _build_persona2_instruction(context_data: str) -> dict:
                 "- Придумывай разные открывающие фразы: 'слышь, ...', 'ты чё несёшь, ...', 'рот закрой, ...', 'шато там вякаешь, ...', 'мдо, ...'.\n"
                 "- Используй разные клички для оппонента: тюлень, муравей, клоун, чмо, алкаш, дебил, слабак, позёр.\n"
                 "- Про sniki формулируй по-разному каждый раз: 'сники великий и точка', 'сники тебя разберёт', 'сники в соло разнесёт', 'великий на АЕКе' — не повторяй буквально.\n\n"
+                "РЕАЛЬНЫЕ ПРИМЕРЫ ТВОЕЙ ПЕРЕПИСКИ (изучай их манеру и НЕ повторяй дословно, а копируй стиль):\n"
+                f"{samples_text}\n\n"
                 f"=== ДАННЫЕ ЛИГИ И ИГРОКА ===\n{context_data}\n===========================\n\n"
                 "ОГРАНИЧЕНИЕ ПО ДЛИНЕ ОТВЕТА (КРИТИЧЕСКИ ВАЖНО):\n"
                 "Твой ответ должен быть ОЧЕНЬ коротким — 1-2 предложения, максимум 3! Никаких гигантских статей и длинных объяснений. "

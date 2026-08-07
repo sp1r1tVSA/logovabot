@@ -208,6 +208,17 @@ async def track_group_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if update.effective_chat and update.effective_chat.type in ("group", "supergroup"):
         await asyncio.to_thread(database.set_config, "group_id", str(update.effective_chat.id))
 
+    # Collect style samples from a persona source user (e.g. @t3miy) for AI learning
+    try:
+        if update.effective_user and update.message and update.message.text:
+            source_username = database.get_config("style_source_username") or "t3miy"
+            msg_username = (update.effective_user.username or "").lower()
+            if msg_username and msg_username == source_username.lower():
+                await asyncio.to_thread(database.append_style_sample, update.message.text)
+                await asyncio.to_thread(database.trim_style_samples, keep=100)
+    except Exception as e:
+        logger.debug(f"Failed to collect style sample: {e}")
+
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Log the error that occurred during update handling."""
     err_str = str(context.error).lower()

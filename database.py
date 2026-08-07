@@ -186,6 +186,16 @@ def init_db() -> None:
         """)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_chat_history_user ON chat_history(user_id, id)")
 
+        # Style samples for AI persona learning (real messages from a source user)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS style_samples (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                text TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_style_samples ON style_samples(id)")
+
         logger.info("Database tables initialized successfully.")
 
 def get_team_owner(team_name: str) -> int | None:
@@ -888,6 +898,44 @@ def trim_chat_history(user_id: int, keep: int = 10) -> None:
             "  SELECT id FROM chat_history WHERE user_id = ? ORDER BY id DESC LIMIT ?"
             ")",
             (user_id, user_id, keep)
+        )
+
+
+def append_style_sample(text: str) -> None:
+    """Append one real message of the persona source user (e.g. @t3miy)."""
+    text_clean = text.strip()
+    if not text_clean:
+        return
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO style_samples (text) VALUES (?)",
+            (text_clean,)
+        )
+
+
+def get_style_samples(limit: int = 20) -> list[str]:
+    """Return the newest style samples (oldest first)."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT text FROM ("
+            "  SELECT id, text FROM style_samples ORDER BY id DESC LIMIT ?"
+            ") ORDER BY id ASC",
+            (limit,)
+        )
+        return [r["text"] for r in cursor.fetchall()]
+
+
+def trim_style_samples(keep: int = 100) -> None:
+    """Keep only the newest `keep` style samples."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "DELETE FROM style_samples WHERE id NOT IN ("
+            "  SELECT id FROM style_samples ORDER BY id DESC LIMIT ?"
+            ")",
+            (keep,)
         )
 
 
