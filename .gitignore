@@ -14,5 +14,8 @@ venv/
 .claude/
 test_*.png
 *.log
+chat_dump.txt
+channel_posts.txt
+telegram_dump_session.session
 
 
