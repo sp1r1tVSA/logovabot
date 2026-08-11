@@ -473,7 +473,8 @@ async def show_cup_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             InlineKeyboardButton("1/2 Финала", callback_data="show_cup_stage_1/2"),
             InlineKeyboardButton("🏆 Финал", callback_data="show_cup_stage_final"),
         ],
-        [InlineKeyboardButton("🖼 Графическая сетка", callback_data=f"show_cup_graphic_{stage}")],
+        [InlineKeyboardButton("🖼 Графическая сетка (Раунд)", callback_data=f"show_cup_graphic_{stage}")],
+        [InlineKeyboardButton("🌳 Полная Сетка Кубка", callback_data="show_full_cup_bracket")],
         [InlineKeyboardButton("📊 Бомбардиры и Ассистенты Кубка", callback_data="show_cup_stats")],
         [InlineKeyboardButton("« Назад к турнирам", callback_data="menu_tournaments")]
     ]
@@ -516,6 +517,30 @@ async def cb_show_cup_graphic(update: Update, context: ContextTypes.DEFAULT_TYPE
         caption=f"🏆 <b>КУБОК КПЛ 2026 | {title}</b>\n<i>Графическая сетка турнира</i>",
         parse_mode="HTML"
     )
+
+async def cb_show_full_cup_bracket(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+
+    # Import the new full bracket generator
+    import sys
+    import os
+    if "services" not in sys.path:
+        sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+        
+    from services.cup_bracket_generator import generate_bracket_image
+    
+    img_buf = await asyncio.to_thread(generate_bracket_image)
+
+    from telegram import InputFile
+    await query.message.reply_photo(
+        photo=InputFile(img_buf, filename="full_cup_bracket.png"),
+        caption="🏆 <b>КУБОК КПЛ 2026 | ПОЛНАЯ СЕТКА</b>\n<i>От 1/8 до Финала</i>",
+        parse_mode="HTML"
+    )
+
 
 async def show_cup_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
