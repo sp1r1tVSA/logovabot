@@ -24,7 +24,8 @@ MUTED_TEXT = (156, 163, 175)
 LINE_COLOR = (75, 85, 99)
 ACCENT_COLOR = (239, 68, 68)
 
-SCALE = 2
+# Increase scale for super-sampling (sharper image)
+SCALE = 3
 BOX_WIDTH = 180 * SCALE
 BOX_HEIGHT = 50 * SCALE
 LOGO_SIZE = 24 * SCALE
@@ -35,12 +36,12 @@ def draw_match_box(draw: ImageDraw.Draw, img: Image.Image, x: int, y: int, serie
     # Draw background
     draw.rectangle([x, y, x + BOX_WIDTH, y + BOX_HEIGHT], fill=BOX_BG, outline=BOX_BORDER, width=2)
     
-    font = load_font(12 * SCALE)
-    font_bold = load_font(12 * SCALE, bold=True)
+    team_font = load_font(16 * SCALE, bold=True)
+    score_font = load_font(16 * SCALE, bold=True)
     
     if not series:
         # TBD Box
-        draw.text((x + BOX_WIDTH//2, y + BOX_HEIGHT//2), "TBD", fill=MUTED_TEXT, font=font, anchor="mm")
+        draw.text((x + BOX_WIDTH//2, y + BOX_HEIGHT//2), "TBD", fill=MUTED_TEXT, font=team_font, anchor="mm")
         return
         
     # Convert series to dict if it's an object for easier access
@@ -58,8 +59,8 @@ def draw_match_box(draw: ImageDraw.Draw, img: Image.Image, x: int, y: int, serie
             img.paste(l1, (x + PADDING, t1_y), l1)
         except Exception: pass
     
-    draw.text((x + PADDING * 2 + LOGO_SIZE, t1_y + LOGO_SIZE//2), t1_name[:12], fill=TEXT_COLOR, font=font_bold, anchor="lm")
-    draw.text((x + BOX_WIDTH - PADDING - SCORE_BOX_W//2, t1_y + LOGO_SIZE//2), s1, fill=TEXT_COLOR, font=font_bold, anchor="mm")
+    draw.text((x + PADDING * 2 + LOGO_SIZE, t1_y + LOGO_SIZE//2), t1_name[:12], fill=TEXT_COLOR, font=team_font, anchor="lm")
+    draw.text((x + BOX_WIDTH - PADDING - SCORE_BOX_W//2, t1_y + LOGO_SIZE//2), s1, fill=TEXT_COLOR, font=score_font, anchor="mm")
     
     # Separation line
     mid_y = y + BOX_HEIGHT//2
@@ -74,8 +75,8 @@ def draw_match_box(draw: ImageDraw.Draw, img: Image.Image, x: int, y: int, serie
             img.paste(l2, (x + PADDING, t2_y), l2)
         except Exception: pass
         
-    draw.text((x + PADDING * 2 + LOGO_SIZE, t2_y + LOGO_SIZE//2), t2_name[:12], fill=TEXT_COLOR, font=font_bold, anchor="lm")
-    draw.text((x + BOX_WIDTH - PADDING - SCORE_BOX_W//2, t2_y + LOGO_SIZE//2), s2, fill=TEXT_COLOR, font=font_bold, anchor="mm")
+    draw.text((x + PADDING * 2 + LOGO_SIZE, t2_y + LOGO_SIZE//2), t2_name[:12], fill=TEXT_COLOR, font=team_font, anchor="lm")
+    draw.text((x + BOX_WIDTH - PADDING - SCORE_BOX_W//2, t2_y + LOGO_SIZE//2), s2, fill=TEXT_COLOR, font=score_font, anchor="mm")
 
 def draw_bracket_connection(draw, start_box, end_box, direction):
     # direction: 1 for left-to-right, -1 for right-to-left
@@ -88,9 +89,10 @@ def draw_bracket_connection(draw, start_box, end_box, direction):
     mid_x = start_x + (end_x - start_x) // 2
     
     # Draw elbow line
-    draw.line([start_x, start_y, mid_x, start_y], fill=LINE_COLOR, width=2*SCALE)
-    draw.line([mid_x, start_y, mid_x, end_y], fill=LINE_COLOR, width=2*SCALE)
-    draw.line([mid_x, end_y, end_x, end_y], fill=LINE_COLOR, width=2*SCALE)
+    # Use thicker lines
+    draw.line([start_x, start_y, mid_x, start_y], fill=LINE_COLOR, width=3*SCALE)
+    draw.line([mid_x, start_y, mid_x, end_y], fill=LINE_COLOR, width=3*SCALE)
+    draw.line([mid_x, end_y, end_x, end_y], fill=LINE_COLOR, width=3*SCALE)
 
 def generate_bracket_image() -> io.BytesIO:
     # 1/8 -> 8 matches
@@ -105,14 +107,14 @@ def generate_bracket_image() -> io.BytesIO:
         
     # Dimensions
     CANVAS_W = 1200 * SCALE
-    CANVAS_H = 700 * SCALE
+    CANVAS_H = 650 * SCALE
     
     img = Image.new("RGBA", (CANVAS_W, CANVAS_H), BG_COLOR)
     draw = ImageDraw.Draw(img)
     
     # Draw Title
-    font_title = load_font(28 * SCALE, bold=True)
-    draw.text((CANVAS_W//2, 40 * SCALE), "КУБОК КПЛ", fill=ACCENT_COLOR, font=font_title, anchor="mm")
+    title_font = load_font(42 * SCALE, bold=True)
+    draw.text((CANVAS_W//2, 40 * SCALE), "КУБОК КПЛ", fill=ACCENT_COLOR, font=title_font, anchor="mm")
     
     # Organize data by stage
     stages = {'1/8': [], '1/4': [], '1/2': [], 'Final': []}
