@@ -119,6 +119,37 @@ async def admin_toggle_chat_mode(update: Update, context: ContextTypes.DEFAULT_T
     )
 
 @admin_only
+async def admin_force_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Force rechecks the DB and updates the league table in the reports topic."""
+    user = update.effective_user
+    if not is_admin(user.id):
+        if update.callback_query:
+            await update.callback_query.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+        
+    if update.callback_query:
+        await update.callback_query.answer("🔄 Запущено обновление баз данных и таблиц...")
+    else:
+        await update.message.reply_text("🔄 Запущено обновление баз данных и таблиц...")
+
+    try:
+        # Trigger league table update which recalculates standings
+        await post_league_table_to_reports(context)
+        
+        msg = "✅ Все базы перепроверены. Турнирная таблица и статистика бомбардиров актуализированы!"
+        if update.callback_query:
+            await update.callback_query.message.reply_text(msg)
+        elif update.message:
+            await update.message.reply_text(msg)
+    except Exception as e:
+        logger.error(f"Error in force_update: {e}")
+        err_msg = "❌ Ошибка при обновлении таблиц. Проверьте логи."
+        if update.callback_query:
+            await update.callback_query.message.reply_text(err_msg)
+        elif update.message:
+            await update.message.reply_text(err_msg)
+
+@admin_only
 async def admin_list_players(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     if not query:
