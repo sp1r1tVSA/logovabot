@@ -743,41 +743,43 @@ def get_open_rounds_with_deadlines() -> list[dict]:
         )
         return [dict(row) for row in cursor.fetchall()]
 
-def get_teams_recent_form(limit: int = 5) -> dict[int, list[str]]:
+def get_teams_recent_form(limit: int = 5) -> dict[str, list[str]]:
     """
-    Retrieve the last `limit` confirmed match outcomes for each user by telegram_id.
-    Returns dict mapping user telegram_id -> list of 'W', 'D', 'L' outcomes.
+    Retrieve the last `limit` confirmed match outcomes for each team by team_name.
+    Returns dict mapping lowercase team_name -> list of 'W', 'D', 'L' outcomes.
     """
     with transaction() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT telegram_id FROM users")
-        user_ids = [row["telegram_id"] for row in cursor.fetchall()]
+        cursor.execute("SELECT team_name FROM users WHERE team_name IS NOT NULL")
+        team_names = [row["team_name"] for row in cursor.fetchall()]
 
         form_map = {}
-        for uid in user_ids:
+        for t_name in team_names:
+            t_name_lower = t_name.lower().strip()
             cursor.execute("""
-                SELECT player1_id, player2_id, player1_score, player2_score
+                SELECT player1_team, player2_team, player1_score, player2_score
                 FROM matches
-                WHERE (player1_id = ? OR player2_id = ?) AND status = 'confirmed'
+                WHERE (LOWER(player1_team) = ? OR LOWER(player2_team) = ?) AND status = 'confirmed'
                 ORDER BY round_number DESC, id DESC
                 LIMIT ?
-            """, (uid, uid, limit))
+            """, (t_name_lower, t_name_lower, limit))
             rows = cursor.fetchall()
             outcomes = []
             for r in reversed(rows):
-                p1, p2 = r["player1_id"], r["player2_id"]
+                p1 = (r["player1_team"] or "").lower().strip()
+                p2 = (r["player2_team"] or "").lower().strip()
                 s1, s2 = r["player1_score"], r["player2_score"]
                 if s1 is None or s2 is None:
                     continue
-                if uid == p1:
+                if p1 == t_name_lower:
                     if s1 > s2: outcomes.append('W')
                     elif s1 < s2: outcomes.append('L')
                     else: outcomes.append('D')
-                else:
+                elif p2 == t_name_lower:
                     if s2 > s1: outcomes.append('W')
                     elif s2 < s1: outcomes.append('L')
                     else: outcomes.append('D')
-            form_map[uid] = outcomes
+            form_map[t_name_lower] = outcomes
         return form_map
 
 def has_reminder_been_sent(round_number: int, reminder_type: str) -> bool:

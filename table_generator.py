@@ -181,8 +181,8 @@ def generate_league_table_image(standings: list[dict] = None, form_map: dict[int
         draw.text((col_x["%"], y_center), rating_str, fill=muted_text_color, font=font_row_text, anchor="mm")
 
         # Form Dots (5 dots)
-        uid = s.get("telegram_id")
-        user_form = form_map.get(uid, []) if uid else []
+        team_n = s.get("team_name", "").lower().strip()
+        user_form = form_map.get(team_n, []) if team_n else []
         dots = (['E'] * (5 - len(user_form))) + user_form[-5:]
 
         dot_radius = 5 * SCALE
