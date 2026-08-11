@@ -108,7 +108,7 @@ def generate_bracket_image() -> io.BytesIO:
         cup_series_list.extend(database.get_cup_series_list(stage))
         
     # Dimensions
-    CANVAS_W = 1200 * SCALE
+    CANVAS_W = 1800 * SCALE
     CANVAS_H = 650 * SCALE
     
     img = Image.new("RGBA", (CANVAS_W, CANVAS_H), BG_COLOR)
