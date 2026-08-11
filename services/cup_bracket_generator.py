@@ -28,7 +28,7 @@ ACCENT_COLOR = (239, 68, 68)
 SCALE = 3
 BOX_WIDTH = 180 * SCALE
 BOX_HEIGHT = 50 * SCALE
-LOGO_SIZE = 24 * SCALE
+LOGO_SIZE = 20 * SCALE
 SCORE_BOX_W = 24 * SCALE
 PADDING = 8 * SCALE
 
@@ -66,7 +66,8 @@ def draw_match_box(draw: ImageDraw.Draw, img: Image.Image, x: int, y: int, serie
     if t2_name == "TBD": s2 = ""
     
     # Team 1 (Top half)
-    t1_y = y + PADDING
+    half_h = BOX_HEIGHT // 2
+    t1_y = y + (half_h - LOGO_SIZE) // 2
     logo1_path = get_logo_path(t1_name)
     if logo1_path and os.path.exists(logo1_path):
         try:
@@ -82,7 +83,7 @@ def draw_match_box(draw: ImageDraw.Draw, img: Image.Image, x: int, y: int, serie
     draw.line([x, mid_y, x + BOX_WIDTH, mid_y], fill=BOX_BORDER, width=1)
     
     # Team 2 (Bottom half)
-    t2_y = mid_y + (BOX_HEIGHT//2 - LOGO_SIZE)//2
+    t2_y = mid_y + (half_h - LOGO_SIZE) // 2
     logo2_path = get_logo_path(t2_name)
     if logo2_path and os.path.exists(logo2_path):
         try:
