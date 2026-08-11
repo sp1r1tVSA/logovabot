@@ -88,11 +88,8 @@ def draw_bracket_connection(draw, start_box, end_box, direction):
     
     mid_x = start_x + (end_x - start_x) // 2
     
-    # Draw elbow line
-    # Use thicker lines
-    draw.line([start_x, start_y, mid_x, start_y], fill=LINE_COLOR, width=3*SCALE)
-    draw.line([mid_x, start_y, mid_x, end_y], fill=LINE_COLOR, width=3*SCALE)
-    draw.line([mid_x, end_y, end_x, end_y], fill=LINE_COLOR, width=3*SCALE)
+    # Draw continuous elbow line to ensure perfect corners
+    draw.line([start_x, start_y, mid_x, start_y, mid_x, end_y, end_x, end_y], fill=LINE_COLOR, width=3*SCALE, joint="curve")
 
 def generate_bracket_image() -> io.BytesIO:
     # 1/8 -> 8 matches
@@ -141,9 +138,10 @@ def generate_bracket_image() -> io.BytesIO:
     
     # Helper to calculate positions
     def get_y_positions(count, canvas_h, offset_y):
-        spacing = (canvas_h - offset_y * 2) / (count if count > 1 else 2)
         if count == 1:
             return [canvas_h // 2 - BOX_HEIGHT//2]
+        total_span = canvas_h - (offset_y * 2) - BOX_HEIGHT
+        spacing = total_span / (count - 1)
         return [int(offset_y + i * spacing) for i in range(count)]
 
     MARGIN_X = 40 * SCALE
