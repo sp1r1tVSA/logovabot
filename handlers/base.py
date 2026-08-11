@@ -449,34 +449,28 @@ async def show_cup_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             s_num = s['series_num']
 
             if s['status'] == 'completed':
-                text += f"⚔️ <b>Серия {s_num}:</b> <b>{t1}</b> ({w1}) 🆚 ({w2}) <b>{t2}</b>\n"
-                text += f"   🏆 <b>Победитель серии:</b> <b>{html.escape(s['winner_name'])}</b>\n\n"
+                text += f"✅ <b>{t1}</b> ({w1}:{w2}) <b>{t2}</b>\n\n"
             else:
-                text += f"⚔️ <b>Серия {s_num}:</b> <b>{t1}</b> ({w1}) 🆚 ({w2}) <b>{t2}</b>\n"
+                text += f"⚔️ <b>{t1}</b> ({w1}:{w2}) <b>{t2}</b>\n"
                 matches = s.get("matches", [])
                 for m in matches:
                     g_num = m['game_num_in_series']
-                    p1 = html.escape(m['player1_team'] or m['player1_nickname'] or t1)
-                    p2 = html.escape(m['player2_team'] or m['player2_nickname'] or t2)
                     if m['status'] == 'confirmed':
-                        text += f"   • Игра {g_num}: {p1} {m['player1_score']} : {m['player2_score']} {p2} ✅\n"
+                        text += f"   └ И{g_num}: {m['player1_score']}:{m['player2_score']} ✅\n"
                     else:
-                        text += f"   • Игра {g_num}: {p1} 🆚 {p2} ⏳ (Ожидается)\n"
+                        text += f"   └ И{g_num}: ⏳\n"
                 text += "\n"
 
     keyboard = [
         [
-            InlineKeyboardButton("1/8 Финала", callback_data="show_cup_stage_1/8"),
-            InlineKeyboardButton("1/4 Финала", callback_data="show_cup_stage_1/4"),
+            InlineKeyboardButton("1/8", callback_data="show_cup_stage_1/8"),
+            InlineKeyboardButton("1/4", callback_data="show_cup_stage_1/4"),
+            InlineKeyboardButton("1/2", callback_data="show_cup_stage_1/2"),
+            InlineKeyboardButton("Финал", callback_data="show_cup_stage_final"),
         ],
-        [
-            InlineKeyboardButton("1/2 Финала", callback_data="show_cup_stage_1/2"),
-            InlineKeyboardButton("🏆 Финал", callback_data="show_cup_stage_final"),
-        ],
-        [InlineKeyboardButton("🖼 Графическая сетка (Раунд)", callback_data=f"show_cup_graphic_{stage}")],
-        [InlineKeyboardButton("🌳 Полная Сетка Кубка", callback_data="show_full_cup_bracket")],
-        [InlineKeyboardButton("📊 Бомбардиры и Ассистенты Кубка", callback_data="show_cup_stats")],
-        [InlineKeyboardButton("« Назад к турнирам", callback_data="menu_tournaments")]
+        [InlineKeyboardButton("🖼 Сетка турнира", callback_data="show_full_cup_bracket")],
+        [InlineKeyboardButton("📊 Статистика", callback_data="show_cup_stats")],
+        [InlineKeyboardButton("« Назад", callback_data="menu_tournaments")]
     ]
     markup = InlineKeyboardMarkup(keyboard)
     if query.message and (query.message.photo or query.message.document):
