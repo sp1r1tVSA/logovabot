@@ -1825,6 +1825,41 @@ def init_kpl_cup_all_stages() -> int:
             
     return created_count
 
+def sync_cup_bracket() -> int:
+    """Synchronize all completed series winners to their next stage slots."""
+    sync_count = 0
+    with transaction() as conn:
+        cursor = conn.cursor()
+        
+        # Get all completed series
+        cursor.execute("SELECT id, stage, series_num, winner_name FROM cup_series WHERE status = 'completed' AND winner_name IS NOT NULL")
+        completed = cursor.fetchall()
+        
+        for s_id, stage, series_num, winner_name in completed:
+            if stage == 'final': continue
+            
+            stages = ['1/8', '1/4', '1/2', 'final']
+            next_stage = stages[stages.index(stage) + 1]
+            
+            next_series_num = (series_num + 1) // 2
+            is_team1 = (series_num % 2 != 0)
+            
+            # Try to resolve telegram ID if possible
+            cursor.execute("SELECT telegram_id FROM users WHERE LOWER(team_name) = LOWER(?)", (winner_name.strip(),))
+            r = cursor.fetchone()
+            p_id = r[0] if r else None
+            
+            if is_team1:
+                cursor.execute("UPDATE cup_series SET team1_name = ? WHERE stage = ? AND series_num = ?", (winner_name, next_stage, next_series_num))
+                cursor.execute("UPDATE matches SET player1_team = ?, player1_id = COALESCE(?, player1_id) WHERE cup_stage = ? AND cup_series_id = (SELECT id FROM cup_series WHERE stage = ? AND series_num = ?) AND game_num_in_series = 1", (winner_name, p_id, next_stage, next_stage, next_series_num))
+            else:
+                cursor.execute("UPDATE cup_series SET team2_name = ? WHERE stage = ? AND series_num = ?", (winner_name, next_stage, next_series_num))
+                cursor.execute("UPDATE matches SET player2_team = ?, player2_id = COALESCE(?, player2_id) WHERE cup_stage = ? AND cup_series_id = (SELECT id FROM cup_series WHERE stage = ? AND series_num = ?) AND game_num_in_series = 1", (winner_name, p_id, next_stage, next_stage, next_series_num))
+            
+            sync_count += 1
+            
+    return sync_count
+
 def get_cup_series_list(stage: str = '1/8') -> list[dict]:
     """Retrieve all series for a given cup stage with match details."""
     with transaction() as conn:

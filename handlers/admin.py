@@ -375,6 +375,19 @@ async def admin_init_cup_execute(update: Update, context: ContextTypes.DEFAULT_T
     await admin_manage_cup(update, context)
 
 @admin_only
+async def admin_sync_cup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Manually synchronize winners of completed series to next stages."""
+    msg = update.message or (update.callback_query.message if update.callback_query else None)
+    if not msg:
+        return
+        
+    try:
+        sync_count = await asyncio.to_thread(database.sync_cup_bracket)
+        await msg.reply_text(f"✅ Синхронизация Кубка завершена!\nПереведено победителей на следующие стадии: {sync_count}")
+    except Exception as e:
+        await msg.reply_text(f"❌ Ошибка синхронизации: {e}")
+
+@admin_only
 async def admin_test_ai(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Run interactive diagnostic check for WARP proxy and Gemini AI models."""
     msg = update.message or (update.callback_query.message if update.callback_query else None)

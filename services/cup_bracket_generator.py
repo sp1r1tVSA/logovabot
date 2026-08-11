@@ -52,8 +52,18 @@ def draw_match_box(draw: ImageDraw.Draw, img: Image.Image, x: int, y: int, serie
         t1_name = "TBD"
     if t2_name and t2_name.startswith("Победитель"):
         t2_name = "TBD"
+        
+    if t1_name == "TBD" and t2_name == "TBD":
+        # Both are TBD, draw single centered text
+        draw.text((x + BOX_WIDTH//2, y + BOX_HEIGHT//2), "TBD", fill=MUTED_TEXT, font=team_font, anchor="mm")
+        return
+        
     s1 = str(series.team1_wins if hasattr(series, 'team1_wins') else series.get('team1_wins', 0))
     s2 = str(series.team2_wins if hasattr(series, 'team2_wins') else series.get('team2_wins', 0))
+    
+    # Render score as blank if team is TBD
+    if t1_name == "TBD": s1 = ""
+    if t2_name == "TBD": s2 = ""
     
     # Team 1 (Top half)
     t1_y = y + PADDING
