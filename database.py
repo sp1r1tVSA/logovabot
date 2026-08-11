@@ -385,6 +385,13 @@ def get_pending_matches(telegram_id: int, only_expired_deadlines: bool = False) 
         matches = []
         for row in cursor.fetchall():
             d = dict(row)
+            
+            # Skip cup matches where one of the teams is still a placeholder
+            if d['tournament_type'] == 'cup':
+                if (d['player1_team'] and d['player1_team'].startswith("Победитель")) or \
+                   (d['player2_team'] and d['player2_team'].startswith("Победитель")):
+                    continue
+                    
             if u_team and d['player1_team'] and d['player1_team'].lower() == u_team.lower():
                 d['opponent_team'] = d['player2_team'] or d['p2_team']
                 d['opponent_username'] = d['p2_username']

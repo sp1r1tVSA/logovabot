@@ -45,8 +45,13 @@ def draw_match_box(draw: ImageDraw.Draw, img: Image.Image, x: int, y: int, serie
         return
         
     # Convert series to dict if it's an object for easier access
-    t1_name = series.team1_name if hasattr(series, 'team1_name') else series.get('team1_name', 'TBD')
-    t2_name = series.team2_name if hasattr(series, 'team2_name') else series.get('team2_name', 'TBD')
+    t1_name = series.get('team1_name', 'TBD') if isinstance(series, dict) else getattr(series, 'team1_name', 'TBD')
+    t2_name = series.get('team2_name', 'TBD') if isinstance(series, dict) else getattr(series, 'team2_name', 'TBD')
+    
+    if t1_name and t1_name.startswith("Победитель"):
+        t1_name = "TBD"
+    if t2_name and t2_name.startswith("Победитель"):
+        t2_name = "TBD"
     s1 = str(series.team1_wins if hasattr(series, 'team1_wins') else series.get('team1_wins', 0))
     s2 = str(series.team2_wins if hasattr(series, 'team2_wins') else series.get('team2_wins', 0))
     
