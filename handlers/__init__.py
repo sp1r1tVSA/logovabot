@@ -182,6 +182,7 @@ from handlers.admin import (
     admin_init_cup_execute,
     admin_remind_cup_execute,
     admin_sync_cup,
+    admin_force_update,
     admin_broadcast_menu,
     admin_broadcast_all_debts_execute,
     admin_send_debts_to_warns,
@@ -557,6 +558,8 @@ def _register_admin_handlers(app: Application) -> None:
     app.add_handler(CallbackQueryHandler(admin_init_cup_execute, pattern="^admin_init_cup_execute$"))
     app.add_handler(CallbackQueryHandler(admin_remind_cup_execute, pattern="^admin_remind_cup_.*$"))
     app.add_handler(CommandHandler("sync_cup", admin_sync_cup))
+    app.add_handler(CommandHandler("force_update", admin_force_update))
+    app.add_handler(CallbackQueryHandler(admin_force_update, pattern="^admin_force_update$"))
     app.add_handler(CommandHandler("test_ai", admin_test_ai))
     app.add_handler(CallbackQueryHandler(admin_broadcast_menu, pattern="^admin_broadcast_menu$"))
     app.add_handler(CallbackQueryHandler(admin_broadcast_all_debts_execute, pattern="^admin_broadcast_all_debts_execute$"))
