@@ -2083,6 +2083,7 @@ def get_all_unplayed_cup_matches() -> list[dict]:
             LEFT JOIN users u1 ON LOWER(m.player1_team) = LOWER(u1.team_name)
             LEFT JOIN users u2 ON LOWER(m.player2_team) = LOWER(u2.team_name)
             WHERE m.tournament_type = 'cup' AND m.status = 'pending' AND s.status = 'active'
+              AND (m.player1_team NOT LIKE 'Победитель%' AND m.player2_team NOT LIKE 'Победитель%')
             ORDER BY s.series_num ASC, m.game_num_in_series ASC
         """)
         return [dict(row) for row in cursor.fetchall()]
