@@ -1768,53 +1768,60 @@ def init_kpl_cup_all_stages() -> int:
         
         # Check if 1/8 series already exists
         cursor.execute("SELECT COUNT(*) FROM cup_series WHERE stage = '1/8'")
-        if cursor.fetchone()[0] > 0:
-            return 0  # Already initialized
+        if cursor.fetchone()[0] == 0:
+            # 1. Initialize 1/8 Final
+            for i, (t1, t2) in enumerate(KPL_CUP_1_8_PAIRS, 1):
+                cursor.execute(
+                    "INSERT INTO cup_series (stage, series_num, team1_name, team2_name, team1_wins, team2_wins, status) VALUES ('1/8', ?, ?, ?, 0, 0, 'active')",
+                    (i, t1, t2)
+                )
+                series_id = cursor.lastrowid
+                created_count += 1
+                
+                cursor.execute("SELECT telegram_id FROM users WHERE LOWER(team_name) = LOWER(?)", (t1.strip(),))
+                r1 = cursor.fetchone()
+                p1_id = r1[0] if r1 else None
+                
+                cursor.execute("SELECT telegram_id FROM users WHERE LOWER(team_name) = LOWER(?)", (t2.strip(),))
+                r2 = cursor.fetchone()
+                p2_id = r2[0] if r2 else None
+                
+                cursor.execute("""
+                    INSERT INTO matches (round_number, player1_id, player2_id, player1_team, player2_team, status, tournament_type, cup_stage, cup_series_id, game_num_in_series)
+                    VALUES (-1, ?, ?, ?, ?, 'pending', 'cup', '1/8', ?, 1)
+                """, (p1_id, p2_id, t1, t2, series_id))
             
-        # 1. Initialize 1/8 Final
-        for i, (t1, t2) in enumerate(KPL_CUP_1_8_PAIRS, 1):
-            cursor.execute(
-                "INSERT INTO cup_series (stage, series_num, team1_name, team2_name, team1_wins, team2_wins, status) VALUES ('1/8', ?, ?, ?, 0, 0, 'active')",
-                (i, t1, t2)
-            )
-            series_id = cursor.lastrowid
+        # 2. Initialize 1/4 Final (4 series) if missing
+        cursor.execute("SELECT COUNT(*) FROM cup_series WHERE stage = '1/4'")
+        if cursor.fetchone()[0] == 0:
+            for i in range(1, 5):
+                t1 = f"Победитель 1/8 (С{(i-1)*2+1})"
+                t2 = f"Победитель 1/8 (С{(i-1)*2+2})"
+                cursor.execute("INSERT INTO cup_series (stage, series_num, team1_name, team2_name, team1_wins, team2_wins, status) VALUES ('1/4', ?, ?, ?, 0, 0, 'active')", (i, t1, t2))
+                s_id = cursor.lastrowid
+                created_count += 1
+                cursor.execute("INSERT INTO matches (round_number, player1_team, player2_team, status, tournament_type, cup_stage, cup_series_id, game_num_in_series) VALUES (-1, ?, ?, 'pending', 'cup', '1/4', ?, 1)", (t1, t2, s_id))
+            
+        # 3. Initialize 1/2 Final (2 series) if missing
+        cursor.execute("SELECT COUNT(*) FROM cup_series WHERE stage = '1/2'")
+        if cursor.fetchone()[0] == 0:
+            for i in range(1, 3):
+                t1 = f"Победитель 1/4 (С{(i-1)*2+1})"
+                t2 = f"Победитель 1/4 (С{(i-1)*2+2})"
+                cursor.execute("INSERT INTO cup_series (stage, series_num, team1_name, team2_name, team1_wins, team2_wins, status) VALUES ('1/2', ?, ?, ?, 0, 0, 'active')", (i, t1, t2))
+                s_id = cursor.lastrowid
+                created_count += 1
+                cursor.execute("INSERT INTO matches (round_number, player1_team, player2_team, status, tournament_type, cup_stage, cup_series_id, game_num_in_series) VALUES (-1, ?, ?, 'pending', 'cup', '1/2', ?, 1)", (t1, t2, s_id))
+            
+        # 4. Initialize Final (1 series) if missing
+        cursor.execute("SELECT COUNT(*) FROM cup_series WHERE stage = 'final'")
+        if cursor.fetchone()[0] == 0:
+            t1 = "Победитель 1/2 (С1)"
+            t2 = "Победитель 1/2 (С2)"
+            cursor.execute("INSERT INTO cup_series (stage, series_num, team1_name, team2_name, team1_wins, team2_wins, status) VALUES ('final', 1, ?, ?, 0, 0, 'active')", (t1, t2))
+            s_id = cursor.lastrowid
             created_count += 1
-            
-            cursor.execute("SELECT telegram_id FROM users WHERE LOWER(team_name) = LOWER(?)", (t1.strip(),))
-            r1 = cursor.fetchone()
-            p1_id = r1[0] if r1 else None
-            
-            cursor.execute("SELECT telegram_id FROM users WHERE LOWER(team_name) = LOWER(?)", (t2.strip(),))
-            r2 = cursor.fetchone()
-            p2_id = r2[0] if r2 else None
-            
-            cursor.execute("""
-                INSERT INTO matches (round_number, player1_id, player2_id, player1_team, player2_team, status, tournament_type, cup_stage, cup_series_id, game_num_in_series)
-                VALUES (-1, ?, ?, ?, ?, 'pending', 'cup', '1/8', ?, 1)
-            """, (p1_id, p2_id, t1, t2, series_id))
-            
-        # 2. Initialize 1/4 Final (4 series)
-        for i in range(1, 5):
-            t1 = f"Победитель 1/8 (С{(i-1)*2+1})"
-            t2 = f"Победитель 1/8 (С{(i-1)*2+2})"
-            cursor.execute("INSERT INTO cup_series (stage, series_num, team1_name, team2_name, team1_wins, team2_wins, status) VALUES ('1/4', ?, ?, ?, 0, 0, 'active')", (i, t1, t2))
-            s_id = cursor.lastrowid
-            cursor.execute("INSERT INTO matches (round_number, player1_team, player2_team, status, tournament_type, cup_stage, cup_series_id, game_num_in_series) VALUES (-1, ?, ?, 'pending', 'cup', '1/4', ?, 1)", (t1, t2, s_id))
-            
-        # 3. Initialize 1/2 Final (2 series)
-        for i in range(1, 3):
-            t1 = f"Победитель 1/4 (С{(i-1)*2+1})"
-            t2 = f"Победитель 1/4 (С{(i-1)*2+2})"
-            cursor.execute("INSERT INTO cup_series (stage, series_num, team1_name, team2_name, team1_wins, team2_wins, status) VALUES ('1/2', ?, ?, ?, 0, 0, 'active')", (i, t1, t2))
-            s_id = cursor.lastrowid
-            cursor.execute("INSERT INTO matches (round_number, player1_team, player2_team, status, tournament_type, cup_stage, cup_series_id, game_num_in_series) VALUES (-1, ?, ?, 'pending', 'cup', '1/2', ?, 1)", (t1, t2, s_id))
-            
-        # 4. Initialize Final (1 series)
-        t1 = "Победитель 1/2 (С1)"
-        t2 = "Победитель 1/2 (С2)"
-        cursor.execute("INSERT INTO cup_series (stage, series_num, team1_name, team2_name, team1_wins, team2_wins, status) VALUES ('final', 1, ?, ?, 0, 0, 'active')", (t1, t2))
-        s_id = cursor.lastrowid
-        cursor.execute("INSERT INTO matches (round_number, player1_team, player2_team, status, tournament_type, cup_stage, cup_series_id, game_num_in_series) VALUES (-1, ?, ?, 'pending', 'cup', 'final', ?, 1)", (t1, t2, s_id))
+            cursor.execute("INSERT INTO matches (round_number, player1_team, player2_team, status, tournament_type, cup_stage, cup_series_id, game_num_in_series) VALUES (-1, ?, ?, 'pending', 'cup', 'final', ?, 1)", (t1, t2, s_id))
             
     return created_count
 
