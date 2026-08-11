@@ -755,31 +755,32 @@ def get_teams_recent_form(limit: int = 5) -> dict[str, list[str]]:
 
         form_map = {}
         for t_name in team_names:
-            t_name_lower = t_name.lower().strip()
+            t_name_clean = t_name.strip()
             cursor.execute("""
                 SELECT player1_team, player2_team, player1_score, player2_score
                 FROM matches
-                WHERE (LOWER(player1_team) = ? OR LOWER(player2_team) = ?) AND status = 'confirmed'
+                WHERE (LOWER(player1_team) = LOWER(?) OR LOWER(player2_team) = LOWER(?)) AND status = 'confirmed'
                 ORDER BY round_number DESC, id DESC
                 LIMIT ?
-            """, (t_name_lower, t_name_lower, limit))
+            """, (t_name_clean, t_name_clean, limit))
             rows = cursor.fetchall()
             outcomes = []
             for r in reversed(rows):
-                p1 = (r["player1_team"] or "").lower().strip()
-                p2 = (r["player2_team"] or "").lower().strip()
+                p1 = (r["player1_team"] or "").strip()
+                p2 = (r["player2_team"] or "").strip()
                 s1, s2 = r["player1_score"], r["player2_score"]
                 if s1 is None or s2 is None:
                     continue
-                if p1 == t_name_lower:
+                # Use python's lower() for accurate cyrillic comparison
+                if p1.lower() == t_name_clean.lower():
                     if s1 > s2: outcomes.append('W')
                     elif s1 < s2: outcomes.append('L')
                     else: outcomes.append('D')
-                elif p2 == t_name_lower:
+                elif p2.lower() == t_name_clean.lower():
                     if s2 > s1: outcomes.append('W')
                     elif s2 < s1: outcomes.append('L')
                     else: outcomes.append('D')
-            form_map[t_name_lower] = outcomes
+            form_map[t_name_clean.lower()] = outcomes
         return form_map
 
 def has_reminder_been_sent(round_number: int, reminder_type: str) -> bool:
