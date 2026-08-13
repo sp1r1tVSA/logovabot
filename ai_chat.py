@@ -145,8 +145,6 @@ def _build_persona2_instruction(context_data: str) -> dict:
         ("@vtrrgyg", "Бенфика"),
         ("@lvckri", "Порту"),
         ("@Serghe1KO", "Нэшвилл"),
-        ("@joraknaz", "великий MOG-мастер"),
-        ("@fifulatyrniru", "главный церемониймейстер"),
         ("@Doakkk", "инсайдщик ТФА"),
         ("@Tonyloki57", "великий тактик"),
         ("@Edeweisss", "тролль-подколист из вечного бана"),
