@@ -227,9 +227,10 @@ def generate_tournament_summary(standings: list[dict], top_scorer: dict | None, 
     for i, s in enumerate(standings):
         pts = s.get("points", 0)
         wins = s.get("wins", 0)
-        games = s.get("games_played", 0)
-        manager = s.get("owner", "Нет тренера")
-        context_lines.append(f"{i+1} место: {s['name']} (Тренер: @{manager}) - {pts} очков, {wins} побед, {games} матчей")
+        games = s.get("played", 0)
+        manager = s.get("username", "Нет тренера")
+        team_name = s.get("team_name", "Неизвестная команда")
+        context_lines.append(f"{i+1} место: {team_name} (Тренер: @{manager}) - {pts} очков, {wins} побед, {games} матчей")
     
     standings_text = "\n".join(context_lines)
     
