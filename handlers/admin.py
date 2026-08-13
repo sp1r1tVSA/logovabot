@@ -1574,9 +1574,9 @@ async def _notify_group_about_tp(context: ContextTypes.DEFAULT_TYPE, match_id: i
     tour_text = f"Тур {rnd}" if tour_type == "league" else "Кубковый матч"
     
     if tp_type == "home":
-        res_text = f"{p1} <b>3:0</b> {p2} (ТП)"
+        res_text = f"{p1} <b>1:0</b> {p2} (ТП)"
     elif tp_type == "away":
-        res_text = f"{p1} <b>0:3</b> {p2} (ТП)"
+        res_text = f"{p1} <b>0:1</b> {p2} (ТП)"
     else:
         res_text = f"{p1} <b>0:0</b> {p2} (ТН)"
 
@@ -1597,11 +1597,11 @@ async def admin_set_tp_home_execute(update: Update, context: ContextTypes.DEFAUL
     if not query or not is_admin(query.from_user.id): return
     await query.answer()
     match_id = int(query.data.replace("admin_tp_home_", ""))
-    next_stage = await asyncio.to_thread(database.set_technical_result, match_id, 3, 0)
+    next_stage = await asyncio.to_thread(database.set_technical_result, match_id, 1, 0)
     if next_stage:
         await notify_cup_stage_opened(context.bot, next_stage)
     await _notify_group_about_tp(context, match_id, "home")
-    await query.answer("✅ Назначено ТП 3:0 (Победа Хозяев)", show_alert=True)
+    await query.answer("✅ Назначено ТП 1:0 (Победа Хозяев)", show_alert=True)
     await admin_view_match(update, context, match_id=match_id)
 
 @admin_only
@@ -1610,11 +1610,11 @@ async def admin_set_tp_away_execute(update: Update, context: ContextTypes.DEFAUL
     if not query or not is_admin(query.from_user.id): return
     await query.answer()
     match_id = int(query.data.replace("admin_tp_away_", ""))
-    next_stage = await asyncio.to_thread(database.set_technical_result, match_id, 0, 3)
+    next_stage = await asyncio.to_thread(database.set_technical_result, match_id, 0, 1)
     if next_stage:
         await notify_cup_stage_opened(context.bot, next_stage)
     await _notify_group_about_tp(context, match_id, "away")
-    await query.answer("✅ Назначено ТП 0:3 (Победа Гостей)", show_alert=True)
+    await query.answer("✅ Назначено ТП 0:1 (Победа Гостей)", show_alert=True)
     await admin_view_match(update, context, match_id=match_id)
 
 @admin_only
