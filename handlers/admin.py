@@ -1465,7 +1465,7 @@ async def admin_view_match(update: Update, context: ContextTypes.DEFAULT_TYPE, m
         [InlineKeyboardButton("📜 Правила турнира", url="https://t.me/fifulatyrniru/3405")],
         [InlineKeyboardButton("⚡ Внести результат по фото (ИИ)", callback_data=f"admin_report_score_auto_{match_id}")],
         [InlineKeyboardButton("✍️ Внести результат вручную", callback_data=f"cb_report_choice_manual_{match_id}")],
-        [InlineKeyboardButton("🚫 ТП 3:0 (Хозяева)", callback_data=f"admin_tp_home_{match_id}"), InlineKeyboardButton("🚫 ТП 0:3 (Гости)", callback_data=f"admin_tp_away_{match_id}")],
+        [InlineKeyboardButton("🚫 ТП 1:0 (Хозяева)", callback_data=f"admin_tp_home_{match_id}"), InlineKeyboardButton("🚫 ТП 0:1 (Гости)", callback_data=f"admin_tp_away_{match_id}")],
     ]
     if not is_cup:
         keyboard.append([InlineKeyboardButton("🤝 ТН 0:0 (Ничья)", callback_data=f"admin_tp_draw_{match_id}"), InlineKeyboardButton("🔄 Сбросить результат", callback_data=f"admin_reset_match_execute_{match_id}")])
