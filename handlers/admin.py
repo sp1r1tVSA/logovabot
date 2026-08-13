@@ -338,6 +338,12 @@ async def notify_cup_stage_opened(bot, stage: str) -> None:
     if not series_list:
         return
 
+    # Проверяем, известны ли все участники стадии
+    for s in series_list:
+        if s["team1_name"].startswith("Победитель") or s["team2_name"].startswith("Победитель"):
+            return  # Ждем, пока все пары определятся
+
+
     stage_title_map = {
         '1/8': '1/8 ФИНАЛА',
         '1/4': '1/4 ФИНАЛА',
