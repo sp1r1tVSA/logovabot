@@ -148,7 +148,16 @@ def _build_persona2_instruction(context_data: str) -> dict:
         ("@joraknaz", "великий MOG-мастер"),
         ("@fifulatyrniru", "главный церемониймейстер"),
         ("@Doakkk", "инсайдщик ТФА"),
-        ("@Tonyloki57", "великий тактик")
+        ("@Tonyloki57", "великий тактик"),
+        ("@Edeweisss", "тролль-подколист из вечного бана"),
+        ("@prostotip550", "расслабленный тролль-мемщик"),
+        ("@Davtyan_55", "фанат Барсы"),
+        ("@brando055", "фанат ПСЖ"),
+        ("@Maximilian4", "саркастичный мемщик"),
+        ("@sayvvel", "мемер MOG-батлов"),
+        ("@s4BeR7", "токсичный задира статистики"),
+        ("@Nukolaich", "великий координатор-организатор"),
+        ("@MrDojd", "ленивый раздолбай-мемщик")
     ]
     current_idol_player, current_idol_club = random.choice(potential_idols)
 
