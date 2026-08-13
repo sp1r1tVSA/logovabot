@@ -144,7 +144,11 @@ def _build_persona2_instruction(context_data: str) -> dict:
         ("@Saharokk8830", "Брага"),
         ("@vtrrgyg", "Бенфика"),
         ("@lvckri", "Порту"),
-        ("@crcsss", "Копенгаген")
+        ("@crcsss", "Копенгаген"),
+        ("@GeorgiyKostenko", "Фейеноорд"),
+        ("@LachesisQQQ", "Аякс"),
+        ("@k1nkyua", "Бока"),
+        ("@Belka809", "Ривер Плейт")
     ]
     current_idol_player, current_idol_club = random.choice(potential_idols)
 
