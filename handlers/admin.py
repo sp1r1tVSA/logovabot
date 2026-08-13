@@ -1558,6 +1558,39 @@ async def admin_report_score_auto(update: Update, context: ContextTypes.DEFAULT_
     keyboard = [[InlineKeyboardButton("« Назад к карточке матча", callback_data=f"admin_view_match_{match_id}")]]
     await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
 
+async def _notify_group_about_tp(context: ContextTypes.DEFAULT_TYPE, match_id: int, tp_type: str):
+    match = await asyncio.to_thread(database.get_match, match_id)
+    group_id = await asyncio.to_thread(database.get_group_id)
+    if not match or not group_id:
+        return
+        
+    reports_topic_id = await asyncio.to_thread(database.get_config, "reports_topic_id")
+    
+    p1 = match.get("player1_nickname") or match.get("direct_p1_team") or "Хозяева"
+    p2 = match.get("player2_nickname") or match.get("direct_p2_team") or "Гости"
+    rnd = match.get("round_number", "?")
+    tour_type = match.get("tournament_type", "league")
+    
+    tour_text = f"Тур {rnd}" if tour_type == "league" else "Кубковый матч"
+    
+    if tp_type == "home":
+        res_text = f"{p1} <b>3:0</b> {p2} (ТП)"
+    elif tp_type == "away":
+        res_text = f"{p1} <b>0:3</b> {p2} (ТП)"
+    else:
+        res_text = f"{p1} <b>0:0</b> {p2} (ТН)"
+
+    text = f"🚨 <b>Администратор назначил результат:</b>\n\n🏆 <b>{tour_text}</b>\n🎮 {res_text}"
+    
+    kwargs = {"chat_id": group_id, "text": text, "parse_mode": "HTML"}
+    if reports_topic_id:
+        kwargs["message_thread_id"] = int(reports_topic_id)
+        
+    try:
+        await context.bot.send_message(**kwargs)
+    except Exception as e:
+        logger.error(f"Failed to send TP notification to group: {e}")
+
 @admin_only
 async def admin_set_tp_home_execute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
@@ -1567,6 +1600,7 @@ async def admin_set_tp_home_execute(update: Update, context: ContextTypes.DEFAUL
     next_stage = await asyncio.to_thread(database.set_technical_result, match_id, 3, 0)
     if next_stage:
         await notify_cup_stage_opened(context.bot, next_stage)
+    await _notify_group_about_tp(context, match_id, "home")
     await query.answer("✅ Назначено ТП 3:0 (Победа Хозяев)", show_alert=True)
     await admin_view_match(update, context, match_id=match_id)
 
@@ -1579,6 +1613,7 @@ async def admin_set_tp_away_execute(update: Update, context: ContextTypes.DEFAUL
     next_stage = await asyncio.to_thread(database.set_technical_result, match_id, 0, 3)
     if next_stage:
         await notify_cup_stage_opened(context.bot, next_stage)
+    await _notify_group_about_tp(context, match_id, "away")
     await query.answer("✅ Назначено ТП 0:3 (Победа Гостей)", show_alert=True)
     await admin_view_match(update, context, match_id=match_id)
 
@@ -1589,6 +1624,7 @@ async def admin_set_tp_draw_execute(update: Update, context: ContextTypes.DEFAUL
     await query.answer()
     match_id = int(query.data.replace("admin_tp_draw_", ""))
     await asyncio.to_thread(database.set_technical_result, match_id, 0, 0)
+    await _notify_group_about_tp(context, match_id, "draw")
     await query.answer("✅ Назначена Техническая ничья 0:0", show_alert=True)
     await admin_view_match(update, context, match_id=match_id)
 
