@@ -70,7 +70,7 @@ def generate_chat_reply(
     from ai_recognizer import _get_gemini_opener
     opener = _get_gemini_opener()
 
-    url = f"{base_url}/chat/completions"
+    url = f"{base_url.rstrip('/')}/chat/completions"
     req = urllib.request.Request(
         url, 
         data=payload_bytes, 
