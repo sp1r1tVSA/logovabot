@@ -17,6 +17,8 @@ TEAM_LOGO_MAP = {
     "Порту": "porto.png",
     "Будë Глимт": "bodo_glimt.png",
     "Будё Глимт": "bodo_glimt.png",
+    "Будë Глимпт": "bodo_glimt.png",
+    "Будё Глимпт": "bodo_glimt.png",
     "Фейеноорд": "feyenoord.png",
     "Селтик": "celtic.png",
     "Расинг": "racing.png",
@@ -131,7 +133,7 @@ def generate_league_table_image(standings: list[dict] = None, form_map: dict[int
 
         # Team Logo with White Circular Container Badge
         team_name = s.get("team_name") or f"Команда {i}"
-        logo_filename = TEAM_LOGO_MAP.get(team_name, "default.png")
+        logo_filename = TEAM_LOGO_MAP.get(team_name.strip(), "default.png")
         logo_path = os.path.join(LOGOS_DIR, logo_filename)
 
         badge_diameter = 30 * SCALE
@@ -329,7 +331,7 @@ def generate_cup_bracket_image(stage: str = "1/8") -> io.BytesIO:
 
         # Team 1 Logo
         t1_x_offset = 20 * SCALE
-        logo1 = TEAM_LOGO_MAP.get(t1_name)
+        logo1 = TEAM_LOGO_MAP.get(t1_name.strip()) if t1_name else None
         if logo1:
             l_path1 = os.path.join(LOGOS_DIR, logo1)
             if os.path.exists(l_path1):
@@ -345,7 +347,7 @@ def generate_cup_bracket_image(stage: str = "1/8") -> io.BytesIO:
 
         # Team 2 Logo
         t2_x_offset = 20 * SCALE
-        logo2 = TEAM_LOGO_MAP.get(t2_name)
+        logo2 = TEAM_LOGO_MAP.get(t2_name.strip()) if t2_name else None
         if logo2:
             l_path2 = os.path.join(LOGOS_DIR, logo2)
             if os.path.exists(l_path2):

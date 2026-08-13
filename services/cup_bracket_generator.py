@@ -9,7 +9,9 @@ BASE_DIR = os.path.dirname(__file__)
 ASSETS_DIR = os.path.join(BASE_DIR, '..', 'assets')
 
 def get_logo_path(team_name: str) -> str | None:
-    filename = TEAM_LOGO_MAP.get(team_name)
+    if not team_name:
+        return None
+    filename = TEAM_LOGO_MAP.get(team_name.strip())
     if not filename:
         return None
     path = os.path.join(ASSETS_DIR, 'logos', filename)
