@@ -22,21 +22,19 @@ def generate_chat_reply(
     Sends chat history and current user text or audio to Gemini for a conversational response.
     Returns the text reply from the AI.
     """
-    api_key = config.GEMINI_CHAT_API_KEY
-    if not api_key:
+    api_keys = config.GEMINI_CHAT_API_KEYS
+    if not api_keys:
         logger.warning("GEMINI_CHAT_API_KEY is not set.")
         return "Ошибка: Не настроен ключ для чата (GEMINI_CHAT_API_KEY)."
+
+    import random
+    keys_to_try = list(api_keys)
+    random.shuffle(keys_to_try)
 
     # List of valid, official Google Gemini API models in order of preference
     candidate_models = [
         "gemini-3.1-flash-lite",
         "gemini-3.5-flash-lite",
-        "gemini-2.5-flash-lite",
-        "gemini-3.6-flash",
-        "gemini-3.5-flash",
-        "gemini-2.5-flash",
-        "gemini-2.0-flash",
-        "gemini-2.0-flash-lite",
     ]
 
     if mode == "persona2":
@@ -84,30 +82,31 @@ def generate_chat_reply(
     opener = _get_gemini_opener()
 
     for model_name in candidate_models:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
-        req = urllib.request.Request(url, data=payload_bytes, headers={'Content-Type': 'application/json'})
-        try:
-            with opener.open(req, timeout=25) as response:
-                result = json.loads(response.read().decode('utf-8'))
-                
-                if "candidates" not in result or not result["candidates"]:
-                    logger.warning(f"AI Chat: No candidates returned from model '{model_name}'. Response: {result}")
-                    continue
-                
-                text_response = result["candidates"][0]["content"]["parts"][0]["text"]
-                clean_text = text_response.replace("**", "").replace("*", "")
-                cleaned_lines = [line.strip() for line in clean_text.split("\n")]
-                return "\n".join(cleaned_lines).strip()
-                
-        except urllib.error.HTTPError as e:
-            if e.code in (400, 404, 429):
-                logger.warning(f"AI Chat: Model '{model_name}' HTTP {e.code} (rate-limit / location / 404). Trying fallback model...")
-            else:
-                logger.warning(f"AI Chat: Model '{model_name}' HTTP Error {e.code}: {e}")
-            continue
-        except Exception as e:
-            logger.exception(f"AI Chat: Unexpected error generating reply with model '{model_name}'")
-            continue
+        for api_key in keys_to_try:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+            req = urllib.request.Request(url, data=payload_bytes, headers={'Content-Type': 'application/json'})
+            try:
+                with opener.open(req, timeout=25) as response:
+                    result = json.loads(response.read().decode('utf-8'))
+                    
+                    if "candidates" not in result or not result["candidates"]:
+                        logger.warning(f"AI Chat: No candidates returned from model '{model_name}'. Response: {result}")
+                        continue
+                    
+                    text_response = result["candidates"][0]["content"]["parts"][0]["text"]
+                    clean_text = text_response.replace("**", "").replace("*", "")
+                    cleaned_lines = [line.strip() for line in clean_text.split("\n")]
+                    return "\n".join(cleaned_lines).strip()
+                    
+            except urllib.error.HTTPError as e:
+                if e.code in (400, 404, 429):
+                    logger.warning(f"AI Chat: Model '{model_name}' HTTP {e.code} (rate-limit / location / 404) with current key. Trying fallback...")
+                else:
+                    logger.warning(f"AI Chat: Model '{model_name}' HTTP Error {e.code}: {e}")
+                continue
+            except Exception as e:
+                logger.exception(f"AI Chat: Unexpected error generating reply with model '{model_name}'")
+                continue
             
     return "Ох, что-то я сейчас не в форме (ошибка API или лимиты), попробуй написать попозже! ⚽"
 
