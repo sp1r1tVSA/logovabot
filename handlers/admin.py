@@ -3806,6 +3806,7 @@ async def admin_ai_summary(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     # Call AI
     from ai_chat import generate_tournament_summary
     summary = await asyncio.to_thread(generate_tournament_summary, standings, top_scorer, top_assist)
+    summary = html.escape(summary)
 
     # Send to admin in DM
     user_id = query.from_user.id
