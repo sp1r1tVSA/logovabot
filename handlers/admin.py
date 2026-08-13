@@ -208,19 +208,11 @@ async def admin_manage_cup(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             s_num = s['series_num']
 
             if s['status'] == 'completed':
-                text += f"⚔️ <b>Серия {s_num}:</b> {t1} ({w1}) 🆚 ({w2}) {t2} ➔ 🏆 <b>{html.escape(s['winner_name'] or 'Победитель')}</b>\n\n"
+                text += f"⚔️ <b>Серия {s_num}:</b> {t1} ({w1}) 🆚 ({w2}) {t2} ➔ 🏆 <b>{html.escape(s['winner_name'] or 'Победитель')}</b>\n"
             else:
                 text += f"⚔️ <b>Серия {s_num}:</b> <b>{t1}</b> ({w1}) 🆚 ({w2}) <b>{t2}</b>\n"
-                matches = s.get("matches", [])
-                for m in matches:
-                    g_num = m['game_num_in_series']
-                    p1 = html.escape(m['player1_team'] or t1)
-                    p2 = html.escape(m['player2_team'] or t2)
-                    if m['status'] == 'confirmed':
-                        text += f"   • Игра {g_num} (ID #{m['id']}): {p1} {m['player1_score']}:{m['player2_score']} {p2} ✅\n"
-                    else:
-                        text += f"   • Игра {g_num} (ID #{m['id']}): {p1} 🆚 {p2} ⏳\n"
-                text += "\n"
+        
+        text += "\n"
 
         keyboard = [
             [
