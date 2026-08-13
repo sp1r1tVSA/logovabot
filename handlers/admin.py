@@ -84,6 +84,7 @@ async def show_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         [InlineKeyboardButton("🏆 Управление Кубком КПЛ", callback_data="admin_manage_cup")],
         [InlineKeyboardButton("📢 Рассылка задолженностей", callback_data="admin_broadcast_menu")],
         [InlineKeyboardButton("🔄 Обновить таблицы и стату", callback_data="admin_force_update")],
+        [InlineKeyboardButton("📝 Итоги круга (AI)", callback_data="admin_ai_summary")],
         [InlineKeyboardButton(f"🎭 Режим общения: {mode_label}", callback_data="admin_toggle_chat_mode")],
         [InlineKeyboardButton("« Назад в меню", callback_data="main_menu")]
     ]
@@ -3782,3 +3783,39 @@ async def admin_reset_season_warns(update: Update, context: ContextTypes.DEFAULT
         "✅ Все предупреждения сброшены (новый сезон).",
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Назад в админку", callback_data="admin_main_menu")]])
     )
+
+@admin_only
+async def admin_ai_summary(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Generate AI summary for the current tournament round."""
+    query = update.callback_query
+    if not query:
+        return
+    try:
+        await query.answer("Генерируем итоги... Это может занять несколько секунд.", show_alert=True)
+    except BadRequest:
+        pass
+
+    # Fetch standings
+    standings = await asyncio.to_thread(database.get_standings)
+    top_scorers = await asyncio.to_thread(database.get_top_scorers, 1)
+    top_assists = await asyncio.to_thread(database.get_top_assists, 1)
+
+    top_scorer = top_scorers[0] if top_scorers else None
+    top_assist = top_assists[0] if top_assists else None
+
+    # Call AI
+    from ai_chat import generate_tournament_summary
+    summary = await asyncio.to_thread(generate_tournament_summary, standings, top_scorer, top_assist)
+
+    # Send to admin in DM
+    user_id = query.from_user.id
+    try:
+        await context.bot.send_message(
+            chat_id=user_id,
+            text=f"🤖 <b>Сгенерированные итоги круга (AI):</b>\n\n{summary}\n\n<i>Скопируйте этот текст и отправьте в нужный чат/канал!</i>",
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        logger.error(f"Failed to send AI summary to admin {user_id}: {e}")
+        if query.message:
+            await query.message.reply_text("❌ Ошибка при отправке итогов в ЛС. Проверьте, что бот может писать вам сообщения.")

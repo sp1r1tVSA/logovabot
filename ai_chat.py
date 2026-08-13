@@ -207,3 +207,77 @@ def _build_persona2_instruction(context_data: str) -> dict:
             )
         }]
     }
+
+def generate_tournament_summary(standings: list[dict], top_scorer: dict | None, top_assist: dict | None) -> str:
+    """
+    Generates a creative summary of the tournament using Gemini based on current stats.
+    """
+    api_keys = config.GEMINI_CHAT_API_KEYS
+    if not api_keys:
+        return "Ошибка: Не настроен ключ для чата (GEMINI_CHAT_API_KEY)."
+
+    import random
+    keys_to_try = list(api_keys)
+    random.shuffle(keys_to_try)
+
+    candidate_models = ["gemini-3.1-flash-lite", "gemini-3.5-flash-lite", "gemini-1.5-flash-latest"]
+
+    # Формируем текстовую сводку для нейросети
+    context_lines = []
+    for i, s in enumerate(standings):
+        pts = s.get("points", 0)
+        wins = s.get("wins", 0)
+        games = s.get("games_played", 0)
+        manager = s.get("owner", "Нет тренера")
+        context_lines.append(f"{i+1} место: {s['name']} (Тренер: @{manager}) - {pts} очков, {wins} побед, {games} матчей")
+    
+    standings_text = "\n".join(context_lines)
+    
+    scorer_text = "Нет данных"
+    if top_scorer:
+        scorer_text = f"{top_scorer['name']} ({top_scorer['team_name']}) - {top_scorer['goals']} голов"
+        
+    assist_text = "Нет данных"
+    if top_assist:
+        assist_text = f"{top_assist['name']} ({top_assist['team_name']}) - {top_assist['assists']} ассистов"
+
+    prompt_text = (
+        "Напиши крутой, эмоциональный и захватывающий пост с итогами круга в турнире КПЛ (или Лиги Чемпионов, если это она). "
+        "Используй много эмодзи 🤩🔥🏆👑🇪🇸 и форматирование.\n\n"
+        "Правила:\n"
+        "1. Укажи лидера и его отрыв или достижения. Упоминай тренера через @.\n"
+        "2. Расскажи про плотную борьбу в топ-6 или преследователей.\n"
+        "3. Упомяни аутсайдера (последнее место).\n"
+        "4. В конце напиши кто 'Лучший бомбардир' и 'Лучший ассистент'.\n\n"
+        f"--- ТЕКУЩАЯ ТАБЛИЦА ---\n{standings_text}\n\n"
+        f"--- ЛУЧШИЙ БОМБАРДИР ---\n{scorer_text}\n\n"
+        f"--- ЛУЧШИЙ АССИСТЕНТ ---\n{assist_text}\n"
+    )
+
+    payload = {
+        "contents": [{"role": "user", "parts": [{"text": prompt_text}]}],
+        "generationConfig": {
+            "temperature": 0.7,
+            "maxOutputTokens": 800,
+        }
+    }
+
+    payload_bytes = json.dumps(payload).encode('utf-8')
+    from ai_recognizer import _get_gemini_opener
+    opener = _get_gemini_opener()
+
+    for model_name in candidate_models:
+        for api_key in keys_to_try:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+            req = urllib.request.Request(url, data=payload_bytes, headers={'Content-Type': 'application/json'})
+            try:
+                with opener.open(req, timeout=25) as response:
+                    result = json.loads(response.read().decode('utf-8'))
+                    if "candidates" not in result or not result["candidates"]:
+                        continue
+                    return result["candidates"][0]["content"]["parts"][0]["text"].strip()
+            except Exception as e:
+                logger.warning(f"AI Summary Error with {model_name}: {e}")
+                continue
+
+    return "Не удалось сгенерировать итоги (ошибка API). Попробуйте позже."

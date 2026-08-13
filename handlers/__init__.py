@@ -193,6 +193,7 @@ from handlers.admin import (
     admin_warn_history,
     admin_amnesty_execute,
     admin_reset_season_warns,
+    admin_ai_summary,
 )
 
 logger = logging.getLogger(__name__)
@@ -560,6 +561,7 @@ def _register_admin_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("sync_cup", admin_sync_cup))
     app.add_handler(CommandHandler("force_update", admin_force_update))
     app.add_handler(CallbackQueryHandler(admin_force_update, pattern="^admin_force_update$"))
+    app.add_handler(CallbackQueryHandler(admin_ai_summary, pattern="^admin_ai_summary$"))
     app.add_handler(CommandHandler("test_ai", admin_test_ai))
     app.add_handler(CallbackQueryHandler(admin_broadcast_menu, pattern="^admin_broadcast_menu$"))
     app.add_handler(CallbackQueryHandler(admin_broadcast_all_debts_execute, pattern="^admin_broadcast_all_debts_execute$"))
