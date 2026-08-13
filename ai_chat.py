@@ -236,11 +236,11 @@ def generate_tournament_summary(standings: list[dict], top_scorer: dict | None, 
     
     scorer_text = "Нет данных"
     if top_scorer:
-        scorer_text = f"{top_scorer['name']} ({top_scorer['team_name']}) - {top_scorer['goals']} голов"
+        scorer_text = f"{top_scorer['player_name']} ({top_scorer['team_name']}) - {top_scorer['total_goals']} голов"
         
     assist_text = "Нет данных"
     if top_assist:
-        assist_text = f"{top_assist['name']} ({top_assist['team_name']}) - {top_assist['assists']} ассистов"
+        assist_text = f"{top_assist['player_name']} ({top_assist['team_name']}) - {top_assist['total_assists']} ассистов"
 
     prompt_text = (
         "Напиши крутой, эмоциональный и захватывающий пост с итогами круга в турнире КПЛ (или Лиги Чемпионов, если это она). "
