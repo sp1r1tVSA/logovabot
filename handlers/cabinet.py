@@ -1281,8 +1281,10 @@ async def cb_report_choice_manual(update: Update, context: ContextTypes.DEFAULT_
     context.user_data["reporting_match_id"] = match_id
     context.user_data["reporting_mode"] = "manual"
 
-    home_team = context.user_data.get("report_home_team") or match['player1_team'] or match['player1_nickname']
-    away_team = context.user_data.get("report_away_team") or match['player2_team'] or match['player2_nickname']
+    home_team = match['player1_team'] or match['player1_nickname']
+    away_team = match['player2_team'] or match['player2_nickname']
+    context.user_data["report_home_team"] = home_team
+    context.user_data["report_away_team"] = away_team
 
     text = (
         f"⚽ <b>Ввод результата матча #{match_id}</b>\n"
@@ -1619,8 +1621,10 @@ async def save_report_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     match_id = context.user_data.get("reporting_match_id")
     match = await asyncio.to_thread(database.get_match, match_id) if match_id else None
-    home_team = context.user_data.get("report_home_team") or (match.get("player1_team") if match else "Хозяева")
-    away_team = context.user_data.get("report_away_team") or (match.get("player2_team") if match else "Гости")
+    home_team = match.get("player1_team") if match else "Хозяева"
+    away_team = match.get("player2_team") if match else "Гости"
+    context.user_data["report_home_team"] = home_team
+    context.user_data["report_away_team"] = away_team
 
     reporting_mode = context.user_data.get("reporting_mode", "auto")
 
@@ -1722,8 +1726,10 @@ async def ai_recognize_now(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         ai_res = await asyncio.to_thread(ai_recognizer.recognize_match_screenshots_bytes, downloaded_bytes)
 
         match = await asyncio.to_thread(database.get_match, match_id) if match_id else None
-        home_team = context.user_data.get("report_home_team") or (match.get("player1_team") if match else "Хозяева")
-        away_team = context.user_data.get("report_away_team") or (match.get("player2_team") if match else "Гости")
+        home_team = match.get("player1_team") if match else "Хозяева"
+        away_team = match.get("player2_team") if match else "Гости"
+        context.user_data["report_home_team"] = home_team
+        context.user_data["report_away_team"] = away_team
 
         if ai_res and ("home_score" in ai_res) and ("away_score" in ai_res):
             s1_goals = ai_res.get("side1_goals") or ai_res.get("home_goals") or []
