@@ -18,8 +18,10 @@ def _get_admin_ids() -> list[int]:
 ADMIN_IDS = _get_admin_ids()
 DB_PATH = os.getenv("LEAGUE_SQLITE_PATH", "league.db")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
-GEMINI_CHAT_API_KEY = os.getenv("GEMINI_CHAT_API_KEY", "").strip()
+OPENAI_CHAT_API_KEY = os.getenv("OPENAI_CHAT_API_KEY", "").strip()
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.claudehub.fun").strip()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite").strip()
+OPENAI_CHAT_MODEL = os.getenv("OPENAI_CHAT_MODEL", "ch-qw35f").strip()
 APISPORTS_KEY = os.getenv("APISPORTS_KEY", "").strip()
 
 def _get_group_id() -> int | None:
