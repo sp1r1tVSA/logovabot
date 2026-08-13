@@ -220,7 +220,7 @@ def generate_tournament_summary(standings: list[dict], top_scorer: dict | None, 
     keys_to_try = list(api_keys)
     random.shuffle(keys_to_try)
 
-    candidate_models = ["gemini-3.1-flash-lite", "gemini-3.5-flash-lite", "gemini-1.5-flash-latest"]
+    candidate_models = ["gemini-3.7-flash"]
 
     # Формируем текстовую сводку для нейросети
     context_lines = []
