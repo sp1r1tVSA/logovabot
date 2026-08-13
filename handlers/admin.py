@@ -84,7 +84,6 @@ async def show_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         [InlineKeyboardButton("🏆 Управление Кубком КПЛ", callback_data="admin_manage_cup")],
         [InlineKeyboardButton("📢 Рассылка задолженностей", callback_data="admin_broadcast_menu")],
         [InlineKeyboardButton("🔄 Обновить таблицы и стату", callback_data="admin_force_update")],
-        [InlineKeyboardButton("📝 Итоги круга (AI)", callback_data="admin_ai_summary")],
         [InlineKeyboardButton(f"🎭 Режим общения: {mode_label}", callback_data="admin_toggle_chat_mode")],
         [InlineKeyboardButton("« Назад в меню", callback_data="main_menu")]
     ]
