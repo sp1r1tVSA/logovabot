@@ -1423,7 +1423,7 @@ async def render_squad_goals_picker(update: Update, context: ContextTypes.DEFAUL
     context.user_data["temp_active_squad_goals"] = squad
     if not squad:
         text += "\n\n⚠️ <i>Состав команды пока не добавлен в систему.</i>"
-        keyboard.append([InlineKeyboardButton("⏩ Пропустить ввод авторов голов", callback_data="cb_skip_goals")])
+        keyboard.append([InlineKeyboardButton("⏩ Пропустить ввод авторов", callback_data="cb_skip_goals")])
     else:
         row = []
         for idx, player in enumerate(squad):
@@ -1433,7 +1433,7 @@ async def render_squad_goals_picker(update: Update, context: ContextTypes.DEFAUL
                 row = []
         if row:
             keyboard.append(row)
-        keyboard.append([InlineKeyboardButton("⏩ Пропустить", callback_data="cb_skip_goals")])
+        keyboard.append([InlineKeyboardButton("⏩ Пропустить остаток (пенальти/автоголы)", callback_data="cb_skip_goals")])
 
     match_id = context.user_data.get("reporting_match_id")
     user_id = query.from_user.id if query else update.effective_user.id
@@ -1520,7 +1520,7 @@ async def render_squad_assists_picker(update: Update, context: ContextTypes.DEFA
         if row:
             keyboard.append(row)
 
-    keyboard.append([InlineKeyboardButton("⏩ Пропустить ассисты", callback_data="cb_skip_assists")])
+    keyboard.append([InlineKeyboardButton("⏩ Пропустить остаток ассистов", callback_data="cb_skip_assists")])
     match_id = context.user_data.get("reporting_match_id")
     user_id = query.from_user.id if query else update.effective_user.id
     cancel_cb = get_match_cancel_cb(context, user_id, match_id)
