@@ -240,9 +240,8 @@ def generate_top_stats_image(mode: str = "goals", limit: int = 10, tournament_ty
             # ── Stat Count Pill Badge (Right) ──────────────────────────────
             val_str = f"{stat_value}"
             val_w = int(draw.textlength(val_str, font=font_stat_val))
-            lbl_w = int(draw.textlength(stat_label_str, font=font_stat_lbl))
 
-            pill_w = max(70 * SCALE, val_w + lbl_w + 24 * SCALE)
+            pill_w = max(60 * SCALE, val_w + 30 * SCALE)
             pill_h = 40 * SCALE
             pill_x = row_x1 - 16 * SCALE - pill_w
             pill_y = row_y0 + (ROW_H - pill_h) // 2
@@ -253,11 +252,9 @@ def generate_top_stats_image(mode: str = "goals", limit: int = 10, tournament_ty
                 radius=8 * SCALE, fill=badge_bg, outline=badge_border, width=1 * SCALE
             )
 
-            # Stat number + sublabel centered
-            sw = int(draw.textlength(val_str, font=font_stat_val))
-            draw.text((pill_x + 10 * SCALE, pill_y + (pill_h - 26 * SCALE) // 2), val_str, fill=WHITE, font=font_stat_val)
-            draw.text((pill_x + 10 * SCALE + sw + 4 * SCALE, pill_y + (pill_h - 12 * SCALE) // 2 + 3 * SCALE), stat_label_str, fill=stat_color, font=font_stat_lbl)
-
+            # Stat number centered
+            text_x = pill_x + (pill_w - val_w) // 2
+            draw.text((text_x, pill_y + (pill_h - 26 * SCALE) // 2), val_str, fill=WHITE, font=font_stat_val)
             y += ROW_H + ROW_GAP
 
     # ══════════════════════════════════════════════════════════════════════
