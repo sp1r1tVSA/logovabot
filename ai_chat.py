@@ -81,7 +81,7 @@ def generate_chat_reply(
     )
     
     try:
-        with opener.open(req, timeout=25) as response:
+        with opener.open(req, timeout=60) as response:
             result = json.loads(response.read().decode('utf-8'))
             
             if "choices" not in result or not result["choices"]:
@@ -96,6 +96,9 @@ def generate_chat_reply(
     except urllib.error.HTTPError as e:
         logger.warning(f"AI Chat: Model '{model_name}' HTTP Error {e.code}: {e.read().decode('utf-8')}")
         return "Ох, шлюз API сейчас недоступен (ошибка соединения), попробуй написать попозже! ⚽"
+    except TimeoutError:
+        logger.warning(f"AI Chat: Model '{model_name}' timed out after 60 seconds.")
+        return "Мой мозг сейчас перегружен (долгое ожидание ответа), попробуй чуть позже! ⚽"
     except Exception as e:
         logger.exception(f"AI Chat: Unexpected error generating reply with model '{model_name}'")
         return "Ох, что-то я сейчас не в форме (ошибка API), попробуй написать попозже! ⚽"
