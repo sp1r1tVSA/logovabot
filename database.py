@@ -687,6 +687,45 @@ def save_match_events(match_id: int, events: list[tuple[str, str, int]], team_na
                 (match_id, t_name, p_name, e_type, cnt)
             )
 
+def get_active_match_by_teams(team1: str, team2: str) -> dict | None:
+    """Find an active (pending/reported/disputed) match given two team names."""
+    if not team1 or not team2:
+        return None
+    
+    # We will search by lowercasing and basic string matching
+    t1_lower = team1.lower().strip()
+    t2_lower = team2.lower().strip()
+    
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT 
+                m.id, m.status, 
+                m.player1_team AS direct_p1_team, m.player2_team AS direct_p2_team,
+                u1.team_name AS u1_team, u2.team_name AS u2_team
+            FROM matches m
+            LEFT JOIN users u1 ON LOWER(m.player1_team) = LOWER(u1.team_name)
+            LEFT JOIN users u2 ON LOWER(m.player2_team) = LOWER(u2.team_name)
+            WHERE m.status IN ('pending', 'reported', 'disputed')
+        """)
+        rows = cursor.fetchall()
+        
+        for row in rows:
+            d = dict(row)
+            p1 = (d['direct_p1_team'] or d['u1_team'] or "").lower()
+            p2 = (d['direct_p2_team'] or d['u2_team'] or "").lower()
+            
+            if not p1 or not p2:
+                continue
+            
+            # Simple substring match (since sometimes team is "Бока" instead of "Бока Хуниорс")
+            if (t1_lower in p1 and t2_lower in p2) or (p1 in t1_lower and p2 in t2_lower):
+                return get_match(d['id'])
+            if (t1_lower in p2 and t2_lower in p1) or (p1 in t2_lower and p2 in t1_lower):
+                return get_match(d['id'])
+                
+        return None
+
 def get_match_events(match_id: int) -> list[dict]:
     """Retrieve all events (goals/assists) for a match, aggregated by team, player, and event_type."""
     with transaction() as conn:

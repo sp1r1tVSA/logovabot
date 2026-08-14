@@ -163,6 +163,7 @@ from handlers.admin import (
     job_check_deadlines_and_remind,
     job_post_debts_to_warns,
     admin_set_squad_topic,
+    admin_set_drafts_topic,
     admin_set_reports_topic,
     admin_set_results_topic,
     admin_set_warns_topic,
@@ -247,6 +248,9 @@ def _register_user_handlers(app: Application) -> None:
     app.add_handler(MessageHandler(filters.Regex("^🏆 Турниры$"), show_tournaments))
     app.add_handler(MessageHandler(filters.Regex("^📊 Таблица лиги$"), show_league_table))
     app.add_handler(MessageHandler(filters.Regex("^💬 Поддержка$"), show_support))
+    
+    from handlers.drafts import handle_draft_media
+    app.add_handler(MessageHandler((filters.PHOTO | filters.TEXT) & filters.ChatType.GROUPS & ~filters.COMMAND, handle_draft_media), group=2)
     app.add_handler(MessageHandler(filters.Regex("^⚙️ Админ-панель$"), show_admin_panel))
 
     app.add_handler(CallbackQueryHandler(cb_refresh_league_table_topic, pattern="^refresh_league_table_topic$"))
@@ -511,6 +515,7 @@ def _register_admin_handlers(app: Application) -> None:
     app.add_handler(admin_squad_conv)
 
     app.add_handler(CommandHandler("set_squad_topic", admin_set_squad_topic))
+    app.add_handler(CommandHandler("set_drafts_topic", admin_set_drafts_topic))
     app.add_handler(CommandHandler("set_reports_topic", admin_set_reports_topic))
     app.add_handler(CommandHandler("set_results_topic", admin_set_results_topic))
     app.add_handler(CommandHandler("set_warns_topic", admin_set_warns_topic))

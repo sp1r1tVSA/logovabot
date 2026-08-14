@@ -3304,6 +3304,22 @@ async def admin_set_squad_topic(update: Update, context: ContextTypes.DEFAULT_TY
     await update.message.reply_text(f"✅ Топик для составов успешно установлен (ID: {thread_id}). Теперь составы будут присылаться сюда.")
 
 @admin_only
+async def admin_set_drafts_topic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Set the topic for receiving match results (drafts)."""
+    user_id = update.effective_user.id
+    if not is_admin(user_id):
+        await update.message.reply_text("❌ Нет прав.")
+        return
+        
+    thread_id = update.message.message_thread_id
+    if not thread_id:
+        await update.message.reply_text("⚠️ Вызовите команду внутри топика «Черновик», куда игроки будут присылать результаты.")
+        return
+        
+    await asyncio.to_thread(database.set_config, "drafts_topic_id", str(thread_id))
+    await update.message.reply_text(f"✅ Тема «Черновик» успешно установлена (ID: {thread_id}). Бот будет распознавать результаты здесь!")
+
+@admin_only
 async def admin_set_reports_topic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Set the topic for reports/announcements."""
     user_id = update.effective_user.id

@@ -21,9 +21,9 @@ GEMINI_MODELS = [
 PROMPT_TEXT = """
 Ты — узкоспециализированный OCR-сканер для извлечения сырых данных из скриншотов FIFA / EA FC Mobile / eFootball.
 
-Твоя единственная задача — БУКВАЛЬНО считать текст и цифры с экрана, НЕ ПЫТАЯСЬ угадывать названия команд, логику матча или додумывать контекст.
+Твоя единственная задача — БУКВАЛЬНО считать текст и цифры с экрана, НЕ ПЫТАЯСЬ угадывать логику матча или додумывать контекст, за исключением названий команд.
 
-⚠️ ИГНОРИРУЙ любые названия клубов, эмблемы и никнеймы над счётом! Они являются декоративными и не используются для логики.
+⚠️ ТЕБЕ ТАКЖЕ БУДЕТ ПЕРЕДАН ТЕКСТ ПОДПИСИ ОТ ПОЛЬЗОВАТЕЛЯ. На основе подписи и изображений (возможно там есть эмблемы) определи названия Левой и Правой команд, которые играли. Верни их в `team1` и `team2`.
 
 ---
 
@@ -103,6 +103,8 @@ PROMPT_TEXT = """
 Верни результат СТРОГО в виде одного валидного JSON-объекта без разметки markdown:
 
 {
+  "team1": "Название левой команды (например, Аякс)",
+  "team2": "Название правой команды (например, Селтик)",
   "left_score": 4,
   "right_score": 2,
   "is_single_timeline": false,
@@ -146,7 +148,7 @@ def _get_gemini_opener():
     # Explicitly disable proxy for direct connection if proxy is inactive/down
     return urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
-def recognize_match_screenshots_bytes(images_bytes_list: list[bytes], mime_type: str = "image/jpeg", api_key: str = None) -> dict | None:
+def recognize_match_screenshots_bytes(images_bytes_list: list[bytes], mime_type: str = "image/jpeg", api_key: str = None, caption: str = "") -> dict | None:
     target_api_key = (api_key or config.GEMINI_API_KEY).strip()
 
     if not target_api_key:
@@ -160,7 +162,11 @@ def recognize_match_screenshots_bytes(images_bytes_list: list[bytes], mime_type:
 
     for m_name in GEMINI_MODELS:
         try:
-            parts = [{"text": PROMPT_TEXT}]
+            prompt_with_caption = PROMPT_TEXT
+            if caption:
+                prompt_with_caption += f"\n\n--- ПОДПИСЬ ПОЛЬЗОВАТЕЛЯ ---\n{caption}"
+                
+            parts = [{"text": prompt_with_caption}]
             for img_bytes in images_bytes_list:
                 parts.append({
                     "inline_data": {
@@ -246,5 +252,5 @@ def recognize_match_screenshots_bytes(images_bytes_list: list[bytes], mime_type:
     logger.error("All Gemini Vision fallback models failed or were rate-limited.")
     return None
 
-def recognize_match_screenshot_bytes(image_bytes: bytes, mime_type: str = "image/jpeg", api_key: str = None) -> dict | None:
-    return recognize_match_screenshots_bytes([image_bytes], mime_type=mime_type, api_key=api_key)
+def recognize_match_screenshot_bytes(image_bytes: bytes, mime_type: str = "image/jpeg", api_key: str = None, caption: str = "") -> dict | None:
+    return recognize_match_screenshots_bytes([image_bytes], mime_type=mime_type, api_key=api_key, caption=caption)
