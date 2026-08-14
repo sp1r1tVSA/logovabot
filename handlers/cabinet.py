@@ -52,31 +52,32 @@ def match_and_enrich_squad(raw_side1_goals: list[str], raw_side2_goals: list[str
                 return squad_p
         return None
 
-    if is_single_timeline:
-        all_raw_goals = raw_side1_goals + raw_side2_goals
-        home_goals = {}
-        away_goals = {}
-
-        for raw in all_raw_goals:
+    # If single timeline had everything dumped into one list and second list is empty
+    if is_single_timeline and (not raw_side1_goals or not raw_side2_goals) and (raw_side1_goals or raw_side2_goals):
+        all_raw = raw_side1_goals + raw_side2_goals
+        home_g = {}
+        away_g = {}
+        for raw in all_raw:
             raw_clean = raw.strip()
             if not raw_clean:
                 continue
             h_match = find_squad_match(raw_clean, home_squad)
             a_match = find_squad_match(raw_clean, away_squad)
-
             if h_match and not a_match:
-                home_goals[h_match] = home_goals.get(h_match, 0) + 1
+                home_g[h_match] = home_g.get(h_match, 0) + 1
             elif a_match and not h_match:
-                away_goals[a_match] = away_goals.get(a_match, 0) + 1
-            elif h_match and a_match:
-                home_goals[h_match] = home_goals.get(h_match, 0) + 1
+                away_g[a_match] = away_g.get(a_match, 0) + 1
+            elif not raw_side1_goals and raw_side2_goals:
+                use_name = a_match or raw_clean
+                database.add_squad(away_team, [use_name])
+                away_squad.append(use_name)
+                away_g[use_name] = away_g.get(use_name, 0) + 1
             else:
-                use_name = raw_clean
+                use_name = h_match or raw_clean
                 database.add_squad(home_team, [use_name])
                 home_squad.append(use_name)
-                home_goals[use_name] = home_goals.get(use_name, 0) + 1
-
-        return home_goals, away_goals, {}, {}, True
+                home_g[use_name] = home_g.get(use_name, 0) + 1
+        return home_g, away_g, {}, {}, True
 
     side1_all = [p.lower().strip() for p in raw_side1_goals + raw_side1_assists]
     side2_all = [p.lower().strip() for p in raw_side2_goals + raw_side2_assists]
@@ -86,8 +87,11 @@ def match_and_enrich_squad(raw_side1_goals: list[str], raw_side2_goals: list[str
 
     side1_home_matches = sum(1 for p in side1_all if any(p in sp or sp in p for sp in home_squad_lower))
     side1_away_matches = sum(1 for p in side1_all if any(p in sp or sp in p for sp in away_squad_lower))
+    side2_home_matches = sum(1 for p in side2_all if any(p in sp or sp in p for sp in home_squad_lower))
+    side2_away_matches = sum(1 for p in side2_all if any(p in sp or sp in p for sp in away_squad_lower))
 
-    if side1_away_matches > side1_home_matches:
+    # Detect if side1 is Away and side2 is Home
+    if (side1_away_matches > side1_home_matches) or (side2_home_matches > side2_away_matches):
         is_side1_home = False
         side1_team, side2_team = away_team, home_team
         side1_squad, side2_squad = away_squad, home_squad
@@ -1746,16 +1750,12 @@ async def ai_recognize_now(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 is_single_timeline=is_single_timeline,
             )
 
-            if is_single_timeline:
-                h_score = sum(h_goals.values())
-                a_score = sum(a_goals.values())
+            if is_side1_home:
+                h_score = int(ai_res.get("left_score", ai_res.get("home_score", sum(h_goals.values()))))
+                a_score = int(ai_res.get("right_score", ai_res.get("away_score", sum(a_goals.values()))))
             else:
-                if is_side1_home:
-                    h_score = int(ai_res.get("home_score", sum(h_goals.values())))
-                    a_score = int(ai_res.get("away_score", sum(a_goals.values())))
-                else:
-                    h_score = int(ai_res.get("away_score", sum(h_goals.values())))
-                    a_score = int(ai_res.get("home_score", sum(a_goals.values())))
+                h_score = int(ai_res.get("right_score", ai_res.get("away_score", sum(h_goals.values()))))
+                a_score = int(ai_res.get("left_score", ai_res.get("home_score", sum(a_goals.values()))))
 
             context.user_data["report_home_goals"] = h_score
             context.user_data["report_away_goals"] = a_score

@@ -148,16 +148,12 @@ async def _process_draft_group_delayed(media_group_id: str, update: Update, cont
         await status_msg.edit_text("❌ Ошибка при сопоставлении состава. Возможно, игроки не зарегистрированы.")
         return
         
-    if is_single_timeline:
-        h_score = sum(h_goals.values())
-        a_score = sum(a_goals.values())
+    if is_side1_home:
+        h_score = int(ai_res.get("left_score", ai_res.get("home_score", sum(h_goals.values()))))
+        a_score = int(ai_res.get("right_score", ai_res.get("away_score", sum(a_goals.values()))))
     else:
-        if is_side1_home:
-            h_score = int(ai_res.get("home_score", sum(h_goals.values())))
-            a_score = int(ai_res.get("away_score", sum(a_goals.values())))
-        else:
-            h_score = int(ai_res.get("away_score", sum(h_goals.values())))
-            a_score = int(ai_res.get("home_score", sum(a_goals.values())))
+        h_score = int(ai_res.get("right_score", ai_res.get("away_score", sum(h_goals.values()))))
+        a_score = int(ai_res.get("left_score", ai_res.get("home_score", sum(a_goals.values()))))
             
     events = []
     for p, c in h_goals.items(): events.append((home_team, p, "goal", c))
