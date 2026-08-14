@@ -249,8 +249,10 @@ def _register_user_handlers(app: Application) -> None:
     app.add_handler(MessageHandler(filters.Regex("^📊 Таблица лиги$"), show_league_table))
     app.add_handler(MessageHandler(filters.Regex("^💬 Поддержка$"), show_support))
     
-    from handlers.drafts import handle_draft_media
+    from handlers.drafts import handle_draft_media, cb_draft_confirm, cb_draft_reject
     app.add_handler(MessageHandler((filters.PHOTO | filters.TEXT) & filters.ChatType.GROUPS & ~filters.COMMAND, handle_draft_media), group=2)
+    app.add_handler(CallbackQueryHandler(cb_draft_confirm, pattern="^draft_conf_"))
+    app.add_handler(CallbackQueryHandler(cb_draft_reject, pattern="^draft_rej_"))
     app.add_handler(MessageHandler(filters.Regex("^⚙️ Админ-панель$"), show_admin_panel))
 
     app.add_handler(CallbackQueryHandler(cb_refresh_league_table_topic, pattern="^refresh_league_table_topic$"))

@@ -165,53 +165,152 @@ async def _process_draft_group_delayed(media_group_id: str, update: Update, cont
     for p, c in h_assists.items(): events.append((home_team, p, "assist", c))
     for p, c in a_assists.items(): events.append((away_team, p, "assist", c))
     
-    # Send draft confirmation message in Drafts topic
-    # In drafts we confirm the match right away for the admins/group since it's drafted
+    # Send draft preview with confirm/reject buttons
     photo_id_to_save = update.message.photo[-1].file_id if update.message and update.message.photo else None
     
+    import uuid
+    draft_uuid = str(uuid.uuid4())[:8]
+    
+    draft_data = {
+        "match_id": match_id,
+        "h_score": h_score,
+        "a_score": a_score,
+        "events": events,
+        "reporter_id": user_id,
+        "photo_id": photo_id_to_save
+    }
+    
+    if "drafts" not in context.bot_data:
+        context.bot_data["drafts"] = {}
+    context.bot_data["drafts"][draft_uuid] = draft_data
+    
+    group_text = build_formatted_match_post(
+        round_number=match.get('round_number'),
+        home_team=home_team,
+        away_team=away_team,
+        h_score=h_score,
+        a_score=a_score,
+        p1_username=match.get('player1_username', 'Хозяева'),
+        p2_username=match.get('player2_username', 'Гости'),
+        h_goals=h_goals,
+        a_goals=a_goals,
+        h_assists=h_assists,
+        a_assists=a_assists,
+        is_single_timeline=is_single_timeline,
+        is_pm=False,
+        match_id=match_id
+    )
+
+    keyboard = [
+        [InlineKeyboardButton("✅ Подтвердить", callback_data=f"draft_conf_{draft_uuid}")],
+        [InlineKeyboardButton("❌ Отклонить", callback_data=f"draft_rej_{draft_uuid}")]
+    ]
+    markup = InlineKeyboardMarkup(keyboard)
+    
+    await status_msg.delete()
+    
     try:
-        next_stage = await asyncio.to_thread(database.confirm_and_finalize_match, match_id, h_score, a_score, events, reporter_id=user_id, photo_id=photo_id_to_save)
+        kwargs = {"chat_id": update.effective_chat.id, "parse_mode": "HTML", "reply_markup": markup}
+        if msg_ids:
+            kwargs["reply_to_message_id"] = msg_ids[0]
+            
+        if photo_id_to_save:
+            kwargs["photo"] = photo_id_to_save
+            kwargs["caption"] = group_text
+            await context.bot.send_photo(**kwargs)
+        else:
+            kwargs["text"] = group_text
+            await context.bot.send_message(**kwargs)
+    except Exception as e:
+        logger.exception("Failed to send draft preview")
+
+from telegram.ext import CallbackQueryHandler
+from handlers.admin import is_admin
+
+async def cb_draft_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query: return
+    await query.answer()
+    
+    if not is_admin(query.from_user.id):
+        await query.answer("Только администратор может подтверждать черновики!", show_alert=True)
+        return
+        
+    draft_uuid = query.data.replace("draft_conf_", "")
+    drafts = context.bot_data.get("drafts", {})
+    if draft_uuid not in drafts:
+        if query.message.photo: await query.edit_message_caption(caption="❌ Данные черновика устарели или не найдены.")
+        else: await query.edit_message_text(text="❌ Данные черновика устарели или не найдены.")
+        return
+        
+    draft = drafts.pop(draft_uuid)
+    match_id = draft["match_id"]
+    
+    match = database.get_match(match_id)
+    if not match:
+        if query.message.photo: await query.edit_message_caption(caption="❌ Матч не найден.")
+        else: await query.edit_message_text(text="❌ Матч не найден.")
+        return
+        
+    if match['status'] == 'confirmed':
+        if query.message.photo: await query.edit_message_caption(caption="✅ Результат уже зафиксирован!")
+        else: await query.edit_message_text(text="✅ Результат уже зафиксирован!")
+        return
+        
+    try:
+        next_stage = await asyncio.to_thread(database.confirm_and_finalize_match, 
+            match_id, draft["h_score"], draft["a_score"], draft["events"], 
+            reporter_id=draft["reporter_id"], photo_id=draft["photo_id"]
+        )
         if next_stage:
             from handlers.admin import notify_cup_stage_opened
             await notify_cup_stage_opened(context.bot, next_stage)
     except Exception as e:
         logger.exception("Failed to confirm drafted match")
-        await status_msg.edit_text("❌ Ошибка при сохранении матча в базу.")
+        if query.message.photo: await query.edit_message_caption(caption="❌ Ошибка при сохранении матча в базу.")
+        else: await query.edit_message_text(text="❌ Ошибка при сохранении матча в базу.")
         return
         
-    await status_msg.edit_text(f"✅ Матч #{match_id} ({html.escape(home_team)} vs {html.escape(away_team)}) успешно распознан и внесён в базу!")
-    
-    # Broadcast to Results/Reports topic
+    original_text = query.message.caption if query.message.photo else query.message.text
+    new_caption = (original_text or "") + "\n\n✅ <b>Одобрено администратором.</b>"
+    if query.message.photo: await query.edit_message_caption(caption=new_caption, parse_mode="HTML")
+    else: await query.edit_message_text(text=new_caption, parse_mode="HTML")
+        
     main_group_id = await asyncio.to_thread(database.get_group_id)
     results_topic_id = (await asyncio.to_thread(database.get_config, "results_topic_id")) or (await asyncio.to_thread(database.get_config, "reports_topic_id"))
     
     if main_group_id:
-        group_text = build_formatted_match_post(
-            round_number=match.get('round_number'),
-            home_team=home_team,
-            away_team=away_team,
-            h_score=h_score,
-            a_score=a_score,
-            p1_username=match.get('player1_username', 'Хозяева'),
-            p2_username=match.get('player2_username', 'Гости'),
-            h_goals=h_goals,
-            a_goals=a_goals,
-            h_assists=h_assists,
-            a_assists=a_assists,
-            is_single_timeline=is_single_timeline,
-            is_pm=False,
-            match_id=match_id
-        )
         try:
             kwargs = {"chat_id": main_group_id, "parse_mode": "HTML"}
-            if results_topic_id:
-                kwargs["message_thread_id"] = int(results_topic_id)
-            if photo_id_to_save:
-                kwargs["photo"] = photo_id_to_save
-                kwargs["caption"] = group_text
+            if results_topic_id: kwargs["message_thread_id"] = int(results_topic_id)
+            if draft["photo_id"]:
+                kwargs["photo"] = draft["photo_id"]
+                kwargs["caption"] = original_text
                 await context.bot.send_photo(**kwargs)
             else:
-                kwargs["text"] = group_text
+                kwargs["text"] = original_text
                 await context.bot.send_message(**kwargs)
-        except Exception as e:
-            logger.exception("Failed to post result to group from draft")
+        except Exception:
+            pass
+            
+    from handlers.cabinet import refresh_league_table, refresh_debts_summary
+    await refresh_debts_summary(context)
+    await refresh_league_table(context)
+
+async def cb_draft_reject(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query: return
+    await query.answer()
+    
+    if not is_admin(query.from_user.id):
+        await query.answer("Только администратор может отклонять черновики!", show_alert=True)
+        return
+        
+    draft_uuid = query.data.replace("draft_rej_", "")
+    drafts = context.bot_data.get("drafts", {})
+    drafts.pop(draft_uuid, None)
+    
+    original_text = query.message.caption if query.message.photo else query.message.text
+    new_caption = (original_text or "") + "\n\n❌ <b>Черновик отклонен администратором.</b>"
+    if query.message.photo: await query.edit_message_caption(caption=new_caption, parse_mode="HTML")
+    else: await query.edit_message_text(text=new_caption, parse_mode="HTML")
