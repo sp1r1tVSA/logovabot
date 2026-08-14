@@ -1901,6 +1901,11 @@ def build_formatted_match_post(
                 if s_row["winner_name"]:
                     series_info_text += f"\n🏆 <b>Победитель серии: {safe_escape(s_row['winner_name'])}! Проходит в следующий раунд!</b>"
 
+    p1_clean = safe_escape(p1_username.lstrip('@')) if p1_username else ""
+    p2_clean = safe_escape(p2_username.lstrip('@')) if p2_username else ""
+    p1_str = f" (@{p1_clean})" if p1_clean else ""
+    p2_str = f" (@{p2_clean})" if p2_clean else ""
+
     if is_cup:
         title_stage = f"{cup_stage} Финала" if cup_stage != "final" else "ФИНАЛ"
         if is_draft:
@@ -1920,10 +1925,6 @@ def build_formatted_match_post(
             )
             footer = "\n\n📊 <i>Сетка Кубка и статистика игроков обновлены.</i>"
         else:
-            p1_clean = safe_escape(p1_username.lstrip('@')) if p1_username else ""
-            p2_clean = safe_escape(p2_username.lstrip('@')) if p2_username else ""
-            p1_str = f" (@{p1_clean})" if p1_clean else ""
-            p2_str = f" (@{p2_clean})" if p2_clean else ""
             header = (
                 f"🏆 <b>КУБОК КПЛ | {title_stage} (Игра {g_num})</b>\n\n"
                 f"🏠 <b>{home_team_esc}</b>{p1_str} <b>{h_score} : {a_score}</b> <b>{away_team_esc}</b>{p2_str} ✈️"
@@ -1946,10 +1947,6 @@ def build_formatted_match_post(
             )
             footer = "\n\n📊 <i>Турнирная таблица и статистика игроков обновлены.</i>"
         else:
-            p1_clean = safe_escape(p1_username.lstrip('@')) if p1_username else ""
-            p2_clean = safe_escape(p2_username.lstrip('@')) if p2_username else ""
-            p1_str = f" (@{p1_clean})" if p1_clean else ""
-            p2_str = f" (@{p2_clean})" if p2_clean else ""
             header = (
                 f"🏆 <b>РЕЗУЛЬТАТ МАТЧА | Тур {round_number}</b>\n\n"
                 f"🏠 <b>{home_team_esc}</b>{p1_str} <b>{h_score} : {a_score}</b> <b>{away_team_esc}</b>{p2_str} ✈️"
