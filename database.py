@@ -1434,6 +1434,17 @@ def clear_squad(team_name: str) -> int:
         return cursor.rowcount
 
 
+def remove_player_from_squad(team_name: str, player_name: str) -> bool:
+    """Remove a single player from a club's squad."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "DELETE FROM squad_players WHERE LOWER(team_name) = LOWER(?) AND LOWER(player_name) = LOWER(?)",
+            (team_name.strip(), player_name.strip())
+        )
+        return cursor.rowcount > 0
+
+
 def get_missing_squad_players(team_name: str) -> list[str]:
     """Return player names that appear in match_events for a club but are absent from its squad."""
     with transaction() as conn:

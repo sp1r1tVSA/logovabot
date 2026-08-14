@@ -2703,6 +2703,7 @@ async def admin_view_squad(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     keyboard = [
         [InlineKeyboardButton("📊 Загрузить состав", callback_data=f"admin_squad_upload_{club}")],
         [InlineKeyboardButton("➕ Добавить игрока", callback_data=f"admin_squad_add_player_{club}")],
+        [InlineKeyboardButton("➖ Удалить игрока", callback_data=f"admin_squad_rm_menu_{club}")],
         [InlineKeyboardButton("➕ Добавить игроков из матчей", callback_data=f"admin_squad_add_missing_{club}")],
         [InlineKeyboardButton("🗑️ Очистить состав", callback_data=f"admin_squad_clear_{club}")],
         [InlineKeyboardButton("« Назад к клубам", callback_data="admin_manage_squads")]
@@ -2823,6 +2824,114 @@ async def admin_squad_clear(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     text = f"🗑️ Состав команды <b>{html.escape(club)}</b> очищен. Удалено игроков: <b>{deleted}</b>."
     keyboard = [[InlineKeyboardButton("« Назад к клубам", callback_data="admin_manage_squads")]]
+    await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+@admin_only
+async def admin_squad_rm_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show list of players in the club's squad with delete buttons."""
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+    if not is_admin(query.from_user.id):
+        await query.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    club = query.data.replace("admin_squad_rm_menu_", "")
+    squad = await asyncio.to_thread(database.get_squad, club)
+
+    if not squad:
+        text = f"👥 <b>Состав команды {html.escape(club)}:</b>\n\n<i>Состав пуст.</i>"
+        keyboard = [[InlineKeyboardButton("« Назад к составу", callback_data=f"admin_squad_view_{club}")]]
+        await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+
+    context.user_data[f"rm_squad_{club}"] = squad
+
+    text = (
+        f"🗑️ <b>Удаление игрока из состава {html.escape(club)}</b>\n\n"
+        f"Нажмите на игрока, которого хотите удалить:"
+    )
+
+    keyboard = []
+    row = []
+    for idx, player in enumerate(squad):
+        row.append(InlineKeyboardButton(f"❌ {player}", callback_data=f"admin_squad_del_p_{club}_{idx}"))
+        if len(row) == 2:
+            keyboard.append(row)
+            row = []
+    if row:
+        keyboard.append(row)
+
+    keyboard.append([InlineKeyboardButton("« Назад к составу", callback_data=f"admin_squad_view_{club}")])
+    await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+@admin_only
+async def admin_squad_del_player(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Delete selected player from club squad."""
+    query = update.callback_query
+    if not query:
+        return
+    if not is_admin(query.from_user.id):
+        await query.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    data_parts = query.data.replace("admin_squad_del_p_", "").rsplit("_", 1)
+    if len(data_parts) != 2:
+        await query.answer("❌ Ошибка данных.")
+        return
+
+    club, idx_str = data_parts
+    try:
+        idx = int(idx_str)
+    except ValueError:
+        await query.answer("❌ Неверный индекс.")
+        return
+
+    squad = context.user_data.get(f"rm_squad_{club}")
+    if not squad or idx >= len(squad):
+        squad = await asyncio.to_thread(database.get_squad, club)
+
+    if not squad or idx >= len(squad):
+        await query.answer("❌ Игрок не найден.")
+        return
+
+    player_name = squad[idx]
+    success = await asyncio.to_thread(database.remove_player_from_squad, club, player_name)
+
+    if success:
+        await query.answer(f"✅ Игрок {player_name} удален из {club}!", show_alert=False)
+    else:
+        await query.answer("❌ Не удалось удалить игрока.")
+
+    new_squad = await asyncio.to_thread(database.get_squad, club)
+    context.user_data[f"rm_squad_{club}"] = new_squad
+
+    if not new_squad:
+        text = f"👥 <b>Состав команды {html.escape(club)} теперь пуст.</b>"
+        keyboard = [[InlineKeyboardButton("« Назад к составу", callback_data=f"admin_squad_view_{club}")]]
+        await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+
+    text = (
+        f"🗑️ <b>Удаление игрока из состава {html.escape(club)}</b>\n\n"
+        f"Игрок <b>{html.escape(player_name)}</b> успешно удален!\n"
+        f"Выберите следующего игрока для удаления или вернитесь назад:"
+    )
+
+    keyboard = []
+    row = []
+    for i, player in enumerate(new_squad):
+        row.append(InlineKeyboardButton(f"❌ {player}", callback_data=f"admin_squad_del_p_{club}_{i}"))
+        if len(row) == 2:
+            keyboard.append(row)
+            row = []
+    if row:
+        keyboard.append(row)
+
+    keyboard.append([InlineKeyboardButton("« Назад к составу", callback_data=f"admin_squad_view_{club}")])
     await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
 
 

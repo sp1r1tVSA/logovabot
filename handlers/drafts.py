@@ -173,8 +173,18 @@ async def _process_draft_group_delayed(media_group_id: str, update: Update, cont
     
     draft_data = {
         "match_id": match_id,
+        "round_number": match.get('round_number'),
+        "home_team": home_team,
+        "away_team": away_team,
         "h_score": h_score,
         "a_score": a_score,
+        "p1_username": match.get('player1_username', 'Хозяева'),
+        "p2_username": match.get('player2_username', 'Гости'),
+        "h_goals": h_goals,
+        "a_goals": a_goals,
+        "h_assists": h_assists,
+        "a_assists": a_assists,
+        "is_single_timeline": is_single_timeline,
         "events": events,
         "reporter_id": user_id,
         "photo_id": photo_id_to_save
@@ -198,7 +208,8 @@ async def _process_draft_group_delayed(media_group_id: str, update: Update, cont
         a_assists=a_assists,
         is_single_timeline=is_single_timeline,
         is_pm=False,
-        match_id=match_id
+        match_id=match_id,
+        is_draft=True
     )
 
     keyboard = [
@@ -271,11 +282,32 @@ async def cb_draft_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         else: await query.edit_message_text(text="❌ Ошибка при сохранении матча в базу.")
         return
         
+    admin_name = f"@{query.from_user.username}" if query.from_user.username else (query.from_user.first_name or "Администратор")
     original_text = query.message.caption if query.message.photo else query.message.text
-    new_caption = (original_text or "") + "\n\n✅ <b>Одобрено администратором.</b>"
+    cleaned_text = (original_text or "").replace("⏳ <i>Ожидает подтверждения администратором...</i>", "").strip()
+    new_caption = f"{cleaned_text}\n\n✅ <b>Одобрено администратором {html.escape(admin_name)}.</b>"
     if query.message.photo: await query.edit_message_caption(caption=new_caption, parse_mode="HTML")
     else: await query.edit_message_text(text=new_caption, parse_mode="HTML")
         
+    # Build clean official post for Results topic
+    official_group_text = build_formatted_match_post(
+        round_number=draft.get('round_number'),
+        home_team=draft.get('home_team'),
+        away_team=draft.get('away_team'),
+        h_score=draft.get('h_score'),
+        a_score=draft.get('a_score'),
+        p1_username=draft.get('p1_username'),
+        p2_username=draft.get('p2_username'),
+        h_goals=draft.get('h_goals'),
+        a_goals=draft.get('a_goals'),
+        h_assists=draft.get('h_assists'),
+        a_assists=draft.get('a_assists'),
+        is_single_timeline=draft.get('is_single_timeline', False),
+        is_pm=False,
+        match_id=match_id,
+        is_draft=False
+    )
+
     main_group_id = await asyncio.to_thread(database.get_group_id)
     results_topic_id = (await asyncio.to_thread(database.get_config, "results_topic_id")) or (await asyncio.to_thread(database.get_config, "reports_topic_id"))
     
@@ -285,10 +317,10 @@ async def cb_draft_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             if results_topic_id: kwargs["message_thread_id"] = int(results_topic_id)
             if draft["photo_id"]:
                 kwargs["photo"] = draft["photo_id"]
-                kwargs["caption"] = original_text
+                kwargs["caption"] = official_group_text
                 await context.bot.send_photo(**kwargs)
             else:
-                kwargs["text"] = original_text
+                kwargs["text"] = official_group_text
                 await context.bot.send_message(**kwargs)
         except Exception:
             pass
@@ -310,7 +342,9 @@ async def cb_draft_reject(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     drafts = context.bot_data.get("drafts", {})
     drafts.pop(draft_uuid, None)
     
+    admin_name = f"@{query.from_user.username}" if query.from_user.username else (query.from_user.first_name or "Администратор")
     original_text = query.message.caption if query.message.photo else query.message.text
-    new_caption = (original_text or "") + "\n\n❌ <b>Черновик отклонен администратором.</b>"
+    cleaned_text = (original_text or "").replace("⏳ <i>Ожидает подтверждения администратором...</i>", "").strip()
+    new_caption = f"{cleaned_text}\n\n❌ <b>Черновик отклонен администратором {html.escape(admin_name)}.</b>"
     if query.message.photo: await query.edit_message_caption(caption=new_caption, parse_mode="HTML")
     else: await query.edit_message_text(text=new_caption, parse_mode="HTML")

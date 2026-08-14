@@ -1836,7 +1836,8 @@ def build_formatted_match_post(
     is_single_timeline: bool = False,
     is_pm: bool = False,
     pm_title: str = "🎉 <b>Результат успешно занесен в лигу!</b>",
-    match_id: int | None = None
+    match_id: int | None = None,
+    is_draft: bool = False
 ) -> str:
     """
     Constructs a unified match result text block with goals and assists for PM notifications and group posts.
@@ -1902,7 +1903,14 @@ def build_formatted_match_post(
 
     if is_cup:
         title_stage = f"{cup_stage} Финала" if cup_stage != "final" else "ФИНАЛ"
-        if is_pm:
+        if is_draft:
+            header = (
+                f"📝 <b>ЧЕРНОВИК РЕЗУЛЬТАТА | КУБОК КПЛ - {title_stage} (Игра {g_num})</b>\n\n"
+                f"🏠 <b>{home_team_esc}</b>{p1_str} <b>{h_score} : {a_score}</b> <b>{away_team_esc}</b>{p2_str} ✈️"
+                f"{series_info_text}"
+            )
+            footer = "\n\n⏳ <i>Ожидает подтверждения администратором...</i>"
+        elif is_pm:
             match_id_str = f" #{match_id}" if match_id else ""
             header = (
                 f"🏆 <b>Результат кубкового матча занесен!</b>\n\n"
@@ -1923,7 +1931,13 @@ def build_formatted_match_post(
             )
             footer = "\n\n📸 <i>Результат официально занесен в сетку Кубка КПЛ.</i>"
     else:
-        if is_pm:
+        if is_draft:
+            header = (
+                f"📝 <b>ЧЕРНОВИК РЕЗУЛЬТАТА | Тур {round_number}</b>\n\n"
+                f"🏠 <b>{home_team_esc}</b>{p1_str} <b>{h_score} : {a_score}</b> <b>{away_team_esc}</b>{p2_str} ✈️"
+            )
+            footer = "\n\n⏳ <i>Ожидает подтверждения администратором...</i>"
+        elif is_pm:
             match_id_str = f" #{match_id}" if match_id else ""
             header = (
                 f"{pm_title}\n\n"
