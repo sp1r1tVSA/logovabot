@@ -1489,6 +1489,13 @@ def amnesty_player(user_id: int, admin_id: int) -> None:
 
 # --- Squad management ---
 
+def get_all_teams() -> list[str]:
+    """Retrieve all unique team names from users table."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT DISTINCT team_name FROM users WHERE team_name IS NOT NULL AND team_name != ''")
+        return [r[0] for r in cursor.fetchall()]
+
 def add_squad(team_name: str, player_names: list[str]) -> int:
     """Add players to a club's squad. Returns count of newly added players."""
     added = 0

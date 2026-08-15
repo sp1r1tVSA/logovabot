@@ -29,6 +29,21 @@ def match_squad_player_names(raw_players: list[str], squad_list: list[str]) -> d
         counts[matched_name] = counts.get(matched_name, 0) + 1
     return counts
 
+def _normalize_name_translit(text: str) -> str:
+    CYR_LAT_MAP = {
+        'а': 'a', 'б': 'b', 'в': 'v', 'г': 'g', 'д': 'd', 'е': 'e', 'ё': 'e', 'ж': 'zh',
+        'з': 'z', 'и': 'i', 'й': 'y', 'к': 'k', 'л': 'l', 'м': 'm', 'н': 'n', 'о': 'o',
+        'п': 'p', 'р': 'r', 'с': 's', 'т': 't', 'у': 'u', 'ф': 'f', 'х': 'h', 'ц': 'c',
+        'ч': 'ch', 'ш': 'sh', 'щ': 'sh', 'ъ': '', 'ы': 'y', 'ь': '', 'э': 'e', 'ю': 'yu',
+        'я': 'ya', 'á': 'a', 'à': 'a', 'ã': 'a', 'â': 'a', 'é': 'e', 'ê': 'e', 'í': 'i',
+        'ó': 'o', 'õ': 'o', 'ô': 'o', 'ú': 'u', 'ç': 'c', 'ø': 'o', 'æ': 'ae', 'ñ': 'n'
+    }
+    t = text.lower().strip()
+    res = []
+    for ch in t:
+        res.append(CYR_LAT_MAP.get(ch, ch))
+    return "".join(res)
+
 def match_and_enrich_squad(raw_side1_goals: list[str], raw_side2_goals: list[str], raw_side1_assists: list[str], raw_side2_assists: list[str], home_team: str, away_team: str, is_single_timeline: bool = False):
     """
     Handles both screenshot formats:
@@ -42,13 +57,17 @@ def match_and_enrich_squad(raw_side1_goals: list[str], raw_side2_goals: list[str
         if not raw_name:
             return None
         raw_lower = raw_name.lower().strip()
+        raw_norm = _normalize_name_translit(raw_lower)
         for squad_p in squad_list:
             sp_lower = squad_p.lower().strip()
+            sp_norm = _normalize_name_translit(sp_lower)
             if raw_lower == sp_lower or raw_lower in sp_lower or sp_lower in raw_lower:
                 return squad_p
-            raw_parts = raw_lower.split()
-            sp_parts = sp_lower.split()
-            if any(p in sp_parts for p in raw_parts if len(p) > 2):
+            if raw_norm == sp_norm or raw_norm in sp_norm or sp_norm in raw_norm:
+                return squad_p
+            raw_parts = raw_norm.split()
+            sp_parts = sp_norm.split()
+            if any(p in sp_parts or any(p in spp or spp in p for spp in sp_parts) for p in raw_parts if len(p) > 2):
                 return squad_p
         return None
 

@@ -108,11 +108,24 @@ async def _process_draft_group_delayed(buffer_key: str, update: Update, context:
         reply_to_message_id=reply_to_id
     )
     
+    squad_hints = {}
+    if caption:
+        try:
+            all_teams = await asyncio.to_thread(database.get_all_teams)
+            for t in all_teams:
+                if t.lower() in caption.lower():
+                    sq = await asyncio.to_thread(database.get_squad, t)
+                    if sq:
+                        squad_hints[t] = sq
+        except Exception as e:
+            logger.warning(f"Failed to load squad hints from DB: {e}")
+
     try:
         ai_res = await asyncio.to_thread(
             recognize_match_screenshots_bytes,
             photos,
-            caption=caption
+            caption=caption,
+            squad_hints=squad_hints
         )
     except Exception as e:
         logger.exception("Error in draft AI processing")

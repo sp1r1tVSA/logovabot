@@ -24,14 +24,15 @@ PROMPT_TEXT = """
 Твоя единственная задача — БУКВАЛЬНО считать голы, ассисты и счёт с экрана, НЕ ПЫТАЯСЬ угадывать логику матча.
 
 ⚠️ ИГНОРИРУЙ любые клубные эмблемы и названия лиг на самом скриншоте (например, Trafic Family FC, НЕТ ЛИГИ, Champions Clups).
-⚠️ НАЗВАНИЯ КОМАНД (team1 и team2):
+⚠️ НАЗВАНИЯ КОМАНД (team1 и team2) И СОПОСТАВЛЕНИЕ ПО СОСТАВАМ:
 - Бери названия команд из текста подписи пользователя (например, Брага и Бенфика).
-- ОПРЕДЕЛЕНИЕ СТОРОН (КТО СЛЕВА / team1, А КТО СПРАВА / team2):
-  - Посмотри на имена игроков в составах/голах и сопоставь с подсказками в подписи:
-    Например, если в подписи написано «Гол Браги Рикардо Орта», а игрок Ricardo Horta играет в левой колонке — значит ЛЕВАЯ команда (team1) — это Брага!
-    А если игроки Родриго, Жоау Педро, Igor Paixão играют в правой колонке — значит ПРАВАЯ команда (team2) — это Бенфика!
-  - `team1` — это ВСЕГДА команда, играющая СЛЕВА на скриншоте (чей счёт `left_score`, голы `left_goals` и ассисты `left_assists`).
-  - `team2` — это ВСЕГДА команда, играющая СПРАВА на скриншоте (чей счёт `right_score`, голы `right_goals` и ассисты `right_assists`).
+- Если переданы официальные составы клубов из базы данных:
+  1. Сравни имена игроков на скриншоте (в колонке голов или таблице статистики) со списками составов:
+     - Если игроки на ЛЕВОЙ стороне скриншота входят в состав клуба «Брага» ➔ значит ЛЕВАЯ команда (`team1`) = "Брага"!
+     - Если игроки на ПРАВОЙ стороне скриншота входят в состав клуба «Бенфика» ➔ значит ПРАВАЯ команда (`team2`) = "Бенфика"!
+  2. Нормализуй имена авторов голов и ассистов в точном соответствии с базой данных (например, `Родриго` ➔ `Rodrygo`, `Жоау Педро` ➔ `João Pedro`, `Рикардо Орта` ➔ `Ricardo Horta`).
+- `team1` — это ВСЕГДА команда, играющая СЛЕВА на скриншоте (чей счёт `left_score`, голы `left_goals` и ассисты `left_assists`).
+- `team2` — это ВСЕГДА команда, играющая СПРАВА на скриншоте (чей счёт `right_score`, голы `right_goals` и ассисты `right_assists`).
 
 ---
 
@@ -167,7 +168,13 @@ def _get_gemini_opener():
     # Explicitly disable proxy for direct connection if proxy is inactive/down
     return urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
-def recognize_match_screenshots_bytes(images_bytes_list: list[bytes], mime_type: str = "image/jpeg", api_key: str = None, caption: str = "") -> dict | None:
+def recognize_match_screenshots_bytes(
+    images_bytes_list: list[bytes], 
+    mime_type: str = "image/jpeg", 
+    api_key: str = None, 
+    caption: str = "",
+    squad_hints: dict[str, list[str]] = None
+) -> dict | None:
     target_api_key = (api_key or config.GEMINI_API_KEY).strip()
 
     if not target_api_key:
@@ -182,6 +189,11 @@ def recognize_match_screenshots_bytes(images_bytes_list: list[bytes], mime_type:
     for m_name in GEMINI_MODELS:
         try:
             prompt_with_caption = PROMPT_TEXT
+            if squad_hints:
+                prompt_with_caption += "\n\n--- ОФИЦИАЛЬНЫЕ СОСТАВЫ КЛУБОВ ИЗ БАЗЫ ДАННЫХ ---\n"
+                for tname, splayers in squad_hints.items():
+                    if splayers:
+                        prompt_with_caption += f"• Клуб «{tname}»: {', '.join(splayers)}\n"
             if caption:
                 prompt_with_caption += f"\n\n--- ПОДПИСЬ ПОЛЬЗОВАТЕЛЯ ---\n{caption}"
                 
