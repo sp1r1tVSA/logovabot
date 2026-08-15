@@ -1,6 +1,7 @@
 import logging
 import sqlite3
 import datetime
+import re
 from typing import Generator
 from contextlib import contextmanager
 from config import DB_PATH
@@ -687,29 +688,48 @@ def save_match_events(match_id: int, events: list[tuple[str, str, int]], team_na
                 (match_id, t_name, p_name, e_type, cnt)
             )
 
-def get_active_match_by_teams(team1: str, team2: str) -> dict | None:
-    """Find an active (pending/reported/disputed) match given two team names."""
+def get_active_match_by_teams(team1: str, team2: str, caption: str | None = None) -> dict | None:
+    """Find an active (pending/reported/disputed) match given two team names and optional caption."""
     if not team1 or not team2:
         return None
     
-    # We will search by lowercasing and basic string matching
     t1_lower = team1.lower().strip()
     t2_lower = team2.lower().strip()
+    
+    caption_clean = (caption or "").lower()
+    
+    # Detect Cup keywords (including typos like 'кубак')
+    cup_keywords = [
+        "кубок", "кубак", "кубк", "кубка", "кубке", "cup",
+        "1/8", "1/4", "1/2", "полуфинал", "финал", "плей-офф", "плейофф", "playoff", "1/16"
+    ]
+    is_cup_hint = any(w in caption_clean for w in cup_keywords)
+    
+    # Detect specific Round number (e.g. "16 тур", "тур 16", "25 тур")
+    round_match = re.search(r'(?:тур|турн|round|r|т|раунд)\s*[:\.\-—#]?\s*(\d+)', caption_clean)
+    if not round_match:
+        round_match = re.search(r'(\d+)\s*[:\.\-—#]?\s*(?:тур|round|раунд)', caption_clean)
+    target_round = int(round_match.group(1)) if round_match else None
     
     with transaction() as conn:
         cursor = conn.cursor()
         cursor.execute("""
             SELECT 
-                m.id, m.status, 
+                m.id, m.status, m.tournament_type, m.round_number, m.cup_stage, m.cup_series_id, m.game_num_in_series,
                 m.player1_team AS direct_p1_team, m.player2_team AS direct_p2_team,
-                u1.team_name AS u1_team, u2.team_name AS u2_team
+                u1.team_name AS u1_team, u2.team_name AS u2_team,
+                COALESCE(r.is_open, 0) AS is_round_open,
+                COALESCE(s.status, '') AS series_status
             FROM matches m
             LEFT JOIN users u1 ON LOWER(m.player1_team) = LOWER(u1.team_name)
             LEFT JOIN users u2 ON LOWER(m.player2_team) = LOWER(u2.team_name)
+            LEFT JOIN rounds r ON m.round_number = r.round_number AND (m.tournament_type IS NULL OR m.tournament_type = 'league')
+            LEFT JOIN cup_series s ON m.cup_series_id = s.id
             WHERE m.status IN ('pending', 'reported', 'disputed')
         """)
         rows = cursor.fetchall()
         
+        candidates = []
         for row in rows:
             d = dict(row)
             p1 = (d['direct_p1_team'] or d['u1_team'] or "").lower()
@@ -718,13 +738,48 @@ def get_active_match_by_teams(team1: str, team2: str) -> dict | None:
             if not p1 or not p2:
                 continue
             
-            # Simple substring match (since sometimes team is "Бока" instead of "Бока Хуниорс")
+            # Substring match for team names
+            is_match = False
             if (t1_lower in p1 and t2_lower in p2) or (p1 in t1_lower and p2 in t2_lower):
-                return get_match(d['id'])
-            if (t1_lower in p2 and t2_lower in p1) or (p1 in t2_lower and p2 in t1_lower):
-                return get_match(d['id'])
+                is_match = True
+            elif (t1_lower in p2 and t2_lower in p1) or (p1 in t2_lower and p2 in t1_lower):
+                is_match = True
                 
-        return None
+            if is_match:
+                score = 0
+                t_type = d.get('tournament_type') or 'league'
+                
+                if is_cup_hint:
+                    if t_type == 'cup':
+                        score += 2000
+                        if d.get('series_status') == 'active':
+                            score += 500
+                    else:
+                        score -= 1000
+                else:
+                    if target_round is not None:
+                        if t_type == 'league' and d.get('round_number') == target_round:
+                            score += 2000
+                        elif t_type == 'league':
+                            score -= 500
+                    else:
+                        if t_type == 'league':
+                            if d.get('is_round_open') == 1:
+                                score += 500
+                            rn = d.get('round_number', 50)
+                            if rn > 0:
+                                score += max(0, 100 - rn)
+                        elif t_type == 'cup' and d.get('series_status') == 'active':
+                            score += 300
+
+                candidates.append((score, d['id']))
+                
+        if not candidates:
+            return None
+            
+        candidates.sort(key=lambda x: x[0], reverse=True)
+        best_match_id = candidates[0][1]
+        return get_match(best_match_id)
 
 def get_match_events(match_id: int) -> list[dict]:
     """Retrieve all events (goals/assists) for a match, aggregated by team, player, and event_type."""

@@ -121,7 +121,7 @@ async def _process_draft_group_delayed(media_group_id: str, update: Update, cont
         return
         
     # Search for match
-    match = database.get_active_match_by_teams(t1, t2)
+    match = database.get_active_match_by_teams(t1, t2, caption=caption)
     if not match:
         await status_msg.edit_text(f"❌ Не найден активный матч между командами {html.escape(t1)} и {html.escape(t2)}.\nВозможно, названия команд в подписи указаны неточно.")
         return
