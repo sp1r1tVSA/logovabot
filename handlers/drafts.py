@@ -397,8 +397,7 @@ async def cb_draft_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     for idx, g in enumerate(games):
         m_id = g.get("match_id")
         if not m_id and s_id:
-            cup_m = await asyncio.to_thread(database.get_cup_match_by_series_and_game, s_id, g.get("game_num", idx + 1))
-            m_id = cup_m["id"] if cup_m else None
+            m_id = await asyncio.to_thread(database.ensure_cup_match_exists, s_id, g.get("game_num", idx + 1))
             
         if not m_id:
             logger.error(f"Could not resolve match_id for game {idx+1}")

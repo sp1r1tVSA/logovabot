@@ -33,12 +33,13 @@ PROMPT_TEXT = """
 Изображений может быть ОДНО или НЕСКОЛЬКО (до 3). Для КАЖДОГО изображения СНАЧАЛА определи его тип ПО СОДЕРЖИМОМУ, а не по порядку отправки:
 
 **ТИП 1 — «ВЕРТИКАЛЬНАЯ КОЛОНКА ГОЛОВ»:**
-- В верхней части скриншота показан счёт матча (крупные цифры).
+- В верхней части скриншота показан счёт матча (крупные цифры по центру, например `3 - 0`).
 - Ниже идёт ВЕРТИКАЛЬНЫЙ список имён футболистов — это ИГРОКИ, ЗАБИВШИЕ ГОЛЫ.
-- В таком списке НЕТ разделения на голы/ассисты и НЕТ столбцов `Г` / `А`.
-- ВАЖНО ДЛЯ ТИП 1 (РАСПРЕДЕЛЕНИЕ ГОЛОВ): Обрати внимание на ЦВЕТ кружка (или логотип) рядом с именем автора гола в списке, а также на цвет полосок статистики (например, Shots, Possession) у левой и правой команд на экране. Обычно левая команда имеет ЗЕЛЁНЫЙ цвет, а правая — СИНИЙ. Если кружок зелёный — это гол левой команды (`left_goals`). Если синий — правой (`right_goals`). Тщательно сопоставляй цвет кружка с цветом команды!
+⚠️ ВАЖНО: В игре EA FC Mobile список авторов голов ВСЕГДА отображается в правой части экрана, независимо от того, кто забил!
+- Сторона гола определяется по ЦВЕТУ КРУЖКА рядом с голом: ЗЕЛЁНЫЙ кружок = гол левой команды (`left_goals`), СИНИЙ кружок = гол правой команды (`right_goals`).
+- СВЕРКА СО СЧЁТОМ НА ТАБЛО: Если счёт 3 - 0 (левая команда 3, правая 0), значит ВСЕ 3 гола со скриншота ОБЯЗАНЫ попасть в `left_goals`, а `right_goals` должен быть пустым `[]`!
+- КРОСС-ПРОВЕРКА: Количество элементов в `left_goals` ОБЯЗАНО в точности равняться `left_score`, а в `right_goals` — `right_score`!
 - ИГНОРИРУЙ раздел "ПЕНАЛЬТИ" (если он есть в списке). Игроков, забивших послематчевые пенальти, в списки `left_goals` и `right_goals` добавлять НЕ НУЖНО.
-- Из этого типа берутся ТОЛЬКО: `left_score`, `right_score` и имена забивших в `left_goals` / `right_goals` (кроме пенальти).
 - `left_assists` / `right_assists` из этого типа = пустые списки.
 
 **ТИП 2 — «ТАБЛИЦА СТАТИСТИКИ»:**
@@ -96,11 +97,12 @@ PROMPT_TEXT = """
 
 ---
 
-### ЭТАП 3: ОПРЕДЕЛЕНИЕ МАТЧЕЙ (ОДИН ИЛИ НЕСКОЛЬКО)
+### ЭТАП 3: ОПРЕДЕЛЕНИЕ МАТЧЕЙ (ОДИН, НЕСКОЛЬКО ИЛИ ИЗ ТЕКСТА ПОДПИСИ)
 
-Изображений может быть несколько:
-- **РАЗНЫЕ МАТЧИ** (например, две игры серии кубка: Игра 1 со счётом 3-2 и Игра 2 со счётом 2-1): обработай каждый матч отдельно и верни их в массиве `matches`.
+- **РАЗНЫЕ МАТЧИ** (например, Игра 1 со счётом 3-0 и Игра 2 со счётом 4-2): обработай каждый матч отдельно и верни их в массиве `matches`.
 - **ОДИН МАТЧ** (например, два скриншота одной игры: вертикальная колонка голов и таблица статистики с одинаковым счётом): объедини голы и ассисты в один объект в массиве `matches`.
+- ⚠️ **МАТЧИ, ОПИСАННЫЕ В ТЕКСТЕ ПОДПИСИ**:
+  Если в тексте подписи пользователя описан дополнительный матч (например: «3 матч в пользу Бенфики 1:2, Голы Родриго, Жоау Педро, Гол Браги Рикардо Орта»), ОБЯЗАТЕЛЬНО извлеки его и добавь отдельным объектом в массив `matches` (со счётом 2-1 и авторами голов из текста)!
 
 ---
 
@@ -229,13 +231,25 @@ def recognize_match_screenshots_bytes(images_bytes_list: list[bytes], mime_type:
                         m.setdefault("right_assists", [])
                         m.setdefault("is_single_timeline", False)
 
+                        # Cross-check and side swap if goals were put on the wrong side
+                        if m["left_score"] > 0 and m["right_score"] == 0:
+                            if len(m["left_goals"]) == 0 and len(m["right_goals"]) > 0:
+                                m["left_goals"], m["right_goals"] = m["right_goals"], m["left_goals"]
+                            if len(m["left_assists"]) == 0 and len(m["right_assists"]) > 0:
+                                m["left_assists"], m["right_assists"] = m["right_assists"], m["left_assists"]
+                        elif m["right_score"] > 0 and m["left_score"] == 0:
+                            if len(m["right_goals"]) == 0 and len(m["left_goals"]) > 0:
+                                m["left_goals"], m["right_goals"] = m["right_goals"], m["left_goals"]
+                            if len(m["right_assists"]) == 0 and len(m["left_assists"]) > 0:
+                                m["left_assists"], m["right_assists"] = m["right_assists"], m["left_assists"]
+
                         # Совместимость
-                        m.setdefault("home_score", m["left_score"])
-                        m.setdefault("away_score", m["right_score"])
-                        m.setdefault("side1_goals", m["left_goals"])
-                        m.setdefault("side2_goals", m["right_goals"])
-                        m.setdefault("side1_assists", m["left_assists"])
-                        m.setdefault("side2_assists", m["right_assists"])
+                        m["home_score"] = m["left_score"]
+                        m["away_score"] = m["right_score"]
+                        m["side1_goals"] = m["left_goals"]
+                        m["side2_goals"] = m["right_goals"]
+                        m["side1_assists"] = m["left_assists"]
+                        m["side2_assists"] = m["right_assists"]
 
                         if m["left_score"] == 0 and len(m["left_goals"]) > 0:
                             m["left_score"] = len(m["left_goals"])
@@ -246,7 +260,6 @@ def recognize_match_screenshots_bytes(images_bytes_list: list[bytes], mime_type:
                             m["away_score"] = len(m["right_goals"])
 
                     parsed_data["matches"] = matches_list
-                    # Copy first match properties to top level for legacy callers
                     first_m = matches_list[0]
                     for k, v in first_m.items():
                         if k != "matches":

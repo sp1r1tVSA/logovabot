@@ -2053,6 +2053,43 @@ def get_cup_match_by_series_and_game(series_id: int, game_num: int) -> dict | No
             return get_match(r[0])
         return None
 
+def ensure_cup_match_exists(cup_series_id: int, game_num: int) -> int | None:
+    """Ensure a match row exists for the given cup series and game number, and return its match_id."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM matches WHERE cup_series_id = ? AND game_num_in_series = ?", (cup_series_id, game_num))
+        r = cursor.fetchone()
+        if r:
+            return r[0]
+        
+        cursor.execute("SELECT * FROM cup_series WHERE id = ?", (cup_series_id,))
+        series = cursor.fetchone()
+        if not series:
+            return None
+        
+        stage = series["stage"]
+        t1_name = series["team1_name"]
+        t2_name = series["team2_name"]
+        
+        if game_num % 2 == 0:
+            hp_team, ap_team = t2_name, t1_name
+        else:
+            hp_team, ap_team = t1_name, t2_name
+            
+        cursor.execute("SELECT telegram_id FROM users WHERE LOWER(team_name) = LOWER(?)", (hp_team.strip(),))
+        r1 = cursor.fetchone()
+        hp_id = r1[0] if r1 else None
+        
+        cursor.execute("SELECT telegram_id FROM users WHERE LOWER(team_name) = LOWER(?)", (ap_team.strip(),))
+        r2 = cursor.fetchone()
+        ap_id = r2[0] if r2 else None
+        
+        cursor.execute("""
+            INSERT INTO matches (round_number, player1_id, player2_id, player1_team, player2_team, status, tournament_type, cup_stage, cup_series_id, game_num_in_series)
+            VALUES (-1, ?, ?, ?, ?, 'pending', 'cup', ?, ?, ?)
+        """, (hp_id, ap_id, hp_team, ap_team, stage, cup_series_id, game_num))
+        return cursor.lastrowid
+
 def get_cup_top_scorers(limit: int = 20) -> list[dict]:
     """Get top goalscorers in the KPL Cup aggregated from match_events."""
     with transaction() as conn:
@@ -2108,7 +2145,7 @@ def process_cup_match_completion(match_id: int) -> str | None:
             
         cursor.execute("SELECT * FROM cup_series WHERE id = ?", (s_id,))
         series = cursor.fetchone()
-        if not series or series["status"] == "completed":
+        if not series:
             return None
             
         t1_name = series["team1_name"]
