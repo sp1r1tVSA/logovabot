@@ -2035,6 +2035,24 @@ def get_cup_series_list(stage: str = '1/8') -> list[dict]:
             
         return series_rows
 
+def get_cup_series(series_id: int) -> dict | None:
+    """Retrieve single cup series by id."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM cup_series WHERE id = ?", (series_id,))
+        r = cursor.fetchone()
+        return dict(r) if r else None
+
+def get_cup_match_by_series_and_game(series_id: int, game_num: int) -> dict | None:
+    """Retrieve match by cup series ID and game number."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM matches WHERE cup_series_id = ? AND game_num_in_series = ?", (series_id, game_num))
+        r = cursor.fetchone()
+        if r:
+            return get_match(r[0])
+        return None
+
 def get_cup_top_scorers(limit: int = 20) -> list[dict]:
     """Get top goalscorers in the KPL Cup aggregated from match_events."""
     with transaction() as conn:

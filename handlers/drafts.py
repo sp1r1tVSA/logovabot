@@ -123,116 +123,241 @@ async def _process_draft_group_delayed(buffer_key: str, update: Update, context:
         await status_msg.edit_text("🤖 ИИ не смог распознать результаты матча. Убедитесь, что скриншоты чёткие.")
         return
         
-    t1 = ai_res.get("team1")
-    t2 = ai_res.get("team2")
+    matches_list = ai_res.get("matches") or [ai_res]
     
+    # 1. Check team names
+    t1 = matches_list[0].get("team1")
+    t2 = matches_list[0].get("team2")
     if not t1 or not t2:
         await status_msg.edit_text("🤖 ИИ распознал счет, но не смог определить названия команд. Пожалуйста, напишите их текстом в описании к фото.")
         return
         
-    # Search for match
-    match = database.get_active_match_by_teams(t1, t2, caption=caption)
-    if not match:
+    # 2. Find first active match
+    first_match = database.get_active_match_by_teams(t1, t2, caption=caption)
+    if not first_match:
         await status_msg.edit_text(f"❌ Не найден активный матч между командами {html.escape(t1)} и {html.escape(t2)}.\nВозможно, названия команд в подписи указаны неточно.")
         return
-        
-    match_id = match["id"]
-    home_team = match["player1_team"] or match["player1_nickname"]
-    away_team = match["player2_team"] or match["player2_nickname"]
+
+    is_cup = first_match.get("tournament_type") == "cup"
+    s_id = first_match.get("cup_series_id")
+    cup_stage = first_match.get("cup_stage", "1/8")
     
-    s1_goals = ai_res.get("side1_goals") or ai_res.get("home_goals") or []
-    s2_goals = ai_res.get("side2_goals") or ai_res.get("away_goals") or []
-    s1_assists = ai_res.get("side1_assists") or ai_res.get("home_assists") or []
-    s2_assists = ai_res.get("side2_assists") or ai_res.get("away_assists") or []
-    is_single_timeline = bool(ai_res.get("is_single_timeline", False))
+    prepared_games = []
     
-    try:
-        h_goals, a_goals, h_assists, a_assists, is_side1_home = await asyncio.to_thread(
-            match_and_enrich_squad,
-            s1_goals, s2_goals, s1_assists, s2_assists,
-            home_team, away_team,
-            is_single_timeline=is_single_timeline,
-        )
-    except Exception as e:
-        logger.exception(f"Error matching squad in draft: {e}")
-        await status_msg.edit_text("❌ Ошибка при сопоставлении состава. Возможно, игроки не зарегистрированы.")
-        return
+    for idx, m_info in enumerate(matches_list):
+        if idx == 0:
+            cur_match = first_match
+        else:
+            if is_cup and s_id:
+                cur_match = database.get_cup_match_by_series_and_game(s_id, idx + 1)
+                if not cur_match:
+                    cur_match = {
+                        "id": None,
+                        "tournament_type": "cup",
+                        "cup_stage": cup_stage,
+                        "cup_series_id": s_id,
+                        "game_num_in_series": idx + 1,
+                        "round_number": -1,
+                        "player1_team": first_match["player2_team"] if (idx % 2 == 1) else first_match["player1_team"],
+                        "player2_team": first_match["player1_team"] if (idx % 2 == 1) else first_match["player2_team"],
+                        "player1_username": first_match.get("player2_username") if (idx % 2 == 1) else first_match.get("player1_username"),
+                        "player2_username": first_match.get("player1_username") if (idx % 2 == 1) else first_match.get("player2_username"),
+                    }
+            else:
+                cur_match = database.get_active_match_by_teams(t1, t2, caption=caption) or first_match
+
+        home_team = cur_match.get("player1_team") or cur_match.get("player1_nickname") or t1
+        away_team = cur_match.get("player2_team") or cur_match.get("player2_nickname") or t2
         
-    if is_side1_home:
-        h_score = int(ai_res.get("left_score", ai_res.get("home_score", sum(h_goals.values()))))
-        a_score = int(ai_res.get("right_score", ai_res.get("away_score", sum(a_goals.values()))))
-    else:
-        h_score = int(ai_res.get("right_score", ai_res.get("away_score", sum(h_goals.values()))))
-        a_score = int(ai_res.get("left_score", ai_res.get("home_score", sum(a_goals.values()))))
+        s1_goals = m_info.get("side1_goals") or m_info.get("home_goals") or []
+        s2_goals = m_info.get("side2_goals") or m_info.get("away_goals") or []
+        s1_assists = m_info.get("side1_assists") or m_info.get("home_assists") or []
+        s2_assists = m_info.get("side2_assists") or m_info.get("away_assists") or []
+        is_single_timeline = bool(m_info.get("is_single_timeline", False))
+        
+        try:
+            h_goals, a_goals, h_assists, a_assists, is_side1_home = await asyncio.to_thread(
+                match_and_enrich_squad,
+                s1_goals, s2_goals, s1_assists, s2_assists,
+                home_team, away_team,
+                is_single_timeline=is_single_timeline,
+            )
+        except Exception as e:
+            logger.exception(f"Error matching squad in draft: {e}")
+            await status_msg.edit_text("❌ Ошибка при сопоставлении состава. Возможно, игроки не зарегистрированы.")
+            return
             
-    events = []
-    for p, c in h_goals.items(): events.append((home_team, p, "goal", c))
-    for p, c in a_goals.items(): events.append((away_team, p, "goal", c))
-    for p, c in h_assists.items(): events.append((home_team, p, "assist", c))
-    for p, c in a_assists.items(): events.append((away_team, p, "assist", c))
-    
-    # Send draft preview with confirm/reject buttons
-    photo_id_to_save = photo_file_ids[0] if photo_file_ids else None
-    
+        if is_side1_home:
+            h_score = int(m_info.get("left_score", m_info.get("home_score", sum(h_goals.values()))))
+            a_score = int(m_info.get("right_score", m_info.get("away_score", sum(a_goals.values()))))
+        else:
+            h_score = int(m_info.get("right_score", m_info.get("away_score", sum(h_goals.values()))))
+            a_score = int(m_info.get("left_score", m_info.get("home_score", sum(a_goals.values()))))
+                
+        events = []
+        for p, c in h_goals.items(): events.append((home_team, p, "goal", c))
+        for p, c in a_goals.items(): events.append((away_team, p, "goal", c))
+        for p, c in h_assists.items(): events.append((home_team, p, "assist", c))
+        for p, c in a_assists.items(): events.append((away_team, p, "assist", c))
+
+        p1_un = cur_match.get('player1_username')
+        p2_un = cur_match.get('player2_username')
+        p1_clean = html.escape(p1_un.lstrip('@')) if p1_un else ""
+        p2_clean = html.escape(p2_un.lstrip('@')) if p2_un else ""
+        p1_str = f" (@{p1_clean})" if p1_clean else ""
+        p2_str = f" (@{p2_clean})" if p2_clean else ""
+
+        prepared_games.append({
+            "match_id": cur_match.get("id"),
+            "round_number": cur_match.get("round_number"),
+            "tournament_type": cur_match.get("tournament_type"),
+            "cup_stage": cur_match.get("cup_stage"),
+            "cup_series_id": s_id,
+            "game_num": cur_match.get("game_num_in_series", idx + 1),
+            "home_team": home_team,
+            "away_team": away_team,
+            "h_score": h_score,
+            "a_score": a_score,
+            "p1_username": p1_un,
+            "p2_username": p2_un,
+            "p1_str": p1_str,
+            "p2_str": p2_str,
+            "h_goals": h_goals,
+            "a_goals": a_goals,
+            "h_assists": h_assists,
+            "a_assists": a_assists,
+            "is_single_timeline": is_single_timeline,
+            "events": events,
+            "reporter_id": user_id,
+            "photo_id": photo_file_ids[idx] if idx < len(photo_file_ids) else (photo_file_ids[0] if photo_file_ids else None)
+        })
+
     import uuid
     draft_uuid = str(uuid.uuid4())[:8]
     
-    draft_data = {
-        "match_id": match_id,
-        "round_number": match.get('round_number'),
-        "home_team": home_team,
-        "away_team": away_team,
-        "h_score": h_score,
-        "a_score": a_score,
-        "p1_username": match.get('player1_username', 'Хозяева'),
-        "p2_username": match.get('player2_username', 'Гости'),
-        "h_goals": h_goals,
-        "a_goals": a_goals,
-        "h_assists": h_assists,
-        "a_assists": a_assists,
-        "is_single_timeline": is_single_timeline,
-        "events": events,
-        "reporter_id": user_id,
-        "photo_id": photo_id_to_save
-    }
+    is_multi = len(prepared_games) > 1
     
+    if not is_multi:
+        g = prepared_games[0]
+        draft_data = {
+            "is_multi": False,
+            "match_id": g["match_id"],
+            "round_number": g["round_number"],
+            "home_team": g["home_team"],
+            "away_team": g["away_team"],
+            "h_score": g["h_score"],
+            "a_score": g["a_score"],
+            "p1_username": g["p1_username"],
+            "p2_username": g["p2_username"],
+            "h_goals": g["h_goals"],
+            "a_goals": g["a_goals"],
+            "h_assists": g["h_assists"],
+            "a_assists": g["a_assists"],
+            "is_single_timeline": g["is_single_timeline"],
+            "events": g["events"],
+            "reporter_id": g["reporter_id"],
+            "photo_id": g["photo_id"],
+            "games": prepared_games
+        }
+        group_text = build_formatted_match_post(
+            round_number=g["round_number"],
+            home_team=g["home_team"],
+            away_team=g["away_team"],
+            h_score=g["h_score"],
+            a_score=g["a_score"],
+            p1_username=g["p1_username"],
+            p2_username=g["p2_username"],
+            h_goals=g["h_goals"],
+            a_goals=g["a_goals"],
+            h_assists=g["h_assists"],
+            a_assists=g["a_assists"],
+            is_single_timeline=g["is_single_timeline"],
+            is_pm=False,
+            match_id=g["match_id"],
+            is_draft=True
+        )
+    else:
+        draft_data = {
+            "is_multi": True,
+            "s_id": s_id,
+            "games": prepared_games
+        }
+        
+        if is_cup:
+            stage_title = f"{cup_stage} Финала" if cup_stage != "final" else "ФИНАЛ"
+            post_lines = [f"📝 <b>ЧЕРНОВИК РЕЗУЛЬТАТОВ СЕРИИ | КУБОК КПЛ - {stage_title}</b>\n"]
+        else:
+            post_lines = ["📝 <b>ЧЕРНОВИК РЕЗУЛЬТАТОВ МАТЧЕЙ</b>\n"]
+
+        def _fmt(data):
+            if not data: return ""
+            return ", ".join([f"{p} ({c})" if c > 1 else f"{p} (1)" for p, c in data.items() if c > 0])
+
+        for g in prepared_games:
+            h_team_esc = html.escape(g["home_team"])
+            a_team_esc = html.escape(g["away_team"])
+            
+            post_lines.append(f"🏟 <b>Игра {g['game_num']}:</b>")
+            post_lines.append(f"🏠 <b>{h_team_esc}</b>{g['p1_str']} <b>{g['h_score']} : {g['a_score']}</b> <b>{a_team_esc}</b>{g['p2_str']} ✈️")
+            
+            h_g_str = _fmt(g["h_goals"])
+            a_g_str = _fmt(g["a_goals"])
+            h_a_str = _fmt(g["h_assists"])
+            a_a_str = _fmt(g["a_assists"])
+            
+            if g["h_score"] > 0:
+                post_lines.append(f"⚽ <b>Голы ({h_team_esc}):</b> {html.escape(h_g_str) if h_g_str else 'не указаны'}")
+                if not g["is_single_timeline"]:
+                    post_lines.append(f"🎯 <b>Ассисты ({h_team_esc}):</b> {html.escape(h_a_str) if h_a_str else 'Нет'}")
+            if g["a_score"] > 0:
+                post_lines.append(f"⚽ <b>Голы ({a_team_esc}):</b> {html.escape(a_g_str) if a_g_str else 'не указаны'}")
+                if not g["is_single_timeline"]:
+                    post_lines.append(f"🎯 <b>Ассисты ({a_team_esc}):</b> {html.escape(a_a_str) if a_a_str else 'Нет'}")
+            post_lines.append("")
+
+        if is_cup and s_id:
+            s_row = database.get_cup_series(s_id)
+            if s_row:
+                team1_n = s_row["team1_name"]
+                team2_n = s_row["team2_name"]
+                t1_wins = s_row["team1_wins"] or 0
+                t2_wins = s_row["team2_wins"] or 0
+                for g in prepared_games:
+                    if g["h_score"] > g["a_score"]: w = g["home_team"]
+                    elif g["a_score"] > g["h_score"]: w = g["away_team"]
+                    else: continue
+                    if w.lower() == team1_n.lower(): t1_wins += 1
+                    elif w.lower() == team2_n.lower(): t2_wins += 1
+                
+                post_lines.append(f"📊 <b>Счёт серии (Best-of-3): {html.escape(team1_n)} {t1_wins} : {t2_wins} {html.escape(team2_n)}</b>")
+                if t1_wins >= 2 or t2_wins >= 2:
+                    series_win = team1_n if t1_wins >= 2 else team2_n
+                    post_lines.append(f"🏆 <b>Победитель серии: {html.escape(series_win)}! Проходит в следующий раунд!</b>")
+
+        post_lines.append("\n⏳ <i>Ожидает подтверждения администратором...</i>")
+        group_text = "\n".join(post_lines)
+
     if "drafts" not in context.bot_data:
         context.bot_data["drafts"] = {}
     context.bot_data["drafts"][draft_uuid] = draft_data
-    
-    group_text = build_formatted_match_post(
-        round_number=match.get('round_number'),
-        home_team=home_team,
-        away_team=away_team,
-        h_score=h_score,
-        a_score=a_score,
-        p1_username=match.get('player1_username', 'Хозяева'),
-        p2_username=match.get('player2_username', 'Гости'),
-        h_goals=h_goals,
-        a_goals=a_goals,
-        h_assists=h_assists,
-        a_assists=a_assists,
-        is_single_timeline=is_single_timeline,
-        is_pm=False,
-        match_id=match_id,
-        is_draft=True
-    )
 
+    btn_label = "✅ Подтвердить все игры" if is_multi else "✅ Подтвердить"
     keyboard = [
-        [InlineKeyboardButton("✅ Подтвердить", callback_data=f"draft_conf_{draft_uuid}")],
+        [InlineKeyboardButton(btn_label, callback_data=f"draft_conf_{draft_uuid}")],
         [InlineKeyboardButton("❌ Отклонить", callback_data=f"draft_rej_{draft_uuid}")]
     ]
     markup = InlineKeyboardMarkup(keyboard)
     
     await status_msg.delete()
     
+    photo_id_to_send = photo_file_ids[0] if photo_file_ids else None
     try:
         kwargs = {"chat_id": update.effective_chat.id, "parse_mode": "HTML", "reply_markup": markup}
         if msg_ids:
             kwargs["reply_to_message_id"] = msg_ids[0]
             
-        if photo_id_to_save:
-            kwargs["photo"] = photo_id_to_save
+        if photo_id_to_send:
+            kwargs["photo"] = photo_id_to_send
             kwargs["caption"] = group_text
             await context.bot.send_photo(**kwargs)
         else:
@@ -261,27 +386,70 @@ async def cb_draft_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
         
     draft = drafts.pop(draft_uuid)
-    match_id = draft["match_id"]
+    is_multi = draft.get("is_multi", False)
+    games = draft.get("games", [draft])
+    s_id = draft.get("s_id")
     
-    match = database.get_match(match_id)
-    if not match:
-        if query.message.photo: await query.edit_message_caption(caption="❌ Матч не найден.")
-        else: await query.edit_message_text(text="❌ Матч не найден.")
-        return
-        
-    try:
-        next_stage = await asyncio.to_thread(database.confirm_and_finalize_match, 
-            match_id, draft["h_score"], draft["a_score"], draft["events"], 
-            reporter_id=draft["reporter_id"], photo_id=draft["photo_id"]
+    last_next_stage = None
+    main_group_id = await asyncio.to_thread(database.get_group_id)
+    results_topic_id = (await asyncio.to_thread(database.get_config, "results_topic_id")) or (await asyncio.to_thread(database.get_config, "reports_topic_id"))
+
+    for idx, g in enumerate(games):
+        m_id = g.get("match_id")
+        if not m_id and s_id:
+            cup_m = await asyncio.to_thread(database.get_cup_match_by_series_and_game, s_id, g.get("game_num", idx + 1))
+            m_id = cup_m["id"] if cup_m else None
+            
+        if not m_id:
+            logger.error(f"Could not resolve match_id for game {idx+1}")
+            continue
+            
+        try:
+            next_stage = await asyncio.to_thread(
+                database.confirm_and_finalize_match,
+                m_id, g["h_score"], g["a_score"], g["events"],
+                reporter_id=g["reporter_id"], photo_id=g["photo_id"]
+            )
+            if next_stage:
+                last_next_stage = next_stage
+        except Exception as e:
+            logger.exception(f"Failed to confirm match {m_id}")
+            
+        official_text = build_formatted_match_post(
+            round_number=g.get('round_number'),
+            home_team=g.get('home_team'),
+            away_team=g.get('away_team'),
+            h_score=g.get('h_score'),
+            a_score=g.get('a_score'),
+            p1_username=g.get('p1_username'),
+            p2_username=g.get('p2_username'),
+            h_goals=g.get('h_goals'),
+            a_goals=g.get('a_goals'),
+            h_assists=g.get('h_assists'),
+            a_assists=g.get('a_assists'),
+            is_single_timeline=g.get('is_single_timeline', False),
+            is_pm=False,
+            match_id=m_id,
+            is_draft=False
         )
-        if next_stage:
-            from handlers.admin import notify_cup_stage_opened
-            await notify_cup_stage_opened(context.bot, next_stage)
-    except Exception as e:
-        logger.exception("Failed to confirm drafted match")
-        if query.message.photo: await query.edit_message_caption(caption="❌ Ошибка при сохранении матча в базу.")
-        else: await query.edit_message_text(text="❌ Ошибка при сохранении матча в базу.")
-        return
+        
+        if main_group_id:
+            try:
+                kwargs = {"chat_id": main_group_id, "parse_mode": "HTML"}
+                if results_topic_id: kwargs["message_thread_id"] = int(results_topic_id)
+                if g.get("photo_id"):
+                    kwargs["photo"] = g["photo_id"]
+                    kwargs["caption"] = official_text
+                    await context.bot.send_photo(**kwargs)
+                else:
+                    kwargs["text"] = official_text
+                    await context.bot.send_message(**kwargs)
+            except Exception as e:
+                logger.error(f"Failed to send match post to group: {e}")
+
+    if last_next_stage:
+        from handlers.admin import notify_cup_stage_opened
+        await notify_cup_stage_opened(context.bot, last_next_stage)
         
     admin_name = f"@{query.from_user.username}" if query.from_user.username else (query.from_user.first_name or "Администратор")
     original_text = query.message.caption if query.message.photo else query.message.text
@@ -290,42 +458,6 @@ async def cb_draft_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if query.message.photo: await query.edit_message_caption(caption=new_caption, parse_mode="HTML")
     else: await query.edit_message_text(text=new_caption, parse_mode="HTML")
         
-    # Build clean official post for Results topic
-    official_group_text = build_formatted_match_post(
-        round_number=draft.get('round_number'),
-        home_team=draft.get('home_team'),
-        away_team=draft.get('away_team'),
-        h_score=draft.get('h_score'),
-        a_score=draft.get('a_score'),
-        p1_username=draft.get('p1_username'),
-        p2_username=draft.get('p2_username'),
-        h_goals=draft.get('h_goals'),
-        a_goals=draft.get('a_goals'),
-        h_assists=draft.get('h_assists'),
-        a_assists=draft.get('a_assists'),
-        is_single_timeline=draft.get('is_single_timeline', False),
-        is_pm=False,
-        match_id=match_id,
-        is_draft=False
-    )
-
-    main_group_id = await asyncio.to_thread(database.get_group_id)
-    results_topic_id = (await asyncio.to_thread(database.get_config, "results_topic_id")) or (await asyncio.to_thread(database.get_config, "reports_topic_id"))
-    
-    if main_group_id:
-        try:
-            kwargs = {"chat_id": main_group_id, "parse_mode": "HTML"}
-            if results_topic_id: kwargs["message_thread_id"] = int(results_topic_id)
-            if draft["photo_id"]:
-                kwargs["photo"] = draft["photo_id"]
-                kwargs["caption"] = official_group_text
-                await context.bot.send_photo(**kwargs)
-            else:
-                kwargs["text"] = official_group_text
-                await context.bot.send_message(**kwargs)
-        except Exception:
-            pass
-            
     from handlers.cabinet import refresh_league_table, refresh_debts_summary
     await refresh_debts_summary(context)
     await refresh_league_table(context)

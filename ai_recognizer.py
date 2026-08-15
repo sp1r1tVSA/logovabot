@@ -76,7 +76,14 @@ PROMPT_TEXT = """
 4. **ПРАВАЯ ПОЛОВИНА (RIGHT SIDE) — ВНИМАНИЕ, ЗЕРКАЛЬНЫЙ ПОРЯДОК:**
    - Порядок столбцов: `А` | `Г` | `ИС` | `ОБЩ` | `ИГРОКИ` | `ПОЗ`
    - Столбец `А` (Ассисты) идет ПЕРВЫМ (ближе всего к центру экрана).
-   - Столбец `Г` (Голы) идет ВТОРЫМ (дальше от центра).
+   - Столбец `Г` (Голы) идет ВТОРЫМ (дальше от центра, перед столбцом ОБЩ/OVR).
+   - ПРИМЕР:
+     Если в строке Cabella стоит: 0  1  104 Cabella
+     -> 0 (первое число) = АССИСТЫ (А = 0)
+     -> 1 (второе число) = ГОЛЫ (Г = 1) -> занеси "Cabella" в `right_goals`!
+     Если в строке Leweling стоит: 1  0  103 Leweling
+     -> 1 (первое число) = АССИСТЫ (А = 1) -> занеси "Leweling" в `right_assists`!
+     -> 0 (второе число) = ГОЛЫ (Г = 0)
    - СТРОГО: первое число слева в правой таблице — это АССИСТЫ (А), второе — ГОЛЫ (Г). НЕ ПЕРЕПУТАЙ!
    - Занеси ИМЯ ИГРОКА в `right_goals`, если число в столбце `Г` > 0 (столько раз, чему равно число).
    - Занеси ИМЯ ИГРОКА в `right_assists`, если число в столбце `А` > 0 (столько раз, чему равно число).
@@ -89,14 +96,11 @@ PROMPT_TEXT = """
 
 ---
 
-### ЭТАП 3: СБОРКА ИТОГОВОГО РЕЗУЛЬТАТА
+### ЭТАП 3: ОПРЕДЕЛЕНИЕ МАТЧЕЙ (ОДИН ИЛИ НЕСКОЛЬКО)
 
-Если прислано несколько изображений РАЗНЫХ типов, собери единый итог:
-
-- **Счёт матча** присутствует на обоих типах — возьми его (если значения различаются, приоритет у ТИПА 2 «таблица статистики»).
-- **Голы (`left_goals` / `right_goals`):** объедини имена забивших из вертикальной колонки (ТИП 1) и из столбца `Г` таблицы (ТИП 2) БЕЗ ДУБЛИРОВАНИЯ одинаковых игроков.
-- **Ассисты (`left_assists` / `right_assists`):** берутся ТОЛЬКО из столбца `А` таблицы (ТИП 2).
-- Если прислан только один скриншот — заполни те поля, которые можно извлечь из его типа, остальные оставь пустыми.
+Изображений может быть несколько:
+- **РАЗНЫЕ МАТЧИ** (например, две игры серии кубка: Игра 1 со счётом 3-2 и Игра 2 со счётом 2-1): обработай каждый матч отдельно и верни их в массиве `matches`.
+- **ОДИН МАТЧ** (например, два скриншота одной игры: вертикальная колонка голов и таблица статистики с одинаковым счётом): объедини голы и ассисты в один объект в массиве `matches`.
 
 ---
 
@@ -105,15 +109,19 @@ PROMPT_TEXT = """
 Верни результат СТРОГО в виде одного валидного JSON-объекта без разметки markdown:
 
 {
-  "team1": "Название левой команды (например, Аякс)",
-  "team2": "Название правой команды (например, Селтик)",
-  "left_score": 4,
-  "right_score": 2,
-  "is_single_timeline": false,
-  "left_goals": ["Raspadori", "Raspadori", "Lang", "Gittens"],
-  "right_goals": ["Morita", "Suárez"],
-  "left_assists": ["Ndidi", "Raspadori", "Raspadori", "Gittens"],
-  "right_assists": ["Zhegrova", "Pedro Gonçalves"]
+  "matches": [
+    {
+      "team1": "Название левой команды (например, Копенгаген)",
+      "team2": "Название правой команды (например, Рейнджерс)",
+      "left_score": 3,
+      "right_score": 2,
+      "is_single_timeline": false,
+      "left_goals": ["Lukébakio", "Lukébakio", "Lukébakio"],
+      "right_goals": ["Cabella", "Ziyech"],
+      "left_assists": ["Mattsson", "Elyounoussi", "Elyounoussi"],
+      "right_assists": ["Leweling"]
+    }
+  ]
 }
 """
 
@@ -205,35 +213,48 @@ def recognize_match_screenshots_bytes(images_bytes_list: list[bytes], mime_type:
                         logger.warning(f"Gemini model '{m_name}' returned non-dict JSON: {parsed_data}")
                         continue
 
-                    parsed_data.setdefault("left_score", 0)
-                    parsed_data.setdefault("right_score", 0)
-                    parsed_data.setdefault("left_goals", [])
-                    parsed_data.setdefault("right_goals", [])
-                    parsed_data.setdefault("left_assists", [])
-                    parsed_data.setdefault("right_assists", [])
-                    parsed_data.setdefault("is_single_timeline", False)
+                    # Support matches array or single match object
+                    raw_matches = parsed_data.get("matches")
+                    if isinstance(raw_matches, list) and len(raw_matches) > 0:
+                        matches_list = raw_matches
+                    else:
+                        matches_list = [parsed_data]
 
-                    # Совместимость со старой структурой
-                    parsed_data.setdefault("home_score", parsed_data["left_score"])
-                    parsed_data.setdefault("away_score", parsed_data["right_score"])
-                    parsed_data.setdefault("side1_goals", parsed_data["left_goals"])
-                    parsed_data.setdefault("side2_goals", parsed_data["right_goals"])
-                    parsed_data.setdefault("side1_assists", parsed_data["left_assists"])
-                    parsed_data.setdefault("side2_assists", parsed_data["right_assists"])
+                    for m in matches_list:
+                        m.setdefault("left_score", 0)
+                        m.setdefault("right_score", 0)
+                        m.setdefault("left_goals", [])
+                        m.setdefault("right_goals", [])
+                        m.setdefault("left_assists", [])
+                        m.setdefault("right_assists", [])
+                        m.setdefault("is_single_timeline", False)
 
-                    # Корректировка счета 0 - 0 по списку голов
-                    if parsed_data["left_score"] == 0 and len(parsed_data["left_goals"]) > 0:
-                        parsed_data["left_score"] = len(parsed_data["left_goals"])
-                        parsed_data["home_score"] = len(parsed_data["left_goals"])
+                        # Совместимость
+                        m.setdefault("home_score", m["left_score"])
+                        m.setdefault("away_score", m["right_score"])
+                        m.setdefault("side1_goals", m["left_goals"])
+                        m.setdefault("side2_goals", m["right_goals"])
+                        m.setdefault("side1_assists", m["left_assists"])
+                        m.setdefault("side2_assists", m["right_assists"])
 
-                    if parsed_data["right_score"] == 0 and len(parsed_data["right_goals"]) > 0:
-                        parsed_data["right_score"] = len(parsed_data["right_goals"])
-                        parsed_data["away_score"] = len(parsed_data["right_goals"])
+                        if m["left_score"] == 0 and len(m["left_goals"]) > 0:
+                            m["left_score"] = len(m["left_goals"])
+                            m["home_score"] = len(m["left_goals"])
+
+                        if m["right_score"] == 0 and len(m["right_goals"]) > 0:
+                            m["right_score"] = len(m["right_goals"])
+                            m["away_score"] = len(m["right_goals"])
+
+                    parsed_data["matches"] = matches_list
+                    # Copy first match properties to top level for legacy callers
+                    first_m = matches_list[0]
+                    for k, v in first_m.items():
+                        if k != "matches":
+                            parsed_data[k] = v
 
                     logger.info(
-                        f"AI Vision ({m_name}) recognized match: "
-                        f"{parsed_data.get('left_score')} - {parsed_data.get('right_score')} "
-                        f"(is_single_timeline={parsed_data.get('is_single_timeline')})"
+                        f"AI Vision ({m_name}) recognized {len(matches_list)} match(es): "
+                        + ", ".join([f"{m.get('left_score')}-{m.get('right_score')}" for m in matches_list])
                     )
                     return parsed_data
                 else:
