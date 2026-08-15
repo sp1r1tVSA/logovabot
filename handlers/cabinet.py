@@ -1895,10 +1895,31 @@ def build_formatted_match_post(
             if s_row:
                 t1 = safe_escape(s_row["team1_name"])
                 t2 = safe_escape(s_row["team2_name"])
-                w1 = s_row["team1_wins"]
-                w2 = s_row["team2_wins"]
+                w1 = s_row["team1_wins"] or 0
+                w2 = s_row["team2_wins"] or 0
+                
+                if is_draft:
+                    c.execute("SELECT id, player1_team, player2_team, player1_score, player2_score FROM matches WHERE cup_series_id = ? AND status = 'confirmed' AND id != ?", (s_id, match_id or -1))
+                    other_conf = c.fetchall()
+                    w1 = 0
+                    w2 = 0
+                    for om in other_conf:
+                        os1, os2 = om["player1_score"] or 0, om["player2_score"] or 0
+                        ow = om["player1_team"] if os1 > os2 else (om["player2_team"] if os2 > os1 else None)
+                        if ow and ow.lower() == s_row["team1_name"].lower(): w1 += 1
+                        elif ow and ow.lower() == s_row["team2_name"].lower(): w2 += 1
+                    
+                    if h_score > a_score: cur_w = home_team
+                    elif a_score > h_score: cur_w = away_team
+                    else: cur_w = None
+                    if cur_w and cur_w.lower() == s_row["team1_name"].lower(): w1 += 1
+                    elif cur_w and cur_w.lower() == s_row["team2_name"].lower(): w2 += 1
+
                 series_info_text = f"\n📊 <b>Счёт серии (Best-of-3):</b> {t1} {w1} : {w2} {t2}"
-                if s_row["winner_name"]:
+                if (w1 >= 2 or w2 >= 2) and is_draft:
+                    win_name = t1 if w1 >= 2 else t2
+                    series_info_text += f"\n🏆 <b>Победитель серии: {win_name}! Проходит в следующий раунд!</b>"
+                elif s_row["winner_name"]:
                     series_info_text += f"\n🏆 <b>Победитель серии: {safe_escape(s_row['winner_name'])}! Проходит в следующий раунд!</b>"
 
     p1_clean = safe_escape(p1_username.lstrip('@')) if p1_username else ""

@@ -320,8 +320,27 @@ async def _process_draft_group_delayed(buffer_key: str, update: Update, context:
             if s_row:
                 team1_n = s_row["team1_name"]
                 team2_n = s_row["team2_name"]
-                t1_wins = s_row["team1_wins"] or 0
-                t2_wins = s_row["team2_wins"] or 0
+                
+                with database.transaction() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT id, player1_team, player2_team, player1_score, player2_score FROM matches WHERE cup_series_id = ? AND status = 'confirmed'", (s_id,))
+                    conf_matches = cursor.fetchall()
+                
+                prep_game_ids = set(g.get("match_id") for g in prepared_games if g.get("match_id"))
+                
+                t1_wins = 0
+                t2_wins = 0
+                
+                for cm in conf_matches:
+                    if cm["id"] in prep_game_ids:
+                        continue
+                    s1, s2 = cm["player1_score"] or 0, cm["player2_score"] or 0
+                    if s1 > s2: w = cm["player1_team"]
+                    elif s2 > s1: w = cm["player2_team"]
+                    else: continue
+                    if w and w.lower() == team1_n.lower(): t1_wins += 1
+                    elif w and w.lower() == team2_n.lower(): t2_wins += 1
+                
                 for g in prepared_games:
                     if g["h_score"] > g["a_score"]: w = g["home_team"]
                     elif g["a_score"] > g["h_score"]: w = g["away_team"]
