@@ -98,22 +98,23 @@ def match_and_enrich_squad(raw_side1_goals: list[str], raw_side2_goals: list[str
                 home_g[use_name] = home_g.get(use_name, 0) + 1
         return home_g, away_g, {}, {}, True
 
-    side1_all = [p.lower().strip() for p in raw_side1_goals + raw_side1_assists]
-    side2_all = [p.lower().strip() for p in raw_side2_goals + raw_side2_assists]
+    side1_all = raw_side1_goals + raw_side1_assists
+    side2_all = raw_side2_goals + raw_side2_assists
 
-    home_squad_lower = [p.lower().strip() for p in home_squad]
-    away_squad_lower = [p.lower().strip() for p in away_squad]
-
-    side1_home_matches = sum(1 for p in side1_all if any(p in sp or sp in p for sp in home_squad_lower))
-    side1_away_matches = sum(1 for p in side1_all if any(p in sp or sp in p for sp in away_squad_lower))
-    side2_home_matches = sum(1 for p in side2_all if any(p in sp or sp in p for sp in home_squad_lower))
-    side2_away_matches = sum(1 for p in side2_all if any(p in sp or sp in p for sp in away_squad_lower))
+    side1_home_matches = sum(1 for p in side1_all if find_squad_match(p, home_squad))
+    side1_away_matches = sum(1 for p in side1_all if find_squad_match(p, away_squad))
+    side2_home_matches = sum(1 for p in side2_all if find_squad_match(p, home_squad))
+    side2_away_matches = sum(1 for p in side2_all if find_squad_match(p, away_squad))
 
     # Detect if side1 is Away and side2 is Home
     if (side1_away_matches > side1_home_matches) or (side2_home_matches > side2_away_matches):
         is_side1_home = False
         side1_team, side2_team = away_team, home_team
         side1_squad, side2_squad = away_squad, home_squad
+    elif (side1_home_matches > side1_away_matches) or (side2_away_matches > side2_home_matches):
+        is_side1_home = True
+        side1_team, side2_team = home_team, away_team
+        side1_squad, side2_squad = home_squad, away_squad
     else:
         is_side1_home = True
         side1_team, side2_team = home_team, away_team

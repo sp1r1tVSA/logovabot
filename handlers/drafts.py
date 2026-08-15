@@ -200,12 +200,30 @@ async def _process_draft_group_delayed(buffer_key: str, update: Update, context:
             await status_msg.edit_text("❌ Ошибка при сопоставлении состава. Возможно, игроки не зарегистрированы.")
             return
             
+        l_score = int(m_info.get("left_score", 0))
+        r_score = int(m_info.get("right_score", 0))
+        h_g_count = sum(h_goals.values())
+        a_g_count = sum(a_goals.values())
+        
         if is_side1_home:
-            h_score = int(m_info.get("left_score", m_info.get("home_score", sum(h_goals.values()))))
-            a_score = int(m_info.get("right_score", m_info.get("away_score", sum(a_goals.values()))))
+            h_score = l_score if (l_score > 0 or r_score > 0) else h_g_count
+            a_score = r_score if (l_score > 0 or r_score > 0) else a_g_count
         else:
-            h_score = int(m_info.get("right_score", m_info.get("away_score", sum(h_goals.values()))))
-            a_score = int(m_info.get("left_score", m_info.get("home_score", sum(a_goals.values()))))
+            h_score = r_score if (l_score > 0 or r_score > 0) else h_g_count
+            a_score = l_score if (l_score > 0 or r_score > 0) else a_g_count
+
+        # SANITY CHECK: The team that scored more goals MUST have the higher score!
+        if a_g_count > h_g_count and h_score > a_score:
+            h_score, a_score = a_score, h_score
+            is_side1_home = not is_side1_home
+        elif h_g_count > a_g_count and a_score > h_score:
+            h_score, a_score = a_score, h_score
+            is_side1_home = not is_side1_home
+
+        if h_score < h_g_count:
+            h_score = h_g_count
+        if a_score < a_g_count:
+            a_score = a_g_count
                 
         events = []
         for p, c in h_goals.items(): events.append((home_team, p, "goal", c))
