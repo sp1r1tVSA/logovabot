@@ -12,7 +12,7 @@ from handlers.cabinet import match_and_enrich_squad, build_formatted_match_post
 logger = logging.getLogger(__name__)
 
 # In-memory storage for collecting media groups
-# { "media_group_id": { "photos": [...], "caption": "", "user_id": int, "message_ids": [...] } }
+# { "buffer_key": { "photos": [...], "photo_file_ids": [...], "caption": "", "user_id": int, "message_ids": [...] } }
 draft_media_groups = {}
 draft_tasks = {}
 
@@ -38,46 +38,55 @@ async def handle_draft_media(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
         
     user_id = update.effective_user.id
-    media_group_id = msg.media_group_id
     
-    if not media_group_id:
-        # Fallback for single photo
-        media_group_id = f"single_{msg.message_id}"
+    # Key by media_group_id or by user in topic for consecutive photos
+    if msg.media_group_id:
+        buffer_key = f"mg_{msg.media_group_id}"
+    else:
+        buffer_key = f"user_{update.effective_chat.id}_{msg.message_thread_id}_{user_id}"
         
-    if media_group_id not in draft_media_groups:
-        draft_media_groups[media_group_id] = {
+    if buffer_key not in draft_media_groups:
+        draft_media_groups[buffer_key] = {
             "photos": [],
+            "photo_file_ids": [],
             "caption": "",
             "user_id": user_id,
             "message_ids": []
         }
         
-    group_data = draft_media_groups[media_group_id]
+    group_data = draft_media_groups[buffer_key]
     group_data["message_ids"].append(msg.message_id)
     
     text = msg.caption or msg.text
-    if text and not group_data["caption"]:
-        group_data["caption"] = text
+    if text:
+        if group_data["caption"]:
+            if text not in group_data["caption"]:
+                group_data["caption"] += f"\n{text}"
+        else:
+            group_data["caption"] = text
         
     if msg.photo:
         # get highest resolution
         photo = msg.photo[-1]
+        group_data["photo_file_ids"].append(photo.file_id)
         f_obj = await context.bot.get_file(photo.file_id)
         f_bytes = await f_obj.download_as_bytearray()
         group_data["photos"].append(bytes(f_bytes))
         
-    # Schedule processing task if it's the first message of the group
-    if media_group_id not in draft_tasks:
-        draft_tasks[media_group_id] = asyncio.create_task(
-            _process_draft_group_delayed(media_group_id, update, context)
-        )
+    # Cancel previous timer if still waiting and restart debounce timer
+    if buffer_key in draft_tasks:
+        draft_tasks[buffer_key].cancel()
+        
+    draft_tasks[buffer_key] = asyncio.create_task(
+        _process_draft_group_delayed(buffer_key, update, context)
+    )
 
-async def _process_draft_group_delayed(media_group_id: str, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # Wait a few seconds to let all media in the group arrive
-    await asyncio.sleep(4)
+async def _process_draft_group_delayed(buffer_key: str, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    # Wait to let all media in the group or rapid consecutive photos arrive
+    await asyncio.sleep(4.5)
     
-    group_data = draft_media_groups.pop(media_group_id, None)
-    draft_tasks.pop(media_group_id, None)
+    group_data = draft_media_groups.pop(buffer_key, None)
+    draft_tasks.pop(buffer_key, None)
     
     if not group_data:
         return
@@ -86,6 +95,7 @@ async def _process_draft_group_delayed(media_group_id: str, update: Update, cont
     caption = group_data["caption"]
     user_id = group_data["user_id"]
     msg_ids = group_data["message_ids"]
+    photo_file_ids = group_data["photo_file_ids"]
     reply_to_id = msg_ids[0] if msg_ids else None
     
     if not photos:
@@ -162,7 +172,7 @@ async def _process_draft_group_delayed(media_group_id: str, update: Update, cont
     for p, c in a_assists.items(): events.append((away_team, p, "assist", c))
     
     # Send draft preview with confirm/reject buttons
-    photo_id_to_save = update.message.photo[-1].file_id if update.message and update.message.photo else None
+    photo_id_to_save = photo_file_ids[0] if photo_file_ids else None
     
     import uuid
     draft_uuid = str(uuid.uuid4())[:8]
