@@ -259,11 +259,6 @@ async def cb_draft_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         else: await query.edit_message_text(text="❌ Матч не найден.")
         return
         
-    if match['status'] == 'confirmed':
-        if query.message.photo: await query.edit_message_caption(caption="✅ Результат уже зафиксирован!")
-        else: await query.edit_message_text(text="✅ Результат уже зафиксирован!")
-        return
-        
     try:
         next_stage = await asyncio.to_thread(database.confirm_and_finalize_match, 
             match_id, draft["h_score"], draft["a_score"], draft["events"], 

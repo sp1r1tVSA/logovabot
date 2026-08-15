@@ -711,6 +711,8 @@ def get_active_match_by_teams(team1: str, team2: str, caption: str | None = None
         round_match = re.search(r'(\d+)\s*[:\.\-—#]?\s*(?:тур|round|раунд)', caption_clean)
     target_round = int(round_match.group(1)) if round_match else None
     
+    now = datetime.datetime.now()
+    
     with transaction() as conn:
         cursor = conn.cursor()
         cursor.execute("""
@@ -719,13 +721,16 @@ def get_active_match_by_teams(team1: str, team2: str, caption: str | None = None
                 m.player1_team AS direct_p1_team, m.player2_team AS direct_p2_team,
                 u1.team_name AS u1_team, u2.team_name AS u2_team,
                 COALESCE(r.is_open, 0) AS is_round_open,
-                COALESCE(s.status, '') AS series_status
+                r.deadline AS round_deadline,
+                COALESCE(s.status, '') AS series_status,
+                (SELECT COUNT(*) FROM match_events me WHERE me.match_id = m.id) AS events_count
             FROM matches m
             LEFT JOIN users u1 ON LOWER(m.player1_team) = LOWER(u1.team_name)
             LEFT JOIN users u2 ON LOWER(m.player2_team) = LOWER(u2.team_name)
             LEFT JOIN rounds r ON m.round_number = r.round_number AND (m.tournament_type IS NULL OR m.tournament_type = 'league')
             LEFT JOIN cup_series s ON m.cup_series_id = s.id
             WHERE m.status IN ('pending', 'reported', 'disputed')
+               OR (m.status = 'confirmed' AND (SELECT COUNT(*) FROM match_events me WHERE me.match_id = m.id) = 0)
         """)
         rows = cursor.fetchall()
         
@@ -748,27 +753,65 @@ def get_active_match_by_teams(team1: str, team2: str, caption: str | None = None
             if is_match:
                 score = 0
                 t_type = d.get('tournament_type') or 'league'
+                is_pending = d['status'] in ('pending', 'reported', 'disputed')
+                is_technical = (d['status'] == 'confirmed' and d.get('events_count', 0) == 0)
+                
+                # Check if deadline is expired for open rounds (Case 1)
+                is_deadline_expired = False
+                dl_str = d.get('round_deadline')
+                if dl_str:
+                    try:
+                        dl_dt = datetime.datetime.strptime(dl_str, "%d.%m.%Y %H:%M")
+                        if dl_dt <= now:
+                            is_deadline_expired = True
+                    except ValueError:
+                        pass
                 
                 if is_cup_hint:
                     if t_type == 'cup':
-                        score += 2000
-                        if d.get('series_status') == 'active':
-                            score += 500
+                        if is_pending:
+                            score += 2500
+                            if d.get('series_status') == 'active':
+                                score += 500
+                        elif is_technical:
+                            score += 1500
+                        else:
+                            score += 1000
                     else:
                         score -= 1000
                 else:
                     if target_round is not None:
                         if t_type == 'league' and d.get('round_number') == target_round:
-                            score += 2000
+                            if is_pending:
+                                score += 3000
+                            elif is_technical:
+                                score += 2500  # Case 2: replace TP/TN in specified round
+                            else:
+                                score += 2000
                         elif t_type == 'league':
                             score -= 500
                     else:
                         if t_type == 'league':
-                            if d.get('is_round_open') == 1:
-                                score += 500
                             rn = d.get('round_number', 50)
-                            if rn > 0:
-                                score += max(0, 100 - rn)
+                            rn_bonus = max(0, 100 - rn)
+                            
+                            if is_pending:
+                                if d.get('is_round_open') == 1:
+                                    if is_deadline_expired:
+                                        # Case 1: Open round + deadline expired (active debt!)
+                                        score += 700 + rn_bonus
+                                    else:
+                                        # Open round + deadline not expired
+                                        score += 500 + rn_bonus
+                                else:
+                                    # Closed/future round
+                                    score += 50 + rn_bonus
+                            elif is_technical:
+                                # Case 2: Closed/open round where admin set TP/TN
+                                if d.get('is_round_open') == 0:
+                                    score += 350 + rn_bonus  # Closed round with TP/TN
+                                else:
+                                    score += 300 + rn_bonus
                         elif t_type == 'cup' and d.get('series_status') == 'active':
                             score += 300
 
