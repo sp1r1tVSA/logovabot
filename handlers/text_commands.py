@@ -182,28 +182,49 @@ async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_T
     # =========================================================================
 
     if action in ("сетка", "кубок", "cup", "bracket"):
-        stage = args_str.strip() or "1/8"
-        if "1/8" in stage: stage = "1/8"
-        elif "1/4" in stage: stage = "1/4"
-        elif "1/2" in stage: stage = "1/2"
-        elif "финал" in stage.lower() or "final" in stage.lower(): stage = "final"
+        from telegram import InputFile
+        
+        stage_arg = args_str.strip().lower()
+        if any(st in stage_arg for st in ("1/8", "1/4", "1/2", "финал", "final")):
+            if "1/8" in stage_arg:
+                stage = "1/8"
+            elif "1/4" in stage_arg:
+                stage = "1/4"
+            elif "1/2" in stage_arg:
+                stage = "1/2"
+            else:
+                stage = "final"
+            
+            from table_generator import generate_cup_bracket_image
+            img_buf = await asyncio.to_thread(generate_cup_bracket_image, stage)
+            stage_title_map = {'1/8': '1/8 Финала', '1/4': '1/4 Финала', '1/2': '1/2 Финала', 'final': '🏆 Финал'}
+            title = stage_title_map.get(stage, stage)
+            caption = f"🏆 <b>КУБОК КПЛ 2026 | {title}</b>\n<i>Графическая сетка турнира</i>"
+            filename = f"cup_bracket_{stage}.png"
+        else:
+            # Default to full bracket graphic!
+            from services.cup_bracket_generator import generate_bracket_image
+            img_buf = await asyncio.to_thread(generate_bracket_image)
+            caption = "🏆 <b>КУБОК КПЛ 2026 | ПОЛНАЯ СЕТКА</b>\n<i>От 1/8 до Финала</i>"
+            filename = "full_cup_bracket.png"
 
-        series_list = await asyncio.to_thread(database.get_cup_series_list, stage)
-        if not series_list:
-            await msg.reply_text(f"🏆 Серии для этапа <b>{html.escape(stage)}</b> не найдены.", parse_mode="HTML")
-            return True
-
-        stage_title = f"{stage} Финала" if stage != "final" else "ФИНАЛ"
-        lines = [f"🏆 <b>КУБОК КПЛ — {stage_title}</b>\n"]
-        for s in series_list:
-            t1 = html.escape(s.get("team1_name") or "Ожидается...")
-            t2 = html.escape(s.get("team2_name") or "Ожидается...")
-            w1 = s.get("team1_wins", 0)
-            w2 = s.get("team2_wins", 0)
-            status_icon = "🏁 " if s.get("status") == "completed" else "⚔️ "
-            winner_str = f" ➔ 🏆 <b>{html.escape(s['winner_name'])}</b>" if s.get("winner_name") else ""
-            lines.append(f"{status_icon}Пара #{s['series_num']}: <b>{t1}</b> {w1} : {w2} <b>{t2}</b>{winner_str}")
-        await msg.reply_text("\n".join(lines), parse_mode="HTML")
+        keyboard = [
+            [
+                InlineKeyboardButton("1/8", callback_data="show_cup_graphic_1/8"),
+                InlineKeyboardButton("1/4", callback_data="show_cup_graphic_1/4"),
+                InlineKeyboardButton("1/2", callback_data="show_cup_graphic_1/2"),
+                InlineKeyboardButton("Финал", callback_data="show_cup_graphic_final"),
+            ],
+            [
+                InlineKeyboardButton("📊 Полная сетка", callback_data="show_full_cup_bracket")
+            ]
+        ]
+        await msg.reply_photo(
+            photo=InputFile(img_buf, filename=filename),
+            caption=caption,
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
         return True
 
     # =========================================================================
