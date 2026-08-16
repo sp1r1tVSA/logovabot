@@ -98,7 +98,8 @@ async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_T
         for idx, p in enumerate(top_list, 1):
             badge = "🥇 " if idx == 1 else ("🥈 " if idx == 2 else ("🥉 " if idx == 3 else f"{idx}. "))
             team_str = f" ({p['team_name']})" if p.get('team_name') else ""
-            lines.append(f"{badge}<b>{html.escape(p['player_name'])}</b>{html.escape(team_str)} — <b>{p['goals']}</b> ⚽")
+            goals_cnt = p.get('total_goals', p.get('goals', 0))
+            lines.append(f"{badge}<b>{html.escape(p.get('player_name', '—'))}</b>{html.escape(team_str)} — <b>{goals_cnt}</b> ⚽")
         await msg.reply_text("\n".join(lines), parse_mode="HTML")
         return True
 
@@ -114,7 +115,8 @@ async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_T
         for idx, p in enumerate(top_list, 1):
             badge = "🥇 " if idx == 1 else ("🥈 " if idx == 2 else ("🥉 " if idx == 3 else f"{idx}. "))
             team_str = f" ({p['team_name']})" if p.get('team_name') else ""
-            lines.append(f"{badge}<b>{html.escape(p['player_name'])}</b>{html.escape(team_str)} — <b>{p['assists']}</b> 🎯")
+            assists_cnt = p.get('total_assists', p.get('assists', 0))
+            lines.append(f"{badge}<b>{html.escape(p.get('player_name', '—'))}</b>{html.escape(team_str)} — <b>{assists_cnt}</b> 🎯")
         await msg.reply_text("\n".join(lines), parse_mode="HTML")
         return True
 
