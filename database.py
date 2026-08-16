@@ -1532,6 +1532,17 @@ def get_all_teams() -> list[str]:
         cursor.execute("SELECT DISTINCT team_name FROM users WHERE team_name IS NOT NULL AND team_name != ''")
         return [r[0] for r in cursor.fetchall()]
 
+def get_team_squad_photo(team_name: str) -> str | None:
+    """Retrieve squad_photo_id for a team name."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT squad_photo_id FROM users WHERE LOWER(team_name) = LOWER(?) AND squad_photo_id IS NOT NULL AND squad_photo_id != ''",
+            (team_name.strip(),)
+        )
+        row = cursor.fetchone()
+        return row[0] if row and row[0] else None
+
 def add_squad(team_name: str, player_names: list[str]) -> int:
     """Add players to a club's squad. Returns count of newly added players."""
     added = 0

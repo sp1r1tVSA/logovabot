@@ -159,22 +159,49 @@ async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_T
                 return True
 
         squad = await asyncio.to_thread(database.get_squad, team_to_find)
-        if not squad:
+        photo_id = await asyncio.to_thread(database.get_team_squad_photo, team_to_find)
+
+        if not squad and not photo_id:
             # Try searching team by partial match
             all_teams = await asyncio.to_thread(database.get_all_teams)
             matched_t = next((t for t in all_teams if team_to_find.lower() in t.lower() or t.lower() in team_to_find.lower()), None)
             if matched_t:
                 team_to_find = matched_t
                 squad = await asyncio.to_thread(database.get_squad, team_to_find)
+                photo_id = await asyncio.to_thread(database.get_team_squad_photo, team_to_find)
 
-        if not squad:
+        if not squad and not photo_id:
             await msg.reply_text(f"❌ Состав для клуба <b>{html.escape(team_to_find)}</b> не найден.", parse_mode="HTML")
             return True
 
         lines = [f"🛡 <b>Состав клуба {html.escape(team_to_find)} ({len(squad)} игроков):</b>\n"]
-        for idx, pl in enumerate(squad, 1):
-            lines.append(f"{idx}. {html.escape(pl)}")
-        await msg.reply_text("\n".join(lines), parse_mode="HTML")
+        if squad:
+            for idx, pl in enumerate(squad, 1):
+                lines.append(f"{idx}. {html.escape(pl)}")
+        else:
+            lines.append("<i>Список игроков в текстовой базе пока не заполнен.</i>")
+
+        full_text = "\n".join(lines)
+
+        if photo_id:
+            if len(full_text) <= 1024:
+                try:
+                    await msg.reply_photo(photo=photo_id, caption=full_text, parse_mode="HTML")
+                    return True
+                except Exception as e:
+                    logger.warning(f"Failed to send squad photo with full caption: {e}")
+            
+            # If caption is too long or failed, send photo with short caption and follow with text
+            short_cap = f"🛡 <b>Состав клуба {html.escape(team_to_find)} ({len(squad)} игроков)</b>"
+            try:
+                await msg.reply_photo(photo=photo_id, caption=short_cap, parse_mode="HTML")
+                if squad:
+                    await msg.reply_text(full_text, parse_mode="HTML")
+            except Exception as e:
+                logger.warning(f"Failed to send squad photo: {e}")
+                await msg.reply_text(full_text, parse_mode="HTML")
+        else:
+            await msg.reply_text(full_text, parse_mode="HTML")
         return True
 
     # =========================================================================
