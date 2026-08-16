@@ -87,38 +87,72 @@ async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_T
         return True
 
     if action in ("бомбардиры", "голы", "топ_голы", "scorers"):
-        limit = 10
-        if args_str.isdigit():
-            limit = min(30, max(3, int(args_str)))
-        top_list = await asyncio.to_thread(database.get_top_scorers, limit)
-        if not top_list:
-            await msg.reply_text("⚽ Список бомбардиров пока пуст.", parse_mode="HTML")
+        from telegram import InputFile
+        import top_stats_generator
+
+        args_lower = args_str.lower()
+        nums = re.findall(r"\d+", args_str)
+        is_cup = "кубок" in args_lower or "cup" in args_lower
+        tourn_type = "cup" if is_cup else "league"
+        tourn_title = "КУБКА" if is_cup else "ЛИГИ"
+
+        if nums:
+            # Text list mode if explicit number is given
+            limit = min(30, max(3, int(nums[0])))
+            fetch_func = database.get_cup_top_scorers if is_cup else database.get_top_scorers
+            top_list = await asyncio.to_thread(fetch_func, limit)
+            if not top_list:
+                await msg.reply_text(f"⚽ Список бомбардиров {tourn_title.lower()} пока пуст.", parse_mode="HTML")
+                return True
+            lines = [f"⚽ <b>ТОП-{len(top_list)} БОМБАРДИРОВ {tourn_title} КПЛ:</b>\n"]
+            for idx, p in enumerate(top_list, 1):
+                badge = "🥇 " if idx == 1 else ("🥈 " if idx == 2 else ("🥉 " if idx == 3 else f"{idx}. "))
+                team_str = f" ({p['team_name']})" if p.get('team_name') else ""
+                goals_cnt = p.get('total_goals', p.get('goals', 0))
+                lines.append(f"{badge}<b>{html.escape(p.get('player_name', '—'))}</b>{html.escape(team_str)} — <b>{goals_cnt}</b> ⚽")
+            await msg.reply_text("\n".join(lines), parse_mode="HTML")
             return True
-        lines = [f"⚽ <b>ТОП-{len(top_list)} БОМБАРДИРОВ ЛИГИ КПЛ:</b>\n"]
-        for idx, p in enumerate(top_list, 1):
-            badge = "🥇 " if idx == 1 else ("🥈 " if idx == 2 else ("🥉 " if idx == 3 else f"{idx}. "))
-            team_str = f" ({p['team_name']})" if p.get('team_name') else ""
-            goals_cnt = p.get('total_goals', p.get('goals', 0))
-            lines.append(f"{badge}<b>{html.escape(p.get('player_name', '—'))}</b>{html.escape(team_str)} — <b>{goals_cnt}</b> ⚽")
-        await msg.reply_text("\n".join(lines), parse_mode="HTML")
-        return True
+        else:
+            # Graphic card mode!
+            buf = await asyncio.to_thread(top_stats_generator.generate_top_stats_image, "goals", 10, tourn_type)
+            caption = f"<b>⚽ ТОП БОМБАРДИРОВ {tourn_title} КПЛ 2026</b>"
+            filename = f"{tourn_type}_top_scorers.png"
+            await msg.reply_photo(photo=InputFile(buf, filename=filename), caption=caption, parse_mode="HTML")
+            return True
 
     if action in ("ассистенты", "пасы", "топ_пас", "assists"):
-        limit = 10
-        if args_str.isdigit():
-            limit = min(30, max(3, int(args_str)))
-        top_list = await asyncio.to_thread(database.get_top_assists, limit)
-        if not top_list:
-            await msg.reply_text("🎯 Список ассистентов пока пуст.", parse_mode="HTML")
+        from telegram import InputFile
+        import top_stats_generator
+
+        args_lower = args_str.lower()
+        nums = re.findall(r"\d+", args_str)
+        is_cup = "кубок" in args_lower or "cup" in args_lower
+        tourn_type = "cup" if is_cup else "league"
+        tourn_title = "КУБКА" if is_cup else "ЛИГИ"
+
+        if nums:
+            # Text list mode if explicit number is given
+            limit = min(30, max(3, int(nums[0])))
+            fetch_func = database.get_cup_top_assists if is_cup else database.get_top_assists
+            top_list = await asyncio.to_thread(fetch_func, limit)
+            if not top_list:
+                await msg.reply_text(f"🎯 Список ассистентов {tourn_title.lower()} пока пуст.", parse_mode="HTML")
+                return True
+            lines = [f"🎯 <b>ТОП-{len(top_list)} АССИСТЕНТОВ {tourn_title} КПЛ:</b>\n"]
+            for idx, p in enumerate(top_list, 1):
+                badge = "🥇 " if idx == 1 else ("🥈 " if idx == 2 else ("🥉 " if idx == 3 else f"{idx}. "))
+                team_str = f" ({p['team_name']})" if p.get('team_name') else ""
+                assists_cnt = p.get('total_assists', p.get('assists', 0))
+                lines.append(f"{badge}<b>{html.escape(p.get('player_name', '—'))}</b>{html.escape(team_str)} — <b>{assists_cnt}</b> 🎯")
+            await msg.reply_text("\n".join(lines), parse_mode="HTML")
             return True
-        lines = [f"🎯 <b>ТОП-{len(top_list)} АССИСТЕНТОВ ЛИГИ КПЛ:</b>\n"]
-        for idx, p in enumerate(top_list, 1):
-            badge = "🥇 " if idx == 1 else ("🥈 " if idx == 2 else ("🥉 " if idx == 3 else f"{idx}. "))
-            team_str = f" ({p['team_name']})" if p.get('team_name') else ""
-            assists_cnt = p.get('total_assists', p.get('assists', 0))
-            lines.append(f"{badge}<b>{html.escape(p.get('player_name', '—'))}</b>{html.escape(team_str)} — <b>{assists_cnt}</b> 🎯")
-        await msg.reply_text("\n".join(lines), parse_mode="HTML")
-        return True
+        else:
+            # Graphic card mode!
+            buf = await asyncio.to_thread(top_stats_generator.generate_top_stats_image, "assists", 10, tourn_type)
+            caption = f"<b>🎯 ТОП АССИСТЕНТОВ {tourn_title} КПЛ 2026</b>"
+            filename = f"{tourn_type}_top_assisters.png"
+            await msg.reply_photo(photo=InputFile(buf, filename=filename), caption=caption, parse_mode="HTML")
+            return True
 
     if action in ("долги", "debts", "должники"):
         debts = await asyncio.to_thread(database.get_all_unplayed_league_matches)
