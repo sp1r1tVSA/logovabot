@@ -1,0 +1,501 @@
+import asyncio
+import logging
+import html
+import re
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram.ext import ContextTypes
+
+import database
+from handlers.base import is_admin, generate_league_table_image
+
+logger = logging.getLogger(__name__)
+
+# Trigger pattern: matches messages starting with "темшик", "темщик", "temshik", or @bot_username
+TRIGGER_REGEX = re.compile(r"^(?:темшик|темщик|temshik|@[\w_]+bot)\b[\s,:]*", re.IGNORECASE)
+
+
+async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """
+    Handle structured tournament text commands prefixed with 'Темшик' without slashes.
+    Returns True if a tournament command was recognized and handled, False otherwise.
+    """
+    msg = update.effective_message
+    if not msg or not msg.text:
+        return False
+
+    text = msg.text.strip()
+    match = TRIGGER_REGEX.match(text)
+    if not match:
+        return False
+
+    # Extract command part after the trigger
+    cmd_text = text[match.end():].strip()
+    if not cmd_text:
+        await msg.reply_text(
+            "👋 Привет! Я <b>Темшик</b> — бот лиги КПЛ.\n"
+            "Напиши <code>Темшик помощь</code> или <code>Темшик команды</code>, чтобы посмотреть список доступных команд.",
+            parse_mode="HTML"
+        )
+        return True
+
+    user_id = update.effective_user.id if update.effective_user else 0
+    is_adm = is_admin(user_id)
+
+    parts = cmd_text.split(None, 1)
+    action = parts[0].lower()
+    args_str = parts[1].strip() if len(parts) > 1 else ""
+    full_cmd = cmd_text.lower()
+
+    # =========================================================================
+    # 📊 СТАТИСТИКА, ТАБЛИЦЫ, ДОЛГИ, ПОМОЩЬ (Публичные)
+    # =========================================================================
+
+    if action in ("помощь", "help", "команды", "команда"):
+        help_text = (
+            "📋 <b>ТЕКСТОВЫЕ КОМАНДЫ БОТА:</b>\n\n"
+            "⚽ <b>Для всех участников:</b>\n"
+            "• <code>Темшик таблица</code> — турнирная таблица лиги\n"
+            "• <code>Темшик состав [клуб]</code> — состав клуба\n"
+            "• <code>Темшик бомбардиры [число]</code> — топ бомбардиров\n"
+            "• <code>Темшик ассистенты [число]</code> — топ ассистентов\n"
+            "• <code>Темшик кубок</code> — сетка и серии кубка\n"
+            "• <code>Темшик долги</code> — несыгранные матчи с тегами\n"
+        )
+        if is_adm:
+            help_text += (
+                "\n👑 <b>Команды администратора:</b>\n"
+                "• <code>Темшик +игрок [клуб] [имена]</code> — добавить в состав\n"
+                "• <code>Темшик -игрок [клуб] [имя]</code> — удалить из состава\n"
+                "• <code>Темшик переименовать игрока [клуб] [старое] -> [новое]</code>\n"
+                "• <code>Темшик открыть тур [номер]</code>\n"
+                "• <code>Темшик закрыть тур [номер]</code>\n"
+                "• <code>Темшик дедлайн [номер] [дата/время]</code>\n"
+                "• <code>Темшик синх кубок</code> — синхронизировать победителей\n"
+                "• <code>Темшик варн @username [причина]</code> — выдать варн\n"
+                "• <code>Темшик снять варн @username</code> — снять варн\n"
+                "• <code>Темшик варны</code> — список игроков с варнами\n"
+                "• <code>Темшик привязать клуб @username [клуб]</code>"
+            )
+        await msg.reply_text(help_text, parse_mode="HTML")
+        return True
+
+    if action in ("таблица", "турнирка", "table", "standings"):
+        img_buf = await asyncio.to_thread(generate_league_table_image)
+        caption = "🏆 <b>Турнирная таблица лиги КПЛ 2026</b>"
+        keyboard = [[InlineKeyboardButton("🔄 Обновить", callback_data="refresh_league_table_topic")]]
+        await msg.reply_photo(photo=img_buf, caption=caption, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+        return True
+
+    if action in ("бомбардиры", "голы", "топ_голы", "scorers"):
+        limit = 10
+        if args_str.isdigit():
+            limit = min(30, max(3, int(args_str)))
+        top_list = await asyncio.to_thread(database.get_top_scorers, limit)
+        if not top_list:
+            await msg.reply_text("⚽ Список бомбардиров пока пуст.", parse_mode="HTML")
+            return True
+        lines = [f"⚽ <b>ТОП-{len(top_list)} БОМБАРДИРОВ ЛИГИ КПЛ:</b>\n"]
+        for idx, p in enumerate(top_list, 1):
+            badge = "🥇 " if idx == 1 else ("🥈 " if idx == 2 else ("🥉 " if idx == 3 else f"{idx}. "))
+            team_str = f" ({p['team_name']})" if p.get('team_name') else ""
+            lines.append(f"{badge}<b>{html.escape(p['player_name'])}</b>{html.escape(team_str)} — <b>{p['goals']}</b> ⚽")
+        await msg.reply_text("\n".join(lines), parse_mode="HTML")
+        return True
+
+    if action in ("ассистенты", "пасы", "топ_пас", "assists"):
+        limit = 10
+        if args_str.isdigit():
+            limit = min(30, max(3, int(args_str)))
+        top_list = await asyncio.to_thread(database.get_top_assists, limit)
+        if not top_list:
+            await msg.reply_text("🎯 Список ассистентов пока пуст.", parse_mode="HTML")
+            return True
+        lines = [f"🎯 <b>ТОП-{len(top_list)} АССИСТЕНТОВ ЛИГИ КПЛ:</b>\n"]
+        for idx, p in enumerate(top_list, 1):
+            badge = "🥇 " if idx == 1 else ("🥈 " if idx == 2 else ("🥉 " if idx == 3 else f"{idx}. "))
+            team_str = f" ({p['team_name']})" if p.get('team_name') else ""
+            lines.append(f"{badge}<b>{html.escape(p['player_name'])}</b>{html.escape(team_str)} — <b>{p['assists']}</b> 🎯")
+        await msg.reply_text("\n".join(lines), parse_mode="HTML")
+        return True
+
+    if action in ("долги", "debts", "должники"):
+        debts = await asyncio.to_thread(database.get_all_unplayed_league_matches)
+        if not debts:
+            await msg.reply_text("✅ <b>Все матчи сыграны! Долгов по турниру нет.</b>", parse_mode="HTML")
+            return True
+        lines = ["⏳ <b>СПИСОК НЕЗАКРЫТЫХ МАТЧЕЙ (ДОЛГИ):</b>\n"]
+        rounds_map = {}
+        for d in debts:
+            rn = d.get("round_number", 0)
+            if rn not in rounds_map:
+                rounds_map[rn] = []
+            rounds_map[rn].append(d)
+
+        for rn in sorted(rounds_map.keys()):
+            lines.append(f"📌 <b>Тур {rn}:</b>")
+            for m in rounds_map[rn]:
+                t1 = html.escape(m.get("player1_team") or "—")
+                t2 = html.escape(m.get("player2_team") or "—")
+                p1_u = f"@{m['p1_username']}" if m.get("p1_username") else t1
+                p2_u = f"@{m['p2_username']}" if m.get("p2_username") else t2
+                lines.append(f"• {t1} ({p1_u}) 🆚 {t2} ({p2_u})")
+            lines.append("")
+        await msg.reply_text("\n".join(lines), parse_mode="HTML")
+        return True
+
+    # =========================================================================
+    # 👥 СОСТАВЫ КЛУБОВ
+    # =========================================================================
+
+    if action in ("состав", "составы", "squad"):
+        team_to_find = args_str.strip()
+        if not team_to_find:
+            team_to_find = await asyncio.to_thread(database.get_user_team, user_id)
+            if not team_to_find:
+                await msg.reply_text(
+                    "ℹ️ Укажите название клуба, например: <code>Темшик состав Расинг</code>",
+                    parse_mode="HTML"
+                )
+                return True
+
+        squad = await asyncio.to_thread(database.get_squad, team_to_find)
+        if not squad:
+            # Try searching team by partial match
+            all_teams = await asyncio.to_thread(database.get_all_teams)
+            matched_t = next((t for t in all_teams if team_to_find.lower() in t.lower() or t.lower() in team_to_find.lower()), None)
+            if matched_t:
+                team_to_find = matched_t
+                squad = await asyncio.to_thread(database.get_squad, team_to_find)
+
+        if not squad:
+            await msg.reply_text(f"❌ Состав для клуба <b>{html.escape(team_to_find)}</b> не найден.", parse_mode="HTML")
+            return True
+
+        lines = [f"🛡 <b>Состав клуба {html.escape(team_to_find)} ({len(squad)} игроков):</b>\n"]
+        for idx, pl in enumerate(squad, 1):
+            lines.append(f"{idx}. {html.escape(pl)}")
+        await msg.reply_text("\n".join(lines), parse_mode="HTML")
+        return True
+
+    # =========================================================================
+    # ⚔️ КУБОК (Сетка)
+    # =========================================================================
+
+    if action in ("сетка", "кубок", "cup", "bracket"):
+        stage = args_str.strip() or "1/8"
+        if "1/8" in stage: stage = "1/8"
+        elif "1/4" in stage: stage = "1/4"
+        elif "1/2" in stage: stage = "1/2"
+        elif "финал" in stage.lower() or "final" in stage.lower(): stage = "final"
+
+        series_list = await asyncio.to_thread(database.get_cup_series_list, stage)
+        if not series_list:
+            await msg.reply_text(f"🏆 Серии для этапа <b>{html.escape(stage)}</b> не найдены.", parse_mode="HTML")
+            return True
+
+        stage_title = f"{stage} Финала" if stage != "final" else "ФИНАЛ"
+        lines = [f"🏆 <b>КУБОК КПЛ — {stage_title}</b>\n"]
+        for s in series_list:
+            t1 = html.escape(s.get("team1_name") or "Ожидается...")
+            t2 = html.escape(s.get("team2_name") or "Ожидается...")
+            w1 = s.get("team1_wins", 0)
+            w2 = s.get("team2_wins", 0)
+            status_icon = "🏁 " if s.get("status") == "completed" else "⚔️ "
+            winner_str = f" ➔ 🏆 <b>{html.escape(s['winner_name'])}</b>" if s.get("winner_name") else ""
+            lines.append(f"{status_icon}Пара #{s['series_num']}: <b>{t1}</b> {w1} : {w2} <b>{t2}</b>{winner_str}")
+        await msg.reply_text("\n".join(lines), parse_mode="HTML")
+        return True
+
+    # =========================================================================
+    # 👑 КОМАНДЫ АДМИНИСТРАТОРА (ТРЕБУЮТ ПРАВ ADMIN)
+    # =========================================================================
+
+    if (
+        action in ("добавить", "добавь", "+игрок", "add_player") or
+        full_cmd.startswith("добавить игрока") or
+        full_cmd.startswith("добавь игрока")
+    ):
+        if not is_adm:
+            await msg.reply_text("⚠️ Эта команда доступна только администраторам турнира.")
+            return True
+
+        clean_args = re.sub(r"^(?:добавить|добавь)?\s*(?:игрока|игроков)?\s*", "", cmd_text, flags=re.IGNORECASE).strip()
+        parts_s = clean_args.split(None, 1)
+        if len(parts_s) < 2:
+            await msg.reply_text(
+                "ℹ️ Формат: <code>Темшик добавить игрока [Клуб] [Имя игрока]</code>\n"
+                "Пример: <code>Темшик добавить игрока Расинг Matías Zaracho</code>",
+                parse_mode="HTML"
+            )
+            return True
+
+        team_name, players_raw = parts_s[0], parts_s[1]
+        player_names = [p.strip() for p in players_raw.split(",") if p.strip()]
+        added_cnt = await asyncio.to_thread(database.add_squad, team_name, player_names)
+        await msg.reply_text(
+            f"✅ В состав клуба <b>{html.escape(team_name)}</b> успешно добавлено игроков: <b>{added_cnt}</b>.",
+            parse_mode="HTML"
+        )
+        return True
+
+    if (
+        action in ("удалить", "удали", "-игрок", "del_player", "remove_player") or
+        full_cmd.startswith("удалить игрока") or
+        full_cmd.startswith("удали игрока")
+    ):
+        if not is_adm:
+            await msg.reply_text("⚠️ Эта команда доступна только администраторам турнира.")
+            return True
+
+        clean_args = re.sub(r"^(?:удалить|удали)?\s*(?:игрока|игроков)?\s*", "", cmd_text, flags=re.IGNORECASE).strip()
+        parts_s = clean_args.split(None, 1)
+        if len(parts_s) < 2:
+            await msg.reply_text(
+                "ℹ️ Формат: <code>Темшик удалить игрока [Клуб] [Имя игрока]</code>\n"
+                "Пример: <code>Темшик удалить игрока Расинг Colombo</code>",
+                parse_mode="HTML"
+            )
+            return True
+
+        team_name, player_name = parts_s[0], parts_s[1].strip()
+        removed = await asyncio.to_thread(database.remove_player_from_squad, team_name, player_name)
+        if removed:
+            await msg.reply_text(
+                f"🗑 Игрок <b>{html.escape(player_name)}</b> удалён из состава клуба <b>{html.escape(team_name)}</b>.",
+                parse_mode="HTML"
+            )
+        else:
+            await msg.reply_text(
+                f"❌ Игрок <b>{html.escape(player_name)}</b> не найден в составе <b>{html.escape(team_name)}</b>.",
+                parse_mode="HTML"
+            )
+        return True
+
+    if (
+        action in ("переименовать", "rename_player") or
+        full_cmd.startswith("переименовать игрока")
+    ):
+        if not is_adm:
+            await msg.reply_text("⚠️ Эта команда доступна только администраторам турнира.")
+            return True
+
+        clean_args = re.sub(r"^(?:переименовать)?\s*(?:игрока)?\s*", "", cmd_text, flags=re.IGNORECASE).strip()
+        if "->" in clean_args:
+            left_p, new_n = clean_args.split("->", 1)
+            left_parts = left_p.strip().split(None, 1)
+            if len(left_parts) == 2:
+                team_n, old_n = left_parts[0], left_parts[1]
+            else:
+                team_n, old_n = None, left_parts[0]
+            new_n = new_n.strip()
+        else:
+            await msg.reply_text(
+                "ℹ️ Формат: <code>Темшик переименовать игрока [Клуб] [Старое имя] -> [Новое имя]</code>\n"
+                "Пример: <code>Темшик переименовать игрока Расинг Lang -> Noa Lang</code>",
+                parse_mode="HTML"
+            )
+            return True
+
+        ok, text_res = await asyncio.to_thread(database.rename_player, old_n, new_n, team_n)
+        await msg.reply_text(f"{'✅' if ok else '❌'} {text_res}", parse_mode="HTML")
+        return True
+
+    if (
+        action in ("открыть", "открой", "open_round") or
+        full_cmd.startswith("открыть тур") or
+        full_cmd.startswith("открой тур")
+    ):
+        if not is_adm:
+            await msg.reply_text("⚠️ Эта команда доступна только администраторам турнира.")
+            return True
+
+        nums = re.findall(r"\d+", cmd_text)
+        if not nums:
+            await msg.reply_text("ℹ️ Укажите номер тура. Пример: <code>Темшик открыть тур 18</code>", parse_mode="HTML")
+            return True
+        rn = int(nums[0])
+        await asyncio.to_thread(database.update_round_status, rn, is_open=True)
+        await msg.reply_text(f"🔓 <b>Тур {rn} успешно открыт!</b> Участники могут вносить результаты.", parse_mode="HTML")
+        return True
+
+    if (
+        action in ("закрыть", "закрой", "close_round") or
+        full_cmd.startswith("закрыть тур") or
+        full_cmd.startswith("закрой тур")
+    ):
+        if not is_adm:
+            await msg.reply_text("⚠️ Эта команда доступна только администраторам турнира.")
+            return True
+
+        nums = re.findall(r"\d+", cmd_text)
+        if not nums:
+            await msg.reply_text("ℹ️ Укажите номер тура. Пример: <code>Темшик закрыть тур 17</code>", parse_mode="HTML")
+            return True
+        rn = int(nums[0])
+        await asyncio.to_thread(database.update_round_status, rn, is_open=False)
+        await msg.reply_text(f"🔒 <b>Тур {rn} закрыт.</b>", parse_mode="HTML")
+        return True
+
+    if action in ("дедлайн", "deadline"):
+        if not is_adm:
+            await msg.reply_text("⚠️ Эта команда доступна только администраторам турнира.")
+            return True
+
+        nums = re.findall(r"\d+", args_str)
+        if not nums:
+            await msg.reply_text(
+                "ℹ️ Формат: <code>Темшик дедлайн [номер_тура] [дата и время]</code>\n"
+                "Пример: <code>Темшик дедлайн 18 18.08 23:59</code>",
+                parse_mode="HTML"
+            )
+            return True
+
+        rn = int(nums[0])
+        dl_text = re.sub(r"^\d+\s*(?:тур)?\s*", "", args_str, flags=re.IGNORECASE).strip()
+        if not dl_text:
+            await msg.reply_text("ℹ️ Укажите дату и время дедлайна, например: <code>18.08 23:59</code>", parse_mode="HTML")
+            return True
+
+        await asyncio.to_thread(database.update_round_status, rn, is_open=True, deadline=dl_text)
+        await msg.reply_text(
+            f"⏰ <b>Дедлайн для тура {rn} установлен на:</b> <code>{html.escape(dl_text)}</code>.",
+            parse_mode="HTML"
+        )
+        return True
+
+    if action in ("синх", "синх_кубок", "sync_cup") or full_cmd.startswith("синх кубок"):
+        if not is_adm:
+            await msg.reply_text("⚠️ Эта команда доступна только администраторам турнира.")
+            return True
+
+        advanced = await asyncio.to_thread(database.sync_cup_bracket)
+        await msg.reply_text(
+            f"🔄 <b>Кубковая сетка синхронизирована.</b> Перенесено победителей в следующие стадии: <b>{advanced}</b>.",
+            parse_mode="HTML"
+        )
+        return True
+
+    if action in ("варн", "warn"):
+        if not is_adm:
+            await msg.reply_text("⚠️ Эта команда доступна только администраторам турнира.")
+            return True
+
+        parts_w = args_str.split(None, 1)
+        if not parts_w:
+            await msg.reply_text(
+                "ℹ️ Формат: <code>Темшик варн @username [причина]</code>\n"
+                "Пример: <code>Темшик варн @ch1lyx Срыв дедлайна</code>",
+                parse_mode="HTML"
+            )
+            return True
+
+        target_ref = parts_w[0]
+        reason = parts_w[1].strip() if len(parts_w) > 1 else "Нарушение регламента турнира"
+
+        target_user = await asyncio.to_thread(database.find_user_by_ref, target_ref)
+        if not target_user:
+            await msg.reply_text(f"❌ Пользователь <b>{html.escape(target_ref)}</b> не найден в базе данных.", parse_mode="HTML")
+            return True
+
+        t_id = target_user["telegram_id"]
+        new_cnt, exceeded = await asyncio.to_thread(database.add_warn, t_id, user_id, reason)
+        from config import MAX_WARNS_LIMIT
+
+        warn_msg = (
+            f"⚠️ <b>ВЫДАНО ПРЕДУПРЕЖДЕНИЕ:</b>\n\n"
+            f"👤 <b>Игрок:</b> @{html.escape(target_user.get('username') or str(t_id))}\n"
+            f"🛡 <b>Клуб:</b> {html.escape(target_user.get('team_name') or '—')}\n"
+            f"📊 <b>Текущие варны:</b> {new_cnt}/{MAX_WARNS_LIMIT}\n"
+            f"📝 <b>Причина:</b> {html.escape(reason)}"
+        )
+        if exceeded:
+            warn_msg += f"\n\n🚨 <b>ВНИМАНИЕ: Достигнут лимит варнов ({MAX_WARNS_LIMIT}/{MAX_WARNS_LIMIT})!</b>"
+
+        await msg.reply_text(warn_msg, parse_mode="HTML")
+
+        # Also forward to warns topic if configured
+        group_id = await asyncio.to_thread(database.get_group_id)
+        warns_topic_id = await asyncio.to_thread(database.get_config, "warns_topic_id")
+        if group_id and warns_topic_id and msg.chat_id != group_id:
+            try:
+                await context.bot.send_message(
+                    chat_id=group_id,
+                    text=warn_msg,
+                    parse_mode="HTML",
+                    message_thread_id=int(warns_topic_id)
+                )
+            except Exception as e:
+                logger.warning(f"Failed to post warn to warns topic: {e}")
+        return True
+
+    if action in ("снять_варн", "unwarn", "разварн") or full_cmd.startswith("снять варн"):
+        if not is_adm:
+            await msg.reply_text("⚠️ Эта команда доступна только администраторам турнира.")
+            return True
+
+        clean_ref = re.sub(r"^(?:снять|сними)?\s*(?:варн)?\s*", "", cmd_text, flags=re.IGNORECASE).strip()
+        if not clean_ref:
+            await msg.reply_text("ℹ️ Укажите игрока: <code>Темшик снять варн @username</code>", parse_mode="HTML")
+            return True
+
+        target_user = await asyncio.to_thread(database.find_user_by_ref, clean_ref)
+        if not target_user:
+            await msg.reply_text(f"❌ Пользователь <b>{html.escape(clean_ref)}</b> не найден в базе данных.", parse_mode="HTML")
+            return True
+
+        t_id = target_user["telegram_id"]
+        new_cnt, removed = await asyncio.to_thread(database.remove_warn, t_id, user_id, "Снято администратором")
+        if removed:
+            await msg.reply_text(
+                f"✅ Предупреждение снято с @{html.escape(target_user.get('username') or str(t_id))}. "
+                f"Текущие варны: <b>{new_cnt}</b>.",
+                parse_mode="HTML"
+            )
+        else:
+            await msg.reply_text(
+                f"ℹ️ У игрока @{html.escape(target_user.get('username') or str(t_id))} нет активных варнов.",
+                parse_mode="HTML"
+            )
+        return True
+
+    if action in ("варны", "список_варнов", "warns"):
+        if not is_adm:
+            await msg.reply_text("⚠️ Эта команда доступна только администраторам турнира.")
+            return True
+
+        warn_users = await asyncio.to_thread(database.get_all_active_warns)
+        if not warn_users:
+            await msg.reply_text("✨ <b>Участников с активными предупреждениями нет.</b>", parse_mode="HTML")
+            return True
+
+        from config import MAX_WARNS_LIMIT
+        lines = ["⚠️ <b>СПИСОК ИГРОКОВ С ПРЕДУПРЕЖДЕНИЯМИ:</b>\n"]
+        for u in warn_users:
+            un = f"@{u['username']}" if u.get("username") else str(u['telegram_id'])
+            tm = f" ({u['team_name']})" if u.get("team_name") else ""
+            lines.append(f"• <b>{html.escape(un)}</b>{html.escape(tm)} — <b>{u['warn_count']}/{MAX_WARNS_LIMIT}</b>")
+        await msg.reply_text("\n".join(lines), parse_mode="HTML")
+        return True
+
+    if action in ("привязать_клуб", "привязать", "set_team") or full_cmd.startswith("привязать клуб"):
+        if not is_adm:
+            await msg.reply_text("⚠️ Эта команда доступна только администраторам турнира.")
+            return True
+
+        clean_args = re.sub(r"^(?:привязать)?\s*(?:клуб)?\s*", "", cmd_text, flags=re.IGNORECASE).strip()
+        parts_p = clean_args.split(None, 1)
+        if len(parts_p) < 2:
+            await msg.reply_text(
+                "ℹ️ Формат: <code>Темшик привязать клуб @username [Название клуба]</code>\n"
+                "Пример: <code>Темшик привязать клуб @ch1lyx Расинг</code>",
+                parse_mode="HTML"
+            )
+            return True
+
+        user_ref, club_name = parts_p[0], parts_p[1].strip()
+        ok, res_text = await asyncio.to_thread(database.set_player_club, user_ref, club_name)
+        await msg.reply_text(f"{'✅' if ok else '❌'} {res_text}", parse_mode="HTML")
+        return True
+
+    # Not a specific tournament command -> return False to allow conversational AI chat to handle it
+    return False

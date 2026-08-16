@@ -1487,6 +1487,42 @@ def amnesty_player(user_id: int, admin_id: int) -> None:
         )
 
 
+def find_user_by_ref(ref: str) -> dict | None:
+    """Find user by telegram_id, @username, or team_name."""
+    ref_clean = ref.strip().lstrip("@")
+    with transaction() as conn:
+        cursor = conn.cursor()
+        if ref_clean.isdigit():
+            cursor.execute("SELECT telegram_id, username, team_name, role, warn_count FROM users WHERE telegram_id = ?", (int(ref_clean),))
+            r = cursor.fetchone()
+            if r:
+                return dict(r)
+        
+        cursor.execute("SELECT telegram_id, username, team_name, role, warn_count FROM users WHERE LOWER(username) = LOWER(?)", (ref_clean,))
+        r = cursor.fetchone()
+        if r:
+            return dict(r)
+            
+        cursor.execute("SELECT telegram_id, username, team_name, role, warn_count FROM users WHERE LOWER(team_name) = LOWER(?)", (ref_clean,))
+        r = cursor.fetchone()
+        if r:
+            return dict(r)
+        return None
+
+
+def get_all_active_warns() -> list[dict]:
+    """Retrieve all users with warn_count > 0."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT telegram_id, username, team_name, warn_count 
+            FROM users 
+            WHERE warn_count > 0 
+            ORDER BY warn_count DESC, username ASC
+        """)
+        return [dict(row) for row in cursor.fetchall()]
+
+
 # --- Squad management ---
 
 def get_all_teams() -> list[str]:

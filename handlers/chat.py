@@ -7,6 +7,7 @@ from telegram.ext import ContextTypes
 from telegram.error import BadRequest
 import database
 import ai_chat
+from handlers.text_commands import handle_temshik_command
 
 
 logger = logging.getLogger(__name__)
@@ -18,6 +19,12 @@ async def handle_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     if not update.message:
         return
+
+    # Check if text is a tournament text command (e.g. "Темшик таблица", "Темшик состав")
+    if update.message.text:
+        handled = await handle_temshik_command(update, context)
+        if handled:
+            return
 
     is_voice_input = bool(update.message.voice)
     user_text = update.message.text.strip() if update.message.text else ""
