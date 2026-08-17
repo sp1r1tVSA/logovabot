@@ -84,8 +84,14 @@ def generate_chat_reply(
     for model_name in candidate_models:
         base_url = os.environ.get("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com").rstrip("/")
         for api_key in keys_to_try:
-            url = f"{base_url}/v1beta/models/{model_name}:generateContent?key={api_key}"
-            req = urllib.request.Request(url, data=payload_bytes, headers={'Content-Type': 'application/json'})
+            req = urllib.request.Request(
+                url,
+                data=payload_bytes,
+                headers={
+                    'Content-Type': 'application/json',
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+                }
+            )
             try:
                 with opener.open(req, timeout=25) as response:
                     result = json.loads(response.read().decode('utf-8'))

@@ -162,6 +162,10 @@ def _check_proxy_alive(proxy_url: str) -> bool:
 
 def _get_gemini_opener():
     """Returns a urllib opener with proxy support if alive, or direct opener."""
+    # If custom GEMINI_BASE_URL (like Cloudflare Worker) is used, default to direct connection
+    if os.environ.get("GEMINI_BASE_URL") and not os.environ.get("GEMINI_PROXY"):
+        return urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
     proxy_url = (
         os.environ.get("GEMINI_PROXY")
         or os.environ.get("ALL_PROXY")
@@ -230,7 +234,10 @@ def recognize_match_screenshots_bytes(
             req = urllib.request.Request(
                 url,
                 data=json.dumps(payload).encode("utf-8"),
-                headers={"Content-Type": "application/json"}
+                headers={
+                    "Content-Type": "application/json",
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+                }
             )
 
             with opener.open(req, timeout=30) as response:
