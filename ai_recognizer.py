@@ -131,20 +131,25 @@ PROMPT_TEXT = """
 
 ### ЭТАП 4: ФОРМАТ ОТВЕТА
 
+⚠️ КРИТИЧЕСКИ ВАЖНО: В массивах left_goals, right_goals, left_assists, right_assists количество элементов ОБЯЗАНО строго равняться числу в соответствующей колонке таблицы (Г или А)!
+- Если у игрока в колонке А стоит 2 — его имя ОБЯЗАНО быть указано 2 раза в массиве ассистов (например: ["Barron", "Barron"]).
+- Если у игрока в колонке А стоит 3 — ровно 3 раза (например: ["Lang", "Lang", "Lang"]).
+- Если у игрока в колонке Г стоит 2 — ровно 2 раза (например: ["Raspadori", "Raspadori"]).
+
 Верни результат СТРОГО в виде одного валидного JSON-объекта без разметки markdown:
 
 {
   "matches": [
     {
-      "team1": "Название левой команды (например, Копенгаген)",
+      "team1": "Название левой команды (например, Брага)",
       "team2": "Название правой команды (например, Рейнджерс)",
       "left_score": 3,
       "right_score": 2,
       "is_single_timeline": false,
-      "left_goals": ["Lukébakio", "Lukébakio", "Lukébakio"],
-      "right_goals": ["Cabella", "Ziyech"],
-      "left_assists": ["Mattsson", "Elyounoussi", "Elyounoussi"],
-      "right_assists": ["Leweling"]
+      "left_goals": ["Addai", "Ricardo Horta", "Ricardo Horta"],
+      "right_goals": ["Diomande", "Ziyech"],
+      "left_assists": ["Vitor Carvalho", "Leonardo Lelo"],
+      "right_assists": ["Barron", "Barron"]
     }
   ]
 }
@@ -235,7 +240,7 @@ def recognize_match_screenshots_bytes(
             payload = {
                 "contents": [{"parts": parts}],
                 "generationConfig": {
-                    "temperature": 0.1
+                    "temperature": 0.0
                 }
             }
 
