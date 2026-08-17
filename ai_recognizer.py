@@ -225,7 +225,8 @@ def recognize_match_screenshots_bytes(
                 }
             }
 
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{m_name}:generateContent?key={target_api_key}"
+            base_url = os.environ.get("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com").rstrip("/")
+            url = f"{base_url}/v1beta/models/{m_name}:generateContent?key={target_api_key}"
             req = urllib.request.Request(
                 url,
                 data=json.dumps(payload).encode("utf-8"),
