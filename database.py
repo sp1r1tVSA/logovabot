@@ -2227,8 +2227,11 @@ def process_cup_match_completion(match_id: int) -> str | None:
         cursor.execute("UPDATE cup_series SET team1_wins = ?, team2_wins = ? WHERE id = ?", (t1_wins, t2_wins, s_id))
         
         stage = series["stage"]
-        if t1_wins >= 2 or t2_wins >= 2:
-            series_winner = t1_name if t1_wins >= 2 else t2_name
+        wins_required = 3 if stage == 'final' else 2
+        max_games = 5 if stage == 'final' else 3
+
+        if t1_wins >= wins_required or t2_wins >= wins_required:
+            series_winner = t1_name if t1_wins >= wins_required else t2_name
             cursor.execute("UPDATE cup_series SET winner_name = ?, status = 'completed' WHERE id = ?", (series_winner, s_id))
             
             # Forward winner to the next stage in the pre-generated bracket
@@ -2260,10 +2263,10 @@ def process_cup_match_completion(match_id: int) -> str | None:
             
             return None
         else:
-            # Need next game (Game 2 or Game 3)
+            # Need next game (Game 2, 3, 4 or 5)
             current_game_num = len(confirmed_matches)
             next_game_num = current_game_num + 1
-            if next_game_num <= 3:
+            if next_game_num <= max_games:
                 cursor.execute("SELECT COUNT(*) FROM matches WHERE cup_series_id = ? AND game_num_in_series = ?", (s_id, next_game_num))
                 if cursor.fetchone()[0] == 0:
                     if next_game_num % 2 == 0:

@@ -284,7 +284,8 @@ def generate_cup_bracket_image(stage: str = "1/8") -> io.BytesIO:
 
     # Draw Header
     draw.text((35 * SCALE, 22 * SCALE), "КУБОК КПЛ 2026", fill=red_accent, font=font_title)
-    draw.text((35 * SCALE, 58 * SCALE), f"{stage_name}  •  СЕРИИ ДО 2-Х ПОБЕД (BEST-OF-3)", fill=text_muted, font=font_subtitle)
+    format_sub = "СЕРИЯ ДО 3-Х ПОБЕД (BEST-OF-5)" if stage == 'final' else "СЕРИИ ДО 2-Х ПОБЕД (BEST-OF-3)"
+    draw.text((35 * SCALE, 58 * SCALE), f"{stage_name}  •  {format_sub}", fill=text_muted, font=font_subtitle)
 
     # Draw Header Accent Line
     draw.rectangle([35 * SCALE, 92 * SCALE, (width_1x - 35) * SCALE, 94 * SCALE], fill=card_border)

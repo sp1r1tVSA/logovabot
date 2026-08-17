@@ -436,7 +436,10 @@ async def show_cup_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     title = stage_title_map.get(stage, stage)
 
     text = f"🏆 <b>КУБОК КПЛ | {title}</b>\n"
-    text += f"<i>Формат: Серии до 2-х побед (Best-of-3)</i>\n\n"
+    if stage == 'final':
+        text += f"<i>Формат: Финальная серия до 3-х побед (Best-of-5, без доп. времени и пенальти)</i>\n\n"
+    else:
+        text += f"<i>Формат: Серии до 2-х побед (Best-of-3)</i>\n\n"
 
     if not series_list:
         text += "Матчи данной стадии пока не сформированы."

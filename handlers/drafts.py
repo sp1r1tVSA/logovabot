@@ -377,12 +377,17 @@ async def _process_draft_group_delayed(buffer_key: str, update: Update, context:
                     elif g["a_score"] > g["h_score"]: w = g["away_team"]
                     else: continue
                     if w.lower() == team1_n.lower(): t1_wins += 1
-                    elif w.lower() == team2_n.lower(): t2_wins += 1
-                
-                post_lines.append(f"📊 <b>Счёт серии (Best-of-3): {html.escape(team1_n)} {t1_wins} : {t2_wins} {html.escape(team2_n)}</b>")
-                if t1_wins >= 2 or t2_wins >= 2:
-                    series_win = team1_n if t1_wins >= 2 else team2_n
-                    post_lines.append(f"🏆 <b>Победитель серии: {html.escape(series_win)}! Проходит в следующий раунд!</b>")
+                s_stage = (s_row.get("stage") or "1/8").lower()
+                wins_needed = 3 if s_stage == 'final' else 2
+                best_of_text = "Best-of-5" if s_stage == 'final' else "Best-of-3"
+
+                post_lines.append(f"📊 <b>Счёт серии ({best_of_text}): {html.escape(team1_n)} {t1_wins} : {t2_wins} {html.escape(team2_n)}</b>")
+                if t1_wins >= wins_needed or t2_wins >= wins_needed:
+                    series_win = team1_n if t1_wins >= wins_needed else team2_n
+                    if s_stage == 'final':
+                        post_lines.append(f"🏆 <b>ЧЕМПИОН КУБКА КПЛ 2026: {html.escape(series_win)}! ПОЗДРАВЛЯЕМ С ПОБЕДОЙ В ТУРНИРЕ! 🎉</b>")
+                    else:
+                        post_lines.append(f"🏆 <b>Победитель серии: {html.escape(series_win)}! Проходит в следующий раунд!</b>")
 
         post_lines.append("\n⏳ <i>Ожидает подтверждения администратором...</i>")
         group_text = "\n".join(post_lines)

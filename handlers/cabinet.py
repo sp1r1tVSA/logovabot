@@ -1935,12 +1935,22 @@ def build_formatted_match_post(
                     if cur_w and cur_w.lower() == s_row["team1_name"].lower(): w1 += 1
                     elif cur_w and cur_w.lower() == s_row["team2_name"].lower(): w2 += 1
 
-                series_info_text = f"\n📊 <b>Счёт серии (Best-of-3):</b> {t1} {w1} : {w2} {t2}"
-                if (w1 >= 2 or w2 >= 2) and is_draft:
-                    win_name = t1 if w1 >= 2 else t2
-                    series_info_text += f"\n🏆 <b>Победитель серии: {win_name}! Проходит в следующий раунд!</b>"
+                s_stage = (cup_stage or "1/8").lower()
+                wins_needed = 3 if s_stage == 'final' else 2
+                best_of_text = "Best-of-5" if s_stage == 'final' else "Best-of-3"
+
+                series_info_text = f"\n📊 <b>Счёт серии ({best_of_text}):</b> {t1} {w1} : {w2} {t2}"
+                if (w1 >= wins_needed or w2 >= wins_needed) and is_draft:
+                    win_name = t1 if w1 >= wins_needed else t2
+                    if s_stage == 'final':
+                        series_info_text += f"\n🏆 <b>ЧЕМПИОН КУБКА КПЛ 2026: {win_name}! ПОЗДРАВЛЯЕМ С ПОБЕДОЙ В ТУРНИРЕ! 🎉</b>"
+                    else:
+                        series_info_text += f"\n🏆 <b>Победитель серии: {win_name}! Проходит в следующий раунд!</b>"
                 elif s_row["winner_name"]:
-                    series_info_text += f"\n🏆 <b>Победитель серии: {safe_escape(s_row['winner_name'])}! Проходит в следующий раунд!</b>"
+                    if s_stage == 'final':
+                        series_info_text += f"\n🏆 <b>ЧЕМПИОН КУБКА КПЛ 2026: {safe_escape(s_row['winner_name'])}! ПОЗДРАВЛЯЕМ С ПОБЕДОЙ В ТУРНИРЕ! 🎉</b>"
+                    else:
+                        series_info_text += f"\n🏆 <b>Победитель серии: {safe_escape(s_row['winner_name'])}! Проходит в следующий раунд!</b>"
 
     p1_clean = safe_escape(p1_username.lstrip('@')) if p1_username else ""
     p2_clean = safe_escape(p2_username.lstrip('@')) if p2_username else ""

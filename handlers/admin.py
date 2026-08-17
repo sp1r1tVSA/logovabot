@@ -208,7 +208,8 @@ async def admin_manage_cup(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             s_num = s['series_num']
 
             if s['status'] == 'completed':
-                text += f"⚔️ <b>Серия {s_num}:</b> {t1} ({w1}) 🆚 ({w2}) {t2} ➔ 🏆 <b>{html.escape(s['winner_name'] or 'Победитель')}</b>\n"
+                win_label = "🏆 ЧЕМПИОН КУБКА 2026" if stage == 'final' else "🏆 Победитель"
+                text += f"⚔️ <b>Серия {s_num}:</b> {t1} ({w1}) 🆚 ({w2}) {t2} ➔ <b>{win_label}: {html.escape(s['winner_name'] or 'Победитель')}</b>\n"
             else:
                 text += f"⚔️ <b>Серия {s_num}:</b> <b>{t1}</b> ({w1}) 🆚 ({w2}) <b>{t2}</b>\n"
         
@@ -283,12 +284,16 @@ async def admin_remind_cup_execute(update: Update, context: ContextTypes.DEFAULT
             r2 = c.fetchone()
             if r2: p2_id = r2[0]
 
+        wins_needed = 3 if stage == 'final' else 2
+        best_of_text = "Best-of-5" if stage == 'final' else "Best-of-3"
+        rule_desc = "Матчи играются в стандартном режиме (90 мин, без доп. времени и серии пенальти)." if stage == 'final' else "Каждая игра до победы (с доп. временем и пенальти)."
+
         pm_text = (
             f"🏆 <b>НАПОМИНАНИЕ О КУБКОВОМ МАТЧЕ!</b>\n\n"
             f"⚔️ <b>Стадия:</b> {stage} Финала (Игра {g_num})\n"
             f"🏠 <b>{html.escape(t1)}</b> 🆚 <b>{html.escape(t2)}</b> ✈️\n"
-            f"📊 <b>Счёт серии (Best-of-3):</b> {w1} : {w2}\n\n"
-            f"Пожалуйста, сыграйте свой кубковый матч! Каждая игра до победы (с доп. временем и пенальти)."
+            f"📊 <b>Счёт серии ({best_of_text}):</b> {w1} : {w2}\n\n"
+            f"Пожалуйста, сыграйте свой кубковый матч! {rule_desc}"
         )
         kb = [[InlineKeyboardButton("📋 Внести результат", callback_data=f"cabinet_report_score_{m['id']}")]]
 
@@ -314,7 +319,10 @@ async def admin_remind_cup_execute(update: Update, context: ContextTypes.DEFAULT
             g_num = m["game_num_in_series"]
             lines.append(f"• ⚔️ <b>Игра {g_num}:</b> <b>{t1_esc}</b> 🆚 <b>{t2_esc}</b> (Счёт серии: {w1} : {w2})")
 
-        lines.append("\n⚠️ Напоминаем: в каждом кубковом матче обязательно доп. время и пенальти (ничьих нет).")
+        if stage == 'final':
+            lines.append("\n⚠️ Напоминаем: в финале серия до 3-х побед (Best-of-5), матчи играются в обычном режиме (90 мин, без доп. времени и серии пенальти).")
+        else:
+            lines.append("\n⚠️ Напоминаем: в каждом кубковом матче обязательно доп. время и пенальти (ничьих нет).")
         lines.append("Пожалуйста, внесите результаты в бота!")
 
         try:
@@ -352,10 +360,20 @@ async def notify_cup_stage_opened(bot, stage: str) -> None:
     }
     title = stage_title_map.get(stage, f"СТАДИЯ {stage}")
 
+    if stage == 'final':
+        format_lines = [
+            f"<i>Формат: Финальная серия до 3-х побед (Best-of-5)</i>",
+            f"<i>Матчи проводятся в стандартном режиме (90 мин, без доп. времени и серии пенальти).</i>\n"
+        ]
+    else:
+        format_lines = [
+            f"<i>Формат: Серии до 2-х побед (Best-of-3)</i>",
+            f"<i>Каждая игра проводится с возможным доп. временем и пенальти (ничьих нет).</i>\n"
+        ]
+
     lines = [
         f"🚀 <b>ОТКРЫТИЕ СТАДИИ | КУБОК КПЛ — {title}</b>\n",
-        f"<i>Формат: Серии до 2-х побед (Best-of-3)</i>",
-        f"<i>Каждая игра проводится с возможным доп. временем и пенальти (ничьих нет).</i>\n",
+        *format_lines,
         f"⚔️ <b>Пары участников:</b>"
     ]
 
