@@ -162,7 +162,13 @@ def _check_proxy_alive(proxy_url: str) -> bool:
 
 def _get_gemini_opener():
     """Returns a urllib opener with proxy support if alive, or direct opener."""
-    proxy_url = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY") or os.environ.get("WARP_PROXY", "http://127.0.0.1:4001")
+    proxy_url = (
+        os.environ.get("GEMINI_PROXY")
+        or os.environ.get("ALL_PROXY")
+        or os.environ.get("HTTPS_PROXY")
+        or os.environ.get("HTTP_PROXY")
+        or os.environ.get("WARP_PROXY", "http://127.0.0.1:4001")
+    )
     if proxy_url and _check_proxy_alive(proxy_url):
         try:
             logger.info(f"AI Vision: Using proxy {proxy_url}")
