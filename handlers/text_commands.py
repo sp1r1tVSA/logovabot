@@ -433,6 +433,119 @@ async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_T
         )
         return True
 
+    if action in ("анонс_кубок", "анонс_финал", "анонс") or full_cmd.startswith("анонс кубок") or full_cmd.startswith("анонс финал") or full_cmd.startswith("кубок анонс"):
+        if not is_adm:
+            await msg.reply_text("⚠️ Эта команда доступна только администраторам турнира.")
+            return True
+
+        stage_req = "final"
+        if "1/8" in full_cmd:
+            stage_req = "1/8"
+        elif "1/4" in full_cmd:
+            stage_req = "1/4"
+        elif "1/2" in full_cmd or "полуфинал" in full_cmd:
+            stage_req = "1/2"
+        elif "финал" in full_cmd or "final" in full_cmd:
+            stage_req = "final"
+
+        from handlers.admin import notify_cup_stage_opened
+        await notify_cup_stage_opened(context.bot, stage_req)
+        await msg.reply_text(f"🚀 <b>Официальное уведомление и сетка для стадии «{stage_req}» отправлены в тему отчётов!</b>", parse_mode="HTML")
+        return True
+
+    if action in ("напомнить_кубок", "кубок_напомнить") or full_cmd.startswith("напомнить кубок") or full_cmd.startswith("кубок напомнить") or full_cmd.startswith("напомни кубок"):
+        if not is_adm:
+            await msg.reply_text("⚠️ Эта команда доступна только администраторам турнира.")
+            return True
+
+        stage_req = "final"
+        if "1/8" in full_cmd:
+            stage_req = "1/8"
+        elif "1/4" in full_cmd:
+            stage_req = "1/4"
+        elif "1/2" in full_cmd or "полуфинал" in full_cmd:
+            stage_req = "1/2"
+        elif "финал" in full_cmd or "final" in full_cmd:
+            stage_req = "final"
+
+        from handlers.admin import admin_remind_cup_execute
+        series_list = await asyncio.to_thread(database.get_cup_series_list, stage_req)
+        unplayed_matches = []
+        for s in series_list:
+            if s["status"] != "completed":
+                for m in s.get("matches", []):
+                    if m["status"] == "pending":
+                        unplayed_matches.append((s, m))
+
+        if not unplayed_matches:
+            await msg.reply_text(f"✅ В стадии {stage_req} нет несыгранных матчей!", parse_mode="HTML")
+            return True
+
+        from handlers.admin import safe_send_notification
+        pm_sent = 0
+        for s, m in unplayed_matches:
+            t1, t2 = s["team1_name"], s["team2_name"]
+            w1, w2 = s["team1_wins"], s["team2_wins"]
+            g_num = m["game_num_in_series"]
+            wins_needed = 3 if stage_req == 'final' else 2
+            best_of_text = "Best-of-5" if stage_req == 'final' else "Best-of-3"
+            rule_desc = "Матчи играются в стандартном режиме (90 мин, без доп. времени и серии пенальти)." if stage_req == 'final' else "Каждая игра до победы (с доп. временем и пенальти)."
+
+            p1_id, p2_id = None, None
+            with database.transaction() as conn:
+                c = conn.cursor()
+                c.execute("SELECT telegram_id FROM users WHERE LOWER(team_name) = LOWER(?)", (t1.strip(),))
+                r1 = c.fetchone()
+                if r1: p1_id = r1[0]
+                c.execute("SELECT telegram_id FROM users WHERE LOWER(team_name) = LOWER(?)", (t2.strip(),))
+                r2 = c.fetchone()
+                if r2: p2_id = r2[0]
+
+            pm_text = (
+                f"🏆 <b>НАПОМИНАНИЕ О КУБКОВОМ МАТЧЕ!</b>\n\n"
+                f"⚔️ <b>Стадия:</b> {stage_req} Финала (Игра {g_num})\n"
+                f"🏠 <b>{html.escape(t1)}</b> 🆚 <b>{html.escape(t2)}</b> ✈️\n"
+                f"📊 <b>Счёт серии ({best_of_text}):</b> {w1} : {w2}\n\n"
+                f"Пожалуйста, сыграйте свой кубковый матч! {rule_desc}"
+            )
+            kb = [[InlineKeyboardButton("📋 Внести результат", callback_data=f"cabinet_report_score_{m['id']}")]]
+            if p1_id and p1_id > 0:
+                if await safe_send_notification(context.bot, p1_id, pm_text, InlineKeyboardMarkup(kb)):
+                    pm_sent += 1
+            if p2_id and p2_id > 0:
+                if await safe_send_notification(context.bot, p2_id, pm_text, InlineKeyboardMarkup(kb)):
+                    pm_sent += 1
+
+        main_group_id = await asyncio.to_thread(database.get_group_id)
+        reports_topic_id = await asyncio.to_thread(database.get_config, "reports_topic_id")
+        if main_group_id:
+            lines = [
+                f"🏆 <b>НАПОМИНАНИЕ О КУБКЕ КПЛ | {stage_req} Финала</b>\n",
+                f"Несыгранные кубковые матчи ({len(unplayed_matches)}):"
+            ]
+            for s, m in unplayed_matches:
+                t1_esc, t2_esc = html.escape(s["team1_name"]), html.escape(s["team2_name"])
+                w1, w2 = s["team1_wins"], s["team2_wins"]
+                g_num = m["game_num_in_series"]
+                lines.append(f"• ⚔️ <b>Игра {g_num}:</b> <b>{t1_esc}</b> 🆚 <b>{t2_esc}</b> (Счёт серии: {w1} : {w2})")
+
+            if stage_req == 'final':
+                lines.append("\n⚠️ Напоминаем: в финале серия до 3-х побед (Best-of-5), матчи играются в обычном режиме (90 мин, без доп. времени и серии пенальти).")
+            else:
+                lines.append("\n⚠️ Напоминаем: в каждом кубковом матче обязательно доп. время и пенальти (ничьих нет).")
+            lines.append("Пожалуйста, внесите результаты в бота!")
+
+            try:
+                kwargs = {"chat_id": main_group_id, "text": "\n".join(lines), "parse_mode": "HTML"}
+                if reports_topic_id:
+                    kwargs["message_thread_id"] = int(reports_topic_id)
+                await context.bot.send_message(**kwargs)
+            except Exception as e:
+                logger.exception("Failed to post cup reminder summary to group")
+
+        await msg.reply_text(f"🚀 <b>Напоминания по стадии «{stage_req}» отправлены!</b> (В ЛС: {pm_sent}, Тема отчетов: ✅)", parse_mode="HTML")
+        return True
+
     if action in ("варн", "warn"):
         if not is_adm:
             await msg.reply_text("⚠️ Эта команда доступна только администраторам турнира.")
