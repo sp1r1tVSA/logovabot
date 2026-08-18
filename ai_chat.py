@@ -85,6 +85,7 @@ def generate_chat_reply(
     for model_name in candidate_models:
         base_url = os.environ.get("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com").rstrip("/")
         for api_key in keys_to_try:
+            url = f"{base_url}/v1beta/models/{model_name}:generateContent?key={api_key}"
             req = urllib.request.Request(
                 url,
                 data=payload_bytes,
