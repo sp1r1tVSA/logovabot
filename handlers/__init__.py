@@ -197,6 +197,7 @@ from handlers.admin import (
     admin_warn_history,
     admin_amnesty_execute,
     admin_reset_season_warns,
+    admin_reset_debts_command,
 )
 
 logger = logging.getLogger(__name__)
@@ -586,6 +587,7 @@ def _register_admin_handlers(app: Application) -> None:
     app.add_handler(CallbackQueryHandler(admin_warn_history, pattern="^warn_hist_-?\\d+$"))
     app.add_handler(CallbackQueryHandler(admin_amnesty_execute, pattern="^warn_amnesty_-?\\d+$"))
     app.add_handler(CallbackQueryHandler(admin_reset_season_warns, pattern="^admin_reset_season_warns$"))
+    app.add_handler(CommandHandler("reset_debts", admin_reset_debts_command))
 
 def register_all_handlers(application: Application) -> None:
     """Register all command, message, and callback handlers to the application."""

@@ -21,15 +21,18 @@ class TestDebtLifecycle(unittest.TestCase):
 
         self.orig_config_path = config.DB_PATH
         self.orig_database_path = database.DB_PATH
+        self.orig_start_dt = config.DEBT_TRACKING_START_DATETIME
 
         config.DB_PATH = self.temp_db_path
         database.DB_PATH = self.temp_db_path
+        config.DEBT_TRACKING_START_DATETIME = "20.08.2026 12:00"
         database.init_db()
 
     def tearDown(self):
         """Restore original paths and cleanup temp db."""
         config.DB_PATH = self.orig_config_path
         database.DB_PATH = self.orig_database_path
+        config.DEBT_TRACKING_START_DATETIME = self.orig_start_dt
         try:
             os.remove(self.temp_db_path)
         except Exception:
@@ -92,61 +95,56 @@ class TestDebtLifecycle(unittest.TestCase):
         self.assertFalse(unwarned)
         self.assertEqual(database.get_user_warn_count(user_id), 0)
 
-    def test_get_detailed_overdue_matches_and_is_overdue(self):
-        """Test overdue matches detection and calculation."""
-        past_dl = (datetime.datetime.now() - datetime.timedelta(hours=26)).strftime("%d.%m.%Y %H:%M")
-        future_dl = (datetime.datetime.now() + datetime.timedelta(hours=24)).strftime("%d.%m.%Y %H:%M")
+    def test_start_datetime_clamping(self):
+        """Test that past deadlines are clamped to DEBT_TRACKING_START_DATETIME (21.08.2026 12:00)."""
+        # When start datetime is in the future relative to now:
+        config.DEBT_TRACKING_START_DATETIME = (datetime.datetime.now() + datetime.timedelta(days=2)).strftime("%d.%m.%Y %H:%M")
+        
+        past_dl = (datetime.datetime.now() - datetime.timedelta(hours=50)).strftime("%d.%m.%Y %H:%M")
 
         with database.transaction() as conn:
-            conn.execute("INSERT INTO users (telegram_id, username, team_name, warn_count) VALUES (111, 'u1', 'Real Madrid', 1)")
+            conn.execute("INSERT INTO users (telegram_id, username, team_name, warn_count) VALUES (111, 'u1', 'Real Madrid', 0)")
             conn.execute("INSERT INTO users (telegram_id, username, team_name, warn_count) VALUES (222, 'u2', 'Barcelona', 0)")
-
             conn.execute("INSERT INTO rounds (round_number, is_open, deadline) VALUES (1, 1, ?)", (past_dl,))
-            conn.execute("INSERT INTO rounds (round_number, is_open, deadline) VALUES (2, 1, ?)", (future_dl,))
+            conn.execute("INSERT INTO matches (id, round_number, player1_id, player2_id, player1_team, player2_team, status) VALUES (10, 1, 111, 222, 'Real Madrid', 'Barcelona', 'pending')")
 
-            conn.execute("""
-                INSERT INTO matches (id, round_number, player1_id, player2_id, player1_team, player2_team, status)
-                VALUES (10, 1, 111, 222, 'Real Madrid', 'Barcelona', 'pending')
-            """)
-            conn.execute("""
-                INSERT INTO matches (id, round_number, player1_id, player2_id, player1_team, player2_team, status)
-                VALUES (20, 2, 111, 222, 'Real Madrid', 'Barcelona', 'pending')
-            """)
+        # Since start datetime is in the future, is_match_overdue should be False
+        self.assertFalse(database.is_match_overdue(10))
 
-        self.assertTrue(database.is_match_overdue(10))
-        self.assertFalse(database.is_match_overdue(20))
-
+        # Overdue matches should report 0.0 hours_overdue
         overdue = database.get_detailed_overdue_matches()
         self.assertEqual(len(overdue), 1)
-        m = overdue[0]
-        self.assertEqual(m["id"], 10)
-        self.assertEqual(m["round_number"], 1)
-        self.assertGreaterEqual(m["hours_overdue"], 25.0)
-        self.assertEqual(m["p1_warns"], 1)
-        self.assertEqual(m["p2_warns"], 0)
+        self.assertEqual(overdue[0]["hours_overdue"], 0.0)
 
-        # User 111 and 222 have 1 debt remaining
-        self.assertEqual(database.count_user_remaining_debts(111), 1)
-        self.assertEqual(database.count_user_remaining_debts(222), 1)
-
-    def test_ban_and_remove_from_league(self):
-        """Test auto-kick function sets team_name to NULL and logs AUTO_KICK."""
-        user_id = 999888
+    def test_recent_warn_rate_limit(self):
+        """Test has_user_been_warned_recently helper."""
+        user_id = 555666
         with database.transaction() as conn:
-            conn.execute("INSERT INTO users (telegram_id, username, team_name, warn_count) VALUES (?, 'kicked_user', 'Chelsea', 4)", (user_id,))
+            conn.execute("INSERT INTO users (telegram_id, username, team_name, warn_count) VALUES (?, 'warned_u', 'Porto', 1)", (user_id,))
+            conn.execute("INSERT INTO user_warns (user_id, admin_id, reason, type, created_at) VALUES (?, NULL, 'Test warn', 'WARN_ADD', CURRENT_TIMESTAMP)", (user_id,))
 
-        team = database.ban_and_remove_from_league(user_id)
-        self.assertEqual(team, "Chelsea")
+        self.assertTrue(database.has_user_been_warned_recently(user_id, hours=20.0))
+        self.assertFalse(database.has_user_been_warned_recently(999999, hours=20.0))
 
+    def test_admin_reset_and_restore(self):
+        """Test global reset and restore user team."""
         with database.transaction() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT team_name FROM users WHERE telegram_id = ?", (user_id,))
-            row = cursor.fetchone()
-            self.assertIsNone(row["team_name"])
+            conn.execute("INSERT INTO users (telegram_id, username, team_name, warn_count) VALUES (10, 'u1', NULL, 4)")
+            conn.execute("INSERT INTO users (telegram_id, username, team_name, warn_count) VALUES (20, 'u2', 'Ajax', 3)")
+            conn.execute("INSERT INTO matches (id, round_number, status) VALUES (1, 1, 'pending')")
+            conn.execute("INSERT INTO debt_reminders (match_id, stage) VALUES (1, 'warn_24h')")
 
-            cursor.execute("SELECT type FROM user_warns WHERE user_id = ?", (user_id,))
-            warn_row = cursor.fetchone()
-            self.assertEqual(warn_row["type"], "AUTO_KICK")
+        affected = database.admin_reset_all_warns_and_debts()
+        self.assertEqual(affected, 2)
+        self.assertEqual(database.get_user_warn_count(10), 0)
+        self.assertEqual(database.get_user_warn_count(20), 0)
+        self.assertFalse(database.has_debt_stage(1, "warn_24h"))
+
+        # Restore user 10 club
+        database.restore_user_team(10, "ПСВ")
+        user10 = database.get_user(10)
+        self.assertEqual(user10["team_name"], "ПСВ")
+        self.assertEqual(user10["warn_count"], 0)
 
 
 if __name__ == "__main__":

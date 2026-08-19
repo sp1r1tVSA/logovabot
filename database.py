@@ -2649,16 +2649,40 @@ def get_detailed_overdue_matches() -> list[dict]:
         """, sorted(expired_rounds.keys()))
 
         results = []
+        start_dt = get_debt_tracking_start_datetime()
         for row in cursor.fetchall():
             d = dict(row)
             rn = d["round_number"]
             dl_str, dl_dt = expired_rounds[rn]
             d["deadline_str"] = dl_str
             d["deadline_dt"] = dl_dt
-            hours_overdue = (now - dl_dt).total_seconds() / 3600.0
+
+            # If a start datetime is configured, clamp overdue calculation to start_dt
+            effective_dl = dl_dt
+            if start_dt and dl_dt < start_dt:
+                effective_dl = start_dt
+
+            if now < effective_dl:
+                hours_overdue = 0.0
+            else:
+                hours_overdue = (now - effective_dl).total_seconds() / 3600.0
+
             d["hours_overdue"] = max(0.0, hours_overdue)
             results.append(d)
         return results
+
+
+def get_debt_tracking_start_datetime() -> datetime.datetime | None:
+    """Parse configured debt tracking activation start datetime."""
+    from config import DEBT_TRACKING_START_DATETIME
+    if not DEBT_TRACKING_START_DATETIME:
+        return None
+    for fmt in ("%d.%m.%Y %H:%M", "%Y-%m-%d %H:%M", "%d.%m.%Y", "%Y-%m-%d"):
+        try:
+            return datetime.datetime.strptime(DEBT_TRACKING_START_DATETIME, fmt)
+        except ValueError:
+            continue
+    return None
 
 
 def is_match_overdue(match_id: int) -> bool:
@@ -2676,7 +2700,11 @@ def is_match_overdue(match_id: int) -> bool:
             return False
         try:
             dl_dt = datetime.datetime.strptime(row["deadline"], "%d.%m.%Y %H:%M")
-            return dl_dt <= datetime.datetime.now()
+            start_dt = get_debt_tracking_start_datetime()
+            effective_dl = dl_dt
+            if start_dt and dl_dt < start_dt:
+                effective_dl = start_dt
+            return datetime.datetime.now() >= effective_dl
         except ValueError:
             return False
 
@@ -2689,6 +2717,55 @@ def count_user_remaining_debts(user_id: int) -> int:
         if m.get("player1_id") == user_id or m.get("player2_id") == user_id:
             count += 1
     return count
+
+
+def has_user_been_warned_recently(user_id: int, hours: float = 20.0) -> bool:
+    """Check if user has received a warn within the last N hours."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT created_at FROM user_warns 
+            WHERE user_id = ? AND type = 'WARN_ADD'
+            ORDER BY created_at DESC LIMIT 1
+        """, (user_id,))
+        row = cursor.fetchone()
+        if not row or not row["created_at"]:
+            return False
+        try:
+            warn_dt = datetime.datetime.fromisoformat(row["created_at"].replace("Z", "+00:00"))
+        except Exception:
+            try:
+                warn_dt = datetime.datetime.strptime(row["created_at"], "%Y-%m-%d %H:%M:%S")
+            except Exception:
+                return False
+        return (datetime.datetime.now() - warn_dt).total_seconds() < hours * 3600.0
+
+
+def reset_all_debt_reminders() -> None:
+    """Clear all recorded debt stages and reminders."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM debt_reminders")
+
+
+def admin_reset_all_warns_and_debts() -> int:
+    """Reset all user warns to 0, clear debt_reminders, and return count of affected users."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE users SET warn_count = 0 WHERE warn_count > 0")
+        affected = cursor.rowcount
+        cursor.execute("DELETE FROM debt_reminders")
+        cursor.execute("DELETE FROM user_warns")
+        return affected
+
+
+def restore_user_team(telegram_id: int, team_name: str) -> None:
+    """Assign/restore team_name for a user and clear warns."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE users SET team_name = ?, warn_count = 0 WHERE telegram_id = ?", (team_name, telegram_id))
+        cursor.execute("INSERT INTO user_warns (user_id, admin_id, reason, type) VALUES (?, NULL, 'Восстановление клуба и сброс варнов', 'RESTORE')", (telegram_id,))
+
 
 
 def apply_debt_played_reward(user_id: int, round_number: int) -> tuple[int, bool]:
@@ -2714,6 +2791,7 @@ def apply_debt_played_reward(user_id: int, round_number: int) -> tuple[int, bool
             (user_id, f"Снятие варна за закрытие долга ({round_number} тур)")
         )
         return new_warns, True
+
 
 
 
