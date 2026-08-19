@@ -106,6 +106,16 @@ def init_db() -> None:
             )
         """)
         cursor.execute("""
+            CREATE TABLE IF NOT EXISTS debt_reminders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                match_id INTEGER NOT NULL,
+                stage TEXT NOT NULL,
+                sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(match_id, stage),
+                FOREIGN KEY(match_id) REFERENCES matches(id) ON DELETE CASCADE
+            )
+        """)
+        cursor.execute("""
             CREATE TABLE IF NOT EXISTS user_warns (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL,
@@ -199,15 +209,55 @@ def init_db() -> None:
 
         logger.info("Database tables initialized successfully.")
 
+def normalize_team_name(name: str | None) -> str:
+    """Normalize team name for fuzzy matching (handles ё/е, latin ë, hyphens, slashes, extra spaces)."""
+    if not name:
+        return ""
+    s = str(name).lower()
+    # Replace variants of 'ё', latin 'ë' (\u00eb), 'ø', 'ö'
+    s = s.replace("ё", "е").replace("\u00eb", "е").replace("ø", "o").replace("ö", "o")
+    # Replace punctuation and separators
+    s = re.sub(r"[\-_/\\.,]", " ", s)
+    # Collapse multiple spaces
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
+def teams_match(team_a: str | None, team_b: str | None) -> bool:
+    """Check if two team names refer to the same team (fuzzy/normalized match)."""
+    if not team_a or not team_b:
+        return False
+    a_norm = normalize_team_name(team_a)
+    b_norm = normalize_team_name(team_b)
+    if not a_norm or not b_norm:
+        return False
+    if a_norm == b_norm:
+        return True
+    if a_norm in b_norm or b_norm in a_norm:
+        return True
+    # Word-level match
+    a_words = [w for w in a_norm.split() if len(w) > 2]
+    b_words = [w for w in b_norm.split() if len(w) > 2]
+    if a_words and b_words:
+        if all(any(aw in bw or bw in aw for bw in b_words) for aw in a_words):
+            return True
+        if all(any(bw in aw or aw in bw for aw in a_words) for bw in b_words):
+            return True
+    return False
+
+
 def get_team_owner(team_name: str) -> int | None:
     """Return the telegram_id of the user who owns the given team."""
     if not team_name:
         return None
     with transaction() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT telegram_id FROM users WHERE LOWER(team_name) = LOWER(?)", (team_name,))
-        row = cursor.fetchone()
-        return row['telegram_id'] if row else None
+        cursor.execute("SELECT telegram_id, team_name FROM users WHERE team_name IS NOT NULL")
+        rows = cursor.fetchall()
+        for r in rows:
+            if teams_match(r['team_name'], team_name):
+                return r['telegram_id']
+        return None
 
 def get_user(telegram_id: int) -> sqlite3.Row | None:
     """Retrieve a user record by Telegram ID."""
@@ -743,11 +793,10 @@ def get_active_match_by_teams(team1: str, team2: str, caption: str | None = None
             if not p1 or not p2:
                 continue
             
-            # Substring match for team names
+            # Substring match for team names using normalized matching
             is_match = False
-            if (t1_lower in p1 and t2_lower in p2) or (p1 in t1_lower and p2 in t2_lower):
-                is_match = True
-            elif (t1_lower in p2 and t2_lower in p1) or (p1 in t2_lower and p2 in t1_lower):
+            if (teams_match(t1_lower, p1) and teams_match(t2_lower, p2)) or \
+               (teams_match(t1_lower, p2) and teams_match(t2_lower, p1)):
                 is_match = True
                 
             if is_match:
@@ -1406,6 +1455,16 @@ def get_user_team(telegram_id: int) -> str | None:
         return row["team_name"] if row else None
 
 
+def get_user_warn_count(user_id: int) -> int:
+    """Get current warn count for user."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT warn_count FROM users WHERE telegram_id = ?", (user_id,))
+        row = cursor.fetchone()
+        return row["warn_count"] if row and row["warn_count"] is not None else 0
+
+
+
 def add_warn(user_id: int, admin_id: int, reason: str) -> tuple[int, bool]:
     from config import MAX_WARNS_LIMIT
     with transaction() as conn:
@@ -1566,13 +1625,26 @@ def add_squad(team_name: str, player_names: list[str]) -> int:
 
 def get_squad(team_name: str) -> list[str]:
     """Get list of player names in a club's squad."""
+    if not team_name:
+        return []
     with transaction() as conn:
         cursor = conn.cursor()
         cursor.execute(
             "SELECT player_name FROM squad_players WHERE LOWER(team_name) = LOWER(?) ORDER BY id ASC",
             (team_name.strip(),)
         )
-        return [row["player_name"] for row in cursor.fetchall()]
+        res = [row["player_name"] for row in cursor.fetchall()]
+        if res:
+            return res
+        
+        # Fallback with fuzzy matching
+        cursor.execute("SELECT DISTINCT team_name FROM squad_players")
+        all_t = [r["team_name"] for r in cursor.fetchall()]
+        for t in all_t:
+            if teams_match(t, team_name):
+                cursor.execute("SELECT player_name FROM squad_players WHERE team_name = ? ORDER BY id ASC", (t,))
+                return [row["player_name"] for row in cursor.fetchall()]
+        return []
 
 
 def clear_squad(team_name: str) -> int:
@@ -2350,6 +2422,160 @@ def get_all_unplayed_cup_matches() -> list[dict]:
             ORDER BY s.series_num ASC, m.game_num_in_series ASC
         """)
         return [dict(row) for row in cursor.fetchall()]
+
+
+def record_debt_stage(match_id: int, stage: str) -> None:
+    """Record a debt lifecycle stage for a match (e.g. 'deadline_passed', 'warn_24h', 'warn_48h', etc.)."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT OR IGNORE INTO debt_reminders (match_id, stage, sent_at) VALUES (?, ?, CURRENT_TIMESTAMP)",
+            (match_id, stage)
+        )
+
+
+def has_debt_stage(match_id: int, stage: str) -> bool:
+    """Check whether a debt lifecycle stage has already been recorded for a match."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT 1 FROM debt_reminders WHERE match_id = ? AND stage = ?", (match_id, stage))
+        return cursor.fetchone() is not None
+
+
+def record_debt_12h_reminder(match_id: int) -> None:
+    """Record timestamp of 12h cycle debt reminder."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO debt_reminders (match_id, stage, sent_at)
+            VALUES (?, 'cycle_reminder_last', CURRENT_TIMESTAMP)
+            ON CONFLICT(match_id, stage) DO UPDATE SET sent_at = CURRENT_TIMESTAMP
+        """, (match_id,))
+
+
+def get_last_debt_12h_reminder(match_id: int) -> datetime.datetime | None:
+    """Get datetime when last cycle reminder was sent for a match."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT sent_at FROM debt_reminders WHERE match_id = ? AND stage = 'cycle_reminder_last'", (match_id,))
+        row = cursor.fetchone()
+        if not row or not row["sent_at"]:
+            return None
+        try:
+            return datetime.datetime.fromisoformat(row["sent_at"].replace("Z", "+00:00"))
+        except Exception:
+            try:
+                return datetime.datetime.strptime(row["sent_at"], "%Y-%m-%d %H:%M:%S")
+            except Exception:
+                return None
+
+
+def get_detailed_overdue_matches() -> list[dict]:
+    """Retrieve all pending league matches whose round deadline has already passed with overdue duration and participant info."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        now = datetime.datetime.now()
+        cursor.execute("SELECT round_number, deadline FROM rounds WHERE is_open = 1")
+        expired_rounds: dict[int, tuple[str, datetime.datetime]] = {}
+        for r_num, dl_str in cursor.fetchall():
+            if not dl_str:
+                continue
+            try:
+                dl_dt = datetime.datetime.strptime(dl_str, "%d.%m.%Y %H:%M")
+            except ValueError:
+                continue
+            if dl_dt <= now:
+                expired_rounds[r_num] = (dl_str, dl_dt)
+
+        if not expired_rounds:
+            return []
+
+        placeholders = ",".join("?" * len(expired_rounds))
+        cursor.execute(f"""
+            SELECT 
+                m.id, m.round_number, COALESCE(m.is_extended, 0) AS is_extended,
+                u1.telegram_id AS player1_id, u2.telegram_id AS player2_id,
+                COALESCE(m.player1_team, u1.team_name) AS player1_team,
+                COALESCE(m.player2_team, u2.team_name) AS player2_team,
+                u1.username AS p1_username, u2.username AS p2_username,
+                COALESCE(u1.warn_count, 0) AS p1_warns,
+                COALESCE(u2.warn_count, 0) AS p2_warns
+            FROM matches m
+            LEFT JOIN users u1 ON (m.player1_id = u1.telegram_id OR (m.player1_id IS NULL AND LOWER(m.player1_team) = LOWER(u1.team_name)))
+            LEFT JOIN users u2 ON (m.player2_id = u2.telegram_id OR (m.player2_id IS NULL AND LOWER(m.player2_team) = LOWER(u2.team_name)))
+            WHERE (m.tournament_type IS NULL OR m.tournament_type = 'league')
+              AND m.round_number IN ({placeholders})
+              AND m.status = 'pending'
+            ORDER BY m.round_number ASC, m.id ASC
+        """, sorted(expired_rounds.keys()))
+
+        results = []
+        for row in cursor.fetchall():
+            d = dict(row)
+            rn = d["round_number"]
+            dl_str, dl_dt = expired_rounds[rn]
+            d["deadline_str"] = dl_str
+            d["deadline_dt"] = dl_dt
+            hours_overdue = (now - dl_dt).total_seconds() / 3600.0
+            d["hours_overdue"] = max(0.0, hours_overdue)
+            results.append(d)
+        return results
+
+
+def is_match_overdue(match_id: int) -> bool:
+    """Check if a match belongs to a round whose deadline has already passed."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT r.deadline 
+            FROM matches m
+            JOIN rounds r ON m.round_number = r.round_number
+            WHERE m.id = ? AND r.is_open = 1
+        """, (match_id,))
+        row = cursor.fetchone()
+        if not row or not row["deadline"]:
+            return False
+        try:
+            dl_dt = datetime.datetime.strptime(row["deadline"], "%d.%m.%Y %H:%M")
+            return dl_dt <= datetime.datetime.now()
+        except ValueError:
+            return False
+
+
+def count_user_remaining_debts(user_id: int) -> int:
+    """Count how many overdue unplayed league matches the user still has."""
+    overdue_matches = get_detailed_overdue_matches()
+    count = 0
+    for m in overdue_matches:
+        if m.get("player1_id") == user_id or m.get("player2_id") == user_id:
+            count += 1
+    return count
+
+
+def apply_debt_played_reward(user_id: int, round_number: int) -> tuple[int, bool]:
+    """
+    Reward player for clearing a debt match by removing 1 warn if warn_count > 0.
+    If warn_count == 0, it remains 0.
+    Returns (new_warn_count, was_unwarned).
+    """
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT warn_count FROM users WHERE telegram_id = ?", (user_id,))
+        row = cursor.fetchone()
+        if not row:
+            return 0, False
+        current_warns = row["warn_count"] or 0
+        if current_warns <= 0:
+            return 0, False
+        
+        new_warns = max(0, current_warns - 1)
+        cursor.execute("UPDATE users SET warn_count = ? WHERE telegram_id = ?", (new_warns, user_id))
+        cursor.execute(
+            "INSERT INTO user_warns (user_id, admin_id, reason, type) VALUES (?, NULL, ?, 'DEBT_UNWARN')",
+            (user_id, f"Снятие варна за закрытие долга ({round_number} тур)")
+        )
+        return new_warns, True
+
 
 
 

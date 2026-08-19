@@ -3414,6 +3414,174 @@ async def job_post_debts_to_warns(context: ContextTypes.DEFAULT_TYPE) -> None:
     await _post_or_update_debts_in_warns(context)
 
 
+async def job_debt_lifecycle_tracker(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Automated debt lifecycle tracking:
+    - 0h overdue: Initial notification to both participants in DM.
+    - Every 12h: Cycle reminder in DM.
+    - Every 24h overdue (+24h, +48h, +72h, +96h): Auto-warn to both participants, post to ПРЕДЫ topic.
+    - On 4/4 warns: Auto-kick player from league and group, free up club, announce in ПРЕДЫ & Отчёты.
+    - If is_extended == 1: auto-warns and auto-kick are paused.
+    """
+    overdue_matches = await asyncio.to_thread(database.get_detailed_overdue_matches)
+    if not overdue_matches:
+        return
+
+    now = datetime.datetime.now()
+    warns_updated = False
+
+    for m in overdue_matches:
+        m_id = m["id"]
+        rn = m["round_number"]
+        is_extended = bool(m.get("is_extended", 0))
+        hours_overdue = m.get("hours_overdue", 0.0)
+
+        p1_id = m.get("player1_id")
+        p2_id = m.get("player2_id")
+        t1 = html.escape(m.get("player1_team") or "Команда 1")
+        t2 = html.escape(m.get("player2_team") or "Команда 2")
+        u1 = f"@{html.escape(m['p1_username'])}" if m.get("p1_username") else t1
+        u2 = f"@{html.escape(m['p2_username'])}" if m.get("p2_username") else t2
+
+        # 1. Initial Notification: Moment deadline passed (0h)
+        if not (await asyncio.to_thread(database.has_debt_stage, m_id, "deadline_passed")):
+            dm_initial_text = (
+                f"⏳ <b>Внимание: дедлайн тура истёк!</b>\n\n"
+                f"Матч переведён в категорию <b>ДОЛГ</b>:\n"
+                f"🏆 <b>{rn}-й тур</b>\n"
+                f"🏠 <b>{t1}</b> ({u1}) 🆚 ✈️ <b>{t2}</b> ({u2})\n\n"
+                f"⚠️ <i>Каждые 24 часа просрочки бот будет начислять авто-варн (+1 варн). "
+                f"При накоплении {MAX_WARNS_LIMIT}/{MAX_WARNS_LIMIT} варнов участник автоматически исключается из лиги.</i>\n"
+                f"🎁 <i>Каждый сыгранный матч-долг списывает 1 варн!</i>"
+            )
+            for pid in (p1_id, p2_id):
+                if pid:
+                    try:
+                        await context.bot.send_message(chat_id=pid, text=dm_initial_text, parse_mode="HTML")
+                    except Exception:
+                        pass
+            await asyncio.to_thread(database.record_debt_stage, m_id, "deadline_passed")
+            await asyncio.to_thread(database.record_debt_12h_reminder, m_id)
+
+        # 2. Cycle Reminders in DM (every 12 hours)
+        last_remind_dt = await asyncio.to_thread(database.get_last_debt_12h_reminder, m_id)
+        should_send_12h = False
+        if last_remind_dt is None:
+            should_send_12h = True
+        else:
+            diff_hours = (now - last_remind_dt).total_seconds() / 3600.0
+            if diff_hours >= 12.0:
+                should_send_12h = True
+
+        if should_send_12h:
+            next_warn_in_hours = max(1, 24 - (int(hours_overdue) % 24))
+            hours_overdue_int = int(hours_overdue)
+
+            # Send to player 1
+            if p1_id:
+                p1_warns = m.get("p1_warns", 0)
+                p1_dm = (
+                    f"⏰ <b>Напоминание о несыгранном долге!</b>\n\n"
+                    f"🏆 <b>{rn}-й тур:</b> 🏠 <b>{t1}</b> ({u1}) 🆚 ✈️ <b>{t2}</b> ({u2})\n"
+                    f"⏳ Просрочка: <b>{hours_overdue_int}ч</b>\n"
+                    f"⚠️ До следующего авто-варна осталось: <b>~{next_warn_in_hours}ч</b>\n"
+                    f"📊 Ваши текущие варны: <b>{p1_warns}/{MAX_WARNS_LIMIT}</b>\n\n"
+                    f"<i>Пожалуйста, сыграйте матч и внесите результат в бота.</i>"
+                )
+                try:
+                    await context.bot.send_message(chat_id=p1_id, text=p1_dm, parse_mode="HTML")
+                except Exception:
+                    pass
+
+            # Send to player 2
+            if p2_id:
+                p2_warns = m.get("p2_warns", 0)
+                p2_dm = (
+                    f"⏰ <b>Напоминание о несыгранном долге!</b>\n\n"
+                    f"🏆 <b>{rn}-й тур:</b> 🏠 <b>{t1}</b> ({u1}) 🆚 ✈️ <b>{t2}</b> ({u2})\n"
+                    f"⏳ Просрочка: <b>{hours_overdue_int}ч</b>\n"
+                    f"⚠️ До следующего авто-варна осталось: <b>~{next_warn_in_hours}ч</b>\n"
+                    f"📊 Ваши текущие варны: <b>{p2_warns}/{MAX_WARNS_LIMIT}</b>\n\n"
+                    f"<i>Пожалуйста, сыграйте матч и внесите результат в бота.</i>"
+                )
+                try:
+                    await context.bot.send_message(chat_id=p2_id, text=p2_dm, parse_mode="HTML")
+                except Exception:
+                    pass
+
+            await asyncio.to_thread(database.record_debt_12h_reminder, m_id)
+
+        # 3. 24-hour Auto-Warn Cycles (+24h, +48h, +72h, +96h)
+        # If match was extended by admin, skip auto-warns and auto-kick
+        if is_extended:
+            continue
+
+        warn_milestones = [
+            (24.0, "warn_24h", "24ч"),
+            (48.0, "warn_48h", "48ч"),
+            (72.0, "warn_72h", "72ч"),
+            (96.0, "warn_96h", "96ч"),
+        ]
+
+        for req_hours, stage_key, label in warn_milestones:
+            if hours_overdue >= req_hours and not (await asyncio.to_thread(database.has_debt_stage, m_id, stage_key)):
+                warns_updated = True
+
+                # Apply warn to Player 1
+                if p1_id:
+                    new_cnt1, is_exceeded1 = await asyncio.to_thread(
+                        database.add_warn, p1_id, None, f"Авто-варн: просрочка {label} по {rn} туру"
+                    )
+                    dm_warn1 = (
+                        f"🚨 <b>Вам начислен АВТО-ВАРН за задержку тура!</b>\n\n"
+                        f"Причина: Просрочка матча {rn}-го тура (vs {u2}) более {label}.\n"
+                        f"📊 <b>Текущие варны:</b> <b>{new_cnt1}/{MAX_WARNS_LIMIT}</b>\n\n"
+                        f"⚠️ <i>При достижении {MAX_WARNS_LIMIT}/{MAX_WARNS_LIMIT} варнов вы будете автоматически исключены из лиги, а клуб передан на замену. Сыграйте долг, чтобы снять варн!</i>"
+                    )
+                    try:
+                        await context.bot.send_message(chat_id=p1_id, text=dm_warn1, parse_mode="HTML")
+                    except Exception:
+                        pass
+                    if is_exceeded1:
+                        await _auto_kick_player(context, p1_id, m.get("p1_username"), m.get("player1_team"))
+
+                # Apply warn to Player 2
+                if p2_id:
+                    new_cnt2, is_exceeded2 = await asyncio.to_thread(
+                        database.add_warn, p2_id, None, f"Авто-варн: просрочка {label} по {rn} туру"
+                    )
+                    dm_warn2 = (
+                        f"🚨 <b>Вам начислен АВТО-ВАРН за задержку тура!</b>\n\n"
+                        f"Причина: Просрочка матча {rn}-го тура (vs {u1}) более {label}.\n"
+                        f"📊 <b>Текущие варны:</b> <b>{new_cnt2}/{MAX_WARNS_LIMIT}</b>\n\n"
+                        f"⚠️ <i>При достижении {MAX_WARNS_LIMIT}/{MAX_WARNS_LIMIT} варнов вы будете автоматически исключены из лиги, а клуб передан на замену. Сыграйте долг, чтобы снять варн!</i>"
+                    )
+                    try:
+                        await context.bot.send_message(chat_id=p2_id, text=dm_warn2, parse_mode="HTML")
+                    except Exception:
+                        pass
+                    if is_exceeded2:
+                        await _auto_kick_player(context, p2_id, m.get("p2_username"), m.get("player2_team"))
+
+                # Post group notice to ПРЕДЫ topic
+                p1_warn_now = await asyncio.to_thread(database.get_user_warn_count, p1_id) if p1_id else 0
+                p2_warn_now = await asyncio.to_thread(database.get_user_warn_count, p2_id) if p2_id else 0
+                thread_notice = (
+                    f"⚠️ <b>АВТО-ВАРН ЗА ПРОСРОЧКУ ТУРА</b>\n\n"
+                    f"👤 Участники: <b>{u1}</b> [{t1}] и <b>{u2}</b> [{t2}]\n"
+                    f"🏆 Матч: {rn}-й тур (Просрочка: {label})\n"
+                    f"📊 Текущий баланс варнов:\n"
+                    f"• {u1}: <b>{p1_warn_now}/{MAX_WARNS_LIMIT}</b>\n"
+                    f"• {u2}: <b>{p2_warn_now}/{MAX_WARNS_LIMIT}</b>\n\n"
+                    f"<i>Матч необходимо срочно доиграть и внести результат.</i>"
+                )
+                await _send_to_warns_thread(context, thread_notice)
+                await asyncio.to_thread(database.record_debt_stage, m_id, stage_key)
+
+    if warns_updated:
+        await _post_or_update_debts_in_warns(context)
+
+
 @admin_only
 async def admin_set_squad_topic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Set the topic where squads will be sent."""
@@ -3607,22 +3775,38 @@ async def _auto_kick_player(context: ContextTypes.DEFAULT_TYPE, user_id: int, us
     uname = f"@{username}" if username else f"ID {user_id}"
     team_display = html.escape(team_name or "без клуба")
     dm_text = (
-        f"🚨 <b>Вы исключены из лиги!</b>\n\n"
-        f"Вы получили {MAX_WARNS_LIMIT}/{MAX_WARNS_LIMIT} предупреждений.\n"
-        f"Клуб <b>{team_display}</b> освобожден.\n\n"
-        f"Для возвращения обратитесь к администратору."
+        f"⛔ <b>Вы исключены из турнира</b>\n\n"
+        f"Вы набрали максимальное количество предупреждений: <b>{MAX_WARNS_LIMIT}/{MAX_WARNS_LIMIT}</b> за систематические долги по турам. "
+        f"🏟 Клуб <b>{team_display}</b> освобождён и выставлен на замену.\n\n"
+        f"<i>Для выяснения обстоятельств или апелляции обратитесь к администрации.</i>"
     )
     try:
         await context.bot.send_message(chat_id=user_id, text=dm_text, parse_mode="HTML")
     except (Forbidden, TelegramError):
         logger.warning(f"Cannot DM user {user_id} about auto-kick.")
 
-    # Public notice in ПРЕДЫ thread
+    # Public notice in ПРЕДЫ thread & reports thread
     thread_text = (
-        f"🚨 Игрок <b>{html.escape(uname)}</b> [{team_display}] получил "
-        f"<b>{MAX_WARNS_LIMIT}/{MAX_WARNS_LIMIT}</b> предупреждений и автоматически удален из лиги и группы! Клуб освобожден."
+        f"🚨 <b>АВТО-ИСКЛЮЧЕНИЕ УЧАСТНИКА</b>\n\n"
+        f"👤 Игрок: <b>{html.escape(uname)}</b>\n"
+        f"🏟 Клуб: <b>{team_display}</b>\n"
+        f"Причина: Превышен лимит варнов ({MAX_WARNS_LIMIT}/{MAX_WARNS_LIMIT}) из-за несыгранных долгов.\n\n"
+        f"📢 Клуб <b>{team_display}</b> свободен и открыт для замены!"
     )
     await _send_to_warns_thread(context, thread_text)
+
+    # Also post to reports topic if configured
+    reports_topic_id = await asyncio.to_thread(database.get_config, "reports_topic_id")
+    if group_id and reports_topic_id:
+        try:
+            await context.bot.send_message(
+                chat_id=group_id,
+                text=thread_text,
+                parse_mode="HTML",
+                message_thread_id=int(reports_topic_id)
+            )
+        except Exception:
+            pass
 
 
 @admin_only

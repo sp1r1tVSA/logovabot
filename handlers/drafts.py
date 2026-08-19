@@ -111,9 +111,11 @@ async def _process_draft_group_delayed(buffer_key: str, update: Update, context:
     squad_hints = {}
     if caption:
         try:
+            caption_norm = database.normalize_team_name(caption)
             all_teams = await asyncio.to_thread(database.get_all_teams)
             for t in all_teams:
-                if t.lower() in caption.lower():
+                t_norm = database.normalize_team_name(t)
+                if t_norm and (t_norm in caption_norm or t.lower() in caption.lower()):
                     sq = await asyncio.to_thread(database.get_squad, t)
                     if sq:
                         squad_hints[t] = sq

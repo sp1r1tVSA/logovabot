@@ -3,7 +3,7 @@ from telegram.ext import ApplicationBuilder, Application, PicklePersistence
 from telegram import BotCommand
 from config import TOKEN
 from database import init_db
-from handlers import register_all_handlers, job_check_deadlines_and_remind, job_post_debts_to_warns
+from handlers import register_all_handlers, job_check_deadlines_and_remind, job_post_debts_to_warns, job_debt_lifecycle_tracker
 
 # Configure logging
 logging.basicConfig(
@@ -23,6 +23,8 @@ def register_jobs(application: Application) -> None:
     application.job_queue.run_repeating(job_check_deadlines_and_remind, interval=1800, first=30)
     # Post/update debts summary in ПРЕДЫ thread every 12 hours
     application.job_queue.run_repeating(job_post_debts_to_warns, interval=12 * 3600, first=60)
+    # Run automated debt lifecycle tracker (reminders + auto-warns + auto-kick) every 30 minutes
+    application.job_queue.run_repeating(job_debt_lifecycle_tracker, interval=1800, first=90)
 
 def main() -> None:
     """Initialize and run the Telegram bot application."""

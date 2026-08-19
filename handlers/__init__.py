@@ -162,6 +162,7 @@ from handlers.admin import (
     admin_send_selected_reminders,
     job_check_deadlines_and_remind,
     job_post_debts_to_warns,
+    job_debt_lifecycle_tracker,
     admin_set_squad_topic,
     admin_set_drafts_topic,
     admin_set_reports_topic,

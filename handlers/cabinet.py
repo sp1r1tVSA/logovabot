@@ -2264,6 +2264,55 @@ async def refresh_league_table(context: ContextTypes.DEFAULT_TYPE) -> None:
     except Exception as e:
         logger.warning(f"Failed to refresh league table: {e}")
 
+async def handle_debt_played_rewards(
+    context: ContextTypes.DEFAULT_TYPE,
+    match_id: int,
+    round_number: int,
+    p1_id: int | None,
+    p2_id: int | None
+) -> None:
+    """Check if the completed match was overdue and reward players with -1 warn."""
+    is_overdue = await asyncio.to_thread(database.is_match_overdue, match_id)
+    if not is_overdue:
+        return
+
+    for p_id in (p1_id, p2_id):
+        if not p_id:
+            continue
+        try:
+            new_warns, was_unwarned = await asyncio.to_thread(
+                database.apply_debt_played_reward, p_id, round_number
+            )
+            if was_unwarned:
+                reward_text = (
+                    f"🎉 <b>Матч-долг закрыт: Снят 1 варн!</b>\n\n"
+                    f"Результат матча <b>{round_number}-го тура</b> успешно внесён в базу.\n"
+                    f"🎁 За закрытие задолженности с вашего аккаунта <b>списан 1 варн</b>.\n"
+                    f"📊 Ваш текущий баланс варнов: <b>{new_warns}/{MAX_WARNS_LIMIT}</b>\n\n"
+                    f"<i>Спасибо за оперативность!</i>"
+                )
+                await context.bot.send_message(chat_id=p_id, text=reward_text, parse_mode="HTML")
+            else:
+                zero_warn_text = (
+                    f"✅ <b>Матч-долг успешно закрыт!</b>\n\n"
+                    f"Результат матча <b>{round_number}-го тура</b> внесён в базу лиги.\n"
+                    f"📊 Ваш баланс варнов чист: <b>0/{MAX_WARNS_LIMIT}</b>"
+                )
+                await context.bot.send_message(chat_id=p_id, text=zero_warn_text, parse_mode="HTML")
+
+            # Check if all debts are cleared
+            remaining_debts = await asyncio.to_thread(database.count_user_remaining_debts, p_id)
+            if remaining_debts == 0:
+                all_clear_text = (
+                    f"🟢 <b>Отличная работа! Все долги закрыты</b>\n\n"
+                    f"У вас больше нет просроченных матчей в лиге.\n"
+                    f"Автоматические напоминания и штрафные таймеры отключены. Удачи в следующих турах! ⚽"
+                )
+                await context.bot.send_message(chat_id=p_id, text=all_clear_text, parse_mode="HTML")
+        except Exception as e:
+            logger.warning(f"Failed to process debt played reward for user {p_id}: {e}")
+
+
 async def notify_match_confirmed(context: ContextTypes.DEFAULT_TYPE, match_id: int) -> None:
     match = await asyncio.to_thread(database.get_match, match_id)
     if not match:
@@ -2302,7 +2351,16 @@ async def notify_match_confirmed(context: ContextTypes.DEFAULT_TYPE, match_id: i
             try:
                 await context.bot.send_message(chat_id=p_id, text=pm_text, parse_mode="HTML")
             except Exception as e:
-                logger.exception("Failed to send confirmation to player {p_id}")
+                logger.exception(f"Failed to send confirmation to player {p_id}")
+
+    # Process debt reward (-1 warn) and all-debts-cleared notification
+    await handle_debt_played_rewards(
+        context,
+        match_id=match_id,
+        round_number=match['round_number'],
+        p1_id=match['player1_id'],
+        p2_id=match['player2_id']
+    )
 
     results_topic_id = await asyncio.to_thread(database.get_config, "results_topic_id")
     group_id = await asyncio.to_thread(database.get_group_id)
