@@ -2,6 +2,7 @@ import logging
 import sqlite3
 import datetime
 import re
+import difflib
 from typing import Generator
 from contextlib import contextmanager
 from config import DB_PATH
@@ -209,6 +210,76 @@ def init_db() -> None:
 
         logger.info("Database tables initialized successfully.")
 
+TEAM_ALIASES = {
+    # Расинг
+    "расинг": "Расинг", "расинг клаб": "Расинг", "расинг клуб": "Расинг", "расинга": "Расинг",
+    "racing": "Расинг", "racing club": "Расинг", "rcing": "Расинг",
+    
+    # Брага
+    "брага": "Брага", "брагу": "Брага", "браге": "Брага", "браги": "Брага",
+    "braga": "Брага", "sc braga": "Брага", "сп брага": "Брага", "сц брага": "Брага",
+    
+    # Бенфика
+    "бенфика": "Бенфика", "бенфику": "Бенфика", "бенфике": "Бенфика", "бенфики": "Бенфика", "бенфа": "Бенфика",
+    "benfica": "Бенфика", "sl benfica": "Бенфика", "бенфика лиссабон": "Бенфика",
+    
+    # АЕК
+    "аек": "АЕК", "аека": "АЕК", "аеку": "АЕК", "аек афины": "АЕК",
+    "aek": "АЕК", "aek athens": "АЕК",
+    
+    # Аякс
+    "аякс": "Аякс", "аякса": "Аякс", "аяксу": "Аякс", "аяксе": "Аякс",
+    "ajax": "Аякс", "afc ajax": "Аякс",
+    
+    # ПСВ
+    "псв": "ПСВ", "псв эйндховен": "ПСВ",
+    "psv": "ПСВ", "psv eindhoven": "ПСВ",
+    
+    # Фейеноорд
+    "фейеноорд": "Фейеноорд", "фейенорд": "Фейеноорд", "фейноорд": "Фейеноорд", "фейнорд": "Фейеноорд",
+    "фейе": "Фейеноорд", "фейеноорда": "Фейеноорд", "фейенорда": "Фейеноорд",
+    "feyenoord": "Фейеноорд", "feyenoor": "Фейеноорд", "feyenord": "Фейеноорд",
+    
+    # Будё Глимт
+    "будё глимт": "Будё Глимт", "буде глимт": "Будё Глимт", "будë глимт": "Будё Глимт",
+    "буде-глимт": "Будё Глимт", "будё-глимт": "Будё Глимт", "будеглимт": "Будё Глимт", "будёглимт": "Будё Глимт",
+    "буде": "Будё Глимт", "будё": "Будё Глимт", "будë": "Будё Глимт", "глимт": "Будё Глимт",
+    "bodo glimt": "Будё Глимт", "bodø glimt": "Будё Глимт", "bodo/glimt": "Будё Глимт", "bodø/glimt": "Будё Глимт",
+    "bodo": "Будё Глимт", "glimt": "Будё Глимт", "bodoe glimt": "Будё Глимт",
+    
+    # Порту
+    "порту": "Порту", "порто": "Порту", "порт": "Порту", "португал": "Порту",
+    "porto": "Порту", "portu": "Порту", "fc porto": "Порту", "фк порту": "Порту", "фк порто": "Порту",
+    
+    # Спортинг
+    "спортинг": "Спортинг", "спортнг": "Спортинг", "спортинга": "Спортинг", "спорт": "Спортинг",
+    "sporting": "Спортинг", "sporting cp": "Спортинг", "спортинг лиссабон": "Спортинг",
+    
+    # Копенгаген
+    "копенгаген": "Копенгаген", "копен": "Копенгаген", "копенгагн": "Копенгаген", "копенгагена": "Копенгаген",
+    "copenhagen": "Копенгаген", "kobenhavn": "Копенгаген", "fc kobenhavn": "Копенгаген", "фк копенгаген": "Копенгаген",
+    
+    # Рейнджерс
+    "рейнджерс": "Рейнджерс", "рейнджер": "Рейнджерс", "рейнджерсы": "Рейнджерс", "ренджерс": "Рейнджерс", "ренджер": "Рейнджерс",
+    "рейнджерса": "Рейнджерс", "rangers": "Рейнджерс", "glasgow rangers": "Рейнджерс", "рейнджерс глазго": "Рейнджерс",
+    
+    # Бока Хуниорс
+    "бока хуниорс": "Бока Хуниорс", "бока": "Бока Хуниорс", "боку": "Бока Хуниорс", "боке": "Бока Хуниорс", "хуниорс": "Бока Хуниорс",
+    "boca juniors": "Бока Хуниорс", "boca": "Бока Хуниорс", "boca jrs": "Бока Хуниорс",
+    
+    # Селтик
+    "селтик": "Селтик", "кельтик": "Селтик", "селтика": "Селтик", "селтику": "Селтик",
+    "celtic": "Селтик", "celtic fc": "Селтик",
+    
+    # Брюгге
+    "брюгге": "Брюгге", "брюге": "Брюгге", "брюгг": "Брюгге", "брюг": "Брюгге", "брюгге фк": "Брюгге",
+    "brugge": "Брюгге", "club brugge": "Брюгге", "клуб брюгге": "Брюгге",
+    
+    # Ривер Плейт
+    "ривер плейт": "Ривер Плейт", "ривер": "Ривер Плейт", "плейт": "Ривер Плейт", "ривера": "Ривер Плейт",
+    "river plate": "Ривер Плейт", "river": "Ривер Плейт",
+}
+
 def normalize_team_name(name: str | None) -> str:
     """Normalize team name for fuzzy matching (handles ё/е, latin ë, hyphens, slashes, extra spaces)."""
     if not name:
@@ -223,18 +294,84 @@ def normalize_team_name(name: str | None) -> str:
     return s
 
 
+def resolve_team_name(name: str | None) -> str:
+    """Intelligently resolve any user-entered team name, typo, alias, or transliteration to canonical KPL team name."""
+    if not name:
+        return ""
+    
+    raw = str(name).strip()
+    norm = normalize_team_name(raw)
+    if not norm:
+        return raw
+
+    # 1. Direct alias dictionary lookup
+    if norm in TEAM_ALIASES:
+        return TEAM_ALIASES[norm]
+
+    # 2. Check tokens / joined words
+    tokens = norm.split()
+    if len(tokens) > 1:
+        joined = "".join(tokens)
+        if joined in TEAM_ALIASES:
+            return TEAM_ALIASES[joined]
+
+    # 3. Check exact match against canonical KPL_TEAMS in config
+    import config
+    all_canon = getattr(config, "KPL_TEAMS", [])
+    for canon in all_canon:
+        c_norm = normalize_team_name(canon)
+        if norm == c_norm:
+            return canon
+
+    # 4. Prefix / Substring match against aliases
+    for alias, canon in TEAM_ALIASES.items():
+        a_norm = normalize_team_name(alias)
+        if len(norm) >= 3 and (norm == a_norm or (len(a_norm) >= 4 and (norm in a_norm or a_norm in norm))):
+            return canon
+
+    # 5. Fuzzy string similarity using difflib
+    best_match = None
+    best_score = 0.0
+
+    for alias, canon in TEAM_ALIASES.items():
+        score = difflib.SequenceMatcher(None, norm, normalize_team_name(alias)).ratio()
+        if score > best_score:
+            best_score = score
+            best_match = canon
+
+    for canon in all_canon:
+        score = difflib.SequenceMatcher(None, norm, normalize_team_name(canon)).ratio()
+        if score > best_score:
+            best_score = score
+            best_match = canon
+
+    if best_match and best_score >= 0.65:
+        return best_match
+
+    return raw
+
+
 def teams_match(team_a: str | None, team_b: str | None) -> bool:
-    """Check if two team names refer to the same team (fuzzy/normalized match)."""
+    """Check if two team names refer to the same team (smart fuzzy/normalized match)."""
     if not team_a or not team_b:
         return False
+    
+    res_a = resolve_team_name(team_a)
+    res_b = resolve_team_name(team_b)
+    if res_a and res_b and res_a.lower() == res_b.lower():
+        return True
+        
     a_norm = normalize_team_name(team_a)
     b_norm = normalize_team_name(team_b)
     if not a_norm or not b_norm:
         return False
-    if a_norm == b_norm:
+    if a_norm == b_norm or a_norm in b_norm or b_norm in a_norm:
         return True
-    if a_norm in b_norm or b_norm in a_norm:
+        
+    # Fuzzy ratio check
+    if difflib.SequenceMatcher(None, a_norm, b_norm).ratio() >= 0.70:
         return True
+        
     # Word-level match
     a_words = [w for w in a_norm.split() if len(w) > 2]
     b_words = [w for w in b_norm.split() if len(w) > 2]
@@ -743,8 +880,10 @@ def get_active_match_by_teams(team1: str, team2: str, caption: str | None = None
     if not team1 or not team2:
         return None
     
-    t1_lower = team1.lower().strip()
-    t2_lower = team2.lower().strip()
+    t1_canon = resolve_team_name(team1) or team1
+    t2_canon = resolve_team_name(team2) or team2
+    t1_lower = t1_canon.lower().strip()
+    t2_lower = t2_canon.lower().strip()
     
     caption_clean = (caption or "").lower()
     

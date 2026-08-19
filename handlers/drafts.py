@@ -141,11 +141,14 @@ async def _process_draft_group_delayed(buffer_key: str, update: Update, context:
     matches_list = ai_res.get("matches") or [ai_res]
     
     # 1. Check team names
-    t1 = matches_list[0].get("team1")
-    t2 = matches_list[0].get("team2")
-    if not t1 or not t2:
+    t1_raw = matches_list[0].get("team1")
+    t2_raw = matches_list[0].get("team2")
+    if not t1_raw or not t2_raw:
         await status_msg.edit_text("🤖 ИИ распознал счет, но не смог определить названия команд. Пожалуйста, напишите их текстом в описании к фото.")
         return
+        
+    t1 = database.resolve_team_name(t1_raw) or t1_raw
+    t2 = database.resolve_team_name(t2_raw) or t2_raw
         
     # 2. Find first active match
     first_match = database.get_active_match_by_teams(t1, t2, caption=caption)
