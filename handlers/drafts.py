@@ -416,10 +416,17 @@ async def _process_draft_group_delayed(buffer_key: str, update: Update, context:
         if msg_ids:
             kwargs["reply_to_message_id"] = msg_ids[0]
             
-        if photo_id_to_send:
-            kwargs["photo"] = photo_id_to_send
-            kwargs["caption"] = group_text
-            await context.bot.send_photo(**kwargs)
+        if photo_id_to_send and len(group_text) <= 1024:
+            try:
+                kwargs["photo"] = photo_id_to_send
+                kwargs["caption"] = group_text
+                await context.bot.send_photo(**kwargs)
+            except Exception as e:
+                logger.warning(f"Failed to send draft photo preview ({e}), falling back to text message")
+                kwargs.pop("photo", None)
+                kwargs.pop("caption", None)
+                kwargs["text"] = group_text
+                await context.bot.send_message(**kwargs)
         else:
             kwargs["text"] = group_text
             await context.bot.send_message(**kwargs)
@@ -496,7 +503,7 @@ async def cb_draft_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             try:
                 kwargs = {"chat_id": main_group_id, "parse_mode": "HTML"}
                 if results_topic_id: kwargs["message_thread_id"] = int(results_topic_id)
-                if g.get("photo_id"):
+                if g.get("photo_id") and len(official_text) <= 1024:
                     kwargs["photo"] = g["photo_id"]
                     kwargs["caption"] = official_text
                     await context.bot.send_photo(**kwargs)
@@ -514,8 +521,17 @@ async def cb_draft_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     original_text = query.message.caption if query.message.photo else query.message.text
     cleaned_text = (original_text or "").replace("⏳ <i>Ожидает подтверждения администратором...</i>", "").strip()
     new_caption = f"{cleaned_text}\n\n✅ <b>Одобрено администратором {html.escape(admin_name)}.</b>"
-    if query.message.photo: await query.edit_message_caption(caption=new_caption, parse_mode="HTML")
-    else: await query.edit_message_text(text=new_caption, parse_mode="HTML")
+    if query.message.photo:
+        try:
+            if len(new_caption) <= 1024:
+                await query.edit_message_caption(caption=new_caption, parse_mode="HTML")
+            else:
+                await query.edit_message_caption(caption=new_caption[:1015] + "...", parse_mode="HTML")
+        except Exception:
+            await query.edit_message_reply_markup(reply_markup=None)
+            await query.message.reply_text(new_caption, parse_mode="HTML")
+    else:
+        await query.edit_message_text(text=new_caption, parse_mode="HTML")
         
     from handlers.cabinet import refresh_league_table, refresh_debts_summary
     await refresh_debts_summary(context)
@@ -538,5 +554,14 @@ async def cb_draft_reject(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     original_text = query.message.caption if query.message.photo else query.message.text
     cleaned_text = (original_text or "").replace("⏳ <i>Ожидает подтверждения администратором...</i>", "").strip()
     new_caption = f"{cleaned_text}\n\n❌ <b>Черновик отклонен администратором {html.escape(admin_name)}.</b>"
-    if query.message.photo: await query.edit_message_caption(caption=new_caption, parse_mode="HTML")
-    else: await query.edit_message_text(text=new_caption, parse_mode="HTML")
+    if query.message.photo:
+        try:
+            if len(new_caption) <= 1024:
+                await query.edit_message_caption(caption=new_caption, parse_mode="HTML")
+            else:
+                await query.edit_message_caption(caption=new_caption[:1015] + "...", parse_mode="HTML")
+        except Exception:
+            await query.edit_message_reply_markup(reply_markup=None)
+            await query.message.reply_text(new_caption, parse_mode="HTML")
+    else:
+        await query.edit_message_text(text=new_caption, parse_mode="HTML")
