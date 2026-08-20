@@ -374,14 +374,15 @@ async def _process_draft_group_delayed(buffer_key: str, update: Update, context:
                     if s1 > s2: w = cm["player1_team"]
                     elif s2 > s1: w = cm["player2_team"]
                     else: continue
-                    if w and w.lower() == team1_n.lower(): t1_wins += 1
-                    elif w and w.lower() == team2_n.lower(): t2_wins += 1
+                    if w and database.teams_match(w, team1_n): t1_wins += 1
+                    elif w and database.teams_match(w, team2_n): t2_wins += 1
                 
                 for g in prepared_games:
                     if g["h_score"] > g["a_score"]: w = g["home_team"]
                     elif g["a_score"] > g["h_score"]: w = g["away_team"]
                     else: continue
-                    if w.lower() == team1_n.lower(): t1_wins += 1
+                    if database.teams_match(w, team1_n): t1_wins += 1
+                    elif database.teams_match(w, team2_n): t2_wins += 1
                 s_stage = (s_row.get("stage") or "1/8").lower()
                 wins_needed = 3 if s_stage == 'final' else 2
                 best_of_text = "Best-of-5" if s_stage == 'final' else "Best-of-3"
