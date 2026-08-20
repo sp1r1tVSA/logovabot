@@ -206,9 +206,43 @@ def init_db() -> None:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_style_samples ON style_samples(id)")
+        # Standardize and migrate canonical team names across all tables
+        migrate_team_names_canonical(cursor)
 
         logger.info("Database tables initialized successfully.")
+
+
+def migrate_team_names_canonical(cursor: sqlite3.Cursor) -> None:
+    """Migrate and standardize legacy/variant team spellings across all DB tables."""
+    try:
+        # Standardize 'Будё Глимт' (latin ë \u00eb, 'Буде Глимт', 'Буде-Глимт', etc.)
+        for tbl, cols in [
+            ("users", ["team_name"]),
+            ("matches", ["player1_team", "player2_team"]),
+            ("squad_players", ["team_name"]),
+            ("match_events", ["team_name"]),
+            ("cup_series", ["team1_name", "team2_name", "winner_name"])
+        ]:
+            for col in cols:
+                cursor.execute(f"""
+                    UPDATE {tbl} 
+                    SET {col} = 'Будё Глимт' 
+                    WHERE {col} IS NOT NULL AND (
+                        {col} LIKE '%буд%глимт%' OR {col} LIKE '%bodo%glimt%' OR {col} = 'Буде Глимт' OR {col} = 'Будë Глимт'
+                    ) AND {col} != 'Будё Глимт'
+                """)
+                cursor.execute(f"""
+                    UPDATE {tbl} 
+                    SET {col} = 'Порту' 
+                    WHERE {col} IS NOT NULL AND LOWER({col}) IN ('порто', 'porto', 'portu') AND {col} != 'Порту'
+                """)
+                cursor.execute(f"""
+                    UPDATE {tbl} 
+                    SET {col} = 'Фейеноорд' 
+                    WHERE {col} IS NOT NULL AND LOWER({col}) IN ('фейенорд', 'фейноорд', 'фейнорд', 'feyenoord') AND {col} != 'Фейеноорд'
+                """)
+    except Exception as e:
+        logger.warning(f"migrate_team_names_canonical notice: {e}")
 
 TEAM_ALIASES = {
     # Расинг
@@ -636,15 +670,20 @@ def get_standings() -> list[dict]:
         from config import KPL_TEAMS
         
         # Get current user info for all teams
-        cursor.execute("SELECT telegram_id, team_name, username FROM users")
-        user_map = {row["team_name"].lower(): row for row in cursor.fetchall() if row["team_name"]}
+        cursor.execute("SELECT telegram_id, team_name, username FROM users WHERE team_name IS NOT NULL AND team_name != ''")
+        all_users = cursor.fetchall()
         
         teams = {}
         for t in KPL_TEAMS:
-            u = user_map.get(t.lower())
-            teams[t.lower()] = {
+            canon = resolve_team_name(t) or t
+            u = None
+            for row in all_users:
+                if teams_match(row["team_name"], canon):
+                    u = row
+                    break
+            teams[canon] = {
                 "telegram_id": u["telegram_id"] if u else None,
-                "team_name": t,
+                "team_name": canon,
                 "username": u["username"] if u and u["username"] else "",
                 "played": 0,
                 "wins": 0,
@@ -670,41 +709,57 @@ def get_standings() -> list[dict]:
         matches = cursor.fetchall()
 
         for match in matches:
-            t1 = (match["player1_team"] or "").lower()
-            t2 = (match["player2_team"] or "").lower()
+            raw_t1 = match["player1_team"] or ""
+            raw_t2 = match["player2_team"] or ""
+            t1 = resolve_team_name(raw_t1) or raw_t1
+            t2 = resolve_team_name(raw_t2) or raw_t2
             p1_score = match["player1_score"]
             p2_score = match["player2_score"]
 
             if p1_score is None or p2_score is None:
                 continue
 
-            if t1 in teams:
-                u1 = teams[t1]
-                u1["played"] += 1
-                u1["goals_scored"] += p1_score
-                u1["goals_conceded"] += p2_score
-                if p1_score > p2_score:
-                    u1["wins"] += 1
-                    u1["points"] += 3
-                elif p1_score < p2_score:
-                    u1["losses"] += 1
-                else:
-                    u1["draws"] += 1
-                    u1["points"] += 1
+            # Match t1
+            matched_u1 = teams.get(t1)
+            if not matched_u1:
+                for k, obj in teams.items():
+                    if teams_match(k, t1):
+                        matched_u1 = obj
+                        break
 
-            if t2 in teams:
-                u2 = teams[t2]
-                u2["played"] += 1
-                u2["goals_scored"] += p2_score
-                u2["goals_conceded"] += p1_score
-                if p2_score > p1_score:
-                    u2["wins"] += 1
-                    u2["points"] += 3
-                elif p2_score < p1_score:
-                    u2["losses"] += 1
+            # Match t2
+            matched_u2 = teams.get(t2)
+            if not matched_u2:
+                for k, obj in teams.items():
+                    if teams_match(k, t2):
+                        matched_u2 = obj
+                        break
+
+            if matched_u1:
+                matched_u1["played"] += 1
+                matched_u1["goals_scored"] += p1_score
+                matched_u1["goals_conceded"] += p2_score
+                if p1_score > p2_score:
+                    matched_u1["wins"] += 1
+                    matched_u1["points"] += 3
+                elif p1_score < p2_score:
+                    matched_u1["losses"] += 1
                 else:
-                    u2["draws"] += 1
-                    u2["points"] += 1
+                    matched_u1["draws"] += 1
+                    matched_u1["points"] += 1
+
+            if matched_u2:
+                matched_u2["played"] += 1
+                matched_u2["goals_scored"] += p2_score
+                matched_u2["goals_conceded"] += p1_score
+                if p2_score > p1_score:
+                    matched_u2["wins"] += 1
+                    matched_u2["points"] += 3
+                elif p2_score < p1_score:
+                    matched_u2["losses"] += 1
+                else:
+                    matched_u2["draws"] += 1
+                    matched_u2["points"] += 1
 
         # Convert to list and sort
         standings_list = list(teams.values())
@@ -1075,37 +1130,40 @@ def get_teams_recent_form(limit: int = 5) -> dict[str, list[str]]:
     """
     with transaction() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT team_name FROM users WHERE team_name IS NOT NULL")
-        team_names = [row["team_name"] for row in cursor.fetchall()]
+        from config import KPL_TEAMS
+        cursor.execute("""
+            SELECT player1_team, player2_team, player1_score, player2_score
+            FROM matches
+            WHERE status = 'confirmed' AND (tournament_type IS NULL OR tournament_type = 'league')
+            ORDER BY round_number DESC, id DESC
+        """)
+        all_matches = cursor.fetchall()
 
         form_map = {}
-        for t_name in team_names:
-            t_name_clean = t_name.strip()
-            cursor.execute("""
-                SELECT player1_team, player2_team, player1_score, player2_score
-                FROM matches
-                WHERE (LOWER(player1_team) = LOWER(?) OR LOWER(player2_team) = LOWER(?)) AND status = 'confirmed'
-                ORDER BY round_number DESC, id DESC
-                LIMIT ?
-            """, (t_name_clean, t_name_clean, limit))
-            rows = cursor.fetchall()
+        for t in KPL_TEAMS:
+            canon = resolve_team_name(t) or t
             outcomes = []
-            for r in reversed(rows):
-                p1 = (r["player1_team"] or "").strip()
-                p2 = (r["player2_team"] or "").strip()
+            for r in all_matches:
+                p1 = r["player1_team"] or ""
+                p2 = r["player2_team"] or ""
                 s1, s2 = r["player1_score"], r["player2_score"]
                 if s1 is None or s2 is None:
                     continue
-                # Use python's lower() for accurate cyrillic comparison
-                if p1.lower() == t_name_clean.lower():
+                if teams_match(p1, canon):
                     if s1 > s2: outcomes.append('W')
                     elif s1 < s2: outcomes.append('L')
                     else: outcomes.append('D')
-                elif p2.lower() == t_name_clean.lower():
+                elif teams_match(p2, canon):
                     if s2 > s1: outcomes.append('W')
                     elif s2 < s1: outcomes.append('L')
                     else: outcomes.append('D')
-            form_map[t_name_clean.lower()] = outcomes
+                if len(outcomes) >= limit:
+                    break
+            
+            reversed_outcomes = list(reversed(outcomes))
+            form_map[canon.lower()] = reversed_outcomes
+            if t.lower() != canon.lower():
+                form_map[t.lower()] = reversed_outcomes
         return form_map
 
 def has_reminder_been_sent(round_number: int, reminder_type: str) -> bool:
