@@ -195,6 +195,7 @@ from handlers.admin import (
     admin_warn_execute,
     admin_warn_remove_execute,
     admin_warn_history,
+    admin_amnesty_execute,
     admin_reset_season_warns,
     admin_reset_debts_command,
     admin_check_debts_command,
