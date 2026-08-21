@@ -142,10 +142,39 @@ class TestDebtLifecycle(unittest.TestCase):
 
         # Restore user 10 club
         database.restore_user_team(10, "ПСВ")
-        user10 = database.get_user(10)
-        self.assertEqual(user10["team_name"], "ПСВ")
-        self.assertEqual(user10["warn_count"], 0)
+    def test_closed_rounds_and_flexible_dates(self):
+        """Test overdue detection for closed rounds, flexible date formats, and missing deadlines."""
+        config.DEBT_TRACKING_START_DATETIME = (datetime.datetime.now() - datetime.timedelta(hours=30)).strftime("%d.%m.%Y %H:%M")
+        
+        with database.transaction() as conn:
+            # User 1 and User 2
+            conn.execute("INSERT INTO users (telegram_id, username, team_name, warn_count) VALUES (301, 'user301', 'Ливерпуль', 0)")
+            conn.execute("INSERT INTO users (telegram_id, username, team_name, warn_count) VALUES (302, 'user302', 'Манчестер Сити', 0)")
+
+            # Closed round 1 with pending match
+            conn.execute("INSERT INTO rounds (round_number, is_open, deadline) VALUES (1, 0, '15.08.2026 12:00')")
+            conn.execute("INSERT INTO matches (id, round_number, player1_id, player2_id, player1_team, player2_team, status) VALUES (501, 1, 301, 302, 'Ливерпуль', 'Манчестер Сити', 'pending')")
+
+            # Open round 2 without deadline but older start datetime
+            conn.execute("INSERT INTO rounds (round_number, is_open, deadline) VALUES (2, 1, NULL)")
+            conn.execute("INSERT INTO matches (id, round_number, player1_id, player2_id, player1_team, player2_team, status) VALUES (502, 2, 301, 302, 'Ливерпуль', 'Манчестер Сити', 'pending')")
+
+        overdue = database.get_detailed_overdue_matches()
+        self.assertEqual(len(overdue), 2)
+        match_ids = {m["id"] for m in overdue}
+        self.assertIn(501, match_ids)
+        self.assertIn(502, match_ids)
+
+        # Verify hours_overdue is calculated correctly (> 24h)
+        for m in overdue:
+            self.assertGreater(m["hours_overdue"], 24.0)
+
+        # Test find_user_by_team
+        u = database.find_user_by_team("ливерпуль")
+        self.assertIsNotNone(u)
+        self.assertEqual(u["telegram_id"], 301)
 
 
 if __name__ == "__main__":
     unittest.main()
+

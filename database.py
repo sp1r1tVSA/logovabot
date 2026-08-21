@@ -2556,48 +2556,102 @@ def process_cup_match_completion(match_id: int) -> str | None:
                         VALUES (-1, ?, ?, ?, ?, 'pending', 'cup', ?, ?, ?)
                     """, (hp_id, ap_id, hp_team, ap_team, stage, s_id, next_game_num))
             return None
-def get_all_unplayed_league_matches() -> list[dict]:
-    """Retrieve all pending league matches whose round deadline has already passed.
+def parse_flexible_datetime(dt_str: str | None) -> datetime.datetime | None:
+    """Parse date/datetime string supporting multiple formats commonly used in the league."""
+    if not dt_str or not str(dt_str).strip():
+        return None
+    s = str(dt_str).strip()
+    formats = [
+        "%d.%m.%Y %H:%M",
+        "%d.%m.%Y %H:%M:%S",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%d.%m.%Y",
+        "%Y-%m-%d",
+    ]
+    for fmt in formats:
+        try:
+            return datetime.datetime.strptime(s, fmt)
+        except ValueError:
+            continue
 
-    Only rounds with an expired deadline count as debts; rounds without a deadline
-    or with a deadline still in the future are excluded.
-    """
+    # Try format without year (e.g. "20.08 12:00" or "20.08") -> use current year
+    try:
+        now_year = datetime.datetime.now().year
+        return datetime.datetime.strptime(f"{s}.{now_year}", "%d.%m %H:%M.%Y")
+    except ValueError:
+        pass
+    try:
+        now_year = datetime.datetime.now().year
+        return datetime.datetime.strptime(f"{s}.{now_year}", "%d.%m.%Y")
+    except ValueError:
+        pass
+    return None
+
+
+def get_all_unplayed_league_matches() -> list[dict]:
+    """Retrieve all pending league matches in open or past rounds."""
     with transaction() as conn:
         cursor = conn.cursor()
-
-        # Collect round numbers whose deadline has already passed
         now = datetime.datetime.now()
-        cursor.execute("SELECT round_number, deadline FROM rounds WHERE is_open = 1")
-        expired_rounds: set[int] = set()
-        for r_num, dl_str in cursor.fetchall():
-            if not dl_str:
-                continue
-            try:
-                dl_dt = datetime.datetime.strptime(dl_str, "%d.%m.%Y %H:%M")
-            except ValueError:
-                continue
-            if dl_dt <= now:
-                expired_rounds.add(r_num)
 
-        if not expired_rounds:
-            return []
+        cursor.execute("SELECT round_number, is_open, deadline FROM rounds")
+        rounds_rows = cursor.fetchall()
 
-        placeholders = ",".join("?" * len(expired_rounds))
-        cursor.execute(f"""
+        round_info_map: dict[int, dict] = {}
+        max_open_round = 0
+        for r_num, is_open, dl_str in rounds_rows:
+            parsed_dl = parse_flexible_datetime(dl_str)
+            round_info_map[r_num] = {
+                "is_open": bool(is_open),
+                "deadline_dt": parsed_dl
+            }
+            if is_open and r_num > max_open_round:
+                max_open_round = r_num
+
+        cursor.execute("""
             SELECT 
-                m.id, m.round_number, u1.telegram_id AS player1_id, u2.telegram_id AS player2_id,
-                m.player1_team, m.player2_team,
+                m.id, m.round_number, 
+                COALESCE(u1.telegram_id, m.player1_id) AS player1_id,
+                COALESCE(u2.telegram_id, m.player2_id) AS player2_id,
+                COALESCE(m.player1_team, u1.team_name) AS player1_team,
+                COALESCE(m.player2_team, u2.team_name) AS player2_team,
                 u1.username AS p1_username, u1.team_name AS p1_team,
                 u2.username AS p2_username, u2.team_name AS p2_team
             FROM matches m
-            LEFT JOIN users u1 ON LOWER(m.player1_team) = LOWER(u1.team_name)
-            LEFT JOIN users u2 ON LOWER(m.player2_team) = LOWER(u2.team_name)
+            LEFT JOIN users u1 ON (m.player1_id = u1.telegram_id OR (m.player1_id IS NULL AND LOWER(m.player1_team) = LOWER(u1.team_name)))
+            LEFT JOIN users u2 ON (m.player2_id = u2.telegram_id OR (m.player2_id IS NULL AND LOWER(m.player2_team) = LOWER(u2.team_name)))
             WHERE (m.tournament_type IS NULL OR m.tournament_type = 'league')
-              AND m.round_number IN ({placeholders})
               AND m.status = 'pending'
             ORDER BY m.round_number ASC, m.id ASC
-        """, sorted(expired_rounds))
-        return [dict(row) for row in cursor.fetchall()]
+        """)
+        matches = [dict(row) for row in cursor.fetchall()]
+
+        unplayed = []
+        for m in matches:
+            rn = m["round_number"]
+            r_info = round_info_map.get(rn, {})
+            dl_dt = r_info.get("deadline_dt")
+            is_open = r_info.get("is_open", False)
+
+            # Include if round is currently open, or has passed deadline, or is older than highest open round
+            if not round_info_map or is_open or (dl_dt and dl_dt <= now) or (max_open_round > 0 and rn < max_open_round) or (not is_open and rn in round_info_map):
+                if not m.get("player1_id") and m.get("player1_team"):
+                    u1_fb = find_user_by_team(m.get("player1_team"))
+                    if u1_fb:
+                        m["player1_id"] = u1_fb.get("telegram_id")
+                        m["p1_username"] = u1_fb.get("username")
+                        m["p1_team"] = u1_fb.get("team_name")
+                if not m.get("player2_id") and m.get("player2_team"):
+                    u2_fb = find_user_by_team(m.get("player2_team"))
+                    if u2_fb:
+                        m["player2_id"] = u2_fb.get("telegram_id")
+                        m["p2_username"] = u2_fb.get("username")
+                        m["p2_team"] = u2_fb.get("team_name")
+                unplayed.append(m)
+
+        return unplayed
+
 
 def get_all_unplayed_cup_matches() -> list[dict]:
     """Retrieve all pending matches across active cup series."""
@@ -2658,40 +2712,44 @@ def get_last_debt_12h_reminder(match_id: int) -> datetime.datetime | None:
         row = cursor.fetchone()
         if not row or not row["sent_at"]:
             return None
-        try:
-            return datetime.datetime.fromisoformat(row["sent_at"].replace("Z", "+00:00"))
-        except Exception:
-            try:
-                return datetime.datetime.strptime(row["sent_at"], "%Y-%m-%d %H:%M:%S")
-            except Exception:
-                return None
+        return parse_flexible_datetime(row["sent_at"])
 
 
 def get_detailed_overdue_matches() -> list[dict]:
-    """Retrieve all pending league matches whose round deadline has already passed with overdue duration and participant info."""
+    """
+    Retrieve all pending league matches that are considered overdue:
+    - Round deadline has passed, OR
+    - Round is closed (is_open = 0) with pending matches, OR
+    - Round is an older round (round_number < max_open_round), OR
+    - Round is open and start datetime (DEBT_TRACKING_START_DATETIME) has passed.
+    """
     with transaction() as conn:
         cursor = conn.cursor()
         now = datetime.datetime.now()
-        cursor.execute("SELECT round_number, deadline FROM rounds WHERE is_open = 1")
-        expired_rounds: dict[int, tuple[str, datetime.datetime]] = {}
-        for r_num, dl_str in cursor.fetchall():
-            if not dl_str:
-                continue
-            try:
-                dl_dt = datetime.datetime.strptime(dl_str, "%d.%m.%Y %H:%M")
-            except ValueError:
-                continue
-            if dl_dt <= now:
-                expired_rounds[r_num] = (dl_str, dl_dt)
+        start_dt = get_debt_tracking_start_datetime()
 
-        if not expired_rounds:
-            return []
+        # 1. Fetch rounds status
+        cursor.execute("SELECT round_number, is_open, deadline FROM rounds")
+        rounds_rows = cursor.fetchall()
 
-        placeholders = ",".join("?" * len(expired_rounds))
-        cursor.execute(f"""
+        round_info_map: dict[int, dict] = {}
+        max_open_round = 0
+        for r_num, is_open, dl_str in rounds_rows:
+            parsed_dl = parse_flexible_datetime(dl_str)
+            round_info_map[r_num] = {
+                "is_open": bool(is_open),
+                "deadline_str": dl_str,
+                "deadline_dt": parsed_dl
+            }
+            if is_open and r_num > max_open_round:
+                max_open_round = r_num
+
+        # 2. Fetch pending league matches
+        cursor.execute("""
             SELECT 
                 m.id, m.round_number, COALESCE(m.is_extended, 0) AS is_extended,
-                u1.telegram_id AS player1_id, u2.telegram_id AS player2_id,
+                COALESCE(u1.telegram_id, m.player1_id) AS player1_id,
+                COALESCE(u2.telegram_id, m.player2_id) AS player2_id,
                 COALESCE(m.player1_team, u1.team_name) AS player1_team,
                 COALESCE(m.player2_team, u2.team_name) AS player2_team,
                 u1.username AS p1_username, u2.username AS p2_username,
@@ -2701,33 +2759,70 @@ def get_detailed_overdue_matches() -> list[dict]:
             LEFT JOIN users u1 ON (m.player1_id = u1.telegram_id OR (m.player1_id IS NULL AND LOWER(m.player1_team) = LOWER(u1.team_name)))
             LEFT JOIN users u2 ON (m.player2_id = u2.telegram_id OR (m.player2_id IS NULL AND LOWER(m.player2_team) = LOWER(u2.team_name)))
             WHERE (m.tournament_type IS NULL OR m.tournament_type = 'league')
-              AND m.round_number IN ({placeholders})
               AND m.status = 'pending'
             ORDER BY m.round_number ASC, m.id ASC
-        """, sorted(expired_rounds.keys()))
+        """)
+        matches = [dict(row) for row in cursor.fetchall()]
 
-        results = []
-        start_dt = get_debt_tracking_start_datetime()
-        for row in cursor.fetchall():
-            d = dict(row)
-            rn = d["round_number"]
-            dl_str, dl_dt = expired_rounds[rn]
-            d["deadline_str"] = dl_str
-            d["deadline_dt"] = dl_dt
+        overdue_list = []
+        for m in matches:
+            rn = m["round_number"]
+            r_info = round_info_map.get(rn, {})
+            dl_dt = r_info.get("deadline_dt")
+            is_open = r_info.get("is_open", False)
 
-            # If a start datetime is configured, clamp overdue calculation to start_dt
-            effective_dl = dl_dt
-            if start_dt and dl_dt < start_dt:
+            # Check if match qualifies as overdue
+            is_overdue = False
+            if dl_dt and dl_dt <= now:
+                is_overdue = True
+            elif not is_open and rn in round_info_map:
+                is_overdue = True
+            elif max_open_round > 0 and rn < max_open_round:
+                is_overdue = True
+            elif not round_info_map:
+                # If no rounds configured in rounds table, all pending matches are tracked
+                is_overdue = True
+            elif is_open and (not dl_dt or dl_dt <= now):
+                is_overdue = True
+
+            if not is_overdue:
+                continue
+
+            # Fallback user resolution if join missed Cyrillic
+            if not m.get("player1_id") and m.get("player1_team"):
+                u1_fb = find_user_by_team(m.get("player1_team"))
+                if u1_fb:
+                    m["player1_id"] = u1_fb.get("telegram_id")
+                    m["p1_username"] = u1_fb.get("username")
+                    m["p1_warns"] = u1_fb.get("warn_count", 0)
+                    if not m.get("player1_team"):
+                        m["player1_team"] = u1_fb.get("team_name")
+
+            if not m.get("player2_id") and m.get("player2_team"):
+                u2_fb = find_user_by_team(m.get("player2_team"))
+                if u2_fb:
+                    m["player2_id"] = u2_fb.get("telegram_id")
+                    m["p2_username"] = u2_fb.get("username")
+                    m["p2_warns"] = u2_fb.get("warn_count", 0)
+                    if not m.get("player2_team"):
+                        m["player2_team"] = u2_fb.get("team_name")
+
+            # Calculate overdue hours relative to effective deadline / start_dt
+            effective_dl = dl_dt if dl_dt else start_dt
+            if start_dt and (effective_dl is None or effective_dl < start_dt):
                 effective_dl = start_dt
 
-            if now < effective_dl:
-                hours_overdue = 0.0
-            else:
+            if effective_dl and now >= effective_dl:
                 hours_overdue = (now - effective_dl).total_seconds() / 3600.0
+            else:
+                hours_overdue = 0.0
 
-            d["hours_overdue"] = max(0.0, hours_overdue)
-            results.append(d)
-        return results
+            m["deadline_str"] = r_info.get("deadline_str") or (start_dt.strftime("%d.%m.%Y %H:%M") if start_dt else "—")
+            m["deadline_dt"] = effective_dl
+            m["hours_overdue"] = max(0.0, hours_overdue)
+            overdue_list.append(m)
+
+        return overdue_list
 
 
 def get_debt_tracking_start_datetime() -> datetime.datetime | None:
@@ -2735,46 +2830,60 @@ def get_debt_tracking_start_datetime() -> datetime.datetime | None:
     from config import DEBT_TRACKING_START_DATETIME
     if not DEBT_TRACKING_START_DATETIME:
         return None
-    for fmt in ("%d.%m.%Y %H:%M", "%Y-%m-%d %H:%M", "%d.%m.%Y", "%Y-%m-%d"):
-        try:
-            return datetime.datetime.strptime(DEBT_TRACKING_START_DATETIME, fmt)
-        except ValueError:
-            continue
-    return None
+    return parse_flexible_datetime(DEBT_TRACKING_START_DATETIME)
 
 
 def is_match_overdue(match_id: int) -> bool:
-    """Check if a match belongs to a round whose deadline has already passed."""
+    """Check if a match is overdue."""
     with transaction() as conn:
         cursor = conn.cursor()
-        cursor.execute("""
-            SELECT r.deadline 
-            FROM matches m
-            JOIN rounds r ON m.round_number = r.round_number
-            WHERE m.id = ? AND r.is_open = 1
-        """, (match_id,))
+        cursor.execute("SELECT round_number FROM matches WHERE id = ?", (match_id,))
         row = cursor.fetchone()
-        if not row or not row["deadline"]:
+        if not row:
             return False
-        try:
-            dl_dt = datetime.datetime.strptime(row["deadline"], "%d.%m.%Y %H:%M")
-            start_dt = get_debt_tracking_start_datetime()
-            effective_dl = dl_dt
-            if start_dt and dl_dt < start_dt:
-                effective_dl = start_dt
-            return datetime.datetime.now() >= effective_dl
-        except ValueError:
-            return False
+        rn = row["round_number"]
+
+        cursor.execute("SELECT is_open, deadline FROM rounds WHERE round_number = ?", (rn,))
+        r_row = cursor.fetchone()
+        start_dt = get_debt_tracking_start_datetime()
+        now = datetime.datetime.now()
+
+        if r_row:
+            dl_dt = parse_flexible_datetime(r_row["deadline"])
+            if dl_dt:
+                effective_dl = dl_dt
+                if start_dt and dl_dt < start_dt:
+                    effective_dl = start_dt
+                return now >= effective_dl
+            if not r_row["is_open"]:
+                return True if not start_dt or now >= start_dt else False
+
+        return True if (start_dt and now >= start_dt) else False
 
 
-def count_user_remaining_debts(user_id: int) -> int:
-    """Count how many overdue unplayed league matches the user still has."""
-    overdue_matches = get_detailed_overdue_matches()
-    count = 0
-    for m in overdue_matches:
-        if m.get("player1_id") == user_id or m.get("player2_id") == user_id:
-            count += 1
-    return count
+def find_user_by_team(team_name: str | None) -> dict | None:
+    """Find a user record by assigned team name using case-insensitive and smart alias/fuzzy matching."""
+    if not team_name:
+        return None
+    tn_target = team_name.strip().lower()
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM users WHERE team_name IS NOT NULL")
+        users = [dict(r) for r in cursor.fetchall()]
+        
+        # 1. Exact case-insensitive match
+        for u in users:
+            u_team = (u.get("team_name") or "").strip().lower()
+            if u_team == tn_target:
+                return u
+
+        # 2. Smart teams_match / aliases
+        for u in users:
+            u_team = (u.get("team_name") or "").strip()
+            if teams_match(u_team, team_name):
+                return u
+
+    return None
 
 
 def has_user_been_warned_recently(user_id: int, hours: float = 20.0) -> bool:
@@ -2789,14 +2898,11 @@ def has_user_been_warned_recently(user_id: int, hours: float = 20.0) -> bool:
         row = cursor.fetchone()
         if not row or not row["created_at"]:
             return False
-        try:
-            warn_dt = datetime.datetime.fromisoformat(row["created_at"].replace("Z", "+00:00"))
-        except Exception:
-            try:
-                warn_dt = datetime.datetime.strptime(row["created_at"], "%Y-%m-%d %H:%M:%S")
-            except Exception:
-                return False
-        return (datetime.datetime.now() - warn_dt).total_seconds() < hours * 3600.0
+        warn_dt = parse_flexible_datetime(row["created_at"])
+        if not warn_dt:
+            return False
+        return abs((datetime.datetime.now() - warn_dt).total_seconds()) < hours * 3600.0
+
 
 
 def reset_all_debt_reminders() -> None:

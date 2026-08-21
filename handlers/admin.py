@@ -3435,6 +3435,11 @@ async def job_debt_lifecycle_tracker(context: ContextTypes.DEFAULT_TYPE) -> None
     warns_updated = False
     warned_users_this_run: set[int] = set()
 
+    logger.info(
+        f"Checking debt tracker: {len(overdue_matches)} overdue matches found "
+        f"(start_dt={start_dt}, auto_warns_active={auto_warns_active})"
+    )
+
     for m in overdue_matches:
         m_id = m["id"]
         rn = m["round_number"]
@@ -3448,9 +3453,21 @@ async def job_debt_lifecycle_tracker(context: ContextTypes.DEFAULT_TYPE) -> None
         u1 = f"@{html.escape(m['p1_username'])}" if m.get("p1_username") else t1
         u2 = f"@{html.escape(m['p2_username'])}" if m.get("p2_username") else t2
 
-        # Fetch current user objects to ensure they are active participants
+        # Fetch current user objects or resolve by team name
         p1_user = await asyncio.to_thread(database.get_user, p1_id) if p1_id else None
+        if not p1_user and m.get("player1_team"):
+            p1_user = await asyncio.to_thread(database.find_user_by_team, m.get("player1_team"))
+            if p1_user:
+                p1_id = p1_user["telegram_id"]
+
         p2_user = await asyncio.to_thread(database.get_user, p2_id) if p2_id else None
+        if not p2_user and m.get("player2_team"):
+            p2_user = await asyncio.to_thread(database.find_user_by_team, m.get("player2_team"))
+            if p2_user:
+                p2_id = p2_user["telegram_id"]
+
+        p1_valid = bool(p1_id and p1_id > 0)
+        p2_valid = bool(p2_id and p2_id > 0)
 
         # 1. Initial Notification: Moment deadline passed (0h)
         if not (await asyncio.to_thread(database.has_debt_stage, m_id, "deadline_passed")):
@@ -3464,8 +3481,8 @@ async def job_debt_lifecycle_tracker(context: ContextTypes.DEFAULT_TYPE) -> None
                 f"При накоплении {MAX_WARNS_LIMIT}/{MAX_WARNS_LIMIT} варнов участник автоматически исключается из лиги.</i>\n"
                 f"🎁 <i>Каждый сыгранный матч-долг списывает 1 варн!</i>"
             )
-            for pid, uobj in ((p1_id, p1_user), (p2_id, p2_user)):
-                if pid and uobj and uobj.get("team_name"):
+            for pid, is_v in ((p1_id, p1_valid), (p2_id, p2_valid)):
+                if pid and is_v:
                     try:
                         await context.bot.send_message(chat_id=pid, text=dm_initial_text, parse_mode="HTML")
                     except Exception:
@@ -3486,15 +3503,14 @@ async def job_debt_lifecycle_tracker(context: ContextTypes.DEFAULT_TYPE) -> None
         if should_send_12h:
             hours_overdue_int = int(hours_overdue)
             if not auto_warns_active and start_dt:
-                time_until_start = (start_dt - now).total_seconds() / 3600.0
                 warn_time_str = f"после старта системы ({start_dt.strftime('%d.%m.%Y %H:%M')})"
             else:
                 next_warn_in_hours = max(1, 24 - (hours_overdue_int % 24))
                 warn_time_str = f"~{next_warn_in_hours}ч"
 
             # Send to player 1
-            if p1_id and p1_user and p1_user.get("team_name"):
-                p1_warns = p1_user.get("warn_count", 0)
+            if p1_id and p1_valid:
+                p1_warns = p1_user.get("warn_count", 0) if p1_user else 0
                 p1_dm = (
                     f"⏰ <b>Напоминание о несыгранном долге!</b>\n\n"
                     f"🏆 <b>{rn}-й тур:</b> 🏠 <b>{t1}</b> ({u1}) 🆚 ✈️ <b>{t2}</b> ({u2})\n"
@@ -3509,8 +3525,8 @@ async def job_debt_lifecycle_tracker(context: ContextTypes.DEFAULT_TYPE) -> None
                     pass
 
             # Send to player 2
-            if p2_id and p2_user and p2_user.get("team_name"):
-                p2_warns = p2_user.get("warn_count", 0)
+            if p2_id and p2_valid:
+                p2_warns = p2_user.get("warn_count", 0) if p2_user else 0
                 p2_dm = (
                     f"⏰ <b>Напоминание о несыгранном долге!</b>\n\n"
                     f"🏆 <b>{rn}-й тур:</b> 🏠 <b>{t1}</b> ({u1}) 🆚 ✈️ <b>{t2}</b> ({u2})\n"
@@ -3544,7 +3560,7 @@ async def job_debt_lifecycle_tracker(context: ContextTypes.DEFAULT_TYPE) -> None
                 warns_updated = True
 
                 # Apply warn to Player 1 (only if active, has club, and not warned within 20h)
-                if p1_id and p1_user and p1_user.get("team_name"):
+                if p1_id and p1_valid:
                     can_warn_p1 = (
                         p1_id not in warned_users_this_run
                         and not (await asyncio.to_thread(database.has_user_been_warned_recently, p1_id, 20.0))
@@ -3568,7 +3584,7 @@ async def job_debt_lifecycle_tracker(context: ContextTypes.DEFAULT_TYPE) -> None
                             await _auto_kick_player(context, p1_id, m.get("p1_username"), m.get("player1_team"))
 
                 # Apply warn to Player 2 (only if active, has club, and not warned within 20h)
-                if p2_id and p2_user and p2_user.get("team_name"):
+                if p2_id and p2_valid:
                     can_warn_p2 = (
                         p2_id not in warned_users_this_run
                         and not (await asyncio.to_thread(database.has_user_been_warned_recently, p2_id, 20.0))
@@ -3605,12 +3621,57 @@ async def job_debt_lifecycle_tracker(context: ContextTypes.DEFAULT_TYPE) -> None
                 )
                 await _send_to_warns_thread(context, thread_notice)
                 await asyncio.to_thread(database.record_debt_stage, m_id, stage_key)
-                
+
                 # Crucial: break so only 1 milestone is handled per match per 30m run
                 break
 
     if warns_updated:
         await _post_or_update_debts_in_warns(context)
+
+
+@admin_only
+async def admin_check_debts_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Admin diagnostic command /check_debts: triggers debt check immediately and outputs full summary."""
+    user_id = update.effective_user.id
+    if not is_admin(user_id):
+        await update.message.reply_text("❌ Нет прав.")
+        return
+
+    overdue_matches = await asyncio.to_thread(database.get_detailed_overdue_matches)
+    start_dt = await asyncio.to_thread(database.get_debt_tracking_start_datetime)
+    start_str = start_dt.strftime("%d.%m.%Y %H:%M") if start_dt else "Не задано"
+
+    now = datetime.datetime.now()
+    auto_warns_active = (start_dt is None or now >= start_dt)
+
+    lines = [
+        f"🔍 <b>Диагностика системы долгов</b>\n",
+        f"📅 Текущее время сервера: <b>{now.strftime('%d.%m.%Y %H:%M:%S')}</b>",
+        f"⏳ Старт начисления авто-варнов: <b>{start_str}</b>",
+        f"⚙️ Статус авто-варнов: <b>{'🟢 АКТИВНЫ' if auto_warns_active else '🟡 ОЖИДАЮТ СТАРТА'}</b>",
+        f"📊 Найдено матчей-долгов: <b>{len(overdue_matches)}</b>\n",
+    ]
+
+    if overdue_matches:
+        for idx, m in enumerate(overdue_matches[:15], 1):
+            t1 = m.get('player1_team') or 'Команда 1'
+            t2 = m.get('player2_team') or 'Команда 2'
+            rn = m.get('round_number', '?')
+            hrs = m.get('hours_overdue', 0.0)
+            u1 = f"@{m.get('p1_username')}" if m.get('p1_username') else f"ID {m.get('player1_id')}"
+            u2 = f"@{m.get('p2_username')}" if m.get('p2_username') else f"ID {m.get('player2_id')}"
+            ext = " ⏸ (Продлен)" if m.get('is_extended') else ""
+            lines.append(f"{idx}. <b>Тур {rn}</b>: {t1} ({u1}) vs {t2} ({u2}) — ⏳ <b>{hrs:.1f}ч</b>{ext}")
+        if len(overdue_matches) > 15:
+            lines.append(f"\n<i>...и еще {len(overdue_matches) - 15} матчей</i>")
+    else:
+        lines.append("⚠️ <i>В базе данных не обнаружено просроченных матчей.</i>")
+
+    lines.append("\n🔄 <i>Запуск процесса проверки долгов...</i>")
+    await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+
+    # Trigger job right now
+    await job_debt_lifecycle_tracker(context)
 
 
 @admin_only
