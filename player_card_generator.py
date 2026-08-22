@@ -10,29 +10,25 @@ LOGOS_DIR = os.path.join(BASE_DIR, "assets", "logos")
 SCALE = 2
 
 # Card dimensions (1x base)
-CARD_WIDTH_1X   = 720
+CARD_WIDTH_1X   = 680
 CARD_PADDING_1X = 36
 
 CARD_WIDTH   = CARD_WIDTH_1X * SCALE
 CARD_PADDING = CARD_PADDING_1X * SCALE
 
-# Colors (Apple / EA FC Premium Dark UI)
-BG_COLOR       = (18, 18, 22)        # #121216
-SURFACE_COLOR  = (26, 26, 32)        # #1A1A20
-SURFACE_ALT    = (21, 21, 26)        # #15151A
-BORDER_COLOR   = (42, 42, 50)        # #2A2A32
+# Colors (EA FC / Dark UI)
+BG_COLOR       = (20, 20, 22)        # #141416
+SURFACE_COLOR  = (26, 26, 30)        # #1A1A1E
+BORDER_COLOR   = (45, 45, 52)        # #2D2D34
 
-CUP_SURFACE    = (35, 28, 18)        # #231C12 warm gold tint
-CUP_BORDER     = (85, 65, 25)        # #554119
-CUP_GOLD       = (245, 158, 11)      # #F59E0B
-CUP_TEXT       = (251, 191, 36)      # #FBBF24
+CUP_SURFACE    = (34, 28, 18)        # subtle warm gold tint
+CUP_BORDER     = (85, 65, 25)
+CUP_GOLD       = (251, 191, 36)      # #FBBF24
 
 WHITE          = (255, 255, 255)
 MUTED          = (156, 163, 175)     # #9CA3AF
 GOAL_COLOR     = (34, 197, 94)       # #22C55E  green
-GOAL_HIGH      = (74, 222, 128)      # #4ADE80  bright green for hat-tricks+
 ASSIST_COLOR   = (59, 130, 246)      # #3B82F6  blue
-POINT_COLOR    = (168, 85, 247)      # #A855F7  purple
 TEXT_SECONDARY = (209, 213, 219)     # #D1D5DB
 
 
@@ -50,72 +46,65 @@ def generate_player_card(stats: dict) -> io.BytesIO:
         "team_name":   str,
         "total_goals": int,
         "total_assists": int,
-        "total_points": int,
         "league_goals": int,
         "league_assists": int,
         "cup_goals": int,
         "cup_assists": int,
-        "matches_count": int,
         "items": [
-           {"title": str, "opponent": str, "score_str": str, "goals": int, "assists": int, "total": int, "is_cup": bool},
-           ...
+            {"title": "Кубок КПЛ" or "Тур 1", "goals": int, "assists": int, "total": int, "is_cup": bool},
+            ...
         ],
         "rounds": dict (fallback)
       }
 
     Returns io.BytesIO PNG buffer.
     """
-    player_name   = stats.get("player_name", "—")
-    team_name     = stats.get("team_name", "—")
-    total_goals   = stats.get("total_goals", 0)
-    total_assists = stats.get("total_assists", 0)
-    total_points  = stats.get("total_points", total_goals + total_assists)
-    
-    league_goals   = stats.get("league_goals", 0)
-    league_assists = stats.get("league_assists", 0)
+    player_name    = stats.get("player_name", "—")
+    team_name      = stats.get("team_name", "—")
+    total_goals    = stats.get("total_goals", 0)
+    total_assists  = stats.get("total_assists", 0)
+    league_goals   = stats.get("league_goals", total_goals)
+    league_assists = stats.get("league_assists", total_assists)
     cup_goals      = stats.get("cup_goals", 0)
     cup_assists    = stats.get("cup_assists", 0)
     
     items: list[dict] = stats.get("items", [])
-    # Fallback if items not provided
     if not items and stats.get("rounds"):
         for rn, rd in sorted(stats["rounds"].items(), key=lambda x: int(x[0])):
             is_c = (int(rn) == -1)
+            g = rd.get("goals", 0)
+            a = rd.get("assists", 0)
             items.append({
-                "title": "🏆 Кубок КПЛ" if is_c else f"Тур {rn}",
-                "opponent": "",
-                "score_str": "",
-                "goals": rd.get("goals", 0),
-                "assists": rd.get("assists", 0),
-                "total": rd.get("goals", 0) + rd.get("assists", 0),
+                "title": "Кубок КПЛ" if is_c else f"Тур {rn}",
+                "goals": g,
+                "assists": a,
+                "total": g + a,
                 "is_cup": is_c
             })
 
-    matches_count = stats.get("matches_count", len(items))
-
     # ── 2x Scaled Fonts ────────────────────────────────────────────────────
-    font_player   = load_font(25 * SCALE, bold=True)
-    font_team     = load_font(15 * SCALE)
+    font_player   = load_font(24 * SCALE, bold=True)
+    font_team     = load_font(14 * SCALE)
     font_label    = load_font(12 * SCALE)
     font_sub_lbl  = load_font(11 * SCALE)
-    font_big_num  = load_font(38 * SCALE, bold=True)
+    font_big_num  = load_font(42 * SCALE, bold=True)
     font_stat_lbl = load_font(13 * SCALE, bold=True)
-    font_round_hd = load_font(15 * SCALE, bold=True)
+    font_round_hd = load_font(14 * SCALE, bold=True)
     font_round    = load_font(14 * SCALE)
     font_round_b  = load_font(14 * SCALE, bold=True)
-    font_season   = load_font(12 * SCALE, bold=True)
+    font_season   = load_font(13 * SCALE, bold=True)
 
     # ── Dynamic height ─────────────────────────────────────────────────────
     HEADER_H      = 100 * SCALE
-    BIG_STATS_H   = 106 * SCALE
-    ROUNDS_HEADER = 40 * SCALE
-    ROW_H         = 44 * SCALE
+    BIG_STATS_H   = (108 if (cup_goals > 0 or cup_assists > 0) else 100) * SCALE
+    ROUNDS_HEADER = 38 * SCALE
+    ROW_H         = 40 * SCALE
     FOOTER_H      = 32 * SCALE
     SECTION_GAP   = 16 * SCALE
 
     num_rows = len(items)
     rounds_section_h = (ROUNDS_HEADER + num_rows * ROW_H) if num_rows > 0 else 0
-    no_rounds_h      = 48 * SCALE if num_rows == 0 else 0
+    no_rounds_h      = 44 * SCALE if num_rows == 0 else 0
 
     total_h = (
         CARD_PADDING
@@ -138,8 +127,8 @@ def generate_player_card(stats: dict) -> io.BytesIO:
     # ══════════════════════════════════════════════════════════════════════
     # 1. HEADER  — player photo  |  name + team + club logo
     # ══════════════════════════════════════════════════════════════════════
-    PHOTO_D = 84 * SCALE   # player portrait diameter
-    BADGE_D = 34 * SCALE   # club logo badge diameter
+    PHOTO_D = 80 * SCALE   # player portrait diameter
+    BADGE_D = 32 * SCALE   # club logo badge diameter
 
     photo_x = CARD_PADDING
     photo_y = y + (HEADER_H - PHOTO_D) // 2
@@ -160,7 +149,7 @@ def generate_player_card(stats: dict) -> io.BytesIO:
             photo_path = None
 
     if not photo_path:
-        placeholder = Image.new("RGBA", (PHOTO_D, PHOTO_D), (45, 55, 72, 255))
+        placeholder = Image.new("RGBA", (PHOTO_D, PHOTO_D), (55, 65, 81, 255))
         ph_draw = ImageDraw.Draw(placeholder)
         initials = "".join(w[0].upper() for w in player_name.split()[:2]) if player_name else "?"
         font_init = load_font(28 * SCALE, bold=True)
@@ -196,24 +185,24 @@ def generate_player_card(stats: dict) -> io.BytesIO:
             pass
 
     # ── Player name + team label ───────────────────────────────────────
-    text_x = photo_x + PHOTO_D + 22 * SCALE
-    name_y = y + 20 * SCALE
-    max_name_w = CARD_WIDTH - CARD_PADDING - text_x - 140 * SCALE
+    text_x = photo_x + PHOTO_D + 20 * SCALE
+    name_y = y + 22 * SCALE
+    max_name_w = CARD_WIDTH - CARD_PADDING - text_x - 120 * SCALE
     if draw.textlength(player_name, font=font_player) > max_name_w:
-        font_player = load_font(21 * SCALE, bold=True)
+        font_player = load_font(20 * SCALE, bold=True)
         if draw.textlength(player_name, font=font_player) > max_name_w:
-            font_player = load_font(18 * SCALE, bold=True)
+            font_player = load_font(17 * SCALE, bold=True)
 
     draw.text((text_x, name_y), player_name, fill=WHITE, font=font_player)
 
-    team_y = name_y + 36 * SCALE
+    team_y = name_y + 34 * SCALE
     draw.text((text_x, team_y), team_name, fill=MUTED, font=font_team)
 
     # "Сезон 2026" badge
     season_label = "Сезон 2026"
     sl_w = int(draw.textlength(season_label, font=font_season))
     sl_x = CARD_WIDTH - CARD_PADDING - sl_w - 16 * SCALE
-    sl_y = y + 10 * SCALE
+    sl_y = y + 6 * SCALE
     _draw_rounded_rect(draw, (sl_x - 10 * SCALE, sl_y - 4 * SCALE, sl_x + sl_w + 10 * SCALE, sl_y + 24 * SCALE), radius=6 * SCALE, fill=SURFACE_COLOR, outline=BORDER_COLOR)
     draw.text((sl_x, sl_y), season_label, fill=MUTED, font=font_season)
 
@@ -223,91 +212,76 @@ def generate_player_card(stats: dict) -> io.BytesIO:
     y += SECTION_GAP
 
     # ══════════════════════════════════════════════════════════════════════
-    # 2. 3-CARD STATS OVERVIEW — Goals  |  Assists  |  Goal + Pass (G+A)
+    # 2. BIG STATS — Goals  |  Assists
     # ══════════════════════════════════════════════════════════════════════
-    gap_between = 12 * SCALE
-    total_avail_w = CARD_WIDTH - CARD_PADDING * 2
-    card_w = (total_avail_w - gap_between * 2) // 3
+    col_w    = (CARD_WIDTH - CARD_PADDING * 2) // 2
     stats_y0 = y
     stats_h  = BIG_STATS_H
 
-    # Card 1: GOALS
-    c1_x0 = CARD_PADDING
-    c1_x1 = c1_x0 + card_w
-    _draw_rounded_rect(draw, (c1_x0, stats_y0, c1_x1, stats_y0 + stats_h), radius=12 * SCALE, fill=SURFACE_COLOR, outline=BORDER_COLOR)
-    c1_cx = (c1_x0 + c1_x1) // 2
+    has_cup = (cup_goals > 0 or cup_assists > 0)
+
+    # Goals block
+    goal_bg_x0 = CARD_PADDING
+    goal_bg_x1 = CARD_PADDING + col_w - 8 * SCALE
+    _draw_rounded_rect(draw, (goal_bg_x0, stats_y0, goal_bg_x1, stats_y0 + stats_h), radius=12 * SCALE, fill=SURFACE_COLOR, outline=BORDER_COLOR)
 
     g_num_str = str(total_goals)
     g_num_w   = int(draw.textlength(g_num_str, font=font_big_num))
-    draw.text((c1_cx - g_num_w // 2, stats_y0 + 10 * SCALE), g_num_str, fill=GOAL_COLOR, font=font_big_num)
-    
+    g_center_x = (goal_bg_x0 + goal_bg_x1) // 2
+
+    num_top_offset = (8 if has_cup else 10) * SCALE
+    lbl_top_offset = (58 if has_cup else 62) * SCALE
+
+    draw.text((g_center_x - g_num_w // 2, stats_y0 + num_top_offset), g_num_str, fill=GOAL_COLOR, font=font_big_num)
     g_lbl = "ГОЛОВ"
     g_lbl_w = int(draw.textlength(g_lbl, font=font_stat_lbl))
-    draw.text((c1_cx - g_lbl_w // 2, stats_y0 + 56 * SCALE), g_lbl, fill=TEXT_SECONDARY, font=font_stat_lbl)
+    draw.text((g_center_x - g_lbl_w // 2, stats_y0 + lbl_top_offset), g_lbl, fill=MUTED, font=font_stat_lbl)
 
-    g_sub = f"Лига: {league_goals} • Кубок: {cup_goals}"
-    g_sub_w = int(draw.textlength(g_sub, font=font_sub_lbl))
-    draw.text((c1_cx - g_sub_w // 2, stats_y0 + 78 * SCALE), g_sub, fill=MUTED, font=font_sub_lbl)
+    if has_cup:
+        g_sub = f"Лига: {league_goals}  •  Кубок: {cup_goals}"
+        g_sub_w = int(draw.textlength(g_sub, font=font_sub_lbl))
+        draw.text((g_center_x - g_sub_w // 2, stats_y0 + 82 * SCALE), g_sub, fill=MUTED, font=font_sub_lbl)
 
-    # Card 2: ASSISTS
-    c2_x0 = c1_x1 + gap_between
-    c2_x1 = c2_x0 + card_w
-    _draw_rounded_rect(draw, (c2_x0, stats_y0, c2_x1, stats_y0 + stats_h), radius=12 * SCALE, fill=SURFACE_COLOR, outline=BORDER_COLOR)
-    c2_cx = (c2_x0 + c2_x1) // 2
+    # Assists block
+    ast_bg_x0 = CARD_PADDING + col_w + 8 * SCALE
+    ast_bg_x1 = CARD_WIDTH - CARD_PADDING
+    _draw_rounded_rect(draw, (ast_bg_x0, stats_y0, ast_bg_x1, stats_y0 + stats_h), radius=12 * SCALE, fill=SURFACE_COLOR, outline=BORDER_COLOR)
 
     a_num_str = str(total_assists)
     a_num_w   = int(draw.textlength(a_num_str, font=font_big_num))
-    draw.text((c2_cx - a_num_w // 2, stats_y0 + 10 * SCALE), a_num_str, fill=ASSIST_COLOR, font=font_big_num)
+    a_center_x = (ast_bg_x0 + ast_bg_x1) // 2
 
+    draw.text((a_center_x - a_num_w // 2, stats_y0 + num_top_offset), a_num_str, fill=ASSIST_COLOR, font=font_big_num)
     a_lbl = "АССИСТОВ"
     a_lbl_w = int(draw.textlength(a_lbl, font=font_stat_lbl))
-    draw.text((c2_cx - a_lbl_w // 2, stats_y0 + 56 * SCALE), a_lbl, fill=TEXT_SECONDARY, font=font_stat_lbl)
+    draw.text((a_center_x - a_lbl_w // 2, stats_y0 + lbl_top_offset), a_lbl, fill=MUTED, font=font_stat_lbl)
 
-    a_sub = f"Лига: {league_assists} • Кубок: {cup_assists}"
-    a_sub_w = int(draw.textlength(a_sub, font=font_sub_lbl))
-    draw.text((c2_cx - a_sub_w // 2, stats_y0 + 78 * SCALE), a_sub, fill=MUTED, font=font_sub_lbl)
-
-    # Card 3: GOAL + PASS (POINTS)
-    c3_x0 = c2_x1 + gap_between
-    c3_x1 = CARD_WIDTH - CARD_PADDING
-    _draw_rounded_rect(draw, (c3_x0, stats_y0, c3_x1, stats_y0 + stats_h), radius=12 * SCALE, fill=SURFACE_COLOR, outline=BORDER_COLOR)
-    c3_cx = (c3_x0 + c3_x1) // 2
-
-    p_num_str = str(total_points)
-    p_num_w   = int(draw.textlength(p_num_str, font=font_big_num))
-    draw.text((c3_cx - p_num_w // 2, stats_y0 + 10 * SCALE), p_num_str, fill=POINT_COLOR, font=font_big_num)
-
-    p_lbl = "ОЧКОВ (Г+П)"
-    p_lbl_w = int(draw.textlength(p_lbl, font=font_stat_lbl))
-    draw.text((c3_cx - p_lbl_w // 2, stats_y0 + 56 * SCALE), p_lbl, fill=TEXT_SECONDARY, font=font_stat_lbl)
-
-    avg_str = f"В {matches_count} матчах"
-    p_sub_w = int(draw.textlength(avg_str, font=font_sub_lbl))
-    draw.text((c3_cx - p_sub_w // 2, stats_y0 + 78 * SCALE), avg_str, fill=MUTED, font=font_sub_lbl)
+    if has_cup:
+        a_sub = f"Лига: {league_assists}  •  Кубок: {cup_assists}"
+        a_sub_w = int(draw.textlength(a_sub, font=font_sub_lbl))
+        draw.text((a_center_x - a_sub_w // 2, stats_y0 + 82 * SCALE), a_sub, fill=MUTED, font=font_sub_lbl)
 
     y += stats_h + SECTION_GAP
 
     # ══════════════════════════════════════════════════════════════════════
-    # 3. DETAILED PER-MATCH & ROUND TABLE
+    # 3. PER-ROUND TABLE
     # ══════════════════════════════════════════════════════════════════════
     if num_rows == 0:
-        no_data = "Нет подтверждённых результативных матчей"
+        no_data = "Нет статистики по турам"
         nd_w = int(draw.textlength(no_data, font=font_stat_lbl))
-        draw.text(((CARD_WIDTH - nd_w) // 2, y + 12 * SCALE), no_data, fill=MUTED, font=font_stat_lbl)
+        draw.text(((CARD_WIDTH - nd_w) // 2, y + 10 * SCALE), no_data, fill=MUTED, font=font_stat_lbl)
         y += no_rounds_h
     else:
-        draw.text((CARD_PADDING, y + 8 * SCALE), "Результативность по матчам", fill=WHITE, font=font_round_hd)
+        draw.text((CARD_PADDING, y + 8 * SCALE), "Статистика по турам", fill=WHITE, font=font_round_hd)
 
-        col_title_x   = CARD_PADDING + 8 * SCALE
-        col_match_x   = CARD_PADDING + 210 * SCALE
-        col_goals_x   = CARD_WIDTH - CARD_PADDING - 210 * SCALE
-        col_assists_x = CARD_WIDTH - CARD_PADDING - 110 * SCALE
-        col_total_x   = CARD_WIDTH - CARD_PADDING - 16 * SCALE
+        col_round_x   = CARD_PADDING
+        col_goals_x   = CARD_WIDTH - CARD_PADDING - 220 * SCALE
+        col_assists_x = CARD_WIDTH - CARD_PADDING - 100 * SCALE
+        col_total_x   = CARD_WIDTH - CARD_PADDING - 10 * SCALE
 
-        draw.text((col_match_x,   y + 8 * SCALE), "Матч",      fill=MUTED, font=font_label, anchor="la")
         draw.text((col_goals_x,   y + 8 * SCALE), "Голы",     fill=MUTED, font=font_label, anchor="ra")
         draw.text((col_assists_x, y + 8 * SCALE), "Ассисты",  fill=MUTED, font=font_label, anchor="ra")
-        draw.text((col_total_x,   y + 8 * SCALE), "Г+П",      fill=MUTED, font=font_label, anchor="ra")
+        draw.text((col_total_x,   y + 8 * SCALE), "Всего",    fill=MUTED, font=font_label, anchor="ra")
 
         y += ROUNDS_HEADER
         draw.line([(CARD_PADDING, y - 4 * SCALE), (CARD_WIDTH - CARD_PADDING, y - 4 * SCALE)], fill=BORDER_COLOR, width=1 * SCALE)
@@ -317,71 +291,35 @@ def generate_player_card(stats: dict) -> io.BytesIO:
             
             if is_cup:
                 row_bg = CUP_SURFACE
-                row_outline = CUP_BORDER
             else:
                 row_bg = SURFACE_COLOR if idx % 2 == 0 else BG_COLOR
-                row_outline = None
 
             draw.rectangle(
-                [(CARD_PADDING, y), (CARD_WIDTH - CARD_PADDING, y + ROW_H - 2 * SCALE)],
-                fill=row_bg,
-                outline=row_outline,
-                width=1 * SCALE if is_cup else 0
+                [(CARD_PADDING - 4 * SCALE, y), (CARD_WIDTH - CARD_PADDING + 4 * SCALE, y + ROW_H - 2 * SCALE)],
+                fill=row_bg
             )
 
             row_center_y = y + ROW_H // 2
 
-            # Title (e.g. "🏆 Кубок КПЛ (1/8)" or "Тур 1")
-            title = item.get("title", "")
-            title_col = CUP_TEXT if is_cup else TEXT_SECONDARY
-            title_font = font_round_b if is_cup else font_round
-            draw.text((col_title_x, row_center_y), title, fill=title_col, font=title_font, anchor="lm")
+            title_text = item.get("title", "")
+            title_color = CUP_GOLD if is_cup else TEXT_SECONDARY
+            title_fnt   = font_round_b if is_cup else font_round
+            draw.text((col_round_x, row_center_y), title_text, fill=title_color, font=title_fnt, anchor="lm")
 
-            # Match info (e.g. "vs Брюгге (4:1)")
-            opp = item.get("opponent")
-            score = item.get("score_str")
-            if opp and score and score != "—":
-                match_str = f"vs {opp} ({score})"
-            elif opp:
-                match_str = f"vs {opp}"
-            else:
-                match_str = "—"
-            
-            # Truncate match_str if too long
-            max_m_w = col_goals_x - col_match_x - 50 * SCALE
-            if draw.textlength(match_str, font=font_round) > max_m_w:
-                match_str = match_str[:22] + "…"
-
-            draw.text((col_match_x, row_center_y), match_str, fill=MUTED if not is_cup else TEXT_SECONDARY, font=font_round, anchor="lm")
-
-            # Goals
             goals   = item.get("goals", 0)
             assists = item.get("assists", 0)
             total   = item.get("total", goals + assists)
 
             g_str = str(goals) if goals > 0 else "—"
-            if goals >= 3:
-                g_col = GOAL_HIGH
-                g_fnt = font_round_b
-            elif goals > 0:
-                g_col = GOAL_COLOR
-                g_fnt = font_round
-            else:
-                g_col = MUTED
-                g_fnt = font_round
-                
-            draw.text((col_goals_x, row_center_y), g_str, fill=g_col, font=g_fnt, anchor="rm")
+            g_col = GOAL_COLOR if goals > 0 else MUTED
+            draw.text((col_goals_x, row_center_y), g_str, fill=g_col, font=font_round, anchor="rm")
 
-            # Assists
             a_str = str(assists) if assists > 0 else "—"
             a_col = ASSIST_COLOR if assists > 0 else MUTED
-            a_fnt = font_round_b if assists >= 2 else font_round
-            draw.text((col_assists_x, row_center_y), a_str, fill=a_col, font=a_fnt, anchor="rm")
+            draw.text((col_assists_x, row_center_y), a_str, fill=a_col, font=font_round, anchor="rm")
 
-            # Total (G+A)
-            t_str = str(total) if total > 0 else "—"
-            t_col = WHITE if total > 0 else MUTED
-            draw.text((col_total_x, row_center_y), t_str, fill=t_col, font=font_round_b, anchor="rm")
+            t_str = str(total)
+            draw.text((col_total_x, row_center_y), t_str, fill=WHITE, font=font_round, anchor="rm")
 
             y += ROW_H
 
@@ -391,7 +329,7 @@ def generate_player_card(stats: dict) -> io.BytesIO:
     # 4. FOOTER
     # ══════════════════════════════════════════════════════════════════════
     draw.line([(CARD_PADDING, y), (CARD_WIDTH - CARD_PADDING, y)], fill=BORDER_COLOR, width=1 * SCALE)
-    footer_text = "КПЛ 2026  •  Логово Фифарей  •  Player Card"
+    footer_text = "КПЛ 2026  •  Player Card"
     ft_w = int(draw.textlength(footer_text, font=font_label))
     draw.text(
         ((CARD_WIDTH - ft_w) // 2, y + 10 * SCALE),
@@ -406,22 +344,3 @@ def generate_player_card(stats: dict) -> io.BytesIO:
     resampled_img.save(buf, format="PNG")
     buf.seek(0)
     return buf
-
-
-if __name__ == "__main__":
-    test_stats = {
-        "player_name": "Криштиану Роналду",
-        "team_name": "Спортинг",
-        "total_goals": 12,
-        "total_assists": 5,
-        "rounds": {
-            1: {"goals": 2, "assists": 1},
-            3: {"goals": 1, "assists": 0},
-            5: {"goals": 0, "assists": 2},
-            7: {"goals": 3, "assists": 1},
-        },
-    }
-    buf = generate_player_card(test_stats)
-    with open("test_player_card.png", "wb") as f:
-        f.write(buf.getvalue())
-    print("test_player_card.png saved")
