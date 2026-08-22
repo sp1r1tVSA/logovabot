@@ -1,186 +1,67 @@
-# Everything Claude Code (ECC) — Agent Instructions
+# Logovobot — Agent Instructions & Architecture Guidelines
 
-This is a **production-ready AI coding plugin** providing 68 specialized agents, 285 skills, 94 commands, and automated hook workflows for software development.
+This repository contains **Logovobot** (Логово Фифарей / ИИ «Темшик») — a high-performance, asynchronous Telegram bot for managing FIFA/FC e-sports championships, cups, match drafts, automated Gemini AI OCR vision processing, SQLite statistics, and graphics generation.
 
-**Version:** 2.2.0
+**Project Path:** `c:\Users\Илез\Desktop\logovobot`  
+**Stack:** Python 3.11+, `python-telegram-bot` v21 (async), SQLite (WAL mode, parameterized transactions), Google Gemini AI OCR (`google-genai` / `google-generativeai`), Pillow (Retina 2x/3x graphics rendering), APScheduler / JobQueue.
+
+---
 
 ## Core Principles
 
-1. **Agent-First** — Delegate to specialized agents for domain tasks
-2. **Test-Driven** — Write tests before implementation, 80%+ coverage required
-3. **Security-First** — Never compromise on security; validate all inputs
-4. **Immutability** — Always create new objects, never mutate existing ones
-5. **Plan Before Execute** — Plan complex features before writing code
+1. **Agent-First** — Delegate complex domain tasks to specialized roles (`planner`, `python-reviewer`, `database-reviewer`, `security-reviewer`, `tdd-guide`).
+2. **Deterministic Data Integrity** — Always use the `transaction()` context manager in `database.py`. All SQL queries MUST be parameterized. Never mutate database records outside verified repository functions.
+3. **Pure OCR & Deterministic Enrichment** — Keep AI Vision OCR strictly perceptual (extracting coordinates, text, goals, and assists without hallucinating database squads). Perform team detection, side assignment, and squad enrichment deterministically in Python/SQLite (`detect_teams_from_players`, `match_and_enrich_squad`).
+4. **Security-First** — Never commit `.env`, `league.db`, or expose Telegram tokens / Gemini API keys.
+5. **High UI/UX Quality** — Telegram messages must use clean HTML formatting, concise keyboards, and stunning Pillow infographics.
 
-## Available Agents
+---
 
-| Agent | Purpose | When to Use |
-|-------|---------|-------------|
-| planner | Implementation planning | Complex features, refactoring |
-| architect | System design and scalability | Architectural decisions |
-| tdd-guide | Test-driven development | New features, bug fixes |
-| code-reviewer | Code quality and maintainability | After writing/modifying code |
-| security-reviewer | Vulnerability detection | Before commits, sensitive code |
-| spec-miner | Brownfield spec extraction | Onboarding brownfield projects to spec-driven development |
-| build-error-resolver | Fix build/type errors | When build fails |
-| e2e-runner | End-to-end Playwright testing | Critical user flows |
-| refactor-cleaner | Dead code cleanup | Code maintenance |
-| doc-updater | Documentation and codemaps | Updating docs |
-| cpp-reviewer | C/C++ code review | C and C++ projects |
-| cpp-build-resolver | C/C++ build errors | C and C++ build failures |
-| fsharp-reviewer | F# functional code review | F# projects |
-| docs-lookup | Documentation lookup via Context7 | API/docs questions |
-| go-reviewer | Go code review | Go projects |
-| go-build-resolver | Go build errors | Go build failures |
-| kotlin-reviewer | Kotlin code review | Kotlin/Android/KMP projects |
-| kotlin-build-resolver | Kotlin/Gradle build errors | Kotlin build failures |
-| database-reviewer | PostgreSQL/Supabase specialist | Schema design, query optimization |
-| python-reviewer | Python code review | Python projects |
-| django-reviewer | Django code review | Django apps, DRF APIs, ORM, migrations |
-| django-build-resolver | Django build, migration, and setup errors | Django startup, dependency, migration, collectstatic failures |
-| java-reviewer | Java and Spring Boot code review | Java/Spring Boot projects |
-| java-build-resolver | Java/Maven/Gradle build errors | Java build failures |
-| loop-operator | Autonomous loop execution | Run loops safely, monitor stalls, intervene |
-| harness-optimizer | Harness config tuning | Reliability, cost, throughput |
-| rust-reviewer | Rust code review | Rust projects |
-| rust-build-resolver | Rust build errors | Rust build failures |
-| pytorch-build-resolver | PyTorch runtime/CUDA/training errors | PyTorch build/training failures |
-| mle-reviewer | Production ML pipeline review | ML pipelines, evals, serving, monitoring, rollback |
-| rag-pipeline-reviewer | RAG pipeline review | Retrieval quality, chunking, reranking, RAGAS evaluation coverage |
-| typescript-reviewer | TypeScript/JavaScript code review | TypeScript/JavaScript projects |
+## Project Architecture & Module Map
 
-## Agent Orchestration
+| Module | Responsibility & Rules |
+|--------|------------------------|
+| `main.py` | Bot entrypoint, ApplicationBuilder, Handler registration, `post_init` background jobs setup. |
+| `config.py` | Environment variables, Telegram `TOKEN`, `GEMINI_API_KEY`, Admin IDs, chat/topic IDs, DB path. |
+| `database.py` | Thread-safe SQLite repository layer, schema migrations, team resolution (`resolve_team_name`, `detect_teams_from_players`), debt tracking, tournament standings. |
+| `ai_recognizer.py` | Gemini 2.5 Flash / 1.5 Flash Vision OCR. Strictly maps `team1` to screen left and `team2` to screen right. Handles multi-screenshot matching (timeline + table). |
+| `ai_chat.py` | AI assistant «Темшик» persona for chat discussions, регламент, and match predictions. |
+| `table_generator.py` | Pillow-based rendering of standings, retina 2x/3x graphics, cards, and top scorers/assisters. |
+| `handlers/drafts.py` | Group topic match draft processing, photo debouncing, OCR triggering, squad matching, team/tour auto-detection, admin interactive approval. |
+| `handlers/cabinet.py` | Private message player cabinet, match reporting, player registration, stats cards, squad photo upload. |
+| `handlers/admin.py` | League & Cup administration, tech defeats/draws, round lifecycle (open/close), deadlines, squad management, broadcast. |
+| `handlers/cup.py` | Cup series, playoff brackets, stage progression, series game tracking. |
+| `handlers/common.py` | Shared command handlers, help, rules, and global error handlers. |
 
-Use agents proactively without user prompt:
-- Complex feature requests → **planner**
-- Code just written/modified → **code-reviewer**
-- Bug fix or new feature → **tdd-guide**
-- Architectural decision → **architect**
-- Security-sensitive code → **security-reviewer**
-- Brownfield project onboarding → **spec-miner**
-- Autonomous loops / loop monitoring → **loop-operator**
-- Harness config reliability and cost → **harness-optimizer**
-- RAG/retrieval pipeline changes → **rag-pipeline-reviewer**
+---
 
-Use parallel execution for independent operations — launch multiple agents simultaneously.
+## Engineering Rules & Invariants
 
-## Security Guidelines
+### 1. Database & Transactions (`database.py`)
+- Always execute SQLite operations inside `with transaction() as conn:` blocks.
+- Enable WAL mode (`PRAGMA journal_mode=WAL;`).
+- Never perform string concatenation in SQL queries — always use `?` placeholders.
+- When matching team names, use `resolve_team_name()` and `normalize_team_name()` to handle aliases, typos, and transliteration.
 
-**Before ANY commit:**
-- No hardcoded secrets (API keys, passwords, tokens)
-- All user inputs validated
-- SQL injection prevention (parameterized queries)
-- XSS prevention (sanitized HTML)
-- CSRF protection enabled
-- Authentication/authorization verified
-- Rate limiting on all endpoints
-- Error messages don't leak sensitive data
+### 2. Vision OCR & Drafts Pipeline (`ai_recognizer.py` + `handlers/drafts.py`)
+- **No Squad Hints in Gemini Prompt**: Gemini Vision must perform pure optical text extraction from screenshots. Do not pass DB squads into the AI prompt to prevent team hallucination.
+- **Side Stability**: `team1` is always left side on-screen, `team2` is always right side.
+- **Team & Round Detection**: Use `database.detect_teams_from_players()` to match extracted player names against `squad_players` in SQLite, determining left and right clubs and the target round automatically.
+- **Preview Non-Mutation**: Previewing a match draft must NEVER insert unrecognized players into `squad_players` automatically.
 
-**Secret management:** NEVER hardcode secrets. Use environment variables or a secret manager. Validate required secrets at startup. Rotate any exposed secrets immediately.
+### 3. Telegram Bot Handlers (`handlers/`)
+- Always use asynchronous handlers with `async def` and `await asyncio.to_thread(...)` for CPU-bound or database operations.
+- Handle Telegram API rate limits gracefully (`telegram.error.RetryAfter`).
+- Escape user input in HTML parse mode using `html.escape()`.
 
-**If security issue found:** STOP → use security-reviewer agent → fix CRITICAL issues → rotate exposed secrets → review codebase for similar issues.
+### 4. Git & Commit Workflow
+- Commit format: `<type>: <description>` (`feat`, `fix`, `refactor`, `docs`, `chore`, `perf`).
+- Remote: `https://github.com/sp1r1tVSA/logovabot.git`.
 
-## Coding Style
+---
 
-**Immutability (CRITICAL):** Always create new objects, never mutate. Return new copies with changes applied.
+## Workspace Project Isolation
 
-**File organization:** Many small files over few large ones. 200-400 lines typical, 800 max. Organize by feature/domain, not by type. High cohesion, low coupling.
-
-**Error handling:** Handle errors at every level. Provide user-friendly messages in UI code. Log detailed context server-side. Never silently swallow errors.
-
-**Input validation:** Validate all user input at system boundaries. Use schema-based validation. Fail fast with clear messages. Never trust external data.
-
-**Code quality checklist:**
-- Functions small (<50 lines), files focused (<800 lines)
-- No deep nesting (>4 levels)
-- Proper error handling, no hardcoded values
-- Readable, well-named identifiers
-
-## Testing Requirements
-
-**Minimum coverage: 80%**
-
-Test types (all required):
-1. **Unit tests** — Individual functions, utilities, components
-2. **Integration tests** — API endpoints, database operations
-3. **E2E tests** — Critical user flows
-
-**TDD workflow (mandatory):**
-1. Write test first (RED) — test should FAIL
-2. Write minimal implementation (GREEN) — test should PASS
-3. Refactor (IMPROVE) — verify coverage 80%+
-
-Troubleshoot failures: check test isolation → verify mocks → fix implementation (not tests, unless tests are wrong).
-
-## Development Workflow
-
-1. **Plan** — Use planner agent, identify dependencies and risks, break into phases
-2. **TDD** — Use tdd-guide agent, write tests first, implement, refactor
-3. **Review** — Use code-reviewer agent immediately, address CRITICAL/HIGH issues
-4. **Capture knowledge in the right place**
-   - Personal debugging notes, preferences, and temporary context → auto memory
-   - Team/project knowledge (architecture decisions, API changes, runbooks) → the project's existing docs structure
-   - If the current task already produces the relevant docs or code comments, do not duplicate the same information elsewhere
-   - If there is no obvious project doc location, ask before creating a new top-level file
-5. **Commit** — Conventional commits format, comprehensive PR summaries
-
-## Workflow Surface Policy
-
-- `skills/` is the canonical workflow surface.
-- New workflow contributions should land in `skills/` first.
-- `commands/` is a legacy slash-entry compatibility surface and should only be added or updated when a shim is still required for migration or cross-harness parity.
-
-## Git Workflow
-
-**Commit format:** `<type>: <description>` — Types: feat, fix, refactor, docs, test, chore, perf, ci
-
-**PR workflow:** Analyze full commit history → draft comprehensive summary → include test plan → push with `-u` flag.
-
-## Architecture Patterns
-
-**API response format:** Consistent envelope with success indicator, data payload, error message, and pagination metadata.
-
-**Repository pattern:** Encapsulate data access behind standard interface (findAll, findById, create, update, delete). Business logic depends on abstract interface, not storage mechanism.
-
-**Skeleton projects:** Search for battle-tested templates, evaluate with parallel agents (security, extensibility, relevance), clone best match, iterate within proven structure.
-
-## Performance
-
-**Context management:** Avoid last 20% of context window for large refactoring and multi-file features. Lower-sensitivity tasks (single edits, docs, simple fixes) tolerate higher utilization.
-
-**Build troubleshooting:** Use build-error-resolver agent → analyze errors → fix incrementally → verify after each fix.
-
-## Project Structure
-
-```
-agents/          — 68 specialized subagents
-skills/          — 285 workflow skills and domain knowledge
-commands/        — 94 slash commands
-hooks/           — Trigger-based automations
-rules/           — Always-follow guidelines (common + per-language)
-scripts/         — Cross-platform Node.js utilities
-mcp-configs/     — 14 MCP server configurations
-tests/           — Test suite
-```
-
-`commands/` remains in the repo for compatibility, but the long-term direction is skills-first.
-
-## Success Metrics
-
-- All tests pass with 80%+ coverage
-- No security vulnerabilities
-- Code is readable and maintainable
-- Performance is acceptable
-- User requirements are met
-
-## Workspace Projects & Isolation Rules
-
-- **Strict Project Scope**: When working on a request, identify which project is being targeted. Confine all edits, test runs, and context reads strictly to that project's folder. Sibling project folders must not be edited or referenced unless explicitly requested.
-- **Environment Isolation**: Always use the targeted project's specific virtual environment or package manager context:
-  - `dbbot`: `c:\Users\Ислам\Desktop\Projects\dbbot\venv` (Python 3.11+, Telegram Bot, PostgreSQL, LPL_SPEC)
-  - `logovobot`: `c:\Users\Ислам\Desktop\Projects\logovobot\venv` (Python 3.11+, Telegram Bot, Gemini AI OCR & Chat, SQLite)
-  - `challenge_place`: `c:\Users\Ислам\Desktop\Projects\challenge_place` (Next.js, TypeScript, Tailwind, ditto.css)
-  - `tournament-web`: `c:\Users\Ислам\Desktop\Projects\tournament-web` (Next.js, TypeScript, Prisma ORM, PostgreSQL)
-  - `strboost`: `c:\Users\Ислам\Desktop\Projects\strboost` (Userscript, Browser automation)
-  - `test1`: `c:\Users\Ислам\Desktop\Projects\test1` (HTML5, CSS3, JavaScript quiz & proctoring)
-- **Credential Protection**: Never overwrite, delete, or expose tokens and credentials in `.env`, `.db`, `.sqlite`, or `.session` files across any of the projects.
+- **Primary Project**: `c:\Users\Илез\Desktop\logovobot` (Python 3.11+, Telegram Bot, Gemini AI, SQLite).
+- Confine all edits, test runs, and context reads strictly to this repository.
+- Never modify or expose secrets in `.env` or `league.db`.
