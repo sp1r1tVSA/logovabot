@@ -1373,7 +1373,7 @@ async def admin_close_round(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     await query.answer()
     
     round_number = int(query.data.replace("admin_close_round_", ""))
-    await asyncio.to_thread(database.update_round_status, round_number, is_open=False, deadline=None)
+    await asyncio.to_thread(database.update_round_status, round_number, is_open=False)
     
     keyboard = [[InlineKeyboardButton("« Вернуться", callback_data=f"admin_manage_round_{round_number}")]]
     await query.edit_message_text(
@@ -3557,7 +3557,8 @@ async def job_debt_lifecycle_tracker(context: ContextTypes.DEFAULT_TYPE) -> None
         # Only trigger at most ONE milestone per match per run to prevent cascades
         for req_hours, stage_key, label in warn_milestones:
             if hours_overdue >= req_hours and not (await asyncio.to_thread(database.has_debt_stage, m_id, stage_key)):
-                warns_updated = True
+                warned_p1 = False
+                warned_p2 = False
 
                 # Apply warn to Player 1 (only if active, has club, and not warned within 20h)
                 if p1_id and p1_valid:
@@ -3570,6 +3571,8 @@ async def job_debt_lifecycle_tracker(context: ContextTypes.DEFAULT_TYPE) -> None
                         new_cnt1, is_exceeded1 = await asyncio.to_thread(
                             database.add_warn, p1_id, None, f"Авто-варн: просрочка {label} по {rn} туру"
                         )
+                        warned_p1 = True
+                        warns_updated = True
                         dm_warn1 = (
                             f"🚨 <b>Вам начислен АВТО-ВАРН за задержку тура!</b>\n\n"
                             f"Причина: Просрочка матча {rn}-го тура (vs {u2}) более {label}.\n"
@@ -3594,6 +3597,8 @@ async def job_debt_lifecycle_tracker(context: ContextTypes.DEFAULT_TYPE) -> None
                         new_cnt2, is_exceeded2 = await asyncio.to_thread(
                             database.add_warn, p2_id, None, f"Авто-варн: просрочка {label} по {rn} туру"
                         )
+                        warned_p2 = True
+                        warns_updated = True
                         dm_warn2 = (
                             f"🚨 <b>Вам начислен АВТО-ВАРН за задержку тура!</b>\n\n"
                             f"Причина: Просрочка матча {rn}-го тура (vs {u1}) более {label}.\n"
@@ -3607,20 +3612,21 @@ async def job_debt_lifecycle_tracker(context: ContextTypes.DEFAULT_TYPE) -> None
                         if is_exceeded2:
                             await _auto_kick_player(context, p2_id, m.get("p2_username"), m.get("player2_team"))
 
-                # Post group notice to ПРЕДЫ topic
-                p1_warn_now = await asyncio.to_thread(database.get_user_warn_count, p1_id) if p1_id else 0
-                p2_warn_now = await asyncio.to_thread(database.get_user_warn_count, p2_id) if p2_id else 0
-                thread_notice = (
-                    f"⚠️ <b>АВТО-ВАРН ЗА ПРОСРОЧКУ ТУРА</b>\n\n"
-                    f"👤 Участники: <b>{u1}</b> [{t1}] и <b>{u2}</b> [{t2}]\n"
-                    f"🏆 Матч: {rn}-й тур (Просрочка: {label})\n"
-                    f"📊 Текущий баланс варнов:\n"
-                    f"• {u1}: <b>{p1_warn_now}/{MAX_WARNS_LIMIT}</b>\n"
-                    f"• {u2}: <b>{p2_warn_now}/{MAX_WARNS_LIMIT}</b>\n\n"
-                    f"<i>Матч необходимо срочно доиграть и внести результат.</i>"
-                )
-                await _send_to_warns_thread(context, thread_notice)
-                await asyncio.to_thread(database.record_debt_stage, m_id, stage_key)
+                # Post group notice to ПРЕДЫ topic and record milestone ONLY if someone was actually warned
+                if warned_p1 or warned_p2:
+                    p1_warn_now = await asyncio.to_thread(database.get_user_warn_count, p1_id) if p1_id else 0
+                    p2_warn_now = await asyncio.to_thread(database.get_user_warn_count, p2_id) if p2_id else 0
+                    thread_notice = (
+                        f"⚠️ <b>АВТО-ВАРН ЗА ПРОСРОЧКУ ТУРА</b>\n\n"
+                        f"👤 Участники: <b>{u1}</b> [{t1}] и <b>{u2}</b> [{t2}]\n"
+                        f"🏆 Матч: {rn}-й тур (Просрочка: {label})\n"
+                        f"📊 Текущий баланс варнов:\n"
+                        f"• {u1}: <b>{p1_warn_now}/{MAX_WARNS_LIMIT}</b>\n"
+                        f"• {u2}: <b>{p2_warn_now}/{MAX_WARNS_LIMIT}</b>\n\n"
+                        f"<i>Матч необходимо срочно доиграть и внести результат.</i>"
+                    )
+                    await _send_to_warns_thread(context, thread_notice)
+                    await asyncio.to_thread(database.record_debt_stage, m_id, stage_key)
 
                 # Crucial: break so only 1 milestone is handled per match per 30m run
                 break

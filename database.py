@@ -1662,7 +1662,7 @@ def get_user_warn_count(user_id: int) -> int:
 
 
 
-def add_warn(user_id: int, admin_id: int, reason: str) -> tuple[int, bool]:
+def add_warn(user_id: int, admin_id: int | None, reason: str) -> tuple[int, bool]:
     from config import MAX_WARNS_LIMIT
     with transaction() as conn:
         cursor = conn.cursor()
@@ -1670,17 +1670,18 @@ def add_warn(user_id: int, admin_id: int, reason: str) -> tuple[int, bool]:
         row = cursor.fetchone()
         current_count = row["warn_count"] if row and row["warn_count"] is not None else 0
         new_count = current_count + 1
+        now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
         cursor.execute("UPDATE users SET warn_count = ? WHERE telegram_id = ?", (new_count, user_id))
         cursor.execute(
-            "INSERT INTO user_warns (user_id, admin_id, reason, type) VALUES (?, ?, ?, 'WARN_ADD')",
-            (user_id, admin_id, reason)
+            "INSERT INTO user_warns (user_id, admin_id, reason, type, created_at) VALUES (?, ?, ?, 'WARN_ADD', ?)",
+            (user_id, admin_id, reason, now_str)
         )
         is_exceeded = new_count >= MAX_WARNS_LIMIT
         return new_count, is_exceeded
 
 
-def remove_warn(user_id: int, admin_id: int, reason: str) -> tuple[int, bool]:
+def remove_warn(user_id: int, admin_id: int | None, reason: str) -> tuple[int, bool]:
     with transaction() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT warn_count FROM users WHERE telegram_id = ?", (user_id,))
@@ -1691,10 +1692,11 @@ def remove_warn(user_id: int, admin_id: int, reason: str) -> tuple[int, bool]:
             return 0, False
             
         new_count = max(0, current_count - 1)
+        now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         cursor.execute("UPDATE users SET warn_count = ? WHERE telegram_id = ?", (new_count, user_id))
         cursor.execute(
-            "INSERT INTO user_warns (user_id, admin_id, reason, type) VALUES (?, ?, ?, 'WARN_REMOVE')",
-            (user_id, admin_id, reason)
+            "INSERT INTO user_warns (user_id, admin_id, reason, type, created_at) VALUES (?, ?, ?, 'WARN_REMOVE', ?)",
+            (user_id, admin_id, reason, now_str)
         )
         return new_count, True
 
@@ -1969,10 +1971,16 @@ def get_round_info(round_number: int) -> dict | None:
 def update_round_status(round_number: int, is_open: bool, deadline: str | None = None) -> None:
     with transaction() as conn:
         cursor = conn.cursor()
-        cursor.execute(
-            "UPDATE rounds SET is_open = ?, deadline = ? WHERE round_number = ?",
-            (1 if is_open else 0, deadline, round_number)
-        )
+        if deadline is not None:
+            cursor.execute(
+                "UPDATE rounds SET is_open = ?, deadline = ? WHERE round_number = ?",
+                (1 if is_open else 0, deadline, round_number)
+            )
+        else:
+            cursor.execute(
+                "UPDATE rounds SET is_open = ? WHERE round_number = ?",
+                (1 if is_open else 0, round_number)
+            )
 
 
 def get_all_rounds() -> list[int]:
@@ -2946,9 +2954,10 @@ def record_debt_stage(match_id: int, stage: str) -> None:
     """Record a debt lifecycle stage for a match (e.g. 'deadline_passed', 'warn_24h', 'warn_48h', etc.)."""
     with transaction() as conn:
         cursor = conn.cursor()
+        now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         cursor.execute(
-            "INSERT OR IGNORE INTO debt_reminders (match_id, stage, sent_at) VALUES (?, ?, CURRENT_TIMESTAMP)",
-            (match_id, stage)
+            "INSERT OR REPLACE INTO debt_reminders (match_id, stage, sent_at) VALUES (?, ?, ?)",
+            (match_id, stage, now_str)
         )
 
 
@@ -2964,11 +2973,12 @@ def record_debt_12h_reminder(match_id: int) -> None:
     """Record timestamp of 12h cycle debt reminder."""
     with transaction() as conn:
         cursor = conn.cursor()
+        now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         cursor.execute("""
             INSERT INTO debt_reminders (match_id, stage, sent_at)
-            VALUES (?, 'cycle_reminder_last', CURRENT_TIMESTAMP)
-            ON CONFLICT(match_id, stage) DO UPDATE SET sent_at = CURRENT_TIMESTAMP
-        """, (match_id,))
+            VALUES (?, 'cycle_reminder_last', ?)
+            ON CONFLICT(match_id, stage) DO UPDATE SET sent_at = ?
+        """, (match_id, now_str, now_str))
 
 
 def get_last_debt_12h_reminder(match_id: int) -> datetime.datetime | None:
@@ -2985,9 +2995,9 @@ def get_last_debt_12h_reminder(match_id: int) -> datetime.datetime | None:
 def get_detailed_overdue_matches() -> list[dict]:
     """
     Retrieve all pending league matches that are legitimately overdue:
-    - Round is currently open (is_open = 1) AND has an expired deadline (deadline_dt <= now).
-    - Or round is a past round with an explicitly recorded expired deadline.
-    - NEVER includes future unopened rounds (is_open = 0 and deadline IS NULL).
+    - Round has an expired deadline (deadline_dt <= now).
+    - Or round is currently open (is_open = 1) without a deadline, and start_dt <= now.
+    - Or round is a past round (rn < max_open_round or is_open = 0 with unplayed matches).
     - Club participants are strictly resolved from current owners in users table.
     """
     with transaction() as conn:
@@ -3000,8 +3010,11 @@ def get_detailed_overdue_matches() -> list[dict]:
         rounds_rows = cursor.fetchall()
 
         round_info_map: dict[int, dict] = {}
+        max_open_round = 0
         for r_num, is_open, dl_str in rounds_rows:
             parsed_dl = parse_flexible_datetime(dl_str)
+            if is_open and r_num > max_open_round:
+                max_open_round = r_num
             round_info_map[r_num] = {
                 "is_open": bool(is_open),
                 "deadline_str": dl_str,
@@ -3042,21 +3055,25 @@ def get_detailed_overdue_matches() -> list[dict]:
         for m in matches:
             rn = m["round_number"]
             r_info = round_info_map.get(rn)
-            if not r_info:
-                continue
 
-            dl_dt = r_info.get("deadline_dt")
-            is_open = r_info.get("is_open", False)
+            dl_dt = r_info.get("deadline_dt") if r_info else None
+            is_open = r_info.get("is_open", False) if r_info else False
 
-            # CRITICAL: A round is ONLY overdue if:
-            # 1. is_open == True and dl_dt is set and dl_dt <= now
-            # 2. Or is_open == True and dl_dt is None and now >= start_dt
-            # 3. Or dl_dt is set in the past (past round with explicit deadline)
-            # Future rounds (is_open == False and deadline is NULL) are NEVER overdue!
+            # CRITICAL: A pending league match is overdue if:
+            # 1. dl_dt is set and dl_dt <= now
+            # 2. Or is_open == True and dl_dt is None and start_dt and now >= start_dt
+            # 3. Or rn < max_open_round (past tour before current open tours)
+            # 4. Or is_open == False and rn <= max_open_round (closed tour with pending matches)
             is_overdue = False
             if dl_dt and dl_dt <= now:
                 is_overdue = True
             elif is_open and dl_dt is None:
+                if start_dt and now >= start_dt:
+                    is_overdue = True
+            elif max_open_round > 0 and rn < max_open_round:
+                if start_dt and now >= start_dt:
+                    is_overdue = True
+            elif not is_open and r_info and max_open_round > 0 and rn <= max_open_round:
                 if start_dt and now >= start_dt:
                     is_overdue = True
 
@@ -3086,7 +3103,7 @@ def get_detailed_overdue_matches() -> list[dict]:
             else:
                 hours_overdue = 0.0
 
-            m["deadline_str"] = r_info.get("deadline_str") or (start_dt.strftime("%d.%m.%Y %H:%M") if start_dt else "—")
+            m["deadline_str"] = r_info.get("deadline_str") if r_info and r_info.get("deadline_str") else (start_dt.strftime("%d.%m.%Y %H:%M") if start_dt else "—")
             m["deadline_dt"] = effective_dl
             m["hours_overdue"] = max(0.0, hours_overdue)
             overdue_list.append(m)
@@ -3122,6 +3139,10 @@ def is_match_overdue(match_id: int) -> bool:
         start_dt = get_debt_tracking_start_datetime()
         now = datetime.datetime.now()
 
+        cursor.execute("SELECT MAX(round_number) FROM rounds WHERE is_open = 1")
+        max_row = cursor.fetchone()
+        max_open = max_row[0] if max_row and max_row[0] is not None else 0
+
         if dl_dt:
             effective_dl = dl_dt
             if start_dt and dl_dt < start_dt:
@@ -3129,6 +3150,9 @@ def is_match_overdue(match_id: int) -> bool:
             return now >= effective_dl
 
         if is_open and start_dt:
+            return now >= start_dt
+
+        if max_open > 0 and rn < max_open and start_dt:
             return now >= start_dt
 
         return False
@@ -3166,7 +3190,7 @@ def has_user_been_warned_recently(user_id: int, hours: float = 20.0) -> bool:
         cursor.execute("""
             SELECT created_at FROM user_warns 
             WHERE user_id = ? AND type = 'WARN_ADD'
-            ORDER BY created_at DESC LIMIT 1
+            ORDER BY created_at DESC, id DESC LIMIT 1
         """, (user_id,))
         row = cursor.fetchone()
         if not row or not row["created_at"]:
@@ -3174,7 +3198,8 @@ def has_user_been_warned_recently(user_id: int, hours: float = 20.0) -> bool:
         warn_dt = parse_flexible_datetime(row["created_at"])
         if not warn_dt:
             return False
-        return abs((datetime.datetime.now() - warn_dt).total_seconds()) < hours * 3600.0
+        diff_sec = (datetime.datetime.now() - warn_dt).total_seconds()
+        return 0 <= diff_sec < (hours * 3600.0)
 
 
 
