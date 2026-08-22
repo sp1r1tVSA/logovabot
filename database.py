@@ -2246,14 +2246,15 @@ def get_player_card_stats(player_name: str, team_name: str) -> dict:
               AND LOWER(me.team_name) = LOWER(?)
               AND m.status = 'confirmed'
         """, (p_name, t_name))
-        summary_row = cursor.fetchone() or {}
+        summary_row = cursor.fetchone()
+        summary_dict = dict(summary_row) if summary_row else {}
         
-        total_goals = summary_row.get("total_goals", 0)
-        total_assists = summary_row.get("total_assists", 0)
-        league_goals = summary_row.get("league_goals", 0)
-        league_assists = summary_row.get("league_assists", 0)
-        cup_goals = summary_row.get("cup_goals", 0)
-        cup_assists = summary_row.get("cup_assists", 0)
+        total_goals = summary_dict.get("total_goals", 0)
+        total_assists = summary_dict.get("total_assists", 0)
+        league_goals = summary_dict.get("league_goals", 0)
+        league_assists = summary_dict.get("league_assists", 0)
+        cup_goals = summary_dict.get("cup_goals", 0)
+        cup_assists = summary_dict.get("cup_assists", 0)
 
         # 2. Detailed per-match breakdown
         cursor.execute("""
