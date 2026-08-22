@@ -1735,14 +1735,20 @@ def reset_season_warns() -> None:
         cursor.execute("DELETE FROM user_warns")
 
 
-def amnesty_player(user_id: int, admin_id: int) -> None:
+def amnesty_player(user_id: int, admin_id: int | None = None) -> None:
     with transaction() as conn:
         cursor = conn.cursor()
+        now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         cursor.execute("UPDATE users SET warn_count = 0 WHERE telegram_id = ?", (user_id,))
         cursor.execute(
-            "INSERT INTO user_warns (user_id, admin_id, reason, type) VALUES (?, ?, 'Амнистия (сброс варнов)', 'WARN_REMOVE')",
-            (user_id, admin_id)
+            "INSERT INTO user_warns (user_id, admin_id, reason, type, created_at) VALUES (?, ?, 'Амнистия (сброс варнов)', 'WARN_REMOVE', ?)",
+            (user_id, admin_id, now_str)
         )
+
+
+def reset_user_warns(user_id: int, admin_id: int | None = None) -> None:
+    """Reset all warns for a specific user to 0."""
+    amnesty_player(user_id, admin_id)
 
 
 def find_user_by_ref(ref: str) -> dict | None:

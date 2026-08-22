@@ -4211,7 +4211,7 @@ async def admin_reset_season_warns(update: Update, context: ContextTypes.DEFAULT
 
 @admin_only
 async def admin_reset_debts_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Admin command /reset_debts: resets all warns, clears debt timers, and confirms start datetime."""
+    """Admin command /reset_debts or /reset_warns: resets all warns, clears debt timers, and confirms start datetime."""
     user_id = update.effective_user.id
     if not is_admin(user_id):
         await update.message.reply_text("❌ Нет прав.")
@@ -4229,6 +4229,59 @@ async def admin_reset_debts_command(update: Update, context: ContextTypes.DEFAUL
         f"<i>До {start_str} бот не будет выписывать авто-варны и исключать участников.</i>"
     )
     await update.message.reply_text(text, parse_mode="HTML")
+
+
+@admin_only
+async def admin_unwarn_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Admin command /unwarn <@user / team>: removes 1 warn from user, or /unwarn all <@user> resets to 0."""
+    user_id = update.effective_user.id
+    if not is_admin(user_id):
+        await update.message.reply_text("❌ Нет прав.")
+        return
+
+    args = context.args or []
+    if not args:
+        await update.message.reply_text(
+            "ℹ️ <b>Использование:</b>\n"
+            "• <code>/unwarn @username</code> — снять 1 варн с игрока\n"
+            "• <code>/unwarn all @username</code> — полностью обнулить варны игрока\n"
+            "• <code>/reset_debts</code> — сбросить все варны и стадии долгов всей лиги",
+            parse_mode="HTML"
+        )
+        return
+
+    is_all = (args[0].lower() == "all" and len(args) > 1)
+    target_ref = args[1] if is_all else args[0]
+    target_ref = target_ref.lstrip("@").strip()
+
+    target_user = await asyncio.to_thread(database.find_user_by_ref, target_ref)
+    if not target_user:
+        await update.message.reply_text(f"❌ Пользователь <b>{html.escape(target_ref)}</b> не найден.", parse_mode="HTML")
+        return
+
+    t_id = target_user["telegram_id"]
+    u_name = f"@{target_user.get('username')}" if target_user.get('username') else f"ID {t_id}"
+    t_name = target_user.get('team_name') or "без клуба"
+
+    if is_all:
+        await asyncio.to_thread(database.reset_user_warns, t_id, user_id)
+        await update.message.reply_text(
+            f"✅ Все варны игрока <b>{html.escape(u_name)}</b> [{html.escape(t_name)}] полностью аннулированы (0/{MAX_WARNS_LIMIT}).",
+            parse_mode="HTML"
+        )
+    else:
+        new_cnt, removed = await asyncio.to_thread(database.remove_warn, t_id, user_id, "Снято администратором")
+        if removed:
+            await update.message.reply_text(
+                f"✅ С игрока <b>{html.escape(u_name)}</b> [{html.escape(t_name)}] снят 1 варн.\n"
+                f"📊 Текущие варны: <b>{new_cnt}/{MAX_WARNS_LIMIT}</b>",
+                parse_mode="HTML"
+            )
+        else:
+            await update.message.reply_text(
+                f"ℹ️ У игрока <b>{html.escape(u_name)}</b> [{html.escape(t_name)}] нет активных варнов (0/{MAX_WARNS_LIMIT}).",
+                parse_mode="HTML"
+            )
 
 
 @admin_only
