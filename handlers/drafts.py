@@ -221,6 +221,35 @@ async def _process_draft_group_delayed(buffer_key: str, update: Update, context:
             h_score = h_g_count
         if a_score < a_g_count:
             a_score = a_g_count
+
+        # Mathematical rule: assists cannot exceed score
+        h_a_count = sum(h_assists.values())
+        if h_a_count > h_score:
+            excess = h_a_count - h_score
+            for p in list(h_assists.keys()):
+                if excess <= 0:
+                    break
+                if p in h_goals:
+                    if h_assists[p] <= excess:
+                        excess -= h_assists[p]
+                        del h_assists[p]
+                    else:
+                        h_assists[p] -= excess
+                        excess = 0
+
+        a_a_count = sum(a_assists.values())
+        if a_a_count > a_score:
+            excess = a_a_count - a_score
+            for p in list(a_assists.keys()):
+                if excess <= 0:
+                    break
+                if p in a_goals:
+                    if a_assists[p] <= excess:
+                        excess -= a_assists[p]
+                        del a_assists[p]
+                    else:
+                        a_assists[p] -= excess
+                        excess = 0
                 
         events = []
         for p, c in h_goals.items(): events.append((home_team, p, "goal", c))

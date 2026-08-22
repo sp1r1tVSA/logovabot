@@ -113,65 +113,61 @@ PROMPT_TEXT = """
 Экран четко разделен на две независимые таблицы (Левая и Правая команда).
 ОНИ ИМЕЮТ РАЗНЫЙ (ЗЕРКАЛЬНЫЙ) ПОРЯДОК СТОЛБЦОВ!
 Обрати внимание на заголовки столбцов (на русском `Г`/`А` или на английском `G`/`A`): `Г` или `G` = Голы, `А` или `A` = Ассисты.
-⚠️ ПРАВИЛО ЧТЕНИЯ ИМЕН:
+
+⚠️ ПРАВИЛО ЧТЕНИЯ ИМЕН И НУЛЕЙ:
 - ЧИТАЙ СТРОГО ТЕ ИМЕНА, КОТОРЫЕ НАПИСАНЫ В КОЛОНКЕ «ИГРОКИ» (PLAYERS) ДЛЯ ДАННОЙ СТРОКИ!
 - Игнорируй иконки капитана или бейджи (короны 👑, значки C, мячики ⚽) рядом с фамилией игрока — извлекай чистое имя.
-- ⚠️ ЗАПРЕЩЕНО добавлять игрока в ассисты, если в колонке А/A стоит 0!
-- ⚠️ ЗАПРЕЩЕНО добавлять игрока в голы, если в колонке Г/G стоит 0!
+- ⚠️ КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО добавлять игрока в ассисты, если в колонке А/A стоит 0! Даже если он забил гол!
+- ⚠️ КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО добавлять игрока в голы, если в колонке Г/G стоит 0!
 - ⚠️ Если у игрока в обеих колонках стоят нули (0 0), он НЕ ДОЛЖЕН попадать ни в голы, ни в ассисты!
 
 3. **ЛЕВАЯ ПОЛОВИНА (LEFT SIDE — ЛЕВАЯ КОМАНДА):**
    - Порядок столбцов: `ПОЗ/POS` | `ИГРОКИ/PLAYERS` | `ОБЩ/OVR` | `ИС/PS` | `Г/G` | `А/A`
-   - Имена игроков левой команды находятся в ЛЕВОЙ КОЛОНКЕ (слева от ОБЩ/OVR, например: `Bardghji`, `Khedira`, `Pineda`, `Evander`).
+   - Имена игроков левой команды находятся в ЛЕВОЙ КОЛОНКЕ (слева от ОБЩ/OVR, например: `Diomande`, `Ziyech`, `Leweling`, `Francisco Moura`).
    - Столбец `Г` / `G` (Голы) идет ПЕРВЫМ из двух правых цифр (предпоследняя колонка левой таблицы).
    - Столбец `А` / `A` (Ассисты) идет ВТОРЫМ (крайняя правая колонка левой таблицы).
-   - Занеси ИМЯ ИГРОКА ИЗ ЛЕВОЙ КОЛОНКИ в `left_goals`, если число в столбце `Г`/`G` > 0 (СТРОГО столько раз, чему равно число).
-   - Занеси ИМЯ ИГРОКА ИЗ ЛЕВОЙ КОЛОНКИ в `left_assists`, если число в столбце `А`/`A` > 0 (СТРОГО столько раз, чему равно число).
+   - Если число в столбце `Г`/`G` > 0 -> занеси имя игрока в `left_goals` (СТРОГО столько раз, чему равно число).
+   - Если число в столбце `А`/`A` > 0 -> занеси имя игрока в `left_assists` (СТРОГО столько раз, чему равно число).
+   - ⚠️ ЕСЛИ СЛЕВА СТОИТ `1 0` (например, `Diomande 74 ... 1 0`): Г=1, А=0 -> Diomande идет ТОЛЬКО в `left_goals`! В `left_assists` его быть НЕ ДОЛЖНО!
 
 4. **ПРАВАЯ ПОЛОВИНА (RIGHT SIDE — ПРАВАЯ КОМАНДА):**
    - Порядок столбцов: `А/A` | `Г/G` | `ИС/PS` | `ОБЩ/OVR` | `ИГРОКИ/PLAYERS` | `ПОЗ/POS`
-   - ⚠️⚠️ ВНИМАНИЕ: ИМЕНА ИГРОКОВ ПРАВОЙ КОМАНДЫ НАХОДЯТСЯ В ПРАВОЙ КОЛОНКЕ (СПРАВА ОТ ОБЩ/OVR, БЛИЖЕ К ПРАВОМУ КРАЮ ЭКРАНА, например: `Berghuis`, `Araujo`, `Bailly`, `Wijndal`)!
+   - ⚠️⚠️ ВНИМАНИЕ: ИМЕНА ИГРОКОВ ПРАВОЙ КОМАНДЫ НАХОДЯТСЯ В ПРАВОЙ КОЛОНКЕ (СПРАВА ОТ ОБЩ/OVR, БЛИЖЕ К ПРАВОМУ КРАЮ ЭКРАНА, например: `Ríos`, `Igor Paixão`, `Rodrygo`, `João Pedro`)!
    - ⚠️ КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО брать имя из левой половины экрана для правой команды!
    - Столбец `А` / `A` (Ассисты) идет ПЕРВЫМ (крайняя левая колонка правой таблицы, ближе к центру).
    - Столбец `Г` / `G` (Голы) идет ВТОРЫМ (дальше от центра, перед столбцом ОБЩ/OVR).
-   - Если в правой таблице число в столбце `А`/`A` > 0 -> возьми имя игрока ИЗ ПРАВОЙ КОЛОНКИ ЭТОЙ ЖЕ СТРОКИ и занеси в `right_assists`!
-   - Если в правой таблице число в столбце `Г`/`G` > 0 -> возьми имя игрока ИЗ ПРАВОЙ КОЛОНКИ ЭТОЙ ЖЕ СТРОКИ и занеси в `right_goals`!
+   - Если число в столбце `А`/`A` > 0 -> занеси имя игрока ИЗ ПРАВОЙ КОЛОНКИ в `right_assists`!
+   - Если число в столбце `Г`/`G` > 0 -> занеси имя игрока ИЗ ПРАВОЙ КОЛОНКИ в `right_goals`!
+   - ⚠️ ЕСЛИ СПРАВА СТОИТ `0 1` (например, `0 1 ... 116 João Pedro`): А=0, Г=1 -> João Pedro идет ТОЛЬКО в `right_goals`! В `right_assists` его быть НЕ ДОЛЖНО!
 
-   - ПРИМЕРЫ:
-     Строка: [Bardghji 108 ... 0 1 | 1 0 ... 113 Berghuis ПВ]
-     -> Слева: Bardghji имеет Г=0, А=1 -> в `left_assists` добавляем "Bardghji".
-     -> Справа: Berghuis имеет А=1, Г=0 -> в `right_assists` добавляем СТРОГО "Berghuis" (из правой колонки, НЕ Bardghji)!
-     Строка: [Koita 75 ... 0 0 | 0 1 ... 74 Araujo ПЗ]
-     -> Слева: Koita 0 0 -> ничего.
-     -> Справа: Araujo А=0, Г=1 -> в `right_goals` добавляем СТРОГО "Araujo".
-     Строка: [Renato Sanches 103 ... 0 2 | 0 0 ... 70 Carlos Forbs ЛВ]
-     -> Слева: Renato Sanches Г=2, А=0 -> в `left_goals` добавляем "Renato Sanches", "Renato Sanches".
-     Строка: [0 0 ... | 1 0 ... 104 El Shaarawy ЛВ]
-     -> Справа: El Shaarawy А=1, Г=0 -> в `right_assists` добавляем СТРОГО "El Shaarawy".
+5. **ОБЯЗАТЕЛЬНЫЙ МАТЕМАТИЧЕСКИЙ ЛИМИТ АССИСТОВ (ЗАКОН ФУТБОЛА):**
+   - ⚠️ Общее количество ассистов команды НЕ МОЖЕТ превышать количество забитых ею голов (счёт команды)!
+   - `len(left_assists) <= left_score`
+   - `len(right_assists) <= right_score`
+   - Если Бенфика забила 3 гола (`right_score = 3`), у неё в `right_assists` может быть МАКСИМУМ 3 ассиста (например, Ríos (1), Igor Paixão (2) = 3). 4-го ассиста быть НЕ МОЖЕТ!
+   - Если Рейнджерс забил 2 гола (`left_score = 2`), у него в `left_assists` может быть МАКСИМУМ 2 ассиста (например, Ziyech (1), Leweling (1) = 2). 3-го ассиста быть НЕ МОЖЕТ!
 
-5. **ОБЯЗАТЕЛЬНАЯ КРОСС-ПРОВЕРКА И ПРАВИЛА ОБЪЕДИНЕНИЯ СКРИНШОТОВ:**
-   - Если предоставлены и скриншот счёта/таймлайна (ТИП 1), и таблица статистики (ТИП 2):
-     Таблица статистики (ТИП 2) является ГЛАВНЫМ ИСТОЧНИКОМ для авторов голов и ассистентов.
-     ⚠️ КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО дублировать голы в ассисты!
-     Если игрок забил 2 гола и имеет 0 ассистов в таблице, он должен быть ТОЛЬКО в `goals`, а в `assists` его быть НЕ ДОЛЖНО!
+6. **ОБРАБОТКА ДВУХ СКРИНШОТОВ ОДНОЙ ТАБЛИЦЫ (ПРИ ПРОКРУТКЕ/СКРОЛЛЕ):**
+   - Если прислано 2 скриншота одной игры (верхняя и нижняя часть состава), один и тот же игрок может попасть на оба скриншота на стыке (например, `Diomande 1 0`).
+   - НЕ ДУБЛИРУЙ ЕГО! Это одна и та же строка одного матча — учитывай её ровно 1 раз!
 
 ---
 
 ### ЭТАП 3: ОПРЕДЕЛЕНИЕ МАТЧЕЙ (ОДИН, НЕСКОЛЬКО ИЛИ ИЗ ТЕКСТА ПОДПИСИ)
 
 - **РАЗНЫЕ МАТЧИ** (например, Игра 1 со счётом 3-0 и Игра 2 со счётом 4-2): обработай каждый матч отдельно и верни их в массиве `matches`.
-- **ОДИН МАТЧ** (например, два скриншота одной игры: вертикальная колонка голов и таблица статистики с одинаковым счётом): объедини голы и ассисты в один объект в массиве `matches`.
+- **ОДИН МАТЧ** (например, два скриншота одной игры: верх и низ таблицы): объедини строки в один объект в массиве `matches`.
 - ⚠️ **МАТЧИ, ОПИСАННЫЕ В ТЕКСТЕ ПОДПИСИ**:
-  Если в тексте подписи пользователя описан дополнительный матч (например: «3 матч в пользу Бенфики 1:2, Голы Родриго, Жоау Педро, Гол Браги Рикардо Орта»), ОБЯЗАТЕЛЬНО извлеки его и добавь отдельным объектом в массив `matches` (со счётом 2-1 и авторами голов из текста)!
+  Если в тексте подписи пользователя описан дополнительный матч (например: «3 матч в пользу Бенфики 1:2, Голы Родриго, Жоау Педро, Гол Браги Рикардо Орта»), ОБЯЗАТЕЛЬНО извлеки его и добавь отдельным объектом в массив `matches`!
 
 ---
 
 ### ЭТАП 4: ФОРМАТ ОТВЕТА
 
 ⚠️ КРИТИЧЕСКИ ВАЖНО: В массивах left_goals, right_goals, left_assists, right_assists количество элементов ОБЯЗАНО строго равняться числу в соответствующей колонке таблицы (Г или А)!
-- Если у игрока в колонке А стоит 2 — его имя ОБЯЗАНО быть указано 2 раза в массиве ассистов (например: ["Barron", "Barron"]).
+- Если у игрока в колонке А стоит 2 — ровно 2 раза в массиве ассистов (например: ["Igor Paixão", "Igor Paixão"]).
 - Если у игрока в колонке А стоит 0 — его НЕ ДОЛЖНО быть в массиве ассистов.
-- Если у игрока в колонке Г стоит 2 — ровно 2 раза в массиве голов (например: ["Renato Sanches", "Renato Sanches"]).
+- Если у игрока в колонке Г стоит 2 — ровно 2 раза в массиве голов (например: ["Rodrygo", "Rodrygo"]).
 - Если у игрока в колонке Г стоит 0 — его НЕ ДОЛЖНО быть в массиве голов.
 
 Верни результат СТРОГО в виде одного валидного JSON-объекта без разметки markdown:
@@ -185,9 +181,9 @@ PROMPT_TEXT = """
       "right_score": 2,
       "is_single_timeline": false,
       "left_goals": ["Addai", "Ricardo Horta", "Ricardo Horta"],
-      "right_goals": ["Diomande", "Ziyech"],
+      "right_goals": ["Diomande", "Leweling"],
       "left_assists": ["Vitor Carvalho", "Leonardo Lelo"],
-      "right_assists": ["Barron", "Barron"]
+      "right_assists": ["Ziyech", "Leweling"]
     }
   ]
 }
@@ -203,11 +199,55 @@ def clean_json_response(raw_text: str) -> str:
         return match.group(1).strip()
     return text.strip()
 
+
+def validate_and_sanitize_match_events(m: dict) -> None:
+    """
+    Enforces deterministic football laws and eliminates duplicate/hallucinated assists:
+    1. Total assists for a team cannot exceed total goals (team score).
+    2. If len(assists) > team_score, prioritize pure assist-makers and remove goal-scorers who had duplicate assists hallucinated.
+    """
+    left_score = int(m.get("left_score", 0))
+    right_score = int(m.get("right_score", 0))
+    
+    # Sanitize left assists
+    if left_score >= 0 and len(m.get("left_assists", [])) > left_score:
+        excess = len(m["left_assists"]) - left_score
+        dual_players = [p for p in m["left_assists"] if p in m.get("left_goals", [])]
+        for p in dual_players:
+            if excess <= 0:
+                break
+            m["left_assists"].remove(p)
+            excess -= 1
+        while len(m["left_assists"]) > left_score:
+            m["left_assists"].pop()
+
+    # Sanitize right assists
+    if right_score >= 0 and len(m.get("right_assists", [])) > right_score:
+        excess = len(m["right_assists"]) - right_score
+        dual_players = [p for p in m["right_assists"] if p in m.get("right_goals", [])]
+        for p in dual_players:
+            if excess <= 0:
+                break
+            m["right_assists"].remove(p)
+            excess -= 1
+        while len(m["right_assists"]) > right_score:
+            m["right_assists"].pop()
+
+
 def _check_proxy_alive(proxy_url: str) -> bool:
     """Check if proxy host:port is accepting connections."""
     import socket
     from urllib.parse import urlparse
     try:
+        parsed = urlparse(proxy_url)
+        host = parsed.hostname
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        if not host:
+            return False
+        with socket.create_connection((host, port), timeout=2.0):
+            return True
+    except Exception:
+        return False
         parsed = urlparse(proxy_url if "://" in proxy_url else f"http://{proxy_url}")
         host = parsed.hostname or "127.0.0.1"
         port = parsed.port or 4001
@@ -330,6 +370,9 @@ def recognize_match_screenshots_bytes(
                         m["right_goals"] = [clean_player_name(p) for p in m["right_goals"] if clean_player_name(p)]
                         m["left_assists"] = [clean_player_name(p) for p in m["left_assists"] if clean_player_name(p)]
                         m["right_assists"] = [clean_player_name(p) for p in m["right_assists"] if clean_player_name(p)]
+
+                        # Enforce mathematical football laws (assists <= goals)
+                        validate_and_sanitize_match_events(m)
 
                         # If assists are present, it is NEVER a single timeline!
                         if len(m["left_assists"]) > 0 or len(m["right_assists"]) > 0:
