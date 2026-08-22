@@ -2732,6 +2732,7 @@ async def admin_view_squad(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         text = f"👥 <b>Состав команды {html.escape(club)}:</b>\n\n<i>Состав пуст.</i>"
 
     keyboard = [
+        [InlineKeyboardButton("🏛 Карточка клуба", callback_data=f"view_club_{club}")],
         [InlineKeyboardButton("📊 Загрузить состав", callback_data=f"admin_squad_upload_{club}")],
         [InlineKeyboardButton("➕ Добавить игрока", callback_data=f"admin_squad_add_player_{club}")],
         [InlineKeyboardButton("➖ Удалить игрока", callback_data=f"admin_squad_rm_menu_{club}")],

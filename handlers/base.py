@@ -177,6 +177,7 @@ async def show_league_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     keyboard = [
         [InlineKeyboardButton("📊 Таблица лиги", callback_data="league_table")],
+        [InlineKeyboardButton("🏛 Карточки клубов", callback_data="cb_clubs_catalog")],
         [InlineKeyboardButton("⚽ Бомбардиры", callback_data="league_scorers")],
         [InlineKeyboardButton("🎯 Ассисты", callback_data="league_assists")],
         [InlineKeyboardButton("« Назад в меню", callback_data="main_menu")]

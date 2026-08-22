@@ -87,6 +87,13 @@ from handlers.cabinet import (
     cb_admin_approve_result,
     cancel_score_report_and_navigate,
     show_player_card,
+    show_my_club_card,
+    show_specific_club_card,
+    show_club_graphic_card,
+    show_club_squad,
+    show_club_history,
+    show_clubs_catalog,
+    club_command,
 )
 
 # Import admin handlers
@@ -280,6 +287,13 @@ def _register_user_handlers(app: Application) -> None:
     app.add_handler(CallbackQueryHandler(show_cup_stats, pattern="^show_cup_stats$"))
     app.add_handler(CallbackQueryHandler(send_cup_scorers_image, pattern="^img_cup_scorers$"))
     app.add_handler(CallbackQueryHandler(send_cup_assisters_image, pattern="^img_cup_assisters$"))
+    app.add_handler(CommandHandler("club", club_command))
+    app.add_handler(CallbackQueryHandler(show_my_club_card, pattern="^cb_my_club_card$"))
+    app.add_handler(CallbackQueryHandler(show_clubs_catalog, pattern="^cb_clubs_catalog$"))
+    app.add_handler(CallbackQueryHandler(show_specific_club_card, pattern="^view_club_.+$"))
+    app.add_handler(CallbackQueryHandler(show_club_graphic_card, pattern="^img_club_.+$"))
+    app.add_handler(CallbackQueryHandler(show_club_squad, pattern="^clsquad_.+$"))
+    app.add_handler(CallbackQueryHandler(show_club_history, pattern="^clhist_.+$"))
     app.add_handler(CallbackQueryHandler(show_round_matches, pattern="^show_round_matches_\\d+$"))
 
 def _register_cabinet_handlers(app: Application) -> None:

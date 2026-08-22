@@ -433,6 +433,31 @@ async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_T
         )
         return True
 
+    if action in ("клуб", "карточка_клуба", "клуб_инфо", "club") or full_cmd.startswith("клуб") or full_cmd.startswith("карточка клуба"):
+        target_club_raw = re.sub(r"^(?:карточка\s+клуба|клуб(?:\s+инфо)?)\s*", "", cmd_text, flags=re.IGNORECASE).strip()
+        if not target_club_raw:
+            user = update.effective_user
+            team = await asyncio.to_thread(database.get_user_team, user.id) if user else None
+            target_club_raw = team or ""
+
+        if not target_club_raw:
+            from handlers.cabinet import show_clubs_catalog
+            await show_clubs_catalog(update, context)
+            return True
+
+        canon = database.resolve_team_name(target_club_raw)
+        if not canon:
+            await msg.reply_text(
+                f"❌ Клуб <b>{html.escape(target_club_raw)}</b> не найден в Лиге КПЛ. Напишите <code>/club</code>, чтобы посмотреть весь список.",
+                parse_mode="HTML"
+            )
+            return True
+
+        from handlers.cabinet import render_club_card
+        text, markup = await render_club_card(canon, back_cb="cb_clubs_catalog")
+        await msg.reply_text(text, parse_mode="HTML", reply_markup=markup)
+        return True
+
     if action in ("анонс_кубок", "анонс_финал", "анонс") or full_cmd.startswith("анонс кубок") or full_cmd.startswith("анонс финал") or full_cmd.startswith("кубок анонс"):
         if not is_adm:
             await msg.reply_text("⚠️ Эта команда доступна только администраторам турнира.")
