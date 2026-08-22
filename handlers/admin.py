@@ -76,7 +76,7 @@ async def show_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     query = update.callback_query
     chat_mode = database.get_config("chat_mode") or "temshik"
-    mode_label = "Темшик 🍺" if chat_mode == "temshik" else "Персона 2 🎭"
+    mode_label = "Темшик 🍺" if chat_mode == "temshik" else "Булли 😈"
     keyboard = [
         [InlineKeyboardButton("👥 Управление игроками", callback_data="admin_manage_players")],
         [InlineKeyboardButton("📋 Составы команд", callback_data="admin_manage_squads")],
@@ -114,7 +114,7 @@ async def admin_toggle_chat_mode(update: Update, context: ContextTypes.DEFAULT_T
     new_mode = "persona2" if current == "temshik" else "temshik"
     database.set_config("chat_mode", new_mode)
     await query.message.reply_text(
-        f"✅ Режим общения ИИ изменён: <b>{'Персона 2 🎭' if new_mode == 'persona2' else 'Темшик 🍺'}</b>",
+        f"✅ Режим общения ИИ изменён: <b>{'Булли 😈' if new_mode == 'persona2' else 'Темшик 🍺'}</b>",
         parse_mode="HTML"
     )
 
