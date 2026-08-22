@@ -500,6 +500,15 @@ async def cb_draft_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             )
             if next_stage:
                 last_next_stage = next_stage
+
+            # Reward players with -1 warn if this was an overdue debt match
+            try:
+                from handlers.cabinet import handle_debt_played_rewards
+                await handle_debt_played_rewards(
+                    context, m_id, g.get('round_number', 0), g.get('player1_id'), g.get('player2_id')
+                )
+            except Exception as e:
+                logger.warning(f"Failed to handle debt rewards in draft confirm: {e}")
         except Exception as e:
             logger.exception(f"Failed to confirm match {m_id}")
             
