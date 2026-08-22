@@ -1921,15 +1921,16 @@ def add_missing_squad_players(team_name: str | None = None) -> int:
 
 
 def get_club_top_scorers(team_name: str) -> list[dict]:
-    """Get top goal scorers for a club across all matches."""
+    """Get top goal scorers for a club across confirmed matches."""
     with transaction() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT player_name, SUM(count) as total
-            FROM match_events
-            WHERE LOWER(team_name) = LOWER(?) AND event_type = 'goal'
-            GROUP BY player_name
-            ORDER BY total DESC, player_name ASC
+            SELECT me.player_name, SUM(me.count) as total
+            FROM match_events me
+            JOIN matches m ON me.match_id = m.id
+            WHERE LOWER(me.team_name) = LOWER(?) AND me.event_type = 'goal' AND m.status = 'confirmed'
+            GROUP BY me.player_name
+            ORDER BY total DESC, me.player_name ASC
         """, (team_name.strip(),))
         return [{"player_name": row["player_name"], "total": row["total"]} for row in cursor.fetchall()]
 
@@ -1982,15 +1983,16 @@ def get_all_rounds() -> list[int]:
         return [row["round_number"] for row in cursor.fetchall()]
 
 def get_club_top_assisters(team_name: str) -> list[dict]:
-    """Get top assist providers for a club across all matches."""
+    """Get top assist providers for a club across confirmed matches."""
     with transaction() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT player_name, SUM(count) as total
-            FROM match_events
-            WHERE LOWER(team_name) = LOWER(?) AND event_type = 'assist'
-            GROUP BY player_name
-            ORDER BY total DESC, player_name ASC
+            SELECT me.player_name, SUM(me.count) as total
+            FROM match_events me
+            JOIN matches m ON me.match_id = m.id
+            WHERE LOWER(me.team_name) = LOWER(?) AND me.event_type = 'assist' AND m.status = 'confirmed'
+            GROUP BY me.player_name
+            ORDER BY total DESC, me.player_name ASC
         """, (team_name.strip(),))
         return [{"player_name": row["player_name"], "total": row["total"]} for row in cursor.fetchall()]
 
@@ -2038,29 +2040,37 @@ def get_unplayed_matches_in_round(round_number: int) -> list[dict]:
         return [dict(row) for row in cursor.fetchall()]
 
 def get_top_scorers(limit: int = 20) -> list[dict]:
-    """Get top goalscorers in the league aggregated from match_events."""
+    """Get top goalscorers in the league aggregated from match_events (strictly confirmed league matches, round_number > 0)."""
     with transaction() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT player_name, team_name, SUM(count) AS total_goals
-            FROM match_events
-            WHERE event_type = 'goal'
-            GROUP BY player_name, team_name
-            ORDER BY total_goals DESC, player_name ASC
+            SELECT me.player_name, me.team_name, SUM(me.count) AS total_goals
+            FROM match_events me
+            JOIN matches m ON me.match_id = m.id
+            WHERE me.event_type = 'goal'
+              AND (m.tournament_type IS NULL OR m.tournament_type = 'league')
+              AND m.round_number > 0
+              AND m.status = 'confirmed'
+            GROUP BY me.player_name, me.team_name
+            ORDER BY total_goals DESC, me.player_name ASC
             LIMIT ?
         """, (limit,))
         return [dict(row) for row in cursor.fetchall()]
 
 def get_top_assists(limit: int = 20) -> list[dict]:
-    """Get top assist providers in the league aggregated from match_events."""
+    """Get top assist providers in the league aggregated from match_events (strictly confirmed league matches, round_number > 0)."""
     with transaction() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT player_name, team_name, SUM(count) AS total_assists
-            FROM match_events
-            WHERE event_type = 'assist'
-            GROUP BY player_name, team_name
-            ORDER BY total_assists DESC, player_name ASC
+            SELECT me.player_name, me.team_name, SUM(me.count) AS total_assists
+            FROM match_events me
+            JOIN matches m ON me.match_id = m.id
+            WHERE me.event_type = 'assist'
+              AND (m.tournament_type IS NULL OR m.tournament_type = 'league')
+              AND m.round_number > 0
+              AND m.status = 'confirmed'
+            GROUP BY me.player_name, me.team_name
+            ORDER BY total_assists DESC, me.player_name ASC
             LIMIT ?
         """, (limit,))
         return [dict(row) for row in cursor.fetchall()]
@@ -2519,7 +2529,9 @@ def get_cup_top_scorers(limit: int = 20) -> list[dict]:
             SELECT me.player_name, me.team_name, SUM(me.count) AS total_goals
             FROM match_events me
             JOIN matches m ON me.match_id = m.id
-            WHERE me.event_type = 'goal' AND m.tournament_type = 'cup'
+            WHERE me.event_type = 'goal'
+              AND (m.tournament_type = 'cup' OR m.round_number = -1 OR m.cup_series_id IS NOT NULL OR m.cup_stage IS NOT NULL)
+              AND m.status = 'confirmed'
             GROUP BY me.player_name, me.team_name
             ORDER BY total_goals DESC, me.player_name ASC
             LIMIT ?
@@ -2534,7 +2546,9 @@ def get_cup_top_assists(limit: int = 20) -> list[dict]:
             SELECT me.player_name, me.team_name, SUM(me.count) AS total_assists
             FROM match_events me
             JOIN matches m ON me.match_id = m.id
-            WHERE me.event_type = 'assist' AND m.tournament_type = 'cup'
+            WHERE me.event_type = 'assist'
+              AND (m.tournament_type = 'cup' OR m.round_number = -1 OR m.cup_series_id IS NOT NULL OR m.cup_stage IS NOT NULL)
+              AND m.status = 'confirmed'
             GROUP BY me.player_name, me.team_name
             ORDER BY total_assists DESC, me.player_name ASC
             LIMIT ?
