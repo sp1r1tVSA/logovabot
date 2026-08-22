@@ -42,7 +42,7 @@ MAX_WARNS_LIMIT = 4
 # Debt tracking and auto-warn activation threshold
 # No auto-warns will be issued before this datetime.
 # All previous round deadlines will be counted starting from this datetime.
-DEBT_TRACKING_START_DATETIME = os.getenv("DEBT_TRACKING_START_DATETIME", "20.08.2026 12:00").strip()
+DEBT_TRACKING_START_DATETIME = os.getenv("DEBT_TRACKING_START_DATETIME", "23.08.2026 00:00").strip()
 
 KPL_TEAMS = [
     "Расинг", "Брага", "Бенфика", "АЕК", "Аякс", "ПСВ", "Фейеноорд", 
