@@ -18,6 +18,46 @@ GEMINI_MODELS = [
     "gemini-2.0-flash-lite",
 ]
 
+POS_TOKENS = {
+    'вр', 'gk', 'цз', 'cb', 'пз', 'rb', 'лз', 'lb', 'цоп', 'cdm',
+    'цп', 'cm', 'лп', 'lm', 'пп', 'rm', 'цап', 'cam', 'лв', 'lw',
+    'пв', 'rw', 'фрд', 'cf', 'нп', 'st', 'нап', 'lf', 'rf'
+}
+
+def clean_player_name(raw_name: str) -> str:
+    """
+    Cleans raw player name extracted by OCR:
+    - Strips player ratings (e.g. 108, 113, 75).
+    - Strips player positions (e.g. ЦОП, ПП, ЦАП, ПВ, GK, ST, LW).
+    - Strips badges, icons (👑, ⚽, ©, Ⓒ, C).
+    - Strips minute marks (e.g. 32', 45').
+    - Normalizes multiple spaces and punctuation.
+    """
+    if not raw_name:
+        return ""
+    name = str(raw_name).strip()
+    
+    # Strip emojis, symbols and minute marks
+    name = re.sub(r'[⚽👑©Ⓒ\(\)\[\]\{\}\*#~|/\\<>]', ' ', name)
+    name = re.sub(r'\b\d+[\'’]\b', ' ', name)
+    
+    # Strip leading/trailing rating numbers (e.g. "108 Bardghji" or "Bardghji 108")
+    name = re.sub(r'^\d+\s+', '', name)
+    name = re.sub(r'\s+\d+$', '', name)
+    
+    tokens = name.split()
+    if len(tokens) > 1:
+        if tokens[0].lower() in POS_TOKENS:
+            tokens = tokens[1:]
+        if tokens and tokens[-1].lower() in POS_TOKENS:
+            tokens = tokens[:-1]
+            
+    name = " ".join(tokens).strip()
+    name = re.sub(r'\b\d+\b', '', name).strip()
+    name = re.sub(r'\s+', ' ', name)
+    return name.strip()
+
+
 PROMPT_TEXT = """
 Ты — узкоспециализированный OCR-сканер для извлечения сырых данных из скриншотов FIFA / EA FC Mobile / eFootball.
 
@@ -120,7 +160,7 @@ PROMPT_TEXT = """
 ### ЭТАП 3: ОПРЕДЕЛЕНИЕ МАТЧЕЙ (ОДИН, НЕСКОЛЬКО ИЛИ ИЗ ТЕКСТА ПОДПИСИ)
 
 - **РАЗНЫЕ МАТЧИ** (например, Игра 1 со счётом 3-0 и Игра 2 со счётом 4-2): обработай каждый матч отдельно и верни их в массиве `matches`.
-- **ОДИН МАТЧ** (например, несколько скриншотов одной и той же игры: обзор + таблица статистики): объедини голы и ассисты в один объект в массиве `matches`.
+- **ОДИН МАТЧ** (например, два скриншота одной игры: вертикальная колонка голов и таблица статистики с одинаковым счётом): объедини голы и ассисты в один объект в массиве `matches`.
 - ⚠️ **МАТЧИ, ОПИСАННЫЕ В ТЕКСТЕ ПОДПИСИ**:
   Если в тексте подписи пользователя описан дополнительный матч (например: «3 матч в пользу Бенфики 1:2, Голы Родриго, Жоау Педро, Гол Браги Рикардо Орта»), ОБЯЗАТЕЛЬНО извлеки его и добавь отдельным объектом в массив `matches` (со счётом 2-1 и авторами голов из текста)!
 
@@ -133,24 +173,6 @@ PROMPT_TEXT = """
 - Если у игрока в колонке А стоит 0 — его НЕ ДОЛЖНО быть в массиве ассистов.
 - Если у игрока в колонке Г стоит 2 — ровно 2 раза в массиве голов (например: ["Renato Sanches", "Renato Sanches"]).
 - Если у игрока в колонке Г стоит 0 — его НЕ ДОЛЖНО быть в массиве голов.
-
----
-
-### ЭТАП 3: ОПРЕДЕЛЕНИЕ МАТЧЕЙ (ОДИН, НЕСКОЛЬКО ИЛИ ИЗ ТЕКСТА ПОДПИСИ)
-
-- **РАЗНЫЕ МАТЧИ** (например, Игра 1 со счётом 3-0 и Игра 2 со счётом 4-2): обработай каждый матч отдельно и верни их в массиве `matches`.
-- **ОДИН МАТЧ** (например, два скриншота одной игры: вертикальная колонка голов и таблица статистики с одинаковым счётом): объедини голы и ассисты в один объект в массиве `matches`.
-- ⚠️ **МАТЧИ, ОПИСАННЫЕ В ТЕКСТЕ ПОДПИСИ**:
-  Если в тексте подписи пользователя описан дополнительный матч (например: «3 матч в пользу Бенфики 1:2, Голы Родриго, Жоау Педро, Гол Браги Рикардо Орта»), ОБЯЗАТЕЛЬНО извлеки его и добавь отдельным объектом в массив `matches` (со счётом 2-1 и авторами голов из текста)!
-
----
-
-### ЭТАП 4: ФОРМАТ ОТВЕТА
-
-⚠️ КРИТИЧЕСКИ ВАЖНО: В массивах left_goals, right_goals, left_assists, right_assists количество элементов ОБЯЗАНО строго равняться числу в соответствующей колонке таблицы (Г или А)!
-- Если у игрока в колонке А стоит 2 — его имя ОБЯЗАНО быть указано 2 раза в массиве ассистов (например: ["Barron", "Barron"]).
-- Если у игрока в колонке А стоит 3 — ровно 3 раза (например: ["Lang", "Lang", "Lang"]).
-- Если у игрока в колонке Г стоит 2 — ровно 2 раза (например: ["Raspadori", "Raspadori"]).
 
 Верни результат СТРОГО в виде одного валидного JSON-объекта без разметки markdown:
 
@@ -172,10 +194,13 @@ PROMPT_TEXT = """
 """
 
 def clean_json_response(raw_text: str) -> str:
-    """Очищает ответ модели от возможных markdown-тегов ```json ... ```."""
+    """Очищает ответ модели от возможных markdown-тегов ```json ... ``` и извлекает чистый JSON."""
     text = raw_text.strip()
     text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
     text = re.sub(r"\s*```$", "", text)
+    match = re.search(r'(\{[\s\S]*\})', text)
+    if match:
+        return match.group(1).strip()
     return text.strip()
 
 def _check_proxy_alive(proxy_url: str) -> bool:
@@ -300,35 +325,41 @@ def recognize_match_screenshots_bytes(
                         m.setdefault("right_assists", [])
                         m.setdefault("is_single_timeline", False)
 
+                        # Clean and sanitize player names
+                        m["left_goals"] = [clean_player_name(p) for p in m["left_goals"] if clean_player_name(p)]
+                        m["right_goals"] = [clean_player_name(p) for p in m["right_goals"] if clean_player_name(p)]
+                        m["left_assists"] = [clean_player_name(p) for p in m["left_assists"] if clean_player_name(p)]
+                        m["right_assists"] = [clean_player_name(p) for p in m["right_assists"] if clean_player_name(p)]
+
                         # If assists are present, it is NEVER a single timeline!
                         if len(m["left_assists"]) > 0 or len(m["right_assists"]) > 0:
                             m["is_single_timeline"] = False
 
                         # Cross-check and side swap if goals were put on the wrong side
-                        if m["left_score"] > 0 and m["right_score"] == 0:
+                        if int(m["left_score"]) > 0 and int(m["right_score"]) == 0:
                             if len(m["left_goals"]) == 0 and len(m["right_goals"]) > 0:
                                 m["left_goals"], m["right_goals"] = m["right_goals"], m["left_goals"]
                             if len(m["left_assists"]) == 0 and len(m["right_assists"]) > 0:
                                 m["left_assists"], m["right_assists"] = m["right_assists"], m["left_assists"]
-                        elif m["right_score"] > 0 and m["left_score"] == 0:
+                        elif int(m["right_score"]) > 0 and int(m["left_score"]) == 0:
                             if len(m["right_goals"]) == 0 and len(m["left_goals"]) > 0:
                                 m["left_goals"], m["right_goals"] = m["right_goals"], m["left_goals"]
                             if len(m["right_assists"]) == 0 and len(m["left_assists"]) > 0:
                                 m["left_assists"], m["right_assists"] = m["right_assists"], m["left_assists"]
 
-                        # Совместимость
-                        m["home_score"] = m["left_score"]
-                        m["away_score"] = m["right_score"]
+                        # Compatibility aliases
+                        m["home_score"] = int(m["left_score"])
+                        m["away_score"] = int(m["right_score"])
                         m["side1_goals"] = m["left_goals"]
                         m["side2_goals"] = m["right_goals"]
                         m["side1_assists"] = m["left_assists"]
                         m["side2_assists"] = m["right_assists"]
 
-                        if m["left_score"] == 0 and len(m["left_goals"]) > 0:
+                        if int(m["left_score"]) == 0 and len(m["left_goals"]) > 0:
                             m["left_score"] = len(m["left_goals"])
                             m["home_score"] = len(m["left_goals"])
 
-                        if m["right_score"] == 0 and len(m["right_goals"]) > 0:
+                        if int(m["right_score"]) == 0 and len(m["right_goals"]) > 0:
                             m["right_score"] = len(m["right_goals"])
                             m["away_score"] = len(m["right_goals"])
 
