@@ -597,6 +597,13 @@ async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_T
                 )
             except Exception as e:
                 logger.warning(f"Failed to post warn to warns topic: {e}")
+
+        try:
+            from handlers.admin import _post_or_update_debts_in_warns
+            await _post_or_update_debts_in_warns(context)
+        except Exception as e:
+            logger.warning(f"Failed to refresh debts in warns topic: {e}")
+
         return True
 
     if action in ("снять_варн", "unwarn", "разварн") or full_cmd.startswith("снять варн"):
@@ -627,6 +634,13 @@ async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_T
                 f"ℹ️ У игрока @{html.escape(target_user.get('username') or str(t_id))} нет активных варнов.",
                 parse_mode="HTML"
             )
+
+        try:
+            from handlers.admin import _post_or_update_debts_in_warns
+            await _post_or_update_debts_in_warns(context)
+        except Exception as e:
+            logger.warning(f"Failed to refresh debts in warns topic: {e}")
+
         return True
 
     if action in ("варны", "список_варнов", "warns"):

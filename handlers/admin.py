@@ -517,7 +517,16 @@ async def _build_debts_summary() -> tuple[str | None, int]:
     for u in users:
         team = (u["team_name"] or "").strip()
         if team:
-            user_by_team.setdefault(team.lower(), {"telegram_id": u["telegram_id"], "username": u["username"], "team_name": team})
+            w_cnt = u.get("warn_count", 0) if u.get("warn_count") is not None else 0
+            user_by_team.setdefault(
+                team.lower(),
+                {
+                    "telegram_id": u["telegram_id"],
+                    "username": u["username"],
+                    "team_name": team,
+                    "warn_count": w_cnt,
+                }
+            )
 
     participants: dict[str, dict] = {}
 
@@ -530,6 +539,7 @@ async def _build_debts_summary() -> tuple[str | None, int]:
             {
                 "team_name": team,
                 "username": info["username"] if info else None,
+                "warn_count": info["warn_count"] if info else 0,
                 "league": [],
                 "cup": [],
             },
@@ -577,11 +587,13 @@ async def _build_debts_summary() -> tuple[str | None, int]:
 
     bar = "━━━━━━━━━━━━━━━━━━━━━━"
 
-    for idx, p in enumerate(sorted(participants.values(), key=lambda x: len(x["league"]) + len(x["cup"]), reverse=True), 1):
+    for idx, p in enumerate(sorted(participants.values(), key=lambda x: (len(x["league"]) + len(x["cup"]), x.get("warn_count", 0)), reverse=True), 1):
         uname_str = f"@{p['username']}" if p['username'] else p['team_name']
         total_n = len(p["league"]) + len(p["cup"])
+        w_cnt = p.get("warn_count", 0)
+        warn_badge = f" ⚠️ <b>{w_cnt}/{MAX_WARNS_LIMIT}</b>" if w_cnt > 0 else f" 🟢 <b>0/{MAX_WARNS_LIMIT}</b>"
         card: list[str] = [bar]
-        card.append(f"{idx}. 👤 <b>{html.escape(uname_str)}</b> [{html.escape(p['team_name'])}] — {total_n} матч.")
+        card.append(f"{idx}. 👤 <b>{html.escape(uname_str)}</b> [{html.escape(p['team_name'])}] — {total_n} долг. |{warn_badge}")
         if p["league"]:
             card.append("⚙️ <b>ЛИГА:</b>")
             for line in p["league"]:
@@ -4019,6 +4031,7 @@ async def admin_warn_execute(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
         keyboard = [[InlineKeyboardButton("« К карточке игрока", callback_data=f"admin_view_player_{p_id}")]]
         await query.edit_message_text(result_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+        await _post_or_update_debts_in_warns(context)
 
     finally:
         _warn_action_locks.discard(p_id)
@@ -4091,6 +4104,7 @@ async def admin_warn_remove_execute(update: Update, context: ContextTypes.DEFAUL
         result_text = f"✅ Варн снят. Счётчик: <b>{new_count} / {MAX_WARNS_LIMIT}</b>"
         keyboard = [[InlineKeyboardButton("« К карточке игрока", callback_data=f"admin_view_player_{p_id}")]]
         await query.edit_message_text(result_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+        await _post_or_update_debts_in_warns(context)
 
     finally:
         _warn_action_locks.discard(p_id)
@@ -4189,6 +4203,7 @@ async def admin_amnesty_execute(update: Update, context: ContextTypes.DEFAULT_TY
     result_text = f"✅ Амнистия применена к <b>{html.escape(username_str)}</b>. Счётчик: <b>0 / {MAX_WARNS_LIMIT}</b>"
     keyboard = [[InlineKeyboardButton("« К карточке игрока", callback_data=f"admin_view_player_{p_id}")]]
     await query.edit_message_text(result_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+    await _post_or_update_debts_in_warns(context)
 
 
 @admin_only
@@ -4207,6 +4222,7 @@ async def admin_reset_season_warns(update: Update, context: ContextTypes.DEFAULT
         "✅ Все предупреждения сброшены (новый сезон).",
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Назад в админку", callback_data="admin_main_menu")]])
     )
+    await _post_or_update_debts_in_warns(context)
 
 
 @admin_only
@@ -4229,6 +4245,7 @@ async def admin_reset_debts_command(update: Update, context: ContextTypes.DEFAUL
         f"<i>До {start_str} бот не будет выписывать авто-варны и исключать участников.</i>"
     )
     await update.message.reply_text(text, parse_mode="HTML")
+    await _post_or_update_debts_in_warns(context)
 
 
 @admin_only
@@ -4282,6 +4299,8 @@ async def admin_unwarn_command(update: Update, context: ContextTypes.DEFAULT_TYP
                 f"ℹ️ У игрока <b>{html.escape(u_name)}</b> [{html.escape(t_name)}] нет активных варнов (0/{MAX_WARNS_LIMIT}).",
                 parse_mode="HTML"
             )
+
+    await _post_or_update_debts_in_warns(context)
 
 
 @admin_only
