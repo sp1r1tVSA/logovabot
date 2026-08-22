@@ -2263,6 +2263,10 @@ def get_player_card_stats(player_name: str, team_name: str) -> dict:
                 m.tournament_type,
                 m.cup_stage,
                 m.cup_series_id,
+                CASE 
+                    WHEN LOWER(m.player1_team) = LOWER(?) THEN m.player2_team 
+                    ELSE m.player1_team 
+                END AS opponent,
                 me.event_type,
                 SUM(me.count) AS total
             FROM match_events me
@@ -2281,15 +2285,16 @@ def get_player_card_stats(player_name: str, team_name: str) -> dict:
                     WHEN m.tournament_type = 'cup' OR m.round_number = -1 OR (m.cup_series_id IS NOT NULL AND m.cup_series_id > 0) THEN -1
                     ELSE m.round_number
                 END ASC
-        """, (p_name, t_name))
+        """, (t_name, p_name, t_name))
 
         rows = cursor.fetchall()
         
-        # Build grouped rounds dict: {round_key: {"title": str, "goals": int, "assists": int, "is_cup": bool}}
+        # Build grouped rounds dict: {round_key: {"title": str, "opponent": str, "goals": int, "assists": int, "is_cup": bool}}
         rounds_dict = {}
         for r in rows:
             rn = r["round_number"]
             is_cup = bool(r["tournament_type"] == "cup" or rn == -1 or (r["cup_series_id"] and r["cup_series_id"] > 0))
+            opp = r["opponent"] or ""
             
             key = -1 if is_cup else rn
             if key not in rounds_dict:
@@ -2297,10 +2302,14 @@ def get_player_card_stats(player_name: str, team_name: str) -> dict:
                 rounds_dict[key] = {
                     "round_key": key,
                     "title": title,
+                    "opponent": opp,
                     "goals": 0,
                     "assists": 0,
                     "is_cup": is_cup
                 }
+            elif opp and not rounds_dict[key].get("opponent"):
+                rounds_dict[key]["opponent"] = opp
+
             if r["event_type"] == "goal":
                 rounds_dict[key]["goals"] += r["total"]
             elif r["event_type"] == "assist":
