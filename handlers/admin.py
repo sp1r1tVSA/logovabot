@@ -2071,7 +2071,7 @@ async def admin_set_score_text(update: Update, context: ContextTypes.DEFAULT_TYP
         try:
             await context.bot.send_message(chat_id=p_id, text=player_text, parse_mode="Markdown")
         except Exception as e:
-            logger.exception("Не удалось отправить уведомление игроку {p_id}")
+            logger.exception(f"Не удалось отправить уведомление игроку {p_id}")
 
     # Notify Telegram Group
     group_id = await asyncio.to_thread(database.get_group_id)
@@ -3103,7 +3103,7 @@ async def notify_players_rounds_opened(context: ContextTypes.DEFAULT_TYPE, round
             try:
                 await context.bot.send_message(chat_id=pid, text="\n".join(lines), parse_mode="HTML", reply_markup=InlineKeyboardMarkup(kb))
             except Exception as e:
-                logger.exception("Failed to send multi-match card to player {pid}")
+                logger.exception(f"Failed to send multi-match card to player {pid}")
 
 async def send_round_reminders(
     context: ContextTypes.DEFAULT_TYPE, 

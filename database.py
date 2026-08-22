@@ -19,7 +19,7 @@ def get_connection() -> sqlite3.Connection:
         conn.execute("PRAGMA foreign_keys = ON")
         return conn
     except sqlite3.Error as e:
-        logger.exception("Failed to connect to database at {DB_PATH}")
+        logger.exception(f"Failed to connect to database at {DB_PATH}")
         raise
 
 @contextmanager

@@ -1,1 +1,1 @@
-worker: python league_module.py
+worker: python main.py

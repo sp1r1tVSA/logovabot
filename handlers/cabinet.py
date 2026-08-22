@@ -61,14 +61,20 @@ def match_and_enrich_squad(raw_side1_goals: list[str], raw_side2_goals: list[str
         for squad_p in squad_list:
             sp_lower = squad_p.lower().strip()
             sp_norm = _normalize_name_translit(sp_lower)
-            if raw_lower == sp_lower or raw_lower in sp_lower or sp_lower in raw_lower:
+            # 1. Exact match (case / translit)
+            if raw_lower == sp_lower or raw_norm == sp_norm:
                 return squad_p
-            if raw_norm == sp_norm or raw_norm in sp_norm or sp_norm in raw_norm:
+            # 2. Substring match only for meaningful length (>=4) to prevent false matches on short words
+            if len(raw_lower) >= 4 and (raw_lower in sp_lower or sp_lower in raw_lower):
                 return squad_p
-            raw_parts = raw_norm.split()
-            sp_parts = sp_norm.split()
-            if any(p in sp_parts or any(p in spp or spp in p for spp in sp_parts) for p in raw_parts if len(p) > 2):
+            if len(raw_norm) >= 4 and (raw_norm in sp_norm or sp_norm in raw_norm):
                 return squad_p
+            # 3. Token-level matching
+            raw_parts = [p for p in raw_norm.split() if len(p) >= 3]
+            sp_parts = [p for p in sp_norm.split() if len(p) >= 3]
+            if raw_parts and sp_parts:
+                if any(p in sp_parts or any(p == spp for spp in sp_parts) for p in raw_parts):
+                    return squad_p
         return None
 
     # If single timeline had everything dumped into one list and second list is empty
@@ -88,13 +94,9 @@ def match_and_enrich_squad(raw_side1_goals: list[str], raw_side2_goals: list[str
                 away_g[a_match] = away_g.get(a_match, 0) + 1
             elif not raw_side1_goals and raw_side2_goals:
                 use_name = a_match or raw_clean
-                database.add_squad(away_team, [use_name])
-                away_squad.append(use_name)
                 away_g[use_name] = away_g.get(use_name, 0) + 1
             else:
                 use_name = h_match or raw_clean
-                database.add_squad(home_team, [use_name])
-                home_squad.append(use_name)
                 home_g[use_name] = home_g.get(use_name, 0) + 1
         return home_g, away_g, {}, {}, True
 
@@ -120,26 +122,21 @@ def match_and_enrich_squad(raw_side1_goals: list[str], raw_side2_goals: list[str
         side1_team, side2_team = home_team, away_team
         side1_squad, side2_squad = home_squad, away_squad
 
-    def process_side_events(raw_list, team_name, squad_list):
+    def process_side_events(raw_list, squad_list):
         counts = {}
         for raw in raw_list:
             raw_clean = raw.strip()
             if not raw_clean:
                 continue
             matched_name = find_squad_match(raw_clean, squad_list)
-            if matched_name:
-                use_name = matched_name
-            else:
-                use_name = raw_clean
-                database.add_squad(team_name, [use_name])
-                squad_list.append(use_name)
+            use_name = matched_name if matched_name else raw_clean
             counts[use_name] = counts.get(use_name, 0) + 1
         return counts
 
-    side1_goals = process_side_events(raw_side1_goals, side1_team, side1_squad)
-    side2_goals = process_side_events(raw_side2_goals, side2_team, side2_squad)
-    side1_assists = process_side_events(raw_side1_assists, side1_team, side1_squad)
-    side2_assists = process_side_events(raw_side2_assists, side2_team, side2_squad)
+    side1_goals = process_side_events(raw_side1_goals, side1_squad)
+    side2_goals = process_side_events(raw_side2_goals, side2_squad)
+    side1_assists = process_side_events(raw_side1_assists, side1_squad)
+    side2_assists = process_side_events(raw_side2_assists, side2_squad)
 
     if is_side1_home:
         return side1_goals, side2_goals, side1_assists, side2_assists, True
@@ -186,10 +183,10 @@ async def safe_send_notification(bot, chat_id: int, text: str, reply_markup=None
         await asyncio.sleep(e.retry_after)
         return await safe_send_notification(bot, chat_id, text, reply_markup, parse_mode)
     except telegram.error.TelegramError as e:
-        logger.exception("Telegram error sending to {chat_id}")
+        logger.exception(f"Telegram error sending to {chat_id}")
         return False
     except Exception as e:
-        logger.exception("Unexpected error sending to {chat_id}")
+        logger.exception(f"Unexpected error sending to {chat_id}")
         return False
 
 # Conversation states
@@ -953,7 +950,7 @@ async def cb_admin_approve_result(update: Update, context: ContextTypes.DEFAULT_
             reply_markup=player_keyboard
         )
     except Exception as e:
-        logger.exception("Failed to notify player {player_id} about admin approval")
+        logger.exception(f"Failed to notify player {player_id} about admin approval")
 
     # Update admin's message to show it's been approved
     try:
