@@ -472,7 +472,7 @@ def list_users() -> list[sqlite3.Row]:
     with transaction() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT telegram_id, username, team_name, league_name, role, registered_at FROM users ORDER BY registered_at DESC"
+            "SELECT telegram_id, username, team_name, league_name, role, registered_at, COALESCE(warn_count, 0) AS warn_count FROM users ORDER BY registered_at DESC"
         )
         return cursor.fetchall()
 

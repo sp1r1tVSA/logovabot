@@ -515,14 +515,15 @@ async def _build_debts_summary() -> tuple[str | None, int]:
     # Map club name (lowercased) -> user info to group debts by participant
     user_by_team: dict[str, dict] = {}
     for u in users:
-        team = (u["team_name"] or "").strip()
+        u_dict = dict(u) if isinstance(u, sqlite3.Row) else dict(u) if hasattr(u, "keys") else u
+        team = (u_dict.get("team_name") or "").strip()
         if team:
-            w_cnt = u.get("warn_count", 0) if u.get("warn_count") is not None else 0
+            w_cnt = int(u_dict.get("warn_count") or 0)
             user_by_team.setdefault(
                 team.lower(),
                 {
-                    "telegram_id": u["telegram_id"],
-                    "username": u["username"],
+                    "telegram_id": u_dict.get("telegram_id"),
+                    "username": u_dict.get("username"),
                     "team_name": team,
                     "warn_count": w_cnt,
                 }
