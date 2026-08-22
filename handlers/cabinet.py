@@ -410,9 +410,12 @@ async def show_player_card(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     # Generate image in a thread
     buf = await asyncio.to_thread(player_card_generator.generate_player_card, stats)
 
+    pts = stats.get("total_points", stats["total_goals"] + stats["total_assists"])
     caption = (
-        f"<b>{html.escape(player_name)}</b> · {html.escape(team_name)}\n"
-        f"⚽ {stats['total_goals']} голов  |  🅰️ {stats['total_assists']} ассистов"
+        f"🃏 <b>{html.escape(player_name)}</b> · {html.escape(team_name)}\n"
+        f"⚽ <b>{stats['total_goals']}</b> голов (Лига: {stats.get('league_goals', 0)} · Кубок: {stats.get('cup_goals', 0)})\n"
+        f"🅰️ <b>{stats['total_assists']}</b> ассистов (Лига: {stats.get('league_assists', 0)} · Кубок: {stats.get('cup_assists', 0)})\n"
+        f"🔥 <b>{pts}</b> очков (Г+П)"
     )
 
     if query.message:

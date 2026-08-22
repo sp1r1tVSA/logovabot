@@ -2222,71 +2222,133 @@ def detect_teams_from_players(
 def get_player_card_stats(player_name: str, team_name: str) -> dict:
     """
     Get full season stats for a specific player:
-    - total goals and assists
-    - breakdown by round (goals + assists per round)
+    - total goals and assists (overall, league, cup)
+    - breakdown by match / round with tournament details, opponents and scores.
     Only considers confirmed matches.
     """
     with transaction() as conn:
         cursor = conn.cursor()
+        p_name = player_name.strip()
+        t_name = team_name.strip()
 
-        # Total goals
+        # 1. Total overall goals & assists + breakdown by tournament
         cursor.execute("""
-            SELECT COALESCE(SUM(me.count), 0) AS total
+            SELECT 
+                COALESCE(SUM(CASE WHEN me.event_type = 'goal' THEN me.count ELSE 0 END), 0) AS total_goals,
+                COALESCE(SUM(CASE WHEN me.event_type = 'assist' THEN me.count ELSE 0 END), 0) AS total_assists,
+                COALESCE(SUM(CASE WHEN me.event_type = 'goal' AND (m.tournament_type IS NULL OR m.tournament_type = 'league') AND m.round_number > 0 THEN me.count ELSE 0 END), 0) AS league_goals,
+                COALESCE(SUM(CASE WHEN me.event_type = 'assist' AND (m.tournament_type IS NULL OR m.tournament_type = 'league') AND m.round_number > 0 THEN me.count ELSE 0 END), 0) AS league_assists,
+                COALESCE(SUM(CASE WHEN me.event_type = 'goal' AND (m.tournament_type = 'cup' OR m.round_number = -1 OR m.cup_series_id IS NOT NULL OR m.cup_stage IS NOT NULL) THEN me.count ELSE 0 END), 0) AS cup_goals,
+                COALESCE(SUM(CASE WHEN me.event_type = 'assist' AND (m.tournament_type = 'cup' OR m.round_number = -1 OR m.cup_series_id IS NOT NULL OR m.cup_stage IS NOT NULL) THEN me.count ELSE 0 END), 0) AS cup_assists
             FROM match_events me
             JOIN matches m ON me.match_id = m.id
             WHERE LOWER(me.player_name) = LOWER(?)
               AND LOWER(me.team_name) = LOWER(?)
-              AND me.event_type = 'goal'
               AND m.status = 'confirmed'
-        """, (player_name.strip(), team_name.strip()))
-        total_goals = cursor.fetchone()["total"]
+        """, (p_name, t_name))
+        summary_row = cursor.fetchone() or {}
+        
+        total_goals = summary_row.get("total_goals", 0)
+        total_assists = summary_row.get("total_assists", 0)
+        league_goals = summary_row.get("league_goals", 0)
+        league_assists = summary_row.get("league_assists", 0)
+        cup_goals = summary_row.get("cup_goals", 0)
+        cup_assists = summary_row.get("cup_assists", 0)
 
-        # Total assists
-        cursor.execute("""
-            SELECT COALESCE(SUM(me.count), 0) AS total
-            FROM match_events me
-            JOIN matches m ON me.match_id = m.id
-            WHERE LOWER(me.player_name) = LOWER(?)
-              AND LOWER(me.team_name) = LOWER(?)
-              AND me.event_type = 'assist'
-              AND m.status = 'confirmed'
-        """, (player_name.strip(), team_name.strip()))
-        total_assists = cursor.fetchone()["total"]
-
-        # Per-round breakdown
+        # 2. Detailed per-match breakdown
         cursor.execute("""
             SELECT
+                m.id AS match_id,
                 m.round_number,
-                me.event_type,
-                SUM(me.count) AS total
+                m.tournament_type,
+                m.cup_stage,
+                m.game_num_in_series,
+                m.player1_team,
+                m.player2_team,
+                m.player1_score,
+                m.player2_score,
+                COALESCE(SUM(CASE WHEN me.event_type = 'goal' THEN me.count ELSE 0 END), 0) AS goals,
+                COALESCE(SUM(CASE WHEN me.event_type = 'assist' THEN me.count ELSE 0 END), 0) AS assists
             FROM match_events me
             JOIN matches m ON me.match_id = m.id
             WHERE LOWER(me.player_name) = LOWER(?)
               AND LOWER(me.team_name) = LOWER(?)
               AND m.status = 'confirmed'
-            GROUP BY m.round_number, me.event_type
-            ORDER BY m.round_number ASC
-        """, (player_name.strip(), team_name.strip()))
+            GROUP BY m.id
+            ORDER BY 
+                CASE 
+                    WHEN m.tournament_type = 'cup' OR m.round_number = -1 OR m.cup_series_id IS NOT NULL OR m.cup_stage IS NOT NULL THEN 0 
+                    ELSE 1 
+                END ASC,
+                m.round_number ASC,
+                m.id ASC
+        """, (p_name, t_name))
 
-        rounds_raw = cursor.fetchall()
+        matches_raw = cursor.fetchall()
+        
+        items = []
+        rounds_compat = {}
+        
+        for r in matches_raw:
+            is_cup = bool(r["tournament_type"] == "cup" or r["round_number"] == -1 or r["cup_stage"] or r["game_num_in_series"])
+            p1 = r["player1_team"] or ""
+            p2 = r["player2_team"] or ""
+            s1 = r["player1_score"] if r["player1_score"] is not None else 0
+            s2 = r["player2_score"] if r["player2_score"] is not None else 0
+            
+            is_p1 = (p1.lower() == t_name.lower())
+            opponent = p2 if is_p1 else p1
+            team_score = s1 if is_p1 else s2
+            opp_score = s2 if is_p1 else s1
+            score_str = f"{team_score}:{opp_score}" if (r["player1_score"] is not None and r["player2_score"] is not None) else "—"
+            
+            if is_cup:
+                stage = r["cup_stage"] or "1/8"
+                stage_names = {"1/8": "1/8", "1/4": "1/4", "1/2": "1/2", "final": "Финал"}
+                st_name = stage_names.get(stage.lower(), stage)
+                g_num = r["game_num_in_series"]
+                game_suffix = f" (И{g_num})" if g_num and g_num > 1 else ""
+                title = f"🏆 Кубок КПЛ ({st_name}){game_suffix}"
+            else:
+                title = f"Тур {r['round_number']}"
+                
+            goals = r["goals"]
+            assists = r["assists"]
+            
+            items.append({
+                "match_id": r["match_id"],
+                "is_cup": is_cup,
+                "title": title,
+                "opponent": opponent,
+                "score_str": score_str,
+                "goals": goals,
+                "assists": assists,
+                "total": goals + assists,
+                "round_number": r["round_number"]
+            })
+            
+            # backward compatibility for old caller formats if any
+            rn_key = r["round_number"]
+            if rn_key not in rounds_compat:
+                rounds_compat[rn_key] = {"goals": 0, "assists": 0}
+            rounds_compat[rn_key]["goals"] += goals
+            rounds_compat[rn_key]["assists"] += assists
 
-        # Build a dict: {round_number: {"goals": n, "assists": n}}
-        rounds: dict[int, dict] = {}
-        for row in rounds_raw:
-            rn = row["round_number"]
-            if rn not in rounds:
-                rounds[rn] = {"goals": 0, "assists": 0}
-            if row["event_type"] == "goal":
-                rounds[rn]["goals"] = row["total"]
-            elif row["event_type"] == "assist":
-                rounds[rn]["assists"] = row["total"]
+        matches_count = len(items)
 
         return {
             "player_name": player_name,
             "team_name": team_name,
             "total_goals": total_goals,
             "total_assists": total_assists,
-            "rounds": rounds,  # {round_number: {"goals": n, "assists": n}}
+            "total_points": total_goals + total_assists,
+            "league_goals": league_goals,
+            "league_assists": league_assists,
+            "cup_goals": cup_goals,
+            "cup_assists": cup_assists,
+            "matches_count": matches_count,
+            "items": items,
+            "rounds": rounds_compat,
         }
 
 
