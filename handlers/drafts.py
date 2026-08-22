@@ -125,20 +125,27 @@ async def _process_draft_group_delayed(buffer_key: str, update: Update, context:
         
     matches_list = ai_res.get("matches") or [ai_res]
     
-    # 1. Check team names
-    t1_raw = matches_list[0].get("team1")
-    t2_raw = matches_list[0].get("team2")
+    # 1. Determine team names (by player names / squads first, then fallback to OCR / caption)
+    s1_all_p = (matches_list[0].get("side1_goals") or matches_list[0].get("left_goals") or []) + \
+               (matches_list[0].get("side1_assists") or matches_list[0].get("left_assists") or [])
+    s2_all_p = (matches_list[0].get("side2_goals") or matches_list[0].get("right_goals") or []) + \
+               (matches_list[0].get("side2_assists") or matches_list[0].get("right_assists") or [])
+
+    detected_t1, detected_t2 = await asyncio.to_thread(database.detect_teams_from_players, s1_all_p, s2_all_p, caption)
+    
+    t1_raw = detected_t1 or matches_list[0].get("team1")
+    t2_raw = detected_t2 or matches_list[0].get("team2")
     if not t1_raw or not t2_raw:
-        await status_msg.edit_text("🤖 ИИ распознал счет, но не смог определить названия команд. Пожалуйста, напишите их текстом в описании к фото.")
+        await status_msg.edit_text("🤖 ИИ распознал счет, но не смог определить команды по составам игроков. Пожалуйста, укажите названия клубов текстом в описании к фото.")
         return
         
     t1 = database.resolve_team_name(t1_raw) or t1_raw
     t2 = database.resolve_team_name(t2_raw) or t2_raw
         
-    # 2. Find first active match
-    first_match = database.get_active_match_by_teams(t1, t2, caption=caption)
+    # 2. Find active match and determine the round automatically
+    first_match = await asyncio.to_thread(database.get_active_match_by_teams, t1, t2, caption)
     if not first_match:
-        await status_msg.edit_text(f"❌ Не найден активный матч между командами {html.escape(t1)} и {html.escape(t2)}.\nВозможно, названия команд в подписи указаны неточно.")
+        await status_msg.edit_text(f"❌ Не найден активный матч между командами {html.escape(t1)} и {html.escape(t2)}.\nВозможно, этот тур уже подтвержден или названия клубов не совпадают.")
         return
 
     is_cup = first_match.get("tournament_type") == "cup"

@@ -2110,6 +2110,104 @@ def get_all_unique_players() -> list[tuple[str, str]]:
         return [(row["player_name"], row["team_name"]) for row in cursor.fetchall()]
 
 
+def detect_teams_from_players(
+    side1_players: list[str],
+    side2_players: list[str],
+    caption: str | None = None
+) -> tuple[str | None, str | None]:
+    """
+    Determines team1 (left side) and team2 (right side) from OCR-extracted player names
+    (goals and assists) by matching them against club squads in the database.
+    Also incorporates any club names mentioned in user caption.
+    Returns (team1_name, team2_name).
+    """
+    all_squads = get_all_squads()
+    all_teams = get_all_teams()
+    for t in all_teams:
+        if t not in all_squads:
+            all_squads[t] = []
+
+    caption_clean = (caption or "").lower()
+    caption_teams = []
+    for t in all_teams:
+        t_clean = t.lower()
+        t_norm = normalize_team_name(t)
+        if t_clean in caption_clean or (t_norm and t_norm in normalize_team_name(caption_clean)):
+            caption_teams.append(t)
+
+    # Check words in caption with resolve_team_name
+    if caption:
+        for word in re.split(r'[\s,:;\-_/\\|]+', caption):
+            resolved = resolve_team_name(word)
+            if resolved and resolved in all_teams and resolved not in caption_teams:
+                caption_teams.append(resolved)
+
+    def score_side(player_list, squad_list):
+        score = 0
+        for p in player_list:
+            if not p:
+                continue
+            p_clean = str(p).strip().lower()
+            if not p_clean:
+                continue
+            for sp in squad_list:
+                sp_clean = str(sp).strip().lower()
+                if p_clean == sp_clean:
+                    score += 6
+                    break
+                elif len(p_clean) >= 4 and (p_clean in sp_clean or sp_clean in p_clean):
+                    score += 4
+                    break
+                else:
+                    p_parts = [x for x in p_clean.split() if len(x) >= 3]
+                    sp_parts = [x for x in sp_clean.split() if len(x) >= 3]
+                    if p_parts and sp_parts and any(x in sp_parts for x in p_parts):
+                        score += 3
+                        break
+        return score
+
+    # Compute scores for every team on side1 and side2
+    side1_scores = {}
+    side2_scores = {}
+    for team, squad in all_squads.items():
+        s1 = score_side(side1_players, squad)
+        s2 = score_side(side2_players, squad)
+        # If team is explicitly in caption, give a bonus
+        if team in caption_teams:
+            s1 += 2
+            s2 += 2
+        side1_scores[team] = s1
+        side2_scores[team] = s2
+
+    s1_sorted = sorted(side1_scores.items(), key=lambda x: x[1], reverse=True)
+    s2_sorted = sorted(side2_scores.items(), key=lambda x: x[1], reverse=True)
+
+    best_t1, best_s1 = s1_sorted[0] if s1_sorted else (None, 0)
+
+    best_t2 = None
+    best_s2 = 0
+    for t, s in s2_sorted:
+        if t != best_t1:
+            best_t2 = t
+            best_s2 = s
+            break
+
+    # If side1 or side2 had no player matches, fill from caption if available
+    if (best_s1 == 0 or not best_t1) and caption_teams:
+        for ct in caption_teams:
+            if ct != best_t2:
+                best_t1 = ct
+                break
+    if (best_s2 == 0 or not best_t2) and caption_teams:
+        for ct in caption_teams:
+            if ct != best_t1:
+                best_t2 = ct
+                break
+
+    return best_t1, best_t2
+
+
+
 
 def get_player_card_stats(player_name: str, team_name: str) -> dict:
     """
