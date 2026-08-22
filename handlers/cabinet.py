@@ -122,21 +122,28 @@ def match_and_enrich_squad(raw_side1_goals: list[str], raw_side2_goals: list[str
         side1_team, side2_team = home_team, away_team
         side1_squad, side2_squad = home_squad, away_squad
 
-    def process_side_events(raw_list, squad_list):
+    def process_side_events(raw_list, this_squad, opp_squad):
         counts = {}
         for raw in raw_list:
             raw_clean = raw.strip()
             if not raw_clean:
                 continue
-            matched_name = find_squad_match(raw_clean, squad_list)
-            use_name = matched_name if matched_name else raw_clean
-            counts[use_name] = counts.get(use_name, 0) + 1
+            matched_name = find_squad_match(raw_clean, this_squad)
+            if matched_name:
+                counts[matched_name] = counts.get(matched_name, 0) + 1
+            else:
+                # If player does NOT belong to this team's squad, check if they belong to opponent squad
+                if opp_squad and find_squad_match(raw_clean, opp_squad):
+                    # Cross-column OCR bleed detected! Do not assign opponent player to this team
+                    continue
+                # If player is in neither squad (e.g. unregistered player or bench sub), keep raw name
+                counts[raw_clean] = counts.get(raw_clean, 0) + 1
         return counts
 
-    side1_goals = process_side_events(raw_side1_goals, side1_squad)
-    side2_goals = process_side_events(raw_side2_goals, side2_squad)
-    side1_assists = process_side_events(raw_side1_assists, side1_squad)
-    side2_assists = process_side_events(raw_side2_assists, side2_squad)
+    side1_goals = process_side_events(raw_side1_goals, side1_squad, side2_squad)
+    side2_goals = process_side_events(raw_side2_goals, side2_squad, side1_squad)
+    side1_assists = process_side_events(raw_side1_assists, side1_squad, side2_squad)
+    side2_assists = process_side_events(raw_side2_assists, side2_squad, side1_squad)
 
     if is_side1_home:
         return side1_goals, side2_goals, side1_assists, side2_assists, True
