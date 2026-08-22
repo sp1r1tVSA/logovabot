@@ -2294,7 +2294,7 @@ def get_player_card_stats(player_name: str, team_name: str) -> dict:
         for r in rows:
             rn = r["round_number"]
             is_cup = bool(r["tournament_type"] == "cup" or rn == -1 or (r["cup_series_id"] and r["cup_series_id"] > 0))
-            opp = r["opponent"] or ""
+            opp = "" if is_cup else (r["opponent"] or "")
             
             key = -1 if is_cup else rn
             if key not in rounds_dict:

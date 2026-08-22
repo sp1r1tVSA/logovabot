@@ -307,11 +307,10 @@ def generate_player_card(stats: dict) -> io.BytesIO:
             title_fnt   = font_round_b if is_cup else font_round
             draw.text((col_round_x, row_center_y), title_text, fill=title_color, font=title_fnt, anchor="lm")
 
-            if opp_text:
+            if opp_text and not is_cup:
                 title_w = int(draw.textlength(title_text, font=title_fnt))
                 opp_str = f"vs {opp_text}"
-                opp_col = (217, 160, 60) if is_cup else MUTED
-                draw.text((col_round_x + title_w + 14 * SCALE, row_center_y), opp_str, fill=opp_col, font=font_round, anchor="lm")
+                draw.text((col_round_x + title_w + 14 * SCALE, row_center_y), opp_str, fill=MUTED, font=font_round, anchor="lm")
 
             goals   = item.get("goals", 0)
             assists = item.get("assists", 0)
