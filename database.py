@@ -2541,6 +2541,104 @@ def get_cup_top_assists(limit: int = 20) -> list[dict]:
         """, (limit,))
         return [dict(row) for row in cursor.fetchall()]
 
+def get_full_cup_summary_for_ai() -> str:
+    """Generate a comprehensive summary of the KPL Cup: rules, bracket state, matches and top stats for AI context."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, stage, series_num, team1_name, team2_name, team1_wins, team2_wins, winner_name, status 
+            FROM cup_series 
+            ORDER BY CASE stage WHEN '1/8' THEN 1 WHEN '1/4' THEN 2 WHEN '1/2' THEN 3 WHEN 'final' THEN 4 ELSE 5 END, series_num ASC
+        """)
+        series_all = [dict(r) for r in cursor.fetchall()]
+        
+        stages_map = {"1/8": "1/8 ФИНАЛА", "1/4": "1/4 ФИНАЛА", "1/2": "ПОЛУФИНАЛ (1/2)", "final": "ФИНАЛ"}
+        
+        bracket_lines = []
+        if series_all:
+            grouped = {}
+            for s in series_all:
+                st = s["stage"]
+                grouped.setdefault(st, []).append(s)
+                
+            for st, s_list in grouped.items():
+                st_title = stages_map.get(st, st)
+                bracket_lines.append(f"\n--- {st_title} ---")
+                for s in s_list:
+                    t1 = s["team1_name"] or "TBD"
+                    t2 = s["team2_name"] or "TBD"
+                    w1 = s.get("team1_wins", 0)
+                    w2 = s.get("team2_wins", 0)
+                    status = s.get("status", "pending")
+                    winner = s.get("winner_name")
+                    
+                    cursor.execute("""
+                        SELECT game_num_in_series, player1_score, player2_score, status, player1_team, player2_team 
+                        FROM matches 
+                        WHERE cup_series_id = ? 
+                        ORDER BY game_num_in_series ASC
+                    """, (s["id"],))
+                    matches = cursor.fetchall()
+                    match_details = []
+                    for m in matches:
+                        if m["status"] == "confirmed":
+                            match_details.append(f"Игра {m['game_num_in_series']}: {m['player1_team']} {m['player1_score']}:{m['player2_score']} {m['player2_team']}")
+                        elif m["status"] in ("pending", "reported"):
+                            match_details.append(f"Игра {m['game_num_in_series']} (ожидает)")
+                            
+                    details_str = f" [{', '.join(match_details)}]" if match_details else ""
+                    
+                    if winner:
+                        bracket_lines.append(f"• Серия #{s['series_num']}: {t1} vs {t2} — Счёт серии: {w1}:{w2} (🏆 Победитель: {winner}){details_str}")
+                    elif status == "active":
+                        bracket_lines.append(f"• Серия #{s['series_num']}: {t1} vs {t2} — Счёт серии: {w1}:{w2} (🔥 Идёт серия){details_str}")
+                    else:
+                        bracket_lines.append(f"• Серия #{s['series_num']}: {t1} vs {t2} — Ожидает{details_str}")
+        else:
+            bracket_lines.append("Сетка кубка ещё не сформирована.")
+
+        # Cup Scorers
+        scorers = get_cup_top_scorers(limit=10)
+        scorers_lines = []
+        if scorers:
+            for i, sc in enumerate(scorers, 1):
+                scorers_lines.append(f"{i}. {sc['player_name']} ({sc['team_name']}) — {sc['total_goals']} голов")
+        else:
+            scorers_lines.append("Пока нет голов в кубке.")
+
+        # Cup Assists
+        assists = get_cup_top_assists(limit=10)
+        assists_lines = []
+        if assists:
+            for i, asst in enumerate(assists, 1):
+                assists_lines.append(f"{i}. {asst['player_name']} ({asst['team_name']}) — {asst['total_assists']} ассистов")
+        else:
+            assists_lines.append("Пока нет ассистов в кубке.")
+
+        cup_text = (
+            "🏆 ПОЛНАЯ ИНФОРМАЦИЯ О КУБКЕ КПЛ (РЕГЛАМЕНТ, СЕТКА И СТАТИСТИКА):\n\n"
+            "📋 РЕГЛАМЕНТ И ПРАВИЛА КУБКА:\n"
+            "• Формат турнира: Олимпийская система плей-офф (1/8 финала ➔ 1/4 финала ➔ 1/2 финала ➔ Финал).\n"
+            "• Формат противостояний: Best-of-3 (серия до 2 побед одного из участников).\n"
+            "  - Игра 1: Дома играет первая команда.\n"
+            "  - Игра 2: Дома играет вторая команда.\n"
+            "  - Игра 3 (при счёте 1:1 в серии): Решающий матч за выход дальше.\n"
+            "• Правила матча: Ничьих в кубке не бывает — при равном счете в игре проводится дополнительное время (овертайм) и серия пенальти.\n"
+            "• Награды и бонусы: За каждую победу в матче кубка клуб получает +1 тренировку. Победитель Кубка КПЛ получает кубковый трофей и гарантированную путевку в Еврокубки (Суперкубок / ЛЕ / ЛК).\n\n"
+            "📜 ИСТОРИЯ ПОБЕДИТЕЛЕЙ КУБКА КПЛ:\n"
+            "• Сезон 1: 🏆 АЕК (@Snikers2121) — обладатель Кубка КПЛ.\n"
+            "• Сезон 2: 🏆 Бенфика (@vtrrgyg) — обладатель Кубка КПЛ (в финале обыграла Расинг 3:1 по сумме).\n"
+            "• Прошлые триумфаторы: 🏆 Бока Хуниорс (2x обладатель Кубка — 2 и 3 сезоны), 🏆 Порту (3 сезон).\n\n"
+            "⚔️ АКТУАЛЬНАЯ СЕТКА И РЕЗУЛЬТАТЫ СЕРИЙ КУБКА КПЛ:\n"
+            + "\n".join(bracket_lines) + "\n\n"
+            "⚽ БОМБАРДИРЫ КУБКА КПЛ:\n"
+            + "\n".join(scorers_lines) + "\n\n"
+            "🎯 АССИСТЕНТЫ КУБКА КПЛ:\n"
+            + "\n".join(assists_lines)
+        )
+        return cup_text
+
+
 def process_cup_match_completion(match_id: int) -> str | None:
     """
     Called whenever a Cup match status changes to 'confirmed'.

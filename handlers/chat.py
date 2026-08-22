@@ -81,7 +81,8 @@ async def handle_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         all_squads,
         all_rounds,
         recent_form_map,
-        pending_matches
+        pending_matches,
+        cup_info_text
     ) = await asyncio.gather(
         asyncio.to_thread(database.get_user, user_id),
         asyncio.to_thread(database.get_standings),
@@ -91,7 +92,8 @@ async def handle_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         asyncio.to_thread(database.get_all_squads),
         asyncio.to_thread(database.get_all_rounds),
         asyncio.to_thread(database.get_teams_recent_form, 5),
-        asyncio.to_thread(database.get_open_pending_matches)
+        asyncio.to_thread(database.get_open_pending_matches),
+        asyncio.to_thread(database.get_full_cup_summary_for_ai)
     )
 
     user_team = user_data["team_name"] if user_data else "Не зарегистрирован"
@@ -245,6 +247,7 @@ async def handle_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"{assists_text}\n"
         f"{matches_text}\n"
         f"{squads_text}\n"
+        f"{cup_info_text}\n\n"
         f"{past_seasons_text}\n"
         f"{league_rules_text}"
     )
