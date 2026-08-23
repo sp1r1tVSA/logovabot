@@ -3496,12 +3496,14 @@ async def job_debt_lifecycle_tracker(context: ContextTypes.DEFAULT_TYPE) -> None
             p1_user = await asyncio.to_thread(database.find_user_by_team, m.get("player1_team"))
             if p1_user:
                 p1_id = p1_user["telegram_id"]
+        p1_user = dict(p1_user) if p1_user else None
 
         p2_user = await asyncio.to_thread(database.get_user, p2_id) if p2_id else None
         if not p2_user and m.get("player2_team"):
             p2_user = await asyncio.to_thread(database.find_user_by_team, m.get("player2_team"))
             if p2_user:
                 p2_id = p2_user["telegram_id"]
+        p2_user = dict(p2_user) if p2_user else None
 
         p1_valid = bool(p1_id and p1_id > 0)
         p2_valid = bool(p2_id and p2_id > 0)
@@ -4301,6 +4303,7 @@ async def admin_unwarn_command(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text(f"❌ Пользователь <b>{html.escape(target_ref)}</b> не найден.", parse_mode="HTML")
         return
 
+    target_user = dict(target_user)
     t_id = target_user["telegram_id"]
     u_name = f"@{target_user.get('username')}" if target_user.get('username') else f"ID {t_id}"
     t_name = target_user.get('team_name') or "без клуба"

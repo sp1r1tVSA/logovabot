@@ -2671,6 +2671,7 @@ async def submit_report_to_guest(update: Update, context: ContextTypes.DEFAULT_T
 
     # Check opponent user status
     opp_user = await asyncio.to_thread(database.get_user, opp_id)
+    opp_user = dict(opp_user) if opp_user else None
     if not opp_user or not opp_user.get("telegram_id"):
         await query.answer("⚠️ У соперника не найден Telegram ID. Отправляем администратору.", show_alert=True)
         await submit_report_to_admin(update, context)

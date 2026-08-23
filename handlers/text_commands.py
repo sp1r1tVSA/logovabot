@@ -614,6 +614,7 @@ async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_T
             await msg.reply_text(f"❌ Пользователь <b>{html.escape(target_ref)}</b> не найден в базе данных.", parse_mode="HTML")
             return True
 
+        target_user = dict(target_user)
         t_id = target_user["telegram_id"]
         new_cnt, exceeded = await asyncio.to_thread(database.add_warn, t_id, user_id, reason)
         from config import MAX_WARNS_LIMIT
@@ -667,6 +668,7 @@ async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_T
             await msg.reply_text(f"❌ Пользователь <b>{html.escape(clean_ref)}</b> не найден в базе данных.", parse_mode="HTML")
             return True
 
+        target_user = dict(target_user)
         t_id = target_user["telegram_id"]
         new_cnt, removed = await asyncio.to_thread(database.remove_warn, t_id, user_id, "Снято администратором")
         if removed:
