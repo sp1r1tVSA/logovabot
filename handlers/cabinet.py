@@ -1,3 +1,5 @@
+import os
+import io
 import datetime
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from telegram.ext import ContextTypes, ConversationHandler
