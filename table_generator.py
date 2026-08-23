@@ -93,7 +93,46 @@ def load_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFo
     return ImageFont.load_default()
 
 
-def generate_league_table_image(standings: list[dict] = None, form_map: dict[int, list[str]] = None) -> io.BytesIO:
+def clean_and_prepare_logo(img: Image.Image) -> Image.Image:
+    """Ensure logo is RGBA, transparent, and auto-cropped of empty margins."""
+    img = img.convert("RGBA")
+    w, h = img.size
+    if w == 0 or h == 0:
+        return img
+
+    corners = [img.getpixel((0, 0)), img.getpixel((w - 1, 0)), img.getpixel((0, h - 1)), img.getpixel((w - 1, h - 1))]
+    has_white_corner = any(c[0] > 240 and c[1] > 240 and c[2] > 240 and c[3] > 200 for c in corners)
+
+    if has_white_corner:
+        datas = img.getdata()
+        new_data = []
+        for item in datas:
+            if item[0] > 245 and item[1] > 245 and item[2] > 245:
+                new_data.append((255, 255, 255, 0))
+            else:
+                new_data.append(item)
+        img.putdata(new_data)
+
+    bbox = img.getbbox()
+    if bbox:
+        img = img.crop(bbox)
+
+    return img
+
+
+def resize_logo_proportional(img: Image.Image, max_w: int, max_h: int) -> tuple[Image.Image, int, int]:
+    """Proportionally resize logo to fit within max_w x max_h preserving aspect ratio without distortion."""
+    w, h = img.size
+    if w <= 0 or h <= 0:
+        return img, max_w, max_h
+    ratio = min(max_w / w, max_h / h)
+    new_w = max(1, int(round(w * ratio)))
+    new_h = max(1, int(round(h * ratio)))
+    resized = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+    return resized, new_w, new_h
+
+
+def generate_table(standings: list[dict] | None = None, form_map: dict[str, list[str]] | None = None) -> io.BytesIO:
     """
     Generate a 2x supersampled, high-res graphic image of the league table.
     Returns io.BytesIO PNG buffer.
@@ -182,7 +221,7 @@ def generate_league_table_image(standings: list[dict] = None, form_map: dict[int
 
         # Team Logo with White Circular Container Badge
         team_name = s.get("team_name") or f"Команда {i}"
-        logo_filename = TEAM_LOGO_MAP.get(team_name.strip(), "default.png")
+        logo_filename = get_team_logo_filename(team_name) or "default.png"
         logo_path = os.path.join(LOGOS_DIR, logo_filename)
 
         badge_diameter = 30 * SCALE
@@ -192,14 +231,15 @@ def generate_league_table_image(standings: list[dict] = None, form_map: dict[int
         # White circle background
         draw.ellipse([badge_x, badge_y, badge_x + badge_diameter, badge_y + badge_diameter], fill=(255, 255, 255))
 
-        # Fit emblem centered
+        # Fit emblem centered proportionally without distortion
         if os.path.exists(logo_path):
             try:
-                logo_img = Image.open(logo_path).convert("RGBA")
+                raw_logo = Image.open(logo_path)
+                clean_logo = clean_and_prepare_logo(raw_logo)
                 inner_size = 24 * SCALE
-                logo_img = logo_img.resize((inner_size, inner_size), Image.Resampling.LANCZOS)
-                offset_x = badge_x + ((badge_diameter - inner_size) // 2)
-                offset_y = badge_y + ((badge_diameter - inner_size) // 2)
+                logo_img, lw, lh = resize_logo_proportional(clean_logo, inner_size, inner_size)
+                offset_x = badge_x + ((badge_diameter - lw) // 2)
+                offset_y = badge_y + ((badge_diameter - lh) // 2)
                 img.paste(logo_img, (offset_x, offset_y), logo_img)
             except Exception:
                 pass

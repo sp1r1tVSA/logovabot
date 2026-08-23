@@ -1,7 +1,7 @@
 import os
 import io
 from PIL import Image, ImageDraw, ImageFont
-from table_generator import get_team_logo_filename, load_font
+from table_generator import get_team_logo_filename, load_font, clean_and_prepare_logo, resize_logo_proportional
 
 BASE_DIR = os.path.dirname(__file__)
 LOGOS_DIR = os.path.join(BASE_DIR, "assets", "logos")
@@ -145,18 +145,22 @@ def generate_club_card(data: dict, avatar_path: str | None = None) -> io.BytesIO
 
     logo_file = get_team_logo_filename(team_name)
     logo_img = None
+    paste_x = tile_x + logo_pad
+    paste_y = tile_y + logo_pad
     if logo_file:
         full_logo_path = os.path.join(LOGOS_DIR, logo_file)
         if os.path.exists(full_logo_path):
             try:
                 raw_logo = Image.open(full_logo_path)
-                clean_logo = _clean_white_background_if_needed(raw_logo)
-                logo_img = clean_logo.resize((inner_logo_size, inner_logo_size), Image.Resampling.LANCZOS)
+                clean_logo = clean_and_prepare_logo(raw_logo)
+                logo_img, lw, lh = resize_logo_proportional(clean_logo, inner_logo_size, inner_logo_size)
+                paste_x = tile_x + (tile_size - lw) // 2
+                paste_y = tile_y + (tile_size - lh) // 2
             except Exception:
                 logo_img = None
 
     if logo_img:
-        img.paste(logo_img, (tile_x + logo_pad, tile_y + logo_pad), logo_img)
+        img.paste(logo_img, (paste_x, paste_y), logo_img)
     else:
         initials = (team_name[:2]).upper()
         bbox = draw.textbbox((0, 0), initials, font=font_title)

@@ -1,7 +1,7 @@
 import os
 import io
 from PIL import Image, ImageDraw, ImageFont
-from table_generator import get_team_logo_filename, load_font
+from table_generator import get_team_logo_filename, load_font, clean_and_prepare_logo, resize_logo_proportional
 
 BASE_DIR = os.path.dirname(__file__)
 LOGOS_DIR = os.path.join(BASE_DIR, "assets", "logos")
@@ -95,32 +95,35 @@ def _draw_calendar_icon(draw: ImageDraw.ImageDraw, x: int, y: int, size: int = 1
     draw.line([(x + size * 0.7, y - 2 * SCALE), (x + size * 0.7, y + size * 0.2)], fill=color, width=1 * SCALE)
 
 
-_logo_cache: dict[str, Image.Image] = {}
+_logo_cache: dict[str, tuple[Image.Image, int, int]] = {}
 
 
-def _get_club_logo(team_name: str, size: int) -> Image.Image | None:
-    """Retrieve resized club logo with caching."""
+def _get_club_logo(team_name: str, max_w: int, max_h: int | None = None) -> tuple[Image.Image | None, int, int]:
+    """Retrieve proportionally resized club logo without distortion."""
     if not team_name:
-        return None
-    key = f"{team_name.lower()}_{size}"
+        return None, 0, 0
+    if max_h is None:
+        max_h = max_w
+    key = f"{team_name.lower()}_{max_w}_{max_h}"
     if key in _logo_cache:
         return _logo_cache[key]
 
     logo_file = get_team_logo_filename(team_name)
     if not logo_file:
-        return None
+        return None, 0, 0
 
     full_path = os.path.join(LOGOS_DIR, logo_file)
     if not os.path.exists(full_path):
-        return None
+        return None, 0, 0
 
     try:
-        raw = Image.open(full_path).convert("RGBA")
-        resized = raw.resize((size, size), Image.Resampling.LANCZOS)
-        _logo_cache[key] = resized
-        return resized
+        raw = Image.open(full_path)
+        clean = clean_and_prepare_logo(raw)
+        resized, rw, rh = resize_logo_proportional(clean, max_w, max_h)
+        _logo_cache[key] = (resized, rw, rh)
+        return resized, rw, rh
     except Exception:
-        return None
+        return None, 0, 0
 
 
 def generate_club_schedule(data: dict, max_matches: int = 12) -> io.BytesIO:
@@ -171,16 +174,15 @@ def generate_club_schedule(data: dict, max_matches: int = 12) -> io.BytesIO:
 
     # ── 1. HEADER (Club Logo + Title + Stats Pill) ─────────────────────────
     logo_size = 68 * SCALE
-    logo_img = _get_club_logo(team_name, logo_size)
+    logo_img, lw, lh = _get_club_logo(team_name, logo_size - 10 * SCALE, logo_size - 10 * SCALE)
     logo_x = CARD_PADDING
     logo_y = curr_y + 4 * SCALE
 
-    _draw_rounded_rect(draw, (logo_x - 3 * SCALE, logo_y - 3 * SCALE,
-                              logo_x + logo_size + 3 * SCALE, logo_y + logo_size + 3 * SCALE),
-                       radius=(logo_size + 6 * SCALE) // 2, fill=(20, 24, 34), outline=BORDER_LIGHT, width=2)
+    _draw_rounded_rect(draw, (logo_x, logo_y, logo_x + logo_size, logo_y + logo_size),
+                       radius=14 * SCALE, fill=(20, 24, 34), outline=BORDER_LIGHT, width=2)
 
     if logo_img:
-        img.paste(logo_img, (logo_x, logo_y), logo_img)
+        img.paste(logo_img, (logo_x + (logo_size - lw) // 2, logo_y + (logo_size - lh) // 2), logo_img)
     else:
         inits = (team_name[:2]).upper()
         bbox = draw.textbbox((0, 0), inits, font=font_title)
@@ -278,7 +280,7 @@ def generate_club_schedule(data: dict, max_matches: int = 12) -> io.BytesIO:
 
             # Home Team (left of score pill)
             home_logo_size = 28 * SCALE
-            home_logo = _get_club_logo(home_t, home_logo_size)
+            home_logo, hlw, hlh = _get_club_logo(home_t, home_logo_size, home_logo_size)
             home_text_end_x = score_pill_x - 14 * SCALE
 
             ht_bbox = draw.textbbox((0, 0), home_t, font=font_team_hd)
@@ -286,15 +288,15 @@ def generate_club_schedule(data: dict, max_matches: int = 12) -> io.BytesIO:
             draw.text((home_text_end_x - ht_w, curr_y + 18 * SCALE), home_t, font=font_team_hd, fill=WHITE if home_t.lower() == team_name.lower() else TEXT_SECONDARY)
             
             if home_logo:
-                img.paste(home_logo, (home_text_end_x - ht_w - home_logo_size - 8 * SCALE, curr_y + 15 * SCALE), home_logo)
+                img.paste(home_logo, (home_text_end_x - ht_w - home_logo_size - 8 * SCALE + (home_logo_size - hlw) // 2, curr_y + 15 * SCALE + (home_logo_size - hlh) // 2), home_logo)
 
             # Away Team (right of score pill)
             away_logo_size = 28 * SCALE
-            away_logo = _get_club_logo(away_t, away_logo_size)
+            away_logo, alw, alh = _get_club_logo(away_t, away_logo_size, away_logo_size)
             away_text_start_x = score_pill_x + score_pill_w + 14 * SCALE
 
             if away_logo:
-                img.paste(away_logo, (away_text_start_x, curr_y + 15 * SCALE), away_logo)
+                img.paste(away_logo, (away_text_start_x + (away_logo_size - alw) // 2, curr_y + 15 * SCALE + (away_logo_size - alh) // 2), away_logo)
                 away_name_x = away_text_start_x + away_logo_size + 8 * SCALE
             else:
                 away_name_x = away_text_start_x
