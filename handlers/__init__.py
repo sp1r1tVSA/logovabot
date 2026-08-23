@@ -238,6 +238,8 @@ async def track_group_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Log the error that occurred during update handling."""
+    if not context.error:
+        return
     err_str = str(context.error).lower()
     if "query is too old" in err_str or "message is not modified" in err_str:
         logger.debug(f"Telegram ошибка, игнорируется: {context.error}")
@@ -248,7 +250,7 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
     if isinstance(context.error, telegram.error.BadRequest):
         logger.debug(f"Telegram BadRequest (игнорируется): {context.error}")
         return
-    logger.exception("Исключение при обработке обновления:")
+    logger.error(f"Исключение при обработке обновления: {context.error}", exc_info=context.error)
 
 def _register_user_handlers(app: Application) -> None:
     """Register general user command and navigation handlers."""
