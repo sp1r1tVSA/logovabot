@@ -119,6 +119,32 @@ class TestClubCard(unittest.TestCase):
         self.assertEqual(ajax["points"], 1)
         self.assertEqual(ajax["draws"], 1)
 
+    def test_club_card_image_generator(self):
+        """Test that club_card_generator.generate_club_card produces valid PNG bytes without error."""
+        import club_card_generator
+        card_data = {
+            "team_name": "Фейеноорд",
+            "manager": {"username": "georgiy", "warn_count": 0, "telegram_id": 12345},
+            "league_stats": {
+                "rank": 1, "played": 22, "wins": 18, "draws": 3, "losses": 1,
+                "goals_scored": 58, "goals_conceded": 24, "goal_diff": 34, "points": 57
+            },
+            "recent_form": ["W", "W", "D", "W", "W"],
+            "cup_stats": {
+                "stage": "1/4", "opponent": "Бенфика", "club_wins": 2, "opp_wins": 1, "status": "active"
+            },
+            "top_scorers": [{"player_name": "Serhou Guirassy", "goals": 18}, {"player_name": "Sem Steijn", "goals": 14}],
+            "top_assists": [{"player_name": "Raheem Sterling", "assists": 12}, {"player_name": "Jordan Lotomba", "assists": 8}],
+            "squad_count": 18,
+            "debts_count": 0
+        }
+        buf = club_card_generator.generate_club_card(card_data)
+        self.assertIsNotNone(buf)
+        buf_bytes = buf.getvalue()
+        self.assertGreater(len(buf_bytes), 1000)
+        # PNG signature check
+        self.assertTrue(buf_bytes.startswith(b'\x89PNG\r\n\x1a\n'))
+
 
 if __name__ == "__main__":
     unittest.main()

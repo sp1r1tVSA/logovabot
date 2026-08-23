@@ -255,12 +255,18 @@ async def show_cabinet(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     )
 
     keyboard = [
-        [InlineKeyboardButton("🏛 Карточка моего клуба", callback_data="cb_my_club_card")],
-        [InlineKeyboardButton("📋 Мои матчи", callback_data="cabinet_my_matches")],
-        [InlineKeyboardButton("📸 Мой состав", callback_data="cabinet_my_squad")],
-        [InlineKeyboardButton("⚽ Бомбардиры и ассистенты", callback_data="cabinet_club_stats")],
-        [InlineKeyboardButton("📜 История игр", callback_data="cabinet_game_history")],
-        [InlineKeyboardButton("🌍 Каталог всех клубов", callback_data="cb_clubs_catalog")],
+        [
+            InlineKeyboardButton("🏛 Карточка клуба", callback_data="cb_my_club_card"),
+            InlineKeyboardButton("📸 Состав", callback_data="cabinet_my_squad"),
+        ],
+        [
+            InlineKeyboardButton("📋 Мои матчи", callback_data="cabinet_my_matches"),
+            InlineKeyboardButton("📜 История игр", callback_data="cabinet_game_history"),
+        ],
+        [
+            InlineKeyboardButton("⚽ Топ клуба", callback_data="cabinet_club_stats"),
+            InlineKeyboardButton("🌍 Все клубы", callback_data="cb_clubs_catalog"),
+        ],
         [InlineKeyboardButton("« Назад в меню", callback_data="main_menu")]
     ]
     markup = InlineKeyboardMarkup(keyboard)
@@ -448,85 +454,47 @@ async def show_my_matches_stub(update: Update, context: ContextTypes.DEFAULT_TYP
         await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
 
 
-async def render_club_card(team_name: str, back_cb: str = "menu_cabinet") -> tuple[str, InlineKeyboardMarkup]:
-    """Generate HTML text and buttons for a club card."""
-    card = await asyncio.to_thread(database.get_club_card_data, team_name)
-    canon = card["team_name"]
-    mgr = card["manager"]
-    l_stats = card["league_stats"]
-    form = card["recent_form"]
-    cup = card["cup_stats"]
-    top_scorers = card["top_scorers"]
-    top_assists = card["top_assists"]
-    squad_cnt = card["squad_count"]
-    debts_cnt = card["debts_count"]
+async def send_or_edit_club_card(update: Update, context: ContextTypes.DEFAULT_TYPE, team_name: str, back_cb: str = "cb_clubs_catalog") -> None:
+    """Send or edit the high-res graphic club card with compact inline keyboard and no wall of text."""
+    query = update.callback_query
+    user = update.effective_user
+    chat_id = query.from_user.id if query else (user.id if user else update.effective_chat.id)
 
-    if mgr:
-        un_str = f"@{html.escape(mgr['username'])}" if mgr.get("username") else f"ID {mgr['telegram_id']}"
-        w_cnt = mgr.get("warn_count", 0)
-        mgr_text = f"{un_str} (⚠️ {w_cnt}/{MAX_WARNS_LIMIT})"
-    else:
-        mgr_text = "<i>Свободен (нет тренера)</i>"
+    canon = database.resolve_team_name(team_name) or team_name
+    card_data = await asyncio.to_thread(database.get_club_card_data, canon)
+    buf = await asyncio.to_thread(club_card_generator.generate_club_card, card_data)
 
-    rank_str = f"#{l_stats['rank']}" if l_stats['rank'] > 0 else "—"
-    gd_sign = "+" if l_stats['goal_diff'] > 0 else ""
-    gd_str = f"{gd_sign}{l_stats['goal_diff']}"
-    
-    form_str = " ".join([
-        "🟢" if o == "W" else ("🟡" if o == "D" else "🔴")
-        for o in form[-5:]
-    ]) if form else "<i>нет сыгранных матчей</i>"
-
-    lines = [
-        f"🏛 <b>КАРТОЧКА КЛУБА: {html.escape(canon.upper())}</b>\n",
-        f"👤 <b>Главный тренер:</b> {mgr_text}",
-        f"📋 <b>Заявка клуба:</b> {squad_cnt} игроков",
-        f"⚠️ <b>Активные долги:</b> {debts_cnt} матч.\n",
-        f"📊 <b>ПОЛОЖЕНИЕ В ЛИГЕ КПЛ:</b>",
-        f"• <b>Место:</b> {rank_str}  |  <b>Очки:</b> {l_stats['points']}",
-        f"• <b>Игры:</b> {l_stats['played']}  (В: {l_stats['wins']} | Н: {l_stats['draws']} | П: {l_stats['losses']})",
-        f"• <b>Мячи:</b> {l_stats['goals_scored']} : {l_stats['goals_conceded']} ({gd_str})",
-        f"• <b>Форма:</b> {form_str}\n"
-    ]
-
-    if cup:
-        st_name = html.escape(str(cup.get('stage', '1/8'))).upper()
-        opp_n = html.escape(str(cup.get('opponent', '—')))
-        cw = cup.get('club_wins', 0)
-        ow = cup.get('opp_wins', 0)
-        status_str = "Завершена" if cup.get('status') == 'completed' else "В игре"
-        lines.append(f"🏆 <b>КУБОК КПЛ 2026 ({st_name} ФИНАЛА):</b>")
-        lines.append(f"• Соперник: <b>{opp_n}</b>")
-        lines.append(f"• Счёт серии: <b>{cw} : {ow}</b> ({status_str})\n")
-
-    lines.append("⚽ <b>БОМБАРДИРЫ КЛУБА:</b>")
-    if not top_scorers:
-        lines.append("• <i>Голов пока нет</i>")
-    else:
-        for idx, sc in enumerate(top_scorers[:3], 1):
-            lines.append(f"• {idx}. <b>{html.escape(sc['player_name'])}</b> — <b>{sc['goals']}</b> ⚽")
-
-    lines.append("\n🎯 <b>АССИСТЕНТЫ КЛУБА:</b>")
-    if not top_assists:
-        lines.append("• <i>Голевых передач пока нет</i>")
-    else:
-        for idx, ac in enumerate(top_assists[:3], 1):
-            lines.append(f"• {idx}. <b>{html.escape(ac['player_name'])}</b> — <b>{ac['assists']}</b> 🎯")
-
+    # Compact inline keyboard (2 buttons per row, minimal labels)
     keyboard = [
-        [InlineKeyboardButton("🖼 Графическая карточка (HD)", callback_data=f"img_club_{canon}")],
         [
-            InlineKeyboardButton("👥 Состав клуба", callback_data=f"clsquad_{canon}"),
-            InlineKeyboardButton("📅 История игр", callback_data=f"clhist_{canon}")
+            InlineKeyboardButton("👥 Состав", callback_data=f"clsquad_{canon}"),
+            InlineKeyboardButton("📅 Матчи", callback_data=f"clhist_{canon}"),
         ],
-        [InlineKeyboardButton("🌍 Все клубы лиги", callback_data="cb_clubs_catalog")],
-        [InlineKeyboardButton("« Назад", callback_data=back_cb)]
+        [
+            InlineKeyboardButton("🌍 Все клубы", callback_data="cb_clubs_catalog"),
+            InlineKeyboardButton("« Назад", callback_data=back_cb),
+        ]
     ]
-    return "\n".join(lines), InlineKeyboardMarkup(keyboard)
+    markup = InlineKeyboardMarkup(keyboard)
+    caption = f"🏛 <b>{html.escape(canon.upper())}</b>"
+
+    if query and query.message:
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
+
+    await context.bot.send_photo(
+        chat_id=chat_id,
+        photo=buf,
+        caption=caption,
+        parse_mode="HTML",
+        reply_markup=markup
+    )
 
 
 async def show_my_club_card(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Show the club card of the current user."""
+    """Show the graphic club card of the current user."""
     query = update.callback_query
     if query:
         await query.answer()
@@ -541,98 +509,35 @@ async def show_my_club_card(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             await show_clubs_catalog(update, context)
             return
         text = "⚠️ Вы не привязаны ни к одному клубу лиги."
-        keyboard = [[InlineKeyboardButton("« Назад в кабинет", callback_data="menu_cabinet")]]
-        if query:
+        keyboard = [[InlineKeyboardButton("« В кабинет", callback_data="menu_cabinet")]]
+        if query and query.message:
             await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
         elif update.message:
             await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
         return
 
-    text, markup = await render_club_card(team, back_cb="menu_cabinet")
-    if query:
-        if query.message and query.message.photo:
-            try:
-                await query.message.delete()
-            except Exception:
-                pass
-            await context.bot.send_message(chat_id=user.id, text=text, parse_mode="HTML", reply_markup=markup)
-        else:
-            try:
-                await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
-            except Exception:
-                await context.bot.send_message(chat_id=user.id, text=text, parse_mode="HTML", reply_markup=markup)
-    elif update.message:
-        await update.message.reply_text(text, parse_mode="HTML", reply_markup=markup)
+    await send_or_edit_club_card(update, context, team, back_cb="menu_cabinet")
 
 
 async def show_specific_club_card(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Show club card by callback (e.g. view_club_Porto)."""
+    """Show specific club card by callback (view_club_<name>)."""
     query = update.callback_query
     if not query:
         return
     await query.answer()
 
     raw_team = query.data.replace("view_club_", "")
-    text, markup = await render_club_card(raw_team, back_cb="cb_clubs_catalog")
-
-    if query.message and query.message.photo:
-        try:
-            await query.message.delete()
-        except Exception:
-            pass
-        await context.bot.send_message(chat_id=query.from_user.id, text=text, parse_mode="HTML", reply_markup=markup)
-    else:
-        try:
-            await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
-        except Exception:
-            await context.bot.send_message(chat_id=query.from_user.id, text=text, parse_mode="HTML", reply_markup=markup)
+    await send_or_edit_club_card(update, context, raw_team, back_cb="cb_clubs_catalog")
 
 
 async def show_club_graphic_card(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Generate and send high-resolution Pillow Club Card."""
+    """Alias for viewing club card."""
     query = update.callback_query
     if not query:
         return
-    await query.answer("Генерируем карточку клуба...", show_alert=False)
-
+    await query.answer()
     team_name = query.data.replace("img_club_", "")
-    card_data = await asyncio.to_thread(database.get_club_card_data, team_name)
-    buf = await asyncio.to_thread(club_card_generator.generate_club_card, card_data)
-
-    canon = card_data["team_name"]
-    mgr = card_data["manager"]
-    mgr_str = f"@{mgr['username']}" if mgr and mgr.get("username") else "Свободен"
-    l_stats = card_data["league_stats"]
-
-    caption = (
-        f"🏛 <b>{html.escape(canon)}</b>\n"
-        f"👤 Тренер: <b>{html.escape(mgr_str)}</b>\n"
-        f"📊 Место в лиге: <b>#{l_stats['rank']}</b> ({l_stats['points']} очков)\n"
-        f"⚽ Голы: <b>{l_stats['goals_scored']}:{l_stats['goals_conceded']}</b>"
-    )
-
-    keyboard = [
-        [
-            InlineKeyboardButton("👥 Состав", callback_data=f"clsquad_{canon}"),
-            InlineKeyboardButton("📅 История", callback_data=f"clhist_{canon}")
-        ],
-        [InlineKeyboardButton("« К карточке клуба", callback_data=f"view_club_{canon}")]
-    ]
-    markup = InlineKeyboardMarkup(keyboard)
-
-    if query.message:
-        try:
-            await query.message.delete()
-        except Exception:
-            pass
-
-    await context.bot.send_photo(
-        chat_id=query.from_user.id,
-        photo=buf,
-        caption=caption,
-        parse_mode="HTML",
-        reply_markup=markup
-    )
+    await send_or_edit_club_card(update, context, team_name, back_cb="cb_clubs_catalog")
 
 
 async def show_club_squad(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -834,8 +739,7 @@ async def club_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         user = update.effective_user
         team = await asyncio.to_thread(database.get_user_team, user.id) if user else None
         if team:
-            text, markup = await render_club_card(team, back_cb="cb_clubs_catalog")
-            await update.message.reply_text(text, parse_mode="HTML", reply_markup=markup)
+            await send_or_edit_club_card(update, context, team, back_cb="cb_clubs_catalog")
         else:
             await show_clubs_catalog(update, context)
         return
@@ -850,8 +754,7 @@ async def club_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         )
         return
 
-    text, markup = await render_club_card(canon, back_cb="cb_clubs_catalog")
-    await update.message.reply_text(text, parse_mode="HTML", reply_markup=markup)
+    await send_or_edit_club_card(update, context, canon, back_cb="cb_clubs_catalog")
 
 def is_valid_name(text: str) -> bool:
     """Validate entered text."""

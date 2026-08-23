@@ -453,9 +453,8 @@ async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_T
             )
             return True
 
-        from handlers.cabinet import render_club_card
-        text, markup = await render_club_card(canon, back_cb="cb_clubs_catalog")
-        await msg.reply_text(text, parse_mode="HTML", reply_markup=markup)
+        from handlers.cabinet import send_or_edit_club_card
+        await send_or_edit_club_card(update, context, canon, back_cb="cb_clubs_catalog")
         return True
 
     if action in ("анонс_кубок", "анонс_финал", "анонс") or full_cmd.startswith("анонс кубок") or full_cmd.startswith("анонс финал") or full_cmd.startswith("кубок анонс"):
