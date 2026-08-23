@@ -454,6 +454,34 @@ async def show_my_matches_stub(update: Update, context: ContextTypes.DEFAULT_TYP
         await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
 
 
+AVATARS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "avatars")
+
+
+async def get_cached_or_fetch_user_avatar(bot, user_id: int | None) -> str | None:
+    """Fetch user avatar from Telegram, save locally to assets/avatars/{user_id}.jpg and return path."""
+    if not user_id or not bot:
+        return None
+    try:
+        os.makedirs(AVATARS_DIR, exist_ok=True)
+        local_path = os.path.join(AVATARS_DIR, f"{user_id}.jpg")
+        if os.path.exists(local_path) and os.path.getsize(local_path) > 0:
+            return local_path
+
+        photos = await bot.get_user_profile_photos(user_id=user_id, limit=1)
+        if photos and photos.total_count > 0 and len(photos.photos) > 0 and len(photos.photos[0]) > 0:
+            best_photo = photos.photos[0][-1]
+            file_obj = await bot.get_file(best_photo.file_id)
+            buf = io.BytesIO()
+            await file_obj.download_to_memory(buf)
+            buf.seek(0)
+            with open(local_path, "wb") as f:
+                f.write(buf.getvalue())
+            return local_path
+    except Exception as e:
+        logger.debug(f"Could not fetch avatar for user {user_id}: {e}")
+    return None
+
+
 async def send_or_edit_club_card(update: Update, context: ContextTypes.DEFAULT_TYPE, team_name: str, back_cb: str = "cb_clubs_catalog") -> None:
     """Send or edit the high-res graphic club card with compact inline keyboard and no wall of text."""
     query = update.callback_query
@@ -462,7 +490,13 @@ async def send_or_edit_club_card(update: Update, context: ContextTypes.DEFAULT_T
 
     canon = database.resolve_team_name(team_name) or team_name
     card_data = await asyncio.to_thread(database.get_club_card_data, canon)
-    buf = await asyncio.to_thread(club_card_generator.generate_club_card, card_data)
+    
+    # Fetch owner avatar if manager is assigned
+    mgr = card_data.get("manager")
+    mgr_id = mgr.get("telegram_id") if mgr else None
+    avatar_path = await get_cached_or_fetch_user_avatar(context.bot, mgr_id) if mgr_id else None
+
+    buf = await asyncio.to_thread(club_card_generator.generate_club_card, card_data, avatar_path)
 
     # Compact inline keyboard (2 buttons per row, minimal labels)
     keyboard = [
