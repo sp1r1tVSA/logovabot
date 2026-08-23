@@ -132,7 +132,7 @@ def resize_logo_proportional(img: Image.Image, max_w: int, max_h: int) -> tuple[
     return resized, new_w, new_h
 
 
-def generate_table(standings: list[dict] | None = None, form_map: dict[str, list[str]] | None = None) -> io.BytesIO:
+def generate_league_table_image(standings: list[dict] | None = None, form_map: dict[str, list[str]] | None = None) -> io.BytesIO:
     """
     Generate a 2x supersampled, high-res graphic image of the league table.
     Returns io.BytesIO PNG buffer.
@@ -487,6 +487,9 @@ def generate_cup_bracket_image(stage: str = "1/8") -> io.BytesIO:
     resampled.save(buf, format="PNG", quality=95)
     buf.seek(0)
     return buf
+
+
+generate_table = generate_league_table_image
 
 
 if __name__ == "__main__":
