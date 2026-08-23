@@ -2749,7 +2749,7 @@ def get_club_schedule_and_results(team_name: str, limit: int = 25) -> dict:
                 "has_played": has_played_games,
             })
 
-        # 2. Fetch League Matches for this club
+        # 2. Fetch League Matches for this club grouped by round_number
         cursor.execute("""
             SELECT 
                 m.id, m.round_number, m.tournament_type,
@@ -2763,60 +2763,104 @@ def get_club_schedule_and_results(team_name: str, limit: int = 25) -> dict:
             WHERE (m.tournament_type IS NULL OR m.tournament_type = 'league' OR m.tournament_type = '')
               AND (m.round_number IS NOT NULL AND m.round_number > 0)
               AND (LOWER(m.player1_team) = LOWER(?) OR LOWER(m.player2_team) = LOWER(?))
-            ORDER BY m.round_number ASC
+            ORDER BY m.round_number ASC, m.id ASC
         """, (canon, canon))
         league_rows = [dict(r) for r in cursor.fetchall()]
 
-        league_items = []
+        # Group by round_number
+        rounds_dict = {}
         for r in league_rows:
-            is_p1 = teams_match(r["player1_team"], canon)
-            home_team = resolve_team_name(r["player1_team"]) or r["player1_team"]
-            away_team = resolve_team_name(r["player2_team"]) or r["player2_team"]
+            rn = r["round_number"]
+            rounds_dict.setdefault(rn, []).append(r)
+
+        league_items = []
+        for rn, r_matches in rounds_dict.items():
+            first_m = r_matches[0]
+            is_p1 = teams_match(first_m["player1_team"], canon)
+            home_team = resolve_team_name(first_m["player1_team"]) or first_m["player1_team"]
+            away_team = resolve_team_name(first_m["player2_team"]) or first_m["player2_team"]
             opp_team = away_team if is_p1 else home_team
-            opp_user = r["p2_username"] if is_p1 else r["p1_username"]
+            opp_user = first_m["p2_username"] if is_p1 else first_m["p1_username"]
 
-            tour_title = f"ТУР {r['round_number']}"
+            tour_title = f"ЛИГА • ТУР {rn}"
 
-            if r["status"] == "confirmed" and r["player1_score"] is not None and r["player2_score"] is not None:
-                c_score = r["player1_score"] if is_p1 else r["player2_score"]
-                o_score = r["player2_score"] if is_p1 else r["player1_score"]
-                if c_score > o_score: outcome = "W"
-                elif c_score < o_score: outcome = "L"
-                else: outcome = "D"
+            # Collect match events / goals for all matches in this round
+            m_ids = [m["id"] for m in r_matches]
+            placeholders = ",".join(["?"] * len(m_ids))
+            cursor.execute(f"""
+                SELECT me.player_name, SUM(me.count) AS cnt
+                FROM match_events me
+                WHERE me.match_id IN ({placeholders}) AND LOWER(me.team_name) = LOWER(?) AND me.event_type = 'goal'
+                GROUP BY LOWER(me.player_name)
+                ORDER BY cnt DESC, me.player_name ASC
+            """, (*m_ids, canon))
+            club_scorers = [f"{g['player_name']} ({g['cnt']})" if g['cnt'] > 1 else g['player_name'] for g in cursor.fetchall()]
 
-                cursor.execute("""
-                    SELECT player_name, count 
-                    FROM match_events 
-                    WHERE match_id = ? AND LOWER(team_name) = LOWER(?) AND event_type = 'goal'
-                """, (r["id"], canon))
-                scorers = [f"{g['player_name']} ({g['count']})" if g['count'] > 1 else g['player_name'] for g in cursor.fetchall()]
-                subline = f"Голы клуба: {', '.join(scorers)}" if scorers else ""
+            confirmed_matches = [m for m in r_matches if m["status"] == "confirmed" and m["player1_score"] is not None and m["player2_score"] is not None]
+            has_played = len(confirmed_matches) > 0
+            all_confirmed = len(confirmed_matches) == len(r_matches)
+
+            if len(r_matches) == 1:
+                m = r_matches[0]
+                h_score = m["player1_score"] if m["status"] == "confirmed" else None
+                a_score = m["player2_score"] if m["status"] == "confirmed" else None
+                if m["status"] == "confirmed" and h_score is not None and a_score is not None:
+                    c_s = m["player1_score"] if is_p1 else m["player2_score"]
+                    o_s = m["player2_score"] if is_p1 else m["player1_score"]
+                    if c_s > o_s: outcome = "W"
+                    elif c_s < o_s: outcome = "L"
+                    else: outcome = "D"
+                    subline = f"Голы клуба: {', '.join(club_scorers)}" if club_scorers else ""
+                else:
+                    outcome = "PENDING"
+                    subline = ""
             else:
-                outcome = "PENDING"
-                scorers = []
-                subline = ""
+                games_scores = [f"{m['player1_score']}:{m['player2_score']}" for m in confirmed_matches]
+                tot_p1 = sum(m["player1_score"] for m in confirmed_matches)
+                tot_p2 = sum(m["player2_score"] for m in confirmed_matches)
+                h_score = tot_p1 if has_played else None
+                a_score = tot_p2 if has_played else None
+
+                if has_played:
+                    c_s = tot_p1 if is_p1 else tot_p2
+                    o_s = tot_p2 if is_p1 else tot_p1
+                    if c_s > o_s: outcome = "W"
+                    elif c_s < o_s: outcome = "L"
+                    else: outcome = "D"
+                else:
+                    outcome = "PENDING"
+
+                games_str = ", ".join(games_scores)
+                if games_str and club_scorers:
+                    subline = f"Матчи: {games_str} • Голы: {', '.join(club_scorers)}"
+                elif games_str:
+                    subline = f"Матчи: {games_str}"
+                elif club_scorers:
+                    subline = f"Голы клуба: {', '.join(club_scorers)}"
+                else:
+                    subline = ""
 
             league_items.append({
-                "match_id": r["id"],
-                "round_number": r["round_number"],
+                "match_id": first_m["id"],
+                "round_number": rn,
                 "stage_order": 0,
                 "tour_title": tour_title,
                 "is_cup": False,
                 "home_team": home_team,
                 "away_team": away_team,
-                "home_score": r["player1_score"] if r["status"] == "confirmed" else None,
-                "away_score": r["player2_score"] if r["status"] == "confirmed" else None,
-                "club_score": r["player1_score"] if is_p1 else r["player2_score"],
-                "opponent_score": r["player2_score"] if is_p1 else r["player1_score"],
+                "home_score": h_score,
+                "away_score": a_score,
+                "club_score": h_score if is_p1 else a_score,
+                "opponent_score": a_score if is_p1 else h_score,
                 "is_home": is_p1,
                 "opponent_team": opp_team,
                 "opponent_username": opp_user,
-                "status": r["status"],
+                "status": "confirmed" if (has_played and all_confirmed) else "pending",
                 "outcome": outcome,
-                "scorers": scorers,
+                "scorers": club_scorers,
                 "subline": subline,
-                "is_completed": (r["status"] == "confirmed"),
-                "has_played": (r["status"] == "confirmed"),
+                "is_completed": all_confirmed and has_played,
+                "has_played": has_played,
             })
 
         # 3. Combine and Sort:

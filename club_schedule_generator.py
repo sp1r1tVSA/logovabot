@@ -231,17 +231,22 @@ def generate_club_schedule(data: dict, max_matches: int = 12) -> io.BytesIO:
             tour_badge_x = CARD_PADDING + 14 * SCALE
             tour_badge_y = curr_y + 14 * SCALE
 
-            tb_fill = (38, 32, 20) if is_cup else SURFACE_ALT
-            tb_border = CUP_GOLD if is_cup else BORDER_LIGHT
-            tb_text_color = CUP_GOLD if is_cup else MUTED
-            _draw_rounded_rect(draw, (tour_badge_x, tour_badge_y, tour_badge_x + tour_badge_w, tour_badge_y + tour_badge_h),
-                               radius=6 * SCALE, fill=tb_fill, outline=tb_border, width=1)
-            
             if is_cup:
+                tb_fill = (38, 32, 20)
+                tb_border = CUP_GOLD
+                tb_text_color = CUP_GOLD
+                _draw_rounded_rect(draw, (tour_badge_x, tour_badge_y, tour_badge_x + tour_badge_w, tour_badge_y + tour_badge_h),
+                                   radius=6 * SCALE, fill=tb_fill, outline=tb_border, width=1)
                 _draw_trophy_icon(draw, tour_badge_x + 6 * SCALE, tour_badge_y + 8 * SCALE, size=13 * SCALE, color=CUP_GOLD)
                 tb_text_x = tour_badge_x + 22 * SCALE
             else:
-                tb_text_x = tour_badge_x + 8 * SCALE
+                tb_fill = (20, 26, 38)
+                tb_border = (56, 189, 248) if m.get("status") == "confirmed" else BORDER_LIGHT
+                tb_text_color = (224, 242, 254) if m.get("status") == "confirmed" else MUTED
+                _draw_rounded_rect(draw, (tour_badge_x, tour_badge_y, tour_badge_x + tour_badge_w, tour_badge_y + tour_badge_h),
+                                   radius=6 * SCALE, fill=tb_fill, outline=tb_border, width=1)
+                _draw_ball_icon(draw, tour_badge_x + 6 * SCALE, tour_badge_y + 8 * SCALE, size=13 * SCALE)
+                tb_text_x = tour_badge_x + 22 * SCALE
 
             draw.text((tb_text_x, tour_badge_y + 7 * SCALE), tour_title, font=font_badge_sm, fill=tb_text_color)
 
