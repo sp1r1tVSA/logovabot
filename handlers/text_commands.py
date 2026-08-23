@@ -433,6 +433,17 @@ async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_T
         )
         return True
 
+    if action in ("автоварны", "проверить_долги", "чекер_долгов") or full_cmd.startswith("автоварны") or full_cmd.startswith("проверить долги") or full_cmd.startswith("проверка долгов"):
+        if not is_adm:
+            await msg.reply_text("⚠️ Эта команда доступна только администраторам турнира.")
+            return True
+
+        from handlers.admin import job_debt_lifecycle_tracker
+        await msg.reply_text("⏳ <b>Запуск проверки долгов и начисления авто-варнов...</b>", parse_mode="HTML")
+        await job_debt_lifecycle_tracker(context)
+        await msg.reply_text("✅ <b>Проверка долгов и авто-варнов успешно завершена!</b>", parse_mode="HTML")
+        return True
+
     if action in ("клуб", "карточка_клуба", "клуб_инфо", "club") or full_cmd.startswith("клуб") or full_cmd.startswith("карточка клуба"):
         chat = update.effective_chat
         if chat and chat.type in ("group", "supergroup", "channel") and not is_adm:
