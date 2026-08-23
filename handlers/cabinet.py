@@ -16,6 +16,7 @@ import config
 from config import MAX_WARNS_LIMIT
 import player_card_generator
 import club_card_generator
+import club_schedule_generator
 
 def match_squad_player_names(raw_players: list[str], squad_list: list[str]) -> dict[str, int]:
     counts = {}
@@ -442,16 +443,48 @@ async def show_player_card(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     )
 
 
-async def show_my_matches_stub(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Stub for My Matches."""
+async def send_or_edit_club_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE, team_name: str, back_cb: str | None = None) -> None:
+    """Send or edit high-res graphic schedule and results card for a club."""
     query = update.callback_query
-    if query:
-        await query.answer()
-    keyboard = [[InlineKeyboardButton("« Назад в кабинет", callback_data="menu_cabinet")]]
+    user = update.effective_user
+    chat_id = query.from_user.id if query else (user.id if user else update.effective_chat.id)
+
+    canon = database.resolve_team_name(team_name) or team_name
+    schedule_data = await asyncio.to_thread(database.get_club_schedule_and_results, canon, 12)
+    buf = await asyncio.to_thread(club_schedule_generator.generate_club_schedule, schedule_data)
+
+    target_back = back_cb or f"view_club_{canon}"
+    keyboard = [
+        [
+            InlineKeyboardButton("🏛 Карточка", callback_data=f"view_club_{canon}"),
+            InlineKeyboardButton("👥 Состав", callback_data=f"clsquad_{canon}"),
+        ],
+        [
+            InlineKeyboardButton("🌍 Все клубы", callback_data="cb_clubs_catalog"),
+            InlineKeyboardButton("« В кабинет", callback_data="menu_cabinet"),
+        ]
+    ]
     markup = InlineKeyboardMarkup(keyboard)
-    text = "🚧 <b>В разработке</b>\n\nРаздел матчей находится в разработке."
-    if query:
-        await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
+    caption = f"📅 <b>МАТЧИ И РАСПИСАНИЕ: {html.escape(canon.upper())}</b>"
+
+    if query and query.message:
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
+
+    await context.bot.send_photo(
+        chat_id=chat_id,
+        photo=buf,
+        caption=caption,
+        parse_mode="HTML",
+        reply_markup=markup
+    )
+
+
+async def show_my_matches_stub(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show schedule/matches for user's club."""
+    await show_game_history_stub(update, context)
 
 
 AVATARS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "avatars")
@@ -631,47 +664,14 @@ async def show_club_squad(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 
 async def show_club_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Display match history for a specific club."""
+    """Display visual match schedule and history for a specific club."""
     query = update.callback_query
     if not query:
         return
     await query.answer()
 
     team_name = query.data.replace("clhist_", "")
-    canon = database.resolve_team_name(team_name) or team_name
-    history = await asyncio.to_thread(database.get_club_match_history, canon, limit=15)
-
-    text = f"📜 <b>ИСТОРИЯ МАТЧЕЙ КЛУБА: {html.escape(canon.upper())}</b>\n\n"
-
-    if not history:
-        text += "<i>Сыгранных матчей пока нет.</i>\n"
-    else:
-        for m in history:
-            is_c = m["is_cup"]
-            tour_str = f"🏆 Кубок ({m['cup_stage']})" if is_c else f"⚙️ Тур {m['round_number']}"
-            out_emoji = "🟢 ПОБЕДА" if m["outcome"] == "W" else ("🟡 НИЧЬЯ" if m["outcome"] == "D" else "🔴 ПОРАЖЕНИЕ")
-            opp_un = f" (@{html.escape(m['opponent_username'])})" if m.get("opponent_username") else ""
-            
-            text += f"{tour_str} | {out_emoji}\n"
-            text += f"🏠 <b>{html.escape(canon)}</b> <b>{m['club_score']} : {m['opponent_score']}</b> <b>{html.escape(m['opponent_team'])}</b>{opp_un}\n"
-            if m["scorers"]:
-                text += f"⚽ <i>Голы: {html.escape(', '.join(m['scorers']))}</i>\n"
-            text += "────────────────────\n"
-
-    keyboard = [[InlineKeyboardButton("« К карточке клуба", callback_data=f"view_club_{canon}")]]
-    markup = InlineKeyboardMarkup(keyboard)
-
-    if query.message and query.message.photo:
-        try:
-            await query.message.delete()
-        except Exception:
-            pass
-        await context.bot.send_message(chat_id=query.from_user.id, text=text, parse_mode="HTML", reply_markup=markup)
-    else:
-        try:
-            await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
-        except Exception:
-            await context.bot.send_message(chat_id=query.from_user.id, text=text, parse_mode="HTML", reply_markup=markup)
+    await send_or_edit_club_schedule(update, context, team_name, back_cb=f"view_club_{team_name}")
 
 
 async def show_game_history_stub(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -686,33 +686,7 @@ async def show_game_history_stub(update: Update, context: ContextTypes.DEFAULT_T
     if not team:
         await show_clubs_catalog(update, context)
         return
-    
-    # Delegate to club history
-    canon = database.resolve_team_name(team) or team
-    history = await asyncio.to_thread(database.get_club_match_history, canon, limit=15)
-    text = f"📜 <b>ИСТОРИЯ МАТЧЕЙ КЛУБА: {html.escape(canon.upper())}</b>\n\n"
-
-    if not history:
-        text += "<i>Сыгранных матчей пока нет.</i>\n"
-    else:
-        for m in history:
-            is_c = m["is_cup"]
-            tour_str = f"🏆 Кубок ({m['cup_stage']})" if is_c else f"⚙️ Тур {m['round_number']}"
-            out_emoji = "🟢 ПОБЕДА" if m["outcome"] == "W" else ("🟡 НИЧЬЯ" if m["outcome"] == "D" else "🔴 ПОРАЖЕНИЕ")
-            opp_un = f" (@{html.escape(m['opponent_username'])})" if m.get("opponent_username") else ""
-            
-            text += f"{tour_str} | {out_emoji}\n"
-            text += f"🏠 <b>{html.escape(canon)}</b> <b>{m['club_score']} : {m['opponent_score']}</b> <b>{html.escape(m['opponent_team'])}</b>{opp_un}\n"
-            if m["scorers"]:
-                text += f"⚽ <i>Голы: {html.escape(', '.join(m['scorers']))}</i>\n"
-            text += "────────────────────\n"
-
-    keyboard = [[InlineKeyboardButton("« Назад в кабинет", callback_data="menu_cabinet")]]
-    markup = InlineKeyboardMarkup(keyboard)
-    if query:
-        await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
-    elif update.message:
-        await update.message.reply_text(text, parse_mode="HTML", reply_markup=markup)
+    await send_or_edit_club_schedule(update, context, team, back_cb="menu_cabinet")
 
 
 async def show_clubs_catalog(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

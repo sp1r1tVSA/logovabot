@@ -2639,6 +2639,99 @@ def get_club_match_history(team_name: str, limit: int = 20) -> list[dict]:
         return matches
 
 
+def get_club_schedule_and_results(team_name: str, limit: int = 25) -> dict:
+    """
+    Retrieve chronological match schedule (both played results and upcoming/pending matches) for a club.
+    """
+    with transaction() as conn:
+        cursor = conn.cursor()
+        canon = resolve_team_name(team_name) or team_name.strip()
+
+        cursor.execute("""
+            SELECT 
+                m.id, m.round_number, m.tournament_type, m.cup_stage, m.cup_series_id, m.game_num_in_series,
+                m.player1_team, m.player2_team, m.player1_score, m.player2_score, m.status,
+                r.is_open, r.deadline,
+                u1.username AS p1_username, u2.username AS p2_username
+            FROM matches m
+            LEFT JOIN rounds r ON m.round_number = r.round_number
+            LEFT JOIN users u1 ON LOWER(m.player1_team) = LOWER(u1.team_name)
+            LEFT JOIN users u2 ON LOWER(m.player2_team) = LOWER(u2.team_name)
+            WHERE (LOWER(m.player1_team) = LOWER(?) OR LOWER(m.player2_team) = LOWER(?))
+            ORDER BY 
+                CASE WHEN m.status = 'confirmed' THEN 1 ELSE 0 END DESC,
+                CASE WHEN m.tournament_type = 'cup' OR m.round_number = -1 THEN 999 ELSE m.round_number END DESC,
+                m.id DESC
+            LIMIT ?
+        """, (canon, canon, limit))
+
+        matches = []
+        played_count = 0
+        pending_count = 0
+
+        for r in cursor.fetchall():
+            is_p1 = teams_match(r["player1_team"], canon)
+            home_team = resolve_team_name(r["player1_team"]) or r["player1_team"]
+            away_team = resolve_team_name(r["player2_team"]) or r["player2_team"]
+            opp_team = away_team if is_p1 else home_team
+            opp_user = r["p2_username"] if is_p1 else r["p1_username"]
+            is_cup = bool(r["tournament_type"] == "cup" or r["round_number"] == -1 or (r["cup_series_id"] and r["cup_series_id"] > 0))
+
+            if is_cup:
+                st_name = (r["cup_stage"] or "1/8").upper()
+                g_num = f" (ИГРА {r['game_num_in_series']})" if r["game_num_in_series"] else ""
+                tour_title = f"КУБОК • {st_name}{g_num}"
+            else:
+                tour_title = f"ТУР {r['round_number']}"
+
+            if r["status"] == "confirmed":
+                played_count += 1
+                club_score = r["player1_score"] if is_p1 else r["player2_score"]
+                opp_score = r["player2_score"] if is_p1 else r["player1_score"]
+                if club_score > opp_score: outcome = "W"
+                elif club_score < opp_score: outcome = "L"
+                else: outcome = "D"
+
+                cursor.execute("""
+                    SELECT player_name, count 
+                    FROM match_events 
+                    WHERE match_id = ? AND LOWER(team_name) = LOWER(?) AND event_type = 'goal'
+                """, (r["id"], canon))
+                scorers = [f"{g['player_name']} ({g['count']})" if g['count'] > 1 else g['player_name'] for g in cursor.fetchall()]
+            else:
+                pending_count += 1
+                club_score = None
+                opp_score = None
+                outcome = "PENDING"
+                scorers = []
+
+            matches.append({
+                "match_id": r["id"],
+                "round_number": r["round_number"],
+                "tour_title": tour_title,
+                "is_cup": is_cup,
+                "home_team": home_team,
+                "away_team": away_team,
+                "home_score": r["player1_score"] if r["status"] == "confirmed" else None,
+                "away_score": r["player2_score"] if r["status"] == "confirmed" else None,
+                "club_score": club_score,
+                "opponent_score": opp_score,
+                "is_home": is_p1,
+                "opponent_team": opp_team,
+                "opponent_username": opp_user,
+                "status": r["status"],
+                "outcome": outcome,
+                "scorers": scorers,
+            })
+
+        return {
+            "team_name": canon,
+            "played_count": played_count,
+            "pending_count": pending_count,
+            "matches": matches,
+        }
+
+
 def get_all_clubs_summary() -> list[dict]:
     """
     Get summary list of all KPL clubs for the clubs catalog.

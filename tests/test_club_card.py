@@ -145,6 +145,31 @@ class TestClubCard(unittest.TestCase):
         # PNG signature check
         self.assertTrue(buf_bytes.startswith(b'\x89PNG\r\n\x1a\n'))
 
+    def test_club_schedule_and_results_image_generator(self):
+        """Test database.get_club_schedule_and_results and club_schedule_generator."""
+        import club_schedule_generator
+        with database.transaction() as conn:
+            c = conn.cursor()
+            c.execute(
+                "INSERT INTO matches (round_number, player1_team, player2_team, player1_score, player2_score, status, tournament_type) "
+                "VALUES (22, 'Фейеноорд', 'Бенфика', 5, 4, 'confirmed', 'league')"
+            )
+            m_id = c.lastrowid
+            c.execute("INSERT INTO match_events (match_id, player_name, team_name, event_type, count) VALUES (?, 'Guirassy', 'Фейеноорд', 'goal', 2)", (m_id,))
+            c.execute("INSERT INTO match_events (match_id, player_name, team_name, event_type, count) VALUES (?, 'Steijn', 'Фейеноорд', 'goal', 2)", (m_id,))
+
+        sched_data = database.get_club_schedule_and_results("Фейеноорд")
+        self.assertEqual(sched_data["played_count"], 1)
+        self.assertEqual(len(sched_data["matches"]), 1)
+        self.assertEqual(sched_data["matches"][0]["outcome"], "W")
+        self.assertIn("Guirassy (2)", sched_data["matches"][0]["scorers"])
+
+        buf = club_schedule_generator.generate_club_schedule(sched_data)
+        self.assertIsNotNone(buf)
+        buf_bytes = buf.getvalue()
+        self.assertGreater(len(buf_bytes), 1000)
+        self.assertTrue(buf_bytes.startswith(b'\x89PNG\r\n\x1a\n'))
+
 
 if __name__ == "__main__":
     unittest.main()
