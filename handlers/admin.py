@@ -100,6 +100,8 @@ async def show_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await update.message.reply_text(text, parse_mode="HTML", reply_markup=markup)
     elif query:
         await query.answer()
+        target_chat_id = query.message.chat_id if query.message else query.from_user.id
+        thread_id = query.message.message_thread_id if query.message and query.message.is_topic_message else None
         try:
             await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
         except Exception:
@@ -107,7 +109,7 @@ async def show_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 await query.message.delete()
             except Exception:
                 pass
-            await context.bot.send_message(chat_id=query.from_user.id, text=text, parse_mode="HTML", reply_markup=markup)
+            await context.bot.send_message(chat_id=target_chat_id, message_thread_id=thread_id, text=text, parse_mode="HTML", reply_markup=markup)
 
 @admin_only
 async def admin_toggle_chat_mode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1432,12 +1434,15 @@ async def admin_round_matches(update: Update, context: ContextTypes.DEFAULT_TYPE
     keyboard.append([InlineKeyboardButton("« Назад к турам", callback_data="admin_manage_matches_info")])
     
     text = f"📅 **Матчи {round_number}-го тура (Панель Администратора):**\n\nВыберите матч для ввода счета или сброса:"
+    target_chat_id = query.message.chat_id if query and query.message else query.from_user.id
+    thread_id = query.message.message_thread_id if query and query.message and query.message.is_topic_message else None
+
     if query.message and query.message.photo:
         try:
             await query.message.delete()
         except Exception:
             pass
-        await context.bot.send_message(chat_id=query.from_user.id, text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+        await context.bot.send_message(chat_id=target_chat_id, message_thread_id=thread_id, text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
     else:
         try:
             await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
@@ -1446,7 +1451,7 @@ async def admin_round_matches(update: Update, context: ContextTypes.DEFAULT_TYPE
                 await query.message.delete()
             except Exception:
                 pass
-            await context.bot.send_message(chat_id=query.from_user.id, text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+            await context.bot.send_message(chat_id=target_chat_id, message_thread_id=thread_id, text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
 @admin_only
 async def admin_view_match(update: Update, context: ContextTypes.DEFAULT_TYPE, match_id: int | None = None) -> None:
@@ -1512,12 +1517,15 @@ async def admin_view_match(update: Update, context: ContextTypes.DEFAULT_TYPE, m
         keyboard.append([InlineKeyboardButton("📸 Просмотр скриншота матча", callback_data=f"admin_view_match_photo_{match_id}")])
     keyboard.append([back_button])
 
+    target_chat_id = query.message.chat_id if query and query.message else query.from_user.id
+    thread_id = query.message.message_thread_id if query and query.message and query.message.is_topic_message else None
+
     if query.message and query.message.photo:
         try:
             await query.message.delete()
         except Exception:
             pass
-        await context.bot.send_message(chat_id=query.from_user.id, text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+        await context.bot.send_message(chat_id=target_chat_id, message_thread_id=thread_id, text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
     else:
         try:
             await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
@@ -1526,7 +1534,7 @@ async def admin_view_match(update: Update, context: ContextTypes.DEFAULT_TYPE, m
                 await query.message.delete()
             except Exception:
                 pass
-            await context.bot.send_message(chat_id=query.from_user.id, text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+            await context.bot.send_message(chat_id=target_chat_id, message_thread_id=thread_id, text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
 @admin_only
 async def admin_view_match_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1559,8 +1567,11 @@ async def admin_view_match_photo(update: Update, context: ContextTypes.DEFAULT_T
     )
     back_button = InlineKeyboardMarkup([[InlineKeyboardButton("« Назад к карточке матча", callback_data=f"admin_view_match_{match_id}")]])
 
+    target_chat_id = query.message.chat_id if query and query.message else query.from_user.id
+    thread_id = query.message.message_thread_id if query and query.message and query.message.is_topic_message else None
+
     try:
-        await context.bot.send_photo(chat_id=query.from_user.id, photo=photo_id, caption=caption, parse_mode="HTML", reply_markup=back_button)
+        await context.bot.send_photo(chat_id=target_chat_id, message_thread_id=thread_id, photo=photo_id, caption=caption, parse_mode="HTML", reply_markup=back_button)
     except BadRequest as e:
         logger.warning(f"Failed to resend screenshot for match #{match_id}: {e}")
         await safe_edit_or_reply(query, context, "📸 Не удалось отобразить скриншот (файл недоступен).")
@@ -3238,13 +3249,16 @@ async def admin_remind_round(update: Update, context: ContextTypes.DEFAULT_TYPE,
     if round_number is None:
         round_number = int(query.data.replace("admin_remind_round_", ""))
 
+    target_chat_id = query.message.chat_id if query and query.message else query.from_user.id
+    thread_id = query.message.message_thread_id if query and query.message and query.message.is_topic_message else None
+
     unplayed = await asyncio.to_thread(database.get_unplayed_matches_by_round, round_number)
     if not unplayed:
         keyboard = [[InlineKeyboardButton("« Назад к туру", callback_data=f"admin_manage_round_{round_number}")]]
         try:
             await query.edit_message_text("🎉 В этом туре нет несыгранных матчей!", reply_markup=InlineKeyboardMarkup(keyboard))
         except Exception:
-            await context.bot.send_message(chat_id=query.from_user.id, text="🎉 В этом туре нет несыгранных матчей!", reply_markup=InlineKeyboardMarkup(keyboard))
+            await context.bot.send_message(chat_id=target_chat_id, message_thread_id=thread_id, text="🎉 В этом туре нет несыгранных матчей!", reply_markup=InlineKeyboardMarkup(keyboard))
         return
 
     selected_key = f"remind_selected_{round_number}"
@@ -3284,7 +3298,7 @@ async def admin_remind_round(update: Update, context: ContextTypes.DEFAULT_TYPE,
             await query.message.delete()
         except Exception:
             pass
-        await context.bot.send_message(chat_id=query.from_user.id, text=text, reply_markup=markup, parse_mode="HTML")
+        await context.bot.send_message(chat_id=target_chat_id, message_thread_id=thread_id, text=text, reply_markup=markup, parse_mode="HTML")
     else:
         try:
             await query.edit_message_text(text, reply_markup=markup, parse_mode="HTML")
@@ -3293,7 +3307,7 @@ async def admin_remind_round(update: Update, context: ContextTypes.DEFAULT_TYPE,
                 await query.message.delete()
             except Exception:
                 pass
-            await context.bot.send_message(chat_id=query.from_user.id, text=text, reply_markup=markup, parse_mode="HTML")
+            await context.bot.send_message(chat_id=target_chat_id, message_thread_id=thread_id, text=text, reply_markup=markup, parse_mode="HTML")
 
 @admin_only
 async def admin_toggle_remind_match(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -3362,12 +3376,15 @@ async def admin_send_selected_reminders(update: Update, context: ContextTypes.DE
     except Exception:
         pass
 
+    target_chat_id = query.message.chat_id if query and query.message else query.from_user.id
+    thread_id = query.message.message_thread_id if query and query.message and query.message.is_topic_message else None
+
     round_number = int(query.data.replace("admin_send_selected_reminders_", ""))
     selected_key = f"remind_selected_{round_number}"
     selected_ids = context.user_data.get(selected_key, set())
 
     if not selected_ids:
-        await context.bot.send_message(chat_id=query.from_user.id, text="⚠️ Не выбрано ни одного матча!")
+        await query.answer("⚠️ Не выбрано ни одного матча!", show_alert=True)
         return
 
     pm_sent, count_matches = await send_round_reminders(context, round_number, target_match_ids=selected_ids)
@@ -3386,7 +3403,7 @@ async def admin_send_selected_reminders(update: Update, context: ContextTypes.DE
     try:
         await query.edit_message_text(text, reply_markup=markup, parse_mode="HTML")
     except Exception:
-        await context.bot.send_message(chat_id=query.from_user.id, text=text, reply_markup=markup, parse_mode="HTML")
+        await context.bot.send_message(chat_id=target_chat_id, message_thread_id=thread_id, text=text, reply_markup=markup, parse_mode="HTML")
 
 async def job_check_deadlines_and_remind(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Periodic job checking open rounds for approaching deadlines and sending automated reminders."""

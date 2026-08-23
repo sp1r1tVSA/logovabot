@@ -358,17 +358,20 @@ async def show_club_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     buttons.append([InlineKeyboardButton("« Назад в кабинет", callback_data="menu_cabinet")])
     markup = InlineKeyboardMarkup(buttons)
 
+    target_chat_id = query.message.chat_id if query and query.message else (update.effective_chat.id if update.effective_chat else update.effective_user.id)
+    thread_id = query.message.message_thread_id if query and query.message and query.message.is_topic_message else None
+
     if query and query.message and (query.message.photo or query.message.caption):
         try:
             await query.message.delete()
         except Exception:
             pass
-        await context.bot.send_message(chat_id=query.from_user.id, text=text, parse_mode="HTML", reply_markup=markup)
+        await context.bot.send_message(chat_id=target_chat_id, message_thread_id=thread_id, text=text, parse_mode="HTML", reply_markup=markup)
     elif query:
         try:
             await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
         except Exception:
-            await context.bot.send_message(chat_id=query.from_user.id, text=text, parse_mode="HTML", reply_markup=markup)
+            await context.bot.send_message(chat_id=target_chat_id, message_thread_id=thread_id, text=text, parse_mode="HTML", reply_markup=markup)
     elif update.message:
         await update.message.reply_text(text, parse_mode="HTML", reply_markup=markup)
 
@@ -430,6 +433,9 @@ async def show_player_card(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         f"🔥 <b>{pts}</b> очков (Г+П)"
     )
 
+    target_chat_id = query.message.chat_id if query.message else (update.effective_chat.id if update.effective_chat else query.from_user.id)
+    thread_id = query.message.message_thread_id if query.message and query.message.is_topic_message else None
+
     if query.message:
         try:
             await query.message.delete()
@@ -437,7 +443,8 @@ async def show_player_card(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             pass
 
     await context.bot.send_photo(
-        chat_id=query.from_user.id,
+        chat_id=target_chat_id,
+        message_thread_id=thread_id,
         photo=buf,
         caption=caption,
         parse_mode="HTML",
@@ -688,17 +695,20 @@ async def show_club_squad(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     buttons.append([InlineKeyboardButton("« К карточке клуба", callback_data=f"view_club_{canon}")])
     markup = InlineKeyboardMarkup(buttons)
 
+    target_chat_id = query.message.chat_id if query and query.message else (update.effective_chat.id if update.effective_chat else query.from_user.id)
+    thread_id = query.message.message_thread_id if query and query.message and query.message.is_topic_message else None
+
     if query.message and query.message.photo:
         try:
             await query.message.delete()
         except Exception:
             pass
-        await context.bot.send_message(chat_id=query.from_user.id, text=text, parse_mode="HTML", reply_markup=markup)
+        await context.bot.send_message(chat_id=target_chat_id, message_thread_id=thread_id, text=text, parse_mode="HTML", reply_markup=markup)
     else:
         try:
             await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
         except Exception:
-            await context.bot.send_message(chat_id=query.from_user.id, text=text, parse_mode="HTML", reply_markup=markup)
+            await context.bot.send_message(chat_id=target_chat_id, message_thread_id=thread_id, text=text, parse_mode="HTML", reply_markup=markup)
 
 
 async def show_club_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -913,34 +923,45 @@ async def cancel_registration(update: Update, context: ContextTypes.DEFAULT_TYPE
     return ConversationHandler.END
 
 async def safe_edit_or_reply(query: CallbackQuery, context: ContextTypes.DEFAULT_TYPE, text: str, reply_markup=None, parse_mode: str = "HTML") -> None:
-    """Safely edit a message whether it's a text message or photo message, preventing BadRequest errors."""
+    """Safely edit a message whether it's a text message or photo message, preserving group/topic context."""
     if not query:
         return
-    user_id = query.from_user.id
+    
+    target_chat_id = query.message.chat_id if query.message else query.from_user.id
+    thread_id = query.message.message_thread_id if query.message and query.message.is_topic_message else None
 
     # 1. Проверяем, содержит ли исходное сообщение медиафайл (фотография)
     has_photo = bool(query.message and (query.message.photo or query.message.caption or query.message.document))
 
     if has_photo:
-        # Для фото-сообщений ВСЕГДА удаляем старое сообщение с картинкой и слаем новое текстовое
         try:
             await query.message.delete()
         except Exception as e:
             logger.debug(f"Could not delete photo message: {e}")
-        await context.bot.send_message(chat_id=user_id, text=text, parse_mode=parse_mode, reply_markup=reply_markup)
+        await context.bot.send_message(
+            chat_id=target_chat_id,
+            message_thread_id=thread_id,
+            text=text,
+            parse_mode=parse_mode,
+            reply_markup=reply_markup
+        )
     else:
-        # Для обычных текстовых сообщений пробуем отредактировать текст
         try:
             await query.edit_message_text(text, parse_mode=parse_mode, reply_markup=reply_markup)
         except telegram.error.BadRequest as e:
             err_msg = str(e).lower()
             if "there is no text in the message to edit" in err_msg or "message is not modified" in err_msg:
-                # Если сработал краевой случай Telegram — удаляем и пересоздаем
                 try:
                     await query.message.delete()
                 except Exception:
                     pass
-                await context.bot.send_message(chat_id=user_id, text=text, parse_mode=parse_mode, reply_markup=reply_markup)
+                await context.bot.send_message(
+                    chat_id=target_chat_id,
+                    message_thread_id=thread_id,
+                    text=text,
+                    parse_mode=parse_mode,
+                    reply_markup=reply_markup
+                )
             else:
                 logger.warning(f"safe_edit_or_reply BadRequest: {e}")
         except Exception as e:
@@ -949,7 +970,13 @@ async def safe_edit_or_reply(query: CallbackQuery, context: ContextTypes.DEFAULT
                 await query.message.delete()
             except Exception:
                 pass
-            await context.bot.send_message(chat_id=user_id, text=text, parse_mode=parse_mode, reply_markup=reply_markup)
+            await context.bot.send_message(
+                chat_id=target_chat_id,
+                message_thread_id=thread_id,
+                text=text,
+                parse_mode=parse_mode,
+                reply_markup=reply_markup
+            )
 
 # --- Placeholders ---
 
@@ -1571,12 +1598,12 @@ async def start_score_reporting(update: Update, context: ContextTypes.DEFAULT_TY
     match = await asyncio.to_thread(database.get_match, match_id)
     if not match:
         if query:
-            await context.bot.send_message(chat_id=query.from_user.id, text="❌ Матч не найден.")
+            await query.answer("❌ Матч не найден.", show_alert=True)
         return
 
     if match['status'] == 'confirmed':
         if query:
-            await context.bot.send_message(chat_id=query.from_user.id, text="⛔ Результат этого матча уже занесён в таблицу!")
+            await query.answer("⛔ Результат этого матча уже занесён в таблицу!", show_alert=True)
         return
 
     user_id = query.from_user.id if query else update.effective_user.id
@@ -1616,11 +1643,11 @@ async def cb_report_choice_auto(update: Update, context: ContextTypes.DEFAULT_TY
 
     match = await asyncio.to_thread(database.get_match, match_id)
     if not match:
-        await context.bot.send_message(chat_id=query.from_user.id, text="❌ Матч не найден.")
+        await query.answer("❌ Матч не найден.", show_alert=True)
         return
 
     if match['status'] == 'confirmed':
-        await context.bot.send_message(chat_id=query.from_user.id, text="⛔ Результат этого матча уже занесён в таблицу!")
+        await query.answer("⛔ Результат этого матча уже занесён в таблицу!", show_alert=True)
         return
 
     user_id = query.from_user.id
@@ -1647,11 +1674,11 @@ async def cb_report_choice_manual(update: Update, context: ContextTypes.DEFAULT_
 
     match = await asyncio.to_thread(database.get_match, match_id)
     if not match:
-        await context.bot.send_message(chat_id=query.from_user.id, text="❌ Матч не найден.")
+        await query.answer("❌ Матч не найден.", show_alert=True)
         return
 
     if match['status'] == 'confirmed':
-        await context.bot.send_message(chat_id=query.from_user.id, text="⛔ Результат этого матча уже занесён в таблицу!")
+        await query.answer("⛔ Результат этого матча уже занесён в таблицу!", show_alert=True)
         return
 
     user_id = query.from_user.id
@@ -2369,11 +2396,11 @@ async def cb_confirm_ai_final(update: Update, context: ContextTypes.DEFAULT_TYPE
     match_id = int(query.data.replace("cb_confirm_ai_final_", ""))
     match = await asyncio.to_thread(database.get_match, match_id)
     if not match:
-        await context.bot.send_message(chat_id=query.from_user.id, text="❌ Матч не найден.")
+        await query.answer("❌ Матч не найден.", show_alert=True)
         return
 
     if match['status'] == 'confirmed':
-        await context.bot.send_message(chat_id=query.from_user.id, text="✅ Результат уже зафиксирован!")
+        await query.answer("✅ Результат уже зафиксирован!", show_alert=True)
         return
 
     user_id = query.from_user.id
@@ -2516,89 +2543,80 @@ async def submit_report_to_guest(update: Update, context: ContextTypes.DEFAULT_T
 
     match = await asyncio.to_thread(database.get_match, match_id) if match_id else None
     if not match:
-        await context.bot.send_message(chat_id=query.from_user.id, text="❌ Ошибка: матч не найден.")
+        await query.answer("❌ Ошибка: матч не найден.", show_alert=True)
         return
 
     if match['status'] == 'confirmed':
-        await context.bot.send_message(chat_id=query.from_user.id, text="⛔ Результат этого матча уже занесён в таблицу!")
+        await query.answer("⛔ Результат этого матча уже занесён в таблицу!", show_alert=True)
         return
 
     submitter_id = query.from_user.id
     is_submitter_home = (submitter_id == match['player1_id'])
+    opp_id = match['player2_id'] if is_submitter_home else match['player1_id']
+    opp_team = match['player2_team'] if is_submitter_home else match['player1_team']
 
-    submitter_team = match['player1_team'] or match['player1_nickname'] if is_submitter_home else match['player2_team'] or match['player2_nickname']
-    recipient_team = match['player2_team'] or match['player2_nickname'] if is_submitter_home else match['player1_team'] or match['player1_nickname']
-    recipient_id = match['player2_id'] if is_submitter_home else match['player1_id']
+    if not opp_id:
+        await query.answer("⚠️ Соперник не зарегистрирован в боте. Результат будет отправлен администратору.", show_alert=True)
+        await submit_report_to_admin(update, context)
+        return
 
-    hg = context.user_data.get("report_home_goals", 0)
-    ag = context.user_data.get("report_away_goals", 0)
-    photo_id = context.user_data.get("report_photo_id")
+    # Check opponent user status
+    opp_user = await asyncio.to_thread(database.get_user, opp_id)
+    if not opp_user or not opp_user.get("telegram_id"):
+        await query.answer("⚠️ У соперника не найден Telegram ID. Отправляем администратору.", show_alert=True)
+        await submit_report_to_admin(update, context)
+        return
 
+    # Fetch recorded report details
     home_team = match['player1_team'] or match['player1_nickname']
     away_team = match['player2_team'] or match['player2_nickname']
+    h_score = context.user_data.get("report_home_score", 0)
+    a_score = context.user_data.get("report_away_score", 0)
+    scorers = context.user_data.get("report_scorers", [])
+    assists = context.user_data.get("report_assists", [])
+    mode = context.user_data.get("reporting_mode", "manual")
+    photos = context.user_data.get("ai_photos_list", [])
+    photo_id = photos[0] if photos else None
 
-    # Build events list for database (collects goals/assists for both teams if present)
-    events = []
-    h_goals = context.user_data.get("home_goals_count", {})
-    a_goals = context.user_data.get("away_goals_count", {})
-    h_assists = context.user_data.get("home_assists_count", {})
-    a_assists = context.user_data.get("away_assists_count", {})
+    # Format text for opponent confirmation
+    sc_text = "\n".join([f"⚽ {s['player_name']} ({s['team_name']}) — {s['count']}" for s in scorers]) if scorers else "<i>(нет голов)</i>"
+    ast_text = "\n".join([f"🎯 {a['player_name']} ({a['team_name']}) — {a['count']}" for a in assists]) if assists else "<i>(нет ассистов)</i>"
 
-    for p, c in h_goals.items():
-        events.append((home_team, p, "goal", c))
-    for p, c in a_goals.items():
-        events.append((away_team, p, "goal", c))
-    for p, c in h_assists.items():
-        events.append((home_team, p, "assist", c))
-    for p, c in a_assists.items():
-        events.append((away_team, p, "assist", c))
-
-    # Instant Match Finalization in DB
-    next_stage = await asyncio.to_thread(database.confirm_and_finalize_match, match_id, hg, ag, events, reporter_id=submitter_id, photo_id=photo_id)
-    if next_stage:
-        from handlers.admin import notify_cup_stage_opened
-        await notify_cup_stage_opened(context.bot, next_stage)
-    await refresh_debts_summary(context)
-    await refresh_league_table(context)
-
-    # 1. Respond to Submitter
-    submitter_msg = f"🎉 <b>Результат матча #{match_id} ({hg}:{ag}) успешно занесён в турнирную таблицу!</b>"
-    try:
-        await query.edit_message_caption(caption=submitter_msg, parse_mode="HTML")
-    except Exception:
-        try:
-            await query.edit_message_text(text=submitter_msg, parse_mode="HTML")
-        except Exception:
-            await context.bot.send_message(chat_id=submitter_id, text=submitter_msg, parse_mode="HTML")
-
-    # 2. Informative notification to players
-    h_summary = ", ".join([f"{p} ({c})" for p, c in h_goals.items()]) if h_goals else "Нет"
-    a_summary = ", ".join([f"{p} ({c})" for p, c in a_goals.items()]) if a_goals else "Нет"
-    h_ast_summary = ", ".join([f"{p} ({c})" for p, c in h_assists.items()]) if h_assists else "Нет"
-    a_ast_summary = ", ".join([f"{p} ({c})" for p, c in a_assists.items()]) if a_assists else "Нет"
-
-    notify_text = (
-        f"🔔 <b>Результат матча #{match_id} зафиксирован!</b>\n"
-        f"🏠 <b>{html.escape(home_team)}</b> {hg} : {ag} <b>{html.escape(away_team)}</b> ✈️\n\n"
-        f"⚽ <b>Голы ({html.escape(home_team)}):</b> {html.escape(h_summary)}\n"
-        f"🎯 <b>Ассисты ({html.escape(home_team)}):</b> {html.escape(h_ast_summary)}\n\n"
-        f"⚽ <b>Голы ({html.escape(away_team)}):</b> {html.escape(a_summary)}\n"
-        f"🎯 <b>Ассисты ({html.escape(away_team)}):</b> {html.escape(a_ast_summary)}\n\n"
-        f"📊 Данные внесены в турнирную таблицу."
+    text = (
+        f"🔔 <b>ПОДТВЕРЖДЕНИЕ РЕЗУЛЬТАТА МАТЧА #{match_id}</b>\n\n"
+        f"Соперник отправил результат вашей очной встречи:\n"
+        f"🏠 <b>{safe_escape(home_team)}</b> <b>{h_score} : {a_score}</b> <b>{safe_escape(away_team)}</b> ✈️\n\n"
+        f"<b>Авторы голов:</b>\n{sc_text}\n\n"
+        f"<b>Ассистенты:</b>\n{ast_text}\n\n"
+        f"Пожалуйста, подтвердите результат или отклоните его, если данные неверны."
     )
 
-    players_to_notify = [p_id for p_id in (match['player1_id'], match['player2_id']) if p_id and p_id != submitter_id]
-    for p_id in players_to_notify:
-        try:
-            if photo_id:
-                await context.bot.send_photo(chat_id=p_id, photo=photo_id, caption=notify_text, parse_mode="HTML")
-            else:
-                await context.bot.send_message(chat_id=p_id, text=notify_text, parse_mode="HTML")
-        except Exception as e:
-            logger.warning(f"Failed to send match notification to player {p_id}: {e}")
+    keyboard = [
+        [
+            InlineKeyboardButton("✅ Подтвердить", callback_data=f"cb_guest_confirm_{match_id}"),
+            InlineKeyboardButton("❌ Отклонить", callback_data=f"cb_guest_reject_{match_id}")
+        ]
+    ]
+    markup = InlineKeyboardMarkup(keyboard)
 
-    # 3. Post to Main Group & Update Standings Graphic
-    await notify_match_confirmed(context, match_id)
+    try:
+        if photo_id:
+            await context.bot.send_photo(chat_id=opp_id, photo=photo_id, caption=text, parse_mode="HTML", reply_markup=markup)
+        else:
+            await context.bot.send_message(chat_id=opp_id, text=text, parse_mode="HTML", reply_markup=markup)
+        
+        await safe_edit_or_reply(
+            query, context,
+            f"✅ <b>Результат матча #{match_id} отправлен сопернику на подтверждение!</b>\n\n"
+            f"Ожидайте подтверждения от второго игрока.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Назад в кабинет", callback_data="menu_cabinet")]])
+        )
+    except Exception as e:
+        logger.warning(f"Could not send match confirmation to opponent {opp_id}: {e}")
+        await query.answer("⚠️ Не удалось связаться с соперником. Отправляем администратору.", show_alert=True)
+        await submit_report_to_admin(update, context)
+
 
 async def refresh_debts_summary(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Refresh the debts summary in the ПРЕДЫ thread after a match result is recorded."""
@@ -2795,12 +2813,18 @@ async def start_upload_squad(update: Update, context: ContextTypes.DEFAULT_TYPE)
     text = "📤 **Загрузка состава**\n\nПожалуйста, отправьте скриншот вашего состава *одним фото*."
     keyboard = [[InlineKeyboardButton("Отмена", callback_data="cabinet_my_squad")]]
     
+    target_chat_id = query.message.chat_id if query and query.message else (update.effective_chat.id if update.effective_chat else update.effective_user.id)
+    thread_id = query.message.message_thread_id if query and query.message and query.message.is_topic_message else None
+
     if query:
         try:
             await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
         except Exception:
-            await query.message.delete()
-            await context.bot.send_message(chat_id=query.from_user.id, text=text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+            try:
+                await query.message.delete()
+            except Exception:
+                pass
+            await context.bot.send_message(chat_id=target_chat_id, message_thread_id=thread_id, text=text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
     else:
         await update.message.reply_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
         
@@ -2861,10 +2885,14 @@ async def cabinet_view_squad(update: Update, context: ContextTypes.DEFAULT_TYPE)
     photo_id = opp_user['squad_photo_id']
     team_name = opp_user['team_name'] or opp_user['username']
     
+    target_chat_id = query.message.chat_id if query and query.message else (update.effective_chat.id if update.effective_chat else query.from_user.id)
+    thread_id = query.message.message_thread_id if query and query.message and query.message.is_topic_message else None
+
     if photo_id:
         try:
             await context.bot.send_photo(
-                chat_id=query.from_user.id, 
+                chat_id=target_chat_id,
+                message_thread_id=thread_id,
                 photo=photo_id, 
                 caption=f"⚽ Состав команды <b>{html.escape(team_name)}</b>",
                 parse_mode="HTML"

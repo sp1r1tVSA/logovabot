@@ -188,12 +188,14 @@ async def show_league_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     markup = InlineKeyboardMarkup(keyboard)
 
     if query:
+        target_chat_id = query.message.chat_id if query.message else (update.effective_chat.id if update.effective_chat else update.effective_user.id)
+        thread_id = query.message.message_thread_id if query.message and query.message.is_topic_message else None
         if query.message and query.message.photo:
             try:
                 await query.message.delete()
             except Exception:
                 pass
-            await context.bot.send_message(chat_id=query.from_user.id, text=text, reply_markup=markup, parse_mode="HTML")
+            await context.bot.send_message(chat_id=target_chat_id, message_thread_id=thread_id, text=text, reply_markup=markup, parse_mode="HTML")
         else:
             try:
                 await query.edit_message_text(text, reply_markup=markup, parse_mode="HTML")
@@ -202,7 +204,7 @@ async def show_league_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                     await query.message.delete()
                 except Exception:
                     pass
-                await context.bot.send_message(chat_id=query.from_user.id, text=text, reply_markup=markup, parse_mode="HTML")
+                await context.bot.send_message(chat_id=target_chat_id, message_thread_id=thread_id, text=text, reply_markup=markup, parse_mode="HTML")
     elif update.message:
         await update.message.reply_text(text, reply_markup=markup, parse_mode="HTML")
 
@@ -238,12 +240,14 @@ async def show_top_scorers(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     markup = InlineKeyboardMarkup(keyboard)
 
     if query:
+        target_chat_id = query.message.chat_id if query.message else (update.effective_chat.id if update.effective_chat else update.effective_user.id)
+        thread_id = query.message.message_thread_id if query.message and query.message.is_topic_message else None
         if query.message and query.message.photo:
             try:
                 await query.message.delete()
             except Exception:
                 pass
-            await context.bot.send_message(chat_id=query.from_user.id, text=text, reply_markup=markup, parse_mode="HTML")
+            await context.bot.send_message(chat_id=target_chat_id, message_thread_id=thread_id, text=text, reply_markup=markup, parse_mode="HTML")
         else:
             try:
                 await query.edit_message_text(text, reply_markup=markup, parse_mode="HTML")
@@ -252,7 +256,7 @@ async def show_top_scorers(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                     await query.message.delete()
                 except Exception:
                     pass
-                await context.bot.send_message(chat_id=query.from_user.id, text=text, reply_markup=markup, parse_mode="HTML")
+                await context.bot.send_message(chat_id=target_chat_id, message_thread_id=thread_id, text=text, reply_markup=markup, parse_mode="HTML")
     elif update.message:
         await update.message.reply_text(text, reply_markup=markup, parse_mode="HTML")
 
@@ -287,12 +291,14 @@ async def show_top_assists(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     markup = InlineKeyboardMarkup(keyboard)
 
     if query:
+        target_chat_id = query.message.chat_id if query.message else (update.effective_chat.id if update.effective_chat else update.effective_user.id)
+        thread_id = query.message.message_thread_id if query.message and query.message.is_topic_message else None
         if query.message and query.message.photo:
             try:
                 await query.message.delete()
             except Exception:
                 pass
-            await context.bot.send_message(chat_id=query.from_user.id, text=text, reply_markup=markup, parse_mode="HTML")
+            await context.bot.send_message(chat_id=target_chat_id, message_thread_id=thread_id, text=text, reply_markup=markup, parse_mode="HTML")
         else:
             try:
                 await query.edit_message_text(text, reply_markup=markup, parse_mode="HTML")
@@ -301,7 +307,7 @@ async def show_top_assists(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                     await query.message.delete()
                 except Exception:
                     pass
-                await context.bot.send_message(chat_id=query.from_user.id, text=text, reply_markup=markup, parse_mode="HTML")
+                await context.bot.send_message(chat_id=target_chat_id, message_thread_id=thread_id, text=text, reply_markup=markup, parse_mode="HTML")
     elif update.message:
         await update.message.reply_text(text, reply_markup=markup, parse_mode="HTML")
 
@@ -321,6 +327,9 @@ async def send_top_scorers_image(update: Update, context: ContextTypes.DEFAULT_T
     ]
     markup = InlineKeyboardMarkup(keyboard)
 
+    target_chat_id = query.message.chat_id if query and query.message else (update.effective_chat.id if update.effective_chat else update.effective_user.id)
+    thread_id = query.message.message_thread_id if query and query.message and query.message.is_topic_message else None
+
     if query and query.message:
         try:
             await query.message.delete()
@@ -328,7 +337,8 @@ async def send_top_scorers_image(update: Update, context: ContextTypes.DEFAULT_T
             pass
 
     await context.bot.send_photo(
-        chat_id=update.effective_user.id,
+        chat_id=target_chat_id,
+        message_thread_id=thread_id,
         photo=buf,
         caption="<b>⚽ ТОП БОМБАРДИРОВ КПЛ 2026</b>",
         parse_mode="HTML",
@@ -351,6 +361,9 @@ async def send_top_assisters_image(update: Update, context: ContextTypes.DEFAULT
     ]
     markup = InlineKeyboardMarkup(keyboard)
 
+    target_chat_id = query.message.chat_id if query and query.message else (update.effective_chat.id if update.effective_chat else update.effective_user.id)
+    thread_id = query.message.message_thread_id if query and query.message and query.message.is_topic_message else None
+
     if query and query.message:
         try:
             await query.message.delete()
@@ -358,7 +371,8 @@ async def send_top_assisters_image(update: Update, context: ContextTypes.DEFAULT
             pass
 
     await context.bot.send_photo(
-        chat_id=update.effective_user.id,
+        chat_id=target_chat_id,
+        message_thread_id=thread_id,
         photo=buf,
         caption="<b>🎯 ТОП АССИСТЕНТОВ КПЛ 2026</b>",
         parse_mode="HTML",
@@ -383,6 +397,8 @@ async def show_tournaments(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     markup = InlineKeyboardMarkup(keyboard)
 
     if query:
+        target_chat_id = query.message.chat_id if query.message else (update.effective_chat.id if update.effective_chat else update.effective_user.id)
+        thread_id = query.message.message_thread_id if query.message and query.message.is_topic_message else None
         try:
             await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
         except Exception:
@@ -390,7 +406,7 @@ async def show_tournaments(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 await query.message.delete()
             except Exception:
                 pass
-            await context.bot.send_message(chat_id=query.from_user.id, text=text, parse_mode="HTML", reply_markup=markup)
+            await context.bot.send_message(chat_id=target_chat_id, message_thread_id=thread_id, text=text, parse_mode="HTML", reply_markup=markup)
     elif update.message:
         await update.message.reply_text(text, parse_mode="HTML", reply_markup=markup)
 
@@ -723,12 +739,15 @@ async def show_league_table(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     keyboard = [[InlineKeyboardButton("« Назад в меню", callback_data="main_menu")]]
     markup = InlineKeyboardMarkup(keyboard)
 
+    target_chat_id = query.message.chat_id if query and query.message else (update.effective_chat.id if update.effective_chat else update.effective_user.id)
+    thread_id = query.message.message_thread_id if query and query.message and query.message.is_topic_message else None
+
     if query:
         try:
             await query.message.delete()
         except Exception:
             pass
-        await context.bot.send_photo(chat_id=query.from_user.id, photo=img_buf, caption=caption, parse_mode="HTML", reply_markup=markup)
+        await context.bot.send_photo(chat_id=target_chat_id, message_thread_id=thread_id, photo=img_buf, caption=caption, parse_mode="HTML", reply_markup=markup)
     elif update.message:
         await update.message.reply_photo(photo=img_buf, caption=caption, parse_mode="HTML", reply_markup=markup)
 
