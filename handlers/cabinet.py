@@ -228,8 +228,23 @@ async def show_cabinet(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             text = "⚠️ <b>Доступ ограничен</b>\n\nВы еще не зарегистрированы в системе лиги."
             keyboard = [[InlineKeyboardButton("« Назад в меню", callback_data="main_menu")]]
             markup = InlineKeyboardMarkup(keyboard)
-            if query:
-                await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
+            target_chat_id = query.message.chat_id if query and query.message else (update.effective_chat.id if update.effective_chat else update.effective_user.id)
+            thread_id = query.message.message_thread_id if query and query.message and query.message.is_topic_message else None
+            if query and query.message and (query.message.photo or query.message.document):
+                try:
+                    await query.message.delete()
+                except Exception:
+                    pass
+                await context.bot.send_message(chat_id=target_chat_id, message_thread_id=thread_id, text=text, parse_mode="HTML", reply_markup=markup)
+            elif query:
+                try:
+                    await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
+                except Exception:
+                    try:
+                        await query.message.delete()
+                    except Exception:
+                        pass
+                    await context.bot.send_message(chat_id=target_chat_id, message_thread_id=thread_id, text=text, parse_mode="HTML", reply_markup=markup)
             elif update.message:
                 await update.message.reply_text(text, parse_mode="HTML", reply_markup=markup)
             return
@@ -274,7 +289,16 @@ async def show_cabinet(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     ]
     markup = InlineKeyboardMarkup(keyboard)
 
-    if query:
+    target_chat_id = query.message.chat_id if query and query.message else (update.effective_chat.id if update.effective_chat else update.effective_user.id)
+    thread_id = query.message.message_thread_id if query and query.message and query.message.is_topic_message else None
+
+    if query and query.message and (query.message.photo or query.message.document):
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
+        await context.bot.send_message(chat_id=target_chat_id, message_thread_id=thread_id, text=text, parse_mode="HTML", reply_markup=markup)
+    elif query:
         try:
             await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
         except Exception:
@@ -282,7 +306,7 @@ async def show_cabinet(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 await query.message.delete()
             except Exception:
                 pass
-            await context.bot.send_message(chat_id=user.id, text=text, parse_mode="HTML", reply_markup=markup)
+            await context.bot.send_message(chat_id=target_chat_id, message_thread_id=thread_id, text=text, parse_mode="HTML", reply_markup=markup)
     elif update.message:
         await update.message.reply_text(text, parse_mode="HTML", reply_markup=markup)
 
