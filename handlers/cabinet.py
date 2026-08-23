@@ -448,8 +448,8 @@ async def show_player_card(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 async def send_or_edit_club_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE, team_name: str, back_cb: str | None = None) -> None:
     """Send or edit high-res graphic schedule and results card for a club."""
     query = update.callback_query
-    user = update.effective_user
-    chat_id = query.from_user.id if query else (user.id if user else update.effective_chat.id)
+    msg = update.effective_message
+    chat = update.effective_chat
 
     canon = database.resolve_team_name(team_name) or team_name
     schedule_data = await asyncio.to_thread(database.get_club_schedule_and_results, canon, 12)
@@ -469,19 +469,37 @@ async def send_or_edit_club_schedule(update: Update, context: ContextTypes.DEFAU
     markup = InlineKeyboardMarkup(keyboard)
     caption = f"📅 <b>МАТЧИ И РАСПИСАНИЕ: {html.escape(canon.upper())}</b>"
 
-    if query and query.message:
-        try:
-            await query.message.delete()
-        except Exception:
-            pass
-
-    await context.bot.send_photo(
-        chat_id=chat_id,
-        photo=buf,
-        caption=caption,
-        parse_mode="HTML",
-        reply_markup=markup
-    )
+    if query:
+        if query.message:
+            try:
+                await query.message.delete()
+            except Exception:
+                pass
+        target_chat_id = query.message.chat_id if query.message else (chat.id if chat else update.effective_user.id)
+        thread_id = query.message.message_thread_id if query.message and query.message.is_topic_message else None
+        await context.bot.send_photo(
+            chat_id=target_chat_id,
+            message_thread_id=thread_id,
+            photo=buf,
+            caption=caption,
+            parse_mode="HTML",
+            reply_markup=markup
+        )
+    elif msg:
+        await msg.reply_photo(
+            photo=buf,
+            caption=caption,
+            parse_mode="HTML",
+            reply_markup=markup
+        )
+    elif chat:
+        await context.bot.send_photo(
+            chat_id=chat.id,
+            photo=buf,
+            caption=caption,
+            parse_mode="HTML",
+            reply_markup=markup
+        )
 
 
 async def show_my_matches_stub(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -520,8 +538,8 @@ async def get_cached_or_fetch_user_avatar(bot, user_id: int | None) -> str | Non
 async def send_or_edit_club_card(update: Update, context: ContextTypes.DEFAULT_TYPE, team_name: str, back_cb: str = "cb_clubs_catalog") -> None:
     """Send or edit the high-res graphic club card with compact inline keyboard and no wall of text."""
     query = update.callback_query
-    user = update.effective_user
-    chat_id = query.from_user.id if query else (user.id if user else update.effective_chat.id)
+    msg = update.effective_message
+    chat = update.effective_chat
 
     canon = database.resolve_team_name(team_name) or team_name
     card_data = await asyncio.to_thread(database.get_club_card_data, canon)
@@ -547,19 +565,37 @@ async def send_or_edit_club_card(update: Update, context: ContextTypes.DEFAULT_T
     markup = InlineKeyboardMarkup(keyboard)
     caption = f"🏛 <b>{html.escape(canon.upper())}</b>"
 
-    if query and query.message:
-        try:
-            await query.message.delete()
-        except Exception:
-            pass
-
-    await context.bot.send_photo(
-        chat_id=chat_id,
-        photo=buf,
-        caption=caption,
-        parse_mode="HTML",
-        reply_markup=markup
-    )
+    if query:
+        if query.message:
+            try:
+                await query.message.delete()
+            except Exception:
+                pass
+        target_chat_id = query.message.chat_id if query.message else (chat.id if chat else update.effective_user.id)
+        thread_id = query.message.message_thread_id if query.message and query.message.is_topic_message else None
+        await context.bot.send_photo(
+            chat_id=target_chat_id,
+            message_thread_id=thread_id,
+            photo=buf,
+            caption=caption,
+            parse_mode="HTML",
+            reply_markup=markup
+        )
+    elif msg:
+        await msg.reply_photo(
+            photo=buf,
+            caption=caption,
+            parse_mode="HTML",
+            reply_markup=markup
+        )
+    elif chat:
+        await context.bot.send_photo(
+            chat_id=chat.id,
+            photo=buf,
+            caption=caption,
+            parse_mode="HTML",
+            reply_markup=markup
+        )
 
 
 async def show_my_club_card(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

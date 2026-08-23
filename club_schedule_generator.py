@@ -1,7 +1,7 @@
 import os
 import io
 from PIL import Image, ImageDraw, ImageFont
-from table_generator import TEAM_LOGO_MAP, load_font
+from table_generator import get_team_logo_filename, load_font
 
 BASE_DIR = os.path.dirname(__file__)
 LOGOS_DIR = os.path.join(BASE_DIR, "assets", "logos")
@@ -56,11 +56,13 @@ _logo_cache: dict[str, Image.Image] = {}
 
 def _get_club_logo(team_name: str, size: int) -> Image.Image | None:
     """Retrieve resized club logo with caching."""
+    if not team_name:
+        return None
     key = f"{team_name.lower()}_{size}"
     if key in _logo_cache:
         return _logo_cache[key]
 
-    logo_file = TEAM_LOGO_MAP.get(team_name.lower())
+    logo_file = get_team_logo_filename(team_name)
     if not logo_file:
         return None
 
@@ -100,8 +102,6 @@ def generate_club_schedule(data: dict, max_matches: int = 12) -> io.BytesIO:
     HEADER_H = 88 * SCALE
     FOOTER_H = 30 * SCALE
 
-    # Match row height:
-    # Basic row without scorers: 56 * SCALE, with scorers: 76 * SCALE
     row_heights = []
     for m in matches:
         if m.get("scorers"):
@@ -146,7 +146,7 @@ def generate_club_schedule(data: dict, max_matches: int = 12) -> io.BytesIO:
     text_x = logo_x + logo_size + 18 * SCALE
     draw.text((text_x, curr_y + 2 * SCALE), team_name.upper(), font=font_title, fill=WHITE)
 
-    sub_title = "📅 РАСПИСАНИЕ И РЕЗУЛЬТАТЫ МАТЧЕЙ • КПЛ 2026"
+    sub_title = "РАСПИСАНИЕ И РЕЗУЛЬТАТЫ МАТЧЕЙ • КПЛ 2026"
     draw.text((text_x, curr_y + 44 * SCALE), sub_title, font=font_sub, fill=TEXT_SECONDARY)
 
     # Right Stats Pill (Played / Upcoming)
@@ -260,29 +260,38 @@ def generate_club_schedule(data: dict, max_matches: int = 12) -> io.BytesIO:
             out_y = curr_y + 15 * SCALE
 
             if outcome == "W":
-                out_fill, out_lbl = (20, 48, 30), "🟢 ПОБЕДА"
+                out_fill, out_lbl = (20, 48, 30), "ПОБЕДА"
                 out_txt_c = WIN_COLOR
+                dot_c = WIN_COLOR
             elif outcome == "D":
-                out_fill, out_lbl = (48, 40, 20), "🟡 НИЧЬЯ"
+                out_fill, out_lbl = (48, 40, 20), "НИЧЬЯ"
                 out_txt_c = DRAW_COLOR
+                dot_c = DRAW_COLOR
             elif outcome == "L":
-                out_fill, out_lbl = (48, 20, 20), "🔴 ПОРАЖЕНИЕ"
+                out_fill, out_lbl = (48, 20, 20), "ПОРАЖЕНИЕ"
                 out_txt_c = LOSS_COLOR
+                dot_c = LOSS_COLOR
             else:
-                out_fill, out_lbl = (28, 32, 44), "⏳ ПРЕДСТОИТ"
+                out_fill, out_lbl = (28, 32, 44), "ПРЕДСТОИТ"
                 out_txt_c = MUTED
+                dot_c = MUTED
 
             _draw_rounded_rect(draw, (out_x, out_y, out_x + out_w, out_y + out_h),
                                radius=6 * SCALE, fill=out_fill)
+            
+            # Draw colored dot + text
+            dot_r = 3 * SCALE
+            draw.ellipse((out_x + 8 * SCALE, out_y + 11 * SCALE, out_x + 8 * SCALE + dot_r * 2, out_y + 11 * SCALE + dot_r * 2), fill=dot_c)
+            
             o_bbox = draw.textbbox((0, 0), out_lbl, font=font_badge_sm)
-            draw.text((out_x + (out_w - (o_bbox[2] - o_bbox[0])) // 2,
+            draw.text((out_x + 18 * SCALE + (out_w - 24 * SCALE - (o_bbox[2] - o_bbox[0])) // 2,
                        out_y + (out_h - (o_bbox[3] - o_bbox[1])) // 2),
                       out_lbl, font=font_badge_sm, fill=out_txt_c)
 
             # Subrow: Goalscorers
             scorers = m.get("scorers") or []
             if scorers:
-                sc_str = f"⚽ Голы клуба: {', '.join(scorers)}"
+                sc_str = f"Голы клуба: {', '.join(scorers)}"
                 draw.text((CARD_PADDING + 18 * SCALE, curr_y + 50 * SCALE), sc_str, font=font_scorers, fill=MUTED)
 
             curr_y += rh + 10 * SCALE

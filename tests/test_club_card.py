@@ -170,6 +170,36 @@ class TestClubCard(unittest.TestCase):
         self.assertGreater(len(buf_bytes), 1000)
         self.assertTrue(buf_bytes.startswith(b'\x89PNG\r\n\x1a\n'))
 
+    def test_racing_logo_lookup(self):
+        """Test that get_team_logo_filename finds racing.png for 'Расинг' case-insensitively."""
+        from table_generator import get_team_logo_filename
+        import club_card_generator
+        logo = get_team_logo_filename("Расинг")
+        self.assertEqual(logo, "racing.png")
+        logo_lower = get_team_logo_filename("расинг")
+        self.assertEqual(logo_lower, "racing.png")
+
+        # Test generating card for Racing
+        card_data = {
+            "team_name": "Расинг",
+            "manager": {"username": "ch1lyx", "warn_count": 1, "telegram_id": 99999},
+            "league_stats": {
+                "rank": 1, "played": 23, "wins": 18, "draws": 1, "losses": 4,
+                "goals_scored": 80, "goals_conceded": 32, "goal_diff": 48, "points": 55
+            },
+            "recent_form": ["L", "W", "L", "W", "W"],
+            "cup_stats": {
+                "stage": "FINAL", "opponent": "Брага", "club_wins": 3, "opp_wins": 2, "status": "completed"
+            },
+            "top_scorers": [{"player_name": "Giacomo Raspadori", "goals": 36}],
+            "top_assists": [{"player_name": "Jamie Bynoe-Gittens", "assists": 23}],
+            "squad_count": 11,
+            "debts_count": 7
+        }
+        buf = club_card_generator.generate_club_card(card_data)
+        self.assertIsNotNone(buf)
+        self.assertTrue(buf.getvalue().startswith(b'\x89PNG\r\n\x1a\n'))
+
 
 if __name__ == "__main__":
     unittest.main()

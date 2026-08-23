@@ -1,7 +1,7 @@
 import os
 import io
 from PIL import Image, ImageDraw, ImageFont
-from table_generator import TEAM_LOGO_MAP, load_font
+from table_generator import get_team_logo_filename, load_font
 
 BASE_DIR = os.path.dirname(__file__)
 LOGOS_DIR = os.path.join(BASE_DIR, "assets", "logos")
@@ -60,6 +60,7 @@ def generate_club_card(data: dict, avatar_path: str | None = None) -> io.BytesIO
     """
     Generate a high-res 2x supersampled Club Stats Card image.
     Includes Club Logo at top, key stats, form, leaders, and Owner Avatar/Tag at bottom.
+    Pure typography without emoji glyphs to prevent missing font boxes on Linux.
     """
     team_name    = data.get("team_name", "Клуб")
     manager      = data.get("manager")
@@ -108,7 +109,7 @@ def generate_club_card(data: dict, avatar_path: str | None = None) -> io.BytesIO
 
     # ── 1. HEADER (Club Logo + Name + Rank Badge + Meta) ───────────────────
     logo_size = 78 * SCALE
-    logo_file = TEAM_LOGO_MAP.get(team_name.lower())
+    logo_file = get_team_logo_filename(team_name)
     logo_img = None
     if logo_file:
         full_logo_path = os.path.join(LOGOS_DIR, logo_file)
@@ -139,9 +140,9 @@ def generate_club_card(data: dict, avatar_path: str | None = None) -> io.BytesIO
     # Club Name
     draw.text((text_x, curr_y + 4 * SCALE), team_name.upper(), font=font_title, fill=WHITE)
 
-    # Squad & Debts subline in header
-    debt_str = f"⚠️ Долги: {debts_count}" if debts_count > 0 else "🟢 Без долгов"
-    meta_str = f"📋 Заявка: {squad_count} игр.  •  {debt_str}  •  КПЛ 2026"
+    # Squad & Debts subline in header (Text only without emoji boxes)
+    debt_str = f"Долги: {debts_count}" if debts_count > 0 else "Без долгов"
+    meta_str = f"Заявка: {squad_count} игр.  •  {debt_str}  •  КПЛ 2026"
     draw.text((text_x, curr_y + 48 * SCALE), meta_str, font=font_sub, fill=TEXT_SECONDARY)
 
     # Rank Badge on Right
@@ -232,13 +233,22 @@ def generate_club_card(data: dict, avatar_path: str | None = None) -> io.BytesIO
         _draw_rounded_rect(draw, (CARD_PADDING, curr_y, CARD_WIDTH - CARD_PADDING, curr_y + CUP_BAR_H),
                            radius=12 * SCALE, fill=CUP_SURFACE, outline=CUP_BORDER, width=2)
         
-        stage_name = cup.get("stage", "1/8")
+        stage_raw = str(cup.get("stage", "1/8")).upper()
+        if "ФИНАЛ" in stage_raw:
+            stage_display = stage_raw
+        elif stage_raw in ("1/8", "1/4", "1/2"):
+            stage_display = f"{stage_raw} ФИНАЛА"
+        elif "FINAL" in stage_raw:
+            stage_display = stage_raw.replace("FINAL", "ФИНАЛ")
+        else:
+            stage_display = f"{stage_raw} ФИНАЛА"
+
         opp = cup.get("opponent", "Соперник")
         c_w = cup.get("club_wins", 0)
         o_w = cup.get("opp_wins", 0)
         status = cup.get("status", "active")
         
-        title_text = f"🏆 КУБОК КПЛ 2026  •  {stage_name.upper()} ФИНАЛА"
+        title_text = f"КУБОК КПЛ 2026  •  {stage_display}"
         draw.text((CARD_PADDING + 18 * SCALE, curr_y + 14 * SCALE), title_text, font=font_row_hd, fill=CUP_GOLD)
 
         cup_desc = f"Серия против «{opp}»  |  Счёт серии: {c_w} : {o_w}  |  {'Завершена' if status == 'completed' else 'В процессе'}"
@@ -255,7 +265,7 @@ def generate_club_card(data: dict, avatar_path: str | None = None) -> io.BytesIO
     
     _draw_rounded_rect(draw, (CARD_PADDING + 4 * SCALE, curr_y + 4 * SCALE, CARD_PADDING + half_w - 4 * SCALE, curr_y + 36 * SCALE),
                        radius=10 * SCALE, fill=SURFACE_ALT)
-    draw.text((CARD_PADDING + 16 * SCALE, curr_y + 10 * SCALE), "⚽ БОМБАРДИРЫ КЛУБА", font=font_row_hd, fill=GOAL_COLOR)
+    draw.text((CARD_PADDING + 16 * SCALE, curr_y + 10 * SCALE), "БОМБАРДИРЫ КЛУБА", font=font_row_hd, fill=GOAL_COLOR)
 
     if not top_scorers:
         draw.text((CARD_PADDING + 18 * SCALE, curr_y + 54 * SCALE), "Нет забитых голов", font=font_sub, fill=MUTED)
@@ -268,7 +278,7 @@ def generate_club_card(data: dict, avatar_path: str | None = None) -> io.BytesIO
             draw.text((CARD_PADDING + 16 * SCALE, sy + 2 * SCALE), f"{s_idx + 1}.", font=font_lbl, fill=MUTED)
             draw.text((CARD_PADDING + 36 * SCALE, sy + 2 * SCALE), p_n, font=font_row_val, fill=WHITE)
             
-            g_str = f"{p_g} ⚽"
+            g_str = f"{p_g} Г"
             g_bbox = draw.textbbox((0, 0), g_str, font=font_pill)
             pill_w = (g_bbox[2] - g_bbox[0]) + 16 * SCALE
             pill_h = 24 * SCALE
@@ -284,7 +294,7 @@ def generate_club_card(data: dict, avatar_path: str | None = None) -> io.BytesIO
     
     _draw_rounded_rect(draw, (right_x + 4 * SCALE, curr_y + 4 * SCALE, right_x + half_w - 4 * SCALE, curr_y + 36 * SCALE),
                        radius=10 * SCALE, fill=SURFACE_ALT)
-    draw.text((right_x + 16 * SCALE, curr_y + 10 * SCALE), "🎯 АССИСТЕНТЫ КЛУБА", font=font_row_hd, fill=ASSIST_COLOR)
+    draw.text((right_x + 16 * SCALE, curr_y + 10 * SCALE), "АССИСТЕНТЫ КЛУБА", font=font_row_hd, fill=ASSIST_COLOR)
 
     if not top_assists:
         draw.text((right_x + 18 * SCALE, curr_y + 54 * SCALE), "Нет голевых передач", font=font_sub, fill=MUTED)
@@ -297,7 +307,7 @@ def generate_club_card(data: dict, avatar_path: str | None = None) -> io.BytesIO
             draw.text((right_x + 16 * SCALE, ay + 2 * SCALE), f"{a_idx + 1}.", font=font_lbl, fill=MUTED)
             draw.text((right_x + 36 * SCALE, ay + 2 * SCALE), p_n, font=font_row_val, fill=WHITE)
             
-            a_str = f"{p_a} 🎯"
+            a_str = f"{p_a} А"
             a_bbox = draw.textbbox((0, 0), a_str, font=font_pill)
             pill_w = (a_bbox[2] - a_bbox[0]) + 16 * SCALE
             pill_h = 24 * SCALE

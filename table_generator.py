@@ -30,6 +30,55 @@ TEAM_LOGO_MAP = {
     "АЕК": "aek.png"
 }
 
+# Also ensure lowercase keys are directly present
+for _k, _v in list(TEAM_LOGO_MAP.items()):
+    TEAM_LOGO_MAP[_k.lower()] = _v
+
+
+def get_team_logo_filename(team_name: str) -> str | None:
+    """Case-insensitive and alias-aware club logo filename lookup."""
+    if not team_name:
+        return None
+    canon = database.resolve_team_name(team_name) or team_name
+    t_clean = canon.strip().lower()
+    for k, v in TEAM_LOGO_MAP.items():
+        if k.lower() == t_clean:
+            return v
+    if "расинг" in t_clean or "racing" in t_clean:
+        return "racing.png"
+    if "аек" in t_clean or "aek" in t_clean:
+        return "aek.png"
+    if "фейено" in t_clean or "feyen" in t_clean:
+        return "feyenoord.png"
+    if "буд" in t_clean or "bodo" in t_clean:
+        return "bodo_glimt.png"
+    if "бока" in t_clean or "boca" in t_clean:
+        return "boca_juniors.png"
+    if "ривер" in t_clean or "river" in t_clean:
+        return "river_plate.png"
+    if "копен" in t_clean or "copen" in t_clean:
+        return "copenhagen.png"
+    if "спортинг" in t_clean or "sporting" in t_clean:
+        return "sporting.png"
+    if "рейнджер" in t_clean or "ranger" in t_clean:
+        return "rangers.png"
+    if "брюг" in t_clean or "brugg" in t_clean:
+        return "brugge.png"
+    if "браг" in t_clean or "braga" in t_clean:
+        return "braga.png"
+    if "аякс" in t_clean or "ajax" in t_clean:
+        return "ajax.png"
+    if "псв" in t_clean or "psv" in t_clean:
+        return "psv.png"
+    if "порт" in t_clean or "porto" in t_clean:
+        return "porto.png"
+    if "селтик" in t_clean or "celtic" in t_clean:
+        return "celtic.png"
+    if "бенфик" in t_clean or "benfica" in t_clean:
+        return "benfica.png"
+    return None
+
+
 SCALE = 2  # 2x Supersampling for Retina broadcast sharpness
 
 
