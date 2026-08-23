@@ -9,35 +9,40 @@ LOGOS_DIR = os.path.join(BASE_DIR, "assets", "logos")
 SCALE = 2
 
 # Card dimensions (1x base)
-CARD_WIDTH_1X   = 740
-CARD_PADDING_1X = 32
+CARD_WIDTH_1X   = 760
+CARD_PADDING_1X = 28
 
 CARD_WIDTH   = CARD_WIDTH_1X * SCALE
 CARD_PADDING = CARD_PADDING_1X * SCALE
 
-# Modern EA FC / Dark Premium UI Colors
-BG_GRAD_TOP    = (14, 16, 22)        # #0E1016
-BG_GRAD_BOT    = (20, 23, 32)        # #141720
-SURFACE_COLOR  = (26, 30, 42)        # #1A1E2A
-SURFACE_ALT    = (22, 25, 36)        # #161924
-BORDER_COLOR   = (46, 52, 70)        # #2E3446
-BORDER_LIGHT   = (65, 74, 98)        # #414A62
+# ── Color Palette (EA FC 25 / FUT Champions Dark Luxury) ────────────────────
+BG_GRAD_TOP    = (12, 14, 20)        # #0C0E14
+BG_GRAD_BOT    = (18, 21, 30)        # #12151E
+SURFACE_COLOR  = (24, 28, 38)        # #181C26
+SURFACE_ALT    = (19, 22, 31)        # #13161F
+BORDER_COLOR   = (42, 48, 66)        # #2A3042
+BORDER_LIGHT   = (60, 70, 96)        # #3C4660
 
-CUP_SURFACE    = (38, 32, 20)        # Gold tinted luxury surface
-CUP_BORDER     = (110, 85, 32)
+CUP_SURFACE    = (36, 30, 16)        # Gold tinted luxury surface
+CUP_BORDER     = (120, 92, 30)
 CUP_GOLD       = (251, 191, 36)      # #FBBF24
 
 WHITE          = (255, 255, 255)
-MUTED          = (148, 163, 184)     # #94A3B8
-TEXT_SECONDARY = (203, 213, 225)     # #CBD5E1
+MUTED          = (135, 150, 172)     # #8796AC
+TEXT_SECONDARY = (200, 210, 224)     # #C8D2E0
 
 WIN_COLOR      = (34, 197, 94)       # #22C55E  green
 DRAW_COLOR     = (245, 158, 11)      # #F59E0B  amber
 LOSS_COLOR     = (239, 68, 68)       # #EF4444  red
 ACCENT_CYAN    = (56, 189, 248)      # #38BDF8  sky blue
+ACCENT_PURPLE  = (168, 85, 247)      # #A855F7
 
 GOAL_COLOR     = (34, 197, 94)       # #22C55E
 ASSIST_COLOR   = (56, 189, 248)      # #38BDF8
+
+GOLD_RANK      = (251, 191, 36)      # 1st place gold
+SILVER_RANK    = (203, 213, 225)     # 2nd place silver
+BRONZE_RANK    = (217, 140, 74)      # 3rd place bronze
 
 
 def _draw_rounded_rect(draw: ImageDraw.ImageDraw, xy: tuple, radius: int, fill: tuple, outline: tuple | None = None, width: int = 1):
@@ -56,11 +61,34 @@ def _draw_vertical_gradient(img: Image.Image, top_color: tuple, bot_color: tuple
         draw.line([(0, y), (w, y)], fill=(r, g, b, 255))
 
 
-# ── Custom Vector Icon Renderers (Zero missing glyphs across all OS) ─────────
+def _clean_white_background_if_needed(img: Image.Image) -> Image.Image:
+    """Remove rectangular white backgrounds from logos and convert to alpha transparent."""
+    img = img.convert("RGBA")
+    w, h = img.size
+    if w == 0 or h == 0:
+        return img
 
-def _draw_ball_icon(draw: ImageDraw.ImageDraw, x: int, y: int, size: int = 16 * SCALE):
+    corners = [img.getpixel((0, 0)), img.getpixel((w - 1, 0)), img.getpixel((0, h - 1)), img.getpixel((w - 1, h - 1))]
+    has_white_corner = any(c[0] > 240 and c[1] > 240 and c[2] > 240 and c[3] > 200 for c in corners)
+
+    if has_white_corner:
+        datas = img.getdata()
+        new_data = []
+        for item in datas:
+            # If near pure white, make transparent
+            if item[0] > 245 and item[1] > 245 and item[2] > 245:
+                new_data.append((255, 255, 255, 0))
+            else:
+                new_data.append(item)
+        img.putdata(new_data)
+    return img
+
+
+# ── Custom Vector Icon Renderers (100% Reliable Cross-Platform) ──────────────
+
+def _draw_ball_icon(draw: ImageDraw.ImageDraw, x: int, y: int, size: int = 15 * SCALE):
     """Draw a clean vector soccer ball icon."""
-    draw.ellipse((x, y, x + size, y + size), fill=(245, 248, 255), outline=(100, 115, 140), width=1)
+    draw.ellipse((x, y, x + size, y + size), fill=(245, 248, 255), outline=(90, 105, 130), width=1)
     cx, cy = x + size / 2, y + size / 2
     p_r = size * 0.28
     draw.polygon([
@@ -69,10 +97,10 @@ def _draw_ball_icon(draw: ImageDraw.ImageDraw, x: int, y: int, size: int = 16 * 
         (cx + p_r * 0.59, cy + p_r * 0.81),
         (cx - p_r * 0.59, cy + p_r * 0.81),
         (cx - p_r * 0.95, cy - p_r * 0.31),
-    ], fill=(24, 28, 38))
+    ], fill=(22, 26, 36))
 
 
-def _draw_target_icon(draw: ImageDraw.ImageDraw, x: int, y: int, size: int = 16 * SCALE, color: tuple = ASSIST_COLOR):
+def _draw_target_icon(draw: ImageDraw.ImageDraw, x: int, y: int, size: int = 15 * SCALE, color: tuple = ASSIST_COLOR):
     """Draw a precision assist target icon."""
     draw.ellipse((x, y, x + size, y + size), outline=color, width=2 * SCALE)
     mid_pad = size * 0.25
@@ -82,7 +110,7 @@ def _draw_target_icon(draw: ImageDraw.ImageDraw, x: int, y: int, size: int = 16 
     draw.line([(cx, y - 2 * SCALE), (cx, y + size + 2 * SCALE)], fill=color, width=1 * SCALE)
 
 
-def _draw_trophy_icon(draw: ImageDraw.ImageDraw, x: int, y: int, size: int = 18 * SCALE, color: tuple = CUP_GOLD):
+def _draw_trophy_icon(draw: ImageDraw.ImageDraw, x: int, y: int, size: int = 16 * SCALE, color: tuple = CUP_GOLD):
     """Draw a luxury gold cup trophy icon."""
     bowl_top_w = size * 0.7
     bowl_bot_w = size * 0.35
@@ -102,13 +130,13 @@ def _draw_trophy_icon(draw: ImageDraw.ImageDraw, x: int, y: int, size: int = 18 
     draw.arc((x + size * 0.65, y + 2 * SCALE, x + size, y + bowl_h * 0.85), start=270, end=90, fill=color, width=2 * SCALE)
 
     # Stem & Base
-    draw.rectangle((cx - 2 * SCALE, y + bowl_h, cx + 2 * SCALE, y + size * 0.75), fill=color)
+    draw.rectangle((cx - 1 * SCALE, y + bowl_h, cx + 1 * SCALE, y + size * 0.75), fill=color)
     base_w = size * 0.55
     draw.rounded_rectangle((cx - base_w / 2, y + size * 0.75, cx + base_w / 2, y + size), radius=2 * SCALE, fill=color)
 
 
-def _draw_warning_icon(draw: ImageDraw.ImageDraw, x: int, y: int, size: int = 14 * SCALE, color: tuple = DRAW_COLOR):
-    """Draw an amber warning triangle icon."""
+def _draw_warning_icon(draw: ImageDraw.ImageDraw, x: int, y: int, size: int = 13 * SCALE, color: tuple = LOSS_COLOR):
+    """Draw an amber/red warning triangle icon."""
     cx = x + size / 2
     draw.polygon([
         (cx, y),
@@ -119,7 +147,7 @@ def _draw_warning_icon(draw: ImageDraw.ImageDraw, x: int, y: int, size: int = 14
     draw.point([(cx, y + size * 0.82)], fill=(20, 20, 20))
 
 
-def _draw_shield_check_icon(draw: ImageDraw.ImageDraw, x: int, y: int, size: int = 14 * SCALE, color: tuple = WIN_COLOR):
+def _draw_shield_check_icon(draw: ImageDraw.ImageDraw, x: int, y: int, size: int = 13 * SCALE, color: tuple = WIN_COLOR):
     """Draw a green checkmark circle icon."""
     draw.ellipse((x, y, x + size, y + size), fill=color)
     cx, cy = x + size / 2, y + size / 2
@@ -127,7 +155,7 @@ def _draw_shield_check_icon(draw: ImageDraw.ImageDraw, x: int, y: int, size: int
     draw.line([(cx - 1 * SCALE, cy + 3 * SCALE), (cx + 4 * SCALE, cy - 2 * SCALE)], fill=WHITE, width=2 * SCALE)
 
 
-def _draw_roster_icon(draw: ImageDraw.ImageDraw, x: int, y: int, size: int = 14 * SCALE, color: tuple = (148, 163, 184)):
+def _draw_roster_icon(draw: ImageDraw.ImageDraw, x: int, y: int, size: int = 13 * SCALE, color: tuple = (148, 163, 184)):
     """Draw a roster clipboard icon."""
     draw.rounded_rectangle((x, y, x + size * 0.85, y + size), radius=2 * SCALE, outline=color, width=1 * SCALE)
     draw.line([(x + 3 * SCALE, y + size * 0.35), (x + size * 0.6, y + size * 0.35)], fill=color, width=1 * SCALE)
@@ -135,11 +163,11 @@ def _draw_roster_icon(draw: ImageDraw.ImageDraw, x: int, y: int, size: int = 14 
     draw.line([(x + 3 * SCALE, y + size * 0.8), (x + size * 0.5, y + size * 0.8)], fill=color, width=1 * SCALE)
 
 
+# ── Main Club Card Generator ────────────────────────────────────────────────
+
 def generate_club_card(data: dict, avatar_path: str | None = None) -> io.BytesIO:
     """
-    Generate a high-res 2x supersampled Club Stats Card image.
-    Includes Club Logo at top, key stats, form, leaders, and Owner Avatar/Tag at bottom.
-    Features vector icon rendering for reliable presentation on all platforms.
+    Generate an immaculate, high-res 2x supersampled EA FC / FUT Champions Club Stats Card.
     """
     team_name    = data.get("team_name", "Клуб")
     manager      = data.get("manager")
@@ -163,17 +191,18 @@ def generate_club_card(data: dict, avatar_path: str | None = None) -> io.BytesIO
     font_row_hd  = load_font(13 * SCALE, bold=True)
     font_row_val = load_font(13 * SCALE)
     font_pill    = load_font(13 * SCALE, bold=True)
+    font_rank_num= load_font(12 * SCALE, bold=True)
     font_owner   = load_font(17 * SCALE, bold=True)
     font_sm      = load_font(11 * SCALE)
 
     # ── Dimensions ─────────────────────────────────────────────────────────
-    HEADER_H     = 100 * SCALE
-    STATS_BAR_H  = 84 * SCALE
+    HEADER_H     = 104 * SCALE
+    STATS_BAR_H  = 86 * SCALE
     FORM_BAR_H   = 58 * SCALE
     CUP_BAR_H    = (76 * SCALE) if cup else 0
-    LEADERS_H    = 156 * SCALE
-    OWNER_CARD_H = 70 * SCALE
-    FOOTER_H     = 32 * SCALE
+    LEADERS_H    = 162 * SCALE
+    OWNER_CARD_H = 74 * SCALE
+    FOOTER_H     = 30 * SCALE
 
     TOTAL_HEIGHT = CARD_PADDING * 2 + HEADER_H + STATS_BAR_H + FORM_BAR_H + CUP_BAR_H + LEADERS_H + OWNER_CARD_H + FOOTER_H + 54 * SCALE
 
@@ -186,58 +215,76 @@ def generate_club_card(data: dict, avatar_path: str | None = None) -> io.BytesIO
 
     curr_y = CARD_PADDING
 
-    # ── 1. HEADER (Club Logo + Name + Rank Badge + Meta) ───────────────────
-    logo_size = 78 * SCALE
+    # ── 1. HEADER (Club Crest Tile + Name + Meta Chips + Rank Badge) ──────
+    tile_size = 84 * SCALE
+    logo_pad  = 8 * SCALE
+    inner_logo_size = tile_size - logo_pad * 2
+
+    tile_x = CARD_PADDING
+    tile_y = curr_y + 4 * SCALE
+
+    # Squircle Crest Tile Background
+    _draw_rounded_rect(draw, (tile_x, tile_y, tile_x + tile_size, tile_y + tile_size),
+                       radius=18 * SCALE, fill=(22, 27, 38), outline=BORDER_LIGHT, width=2)
+
     logo_file = get_team_logo_filename(team_name)
     logo_img = None
     if logo_file:
         full_logo_path = os.path.join(LOGOS_DIR, logo_file)
         if os.path.exists(full_logo_path):
             try:
-                logo_img = Image.open(full_logo_path).convert("RGBA")
-                logo_img = logo_img.resize((logo_size, logo_size), Image.Resampling.LANCZOS)
+                raw_logo = Image.open(full_logo_path)
+                clean_logo = _clean_white_background_if_needed(raw_logo)
+                logo_img = clean_logo.resize((inner_logo_size, inner_logo_size), Image.Resampling.LANCZOS)
             except Exception:
                 logo_img = None
 
-    # Logo border circle / glow
-    logo_circle_x = CARD_PADDING
-    logo_circle_y = curr_y + 4 * SCALE
-    _draw_rounded_rect(draw, (logo_circle_x - 4 * SCALE, logo_circle_y - 4 * SCALE,
-                              logo_circle_x + logo_size + 4 * SCALE, logo_circle_y + logo_size + 4 * SCALE),
-                       radius=(logo_size + 8 * SCALE) // 2, fill=(20, 24, 34), outline=BORDER_LIGHT, width=2)
-
     if logo_img:
-        img.paste(logo_img, (logo_circle_x, logo_circle_y), logo_img)
+        img.paste(logo_img, (tile_x + logo_pad, tile_y + logo_pad), logo_img)
     else:
         initials = (team_name[:2]).upper()
         bbox = draw.textbbox((0, 0), initials, font=font_title)
-        draw.text((logo_circle_x + (logo_size - (bbox[2] - bbox[0])) // 2,
-                   logo_circle_y + (logo_size - (bbox[3] - bbox[1])) // 2), initials, font=font_title, fill=WHITE)
+        draw.text((tile_x + (tile_size - (bbox[2] - bbox[0])) // 2,
+                   tile_y + (tile_size - (bbox[3] - bbox[1])) // 2), initials, font=font_title, fill=WHITE)
 
-    text_x = logo_circle_x + logo_size + 20 * SCALE
+    text_x = tile_x + tile_size + 18 * SCALE
 
     # Club Name
-    draw.text((text_x, curr_y + 4 * SCALE), team_name.upper(), font=font_title, fill=WHITE)
+    draw.text((text_x, curr_y + 6 * SCALE), team_name.upper(), font=font_title, fill=WHITE)
 
-    # Squad & Debts subline with vector icon badges
-    sub_y = curr_y + 48 * SCALE
-    _draw_roster_icon(draw, text_x, sub_y + 1 * SCALE, size=13 * SCALE, color=TEXT_SECONDARY)
-    draw.text((text_x + 16 * SCALE, sub_y), f"Заявка: {squad_count} игр.", font=font_sub, fill=TEXT_SECONDARY)
+    # Meta Chips Row (Roster / Debts / League)
+    chip_y = curr_y + 52 * SCALE
+    
+    # 1. Roster Chip
+    chip1_w = 110 * SCALE
+    chip_h  = 26 * SCALE
+    _draw_rounded_rect(draw, (text_x, chip_y, text_x + chip1_w, chip_y + chip_h),
+                       radius=6 * SCALE, fill=SURFACE_ALT, outline=BORDER_COLOR, width=1)
+    _draw_roster_icon(draw, text_x + 8 * SCALE, chip_y + 6 * SCALE, size=13 * SCALE, color=TEXT_SECONDARY)
+    draw.text((text_x + 26 * SCALE, chip_y + 4 * SCALE), f"Заявка: {squad_count}", font=font_sm, fill=TEXT_SECONDARY)
 
-    dot1_x = text_x + 130 * SCALE
-    draw.text((dot1_x, sub_y), "•", font=font_sub, fill=MUTED)
-
-    debt_icon_x = dot1_x + 16 * SCALE
+    # 2. Debts Chip
+    chip2_x = text_x + chip1_w + 10 * SCALE
     if debts_count > 0:
-        _draw_warning_icon(draw, debt_icon_x, sub_y + 1 * SCALE, size=13 * SCALE, color=LOSS_COLOR)
-        draw.text((debt_icon_x + 17 * SCALE, sub_y), f"Долги: {debts_count}", font=font_sub, fill=LOSS_COLOR)
-        next_x = debt_icon_x + 85 * SCALE
+        chip2_w = 98 * SCALE
+        _draw_rounded_rect(draw, (chip2_x, chip_y, chip2_x + chip2_w, chip_y + chip_h),
+                           radius=6 * SCALE, fill=(48, 20, 24), outline=(239, 68, 68), width=1)
+        _draw_warning_icon(draw, chip2_x + 8 * SCALE, chip_y + 6 * SCALE, size=13 * SCALE, color=LOSS_COLOR)
+        draw.text((chip2_x + 25 * SCALE, chip_y + 4 * SCALE), f"Долги: {debts_count}", font=font_sm, fill=LOSS_COLOR)
+        chip3_x = chip2_x + chip2_w + 10 * SCALE
     else:
-        _draw_shield_check_icon(draw, debt_icon_x, sub_y + 1 * SCALE, size=13 * SCALE, color=WIN_COLOR)
-        draw.text((debt_icon_x + 17 * SCALE, sub_y), "Без долгов", font=font_sub, fill=WIN_COLOR)
-        next_x = debt_icon_x + 105 * SCALE
+        chip2_w = 116 * SCALE
+        _draw_rounded_rect(draw, (chip2_x, chip_y, chip2_x + chip2_w, chip_y + chip_h),
+                           radius=6 * SCALE, fill=(18, 42, 28), outline=(34, 197, 94), width=1)
+        _draw_shield_check_icon(draw, chip2_x + 8 * SCALE, chip_y + 6 * SCALE, size=13 * SCALE, color=WIN_COLOR)
+        draw.text((chip2_x + 25 * SCALE, chip_y + 4 * SCALE), "Без долгов", font=font_sm, fill=WIN_COLOR)
+        chip3_x = chip2_x + chip2_w + 10 * SCALE
 
-    draw.text((next_x, sub_y), "•  КПЛ 2026", font=font_sub, fill=MUTED)
+    # 3. League Chip
+    chip3_w = 92 * SCALE
+    _draw_rounded_rect(draw, (chip3_x, chip_y, chip3_x + chip3_w, chip_y + chip_h),
+                       radius=6 * SCALE, fill=SURFACE_ALT, outline=BORDER_COLOR, width=1)
+    draw.text((chip3_x + 10 * SCALE, chip_y + 4 * SCALE), "КПЛ 2026", font=font_sm, fill=MUTED)
 
     # Rank Badge on Right
     rank = l_stats.get("rank", 0)
@@ -245,19 +292,21 @@ def generate_club_card(data: dict, avatar_path: str | None = None) -> io.BytesIO
     rank_text = f"#{rank} МЕСТО" if rank > 0 else "ЛИГА КПЛ"
     pts_text  = f"{pts} PTS"
 
-    badge_w = 124 * SCALE
-    badge_h = 58 * SCALE
+    badge_w = 128 * SCALE
+    badge_h = 60 * SCALE
     badge_x = CARD_WIDTH - CARD_PADDING - badge_w
-    _draw_rounded_rect(draw, (badge_x, curr_y + 8 * SCALE, badge_x + badge_w, curr_y + 8 * SCALE + badge_h),
-                       radius=12 * SCALE, fill=(34, 30, 20), outline=CUP_BORDER, width=2)
+    badge_y = curr_y + 12 * SCALE
+
+    _draw_rounded_rect(draw, (badge_x, badge_y, badge_x + badge_w, badge_y + badge_h),
+                       radius=14 * SCALE, fill=(34, 28, 16), outline=CUP_BORDER, width=2)
     
     rb_bbox = draw.textbbox((0, 0), rank_text, font=font_badge)
-    draw.text((badge_x + (badge_w - (rb_bbox[2] - rb_bbox[0])) // 2, curr_y + 14 * SCALE), rank_text, font=font_badge, fill=CUP_GOLD)
+    draw.text((badge_x + (badge_w - (rb_bbox[2] - rb_bbox[0])) // 2, badge_y + 12 * SCALE), rank_text, font=font_badge, fill=CUP_GOLD)
     
     pb_bbox = draw.textbbox((0, 0), pts_text, font=font_badge_sm)
-    draw.text((badge_x + (badge_w - (pb_bbox[2] - pb_bbox[0])) // 2, curr_y + 37 * SCALE), pts_text, font=font_badge_sm, fill=WHITE)
+    draw.text((badge_x + (badge_w - (pb_bbox[2] - pb_bbox[0])) // 2, badge_y + 36 * SCALE), pts_text, font=font_badge_sm, fill=WHITE)
 
-    curr_y += HEADER_H + 10 * SCALE
+    curr_y += HEADER_H + 12 * SCALE
 
     # ── 2. STATS TILES (6 Columns: ИГРЫ / В / Н / П / ГОЛЫ / РАЗНИЦА) ─────
     _draw_rounded_rect(draw, (CARD_PADDING, curr_y, CARD_WIDTH - CARD_PADDING, curr_y + STATS_BAR_H),
@@ -298,7 +347,7 @@ def generate_club_card(data: dict, avatar_path: str | None = None) -> io.BytesIO
     draw.text((CARD_PADDING + 18 * SCALE, curr_y + 19 * SCALE), "ФОРМА (ПОСЛЕДНИЕ МАТЧИ В ЛИГЕ):", font=font_row_hd, fill=TEXT_SECONDARY)
 
     badge_start_x = CARD_WIDTH - CARD_PADDING - 16 * SCALE
-    b_size = 30 * SCALE
+    b_size = 32 * SCALE
     spacing = 8 * SCALE
 
     if not form:
@@ -315,7 +364,7 @@ def generate_club_card(data: dict, avatar_path: str | None = None) -> io.BytesIO
             else:
                 b_fill, b_text = LOSS_COLOR, 'П'
 
-            _draw_rounded_rect(draw, (bx, by, bx + b_size, by + b_size), radius=7 * SCALE, fill=b_fill)
+            _draw_rounded_rect(draw, (bx, by, bx + b_size, by + b_size), radius=8 * SCALE, fill=b_fill)
             t_bbox = draw.textbbox((0, 0), b_text, font=font_badge)
             draw.text((bx + (b_size - (t_bbox[2] - t_bbox[0])) // 2, by + (b_size - (t_bbox[3] - t_bbox[1])) // 2),
                       b_text, font=font_badge, fill=WHITE if outcome != 'D' else (20, 20, 20))
@@ -325,8 +374,12 @@ def generate_club_card(data: dict, avatar_path: str | None = None) -> io.BytesIO
     # ── 4. CUP BLOCK (If played/active in Cup) ─────────────────────────────
     if cup:
         _draw_rounded_rect(draw, (CARD_PADDING, curr_y, CARD_WIDTH - CARD_PADDING, curr_y + CUP_BAR_H),
-                           radius=12 * SCALE, fill=CUP_SURFACE, outline=CUP_BORDER, width=2)
+                           radius=14 * SCALE, fill=CUP_SURFACE, outline=CUP_BORDER, width=2)
         
+        # Left golden accent line
+        draw.line([(CARD_PADDING + 4 * SCALE, curr_y + 8 * SCALE), (CARD_PADDING + 4 * SCALE, curr_y + CUP_BAR_H - 8 * SCALE)],
+                  fill=CUP_GOLD, width=3 * SCALE)
+
         stage_raw = str(cup.get("stage", "1/8")).upper()
         if "ФИНАЛ" in stage_raw:
             stage_display = stage_raw
@@ -343,12 +396,12 @@ def generate_club_card(data: dict, avatar_path: str | None = None) -> io.BytesIO
         status = cup.get("status", "active")
         
         # Trophy vector icon in cup title
-        _draw_trophy_icon(draw, CARD_PADDING + 18 * SCALE, curr_y + 13 * SCALE, size=16 * SCALE, color=CUP_GOLD)
+        _draw_trophy_icon(draw, CARD_PADDING + 18 * SCALE, curr_y + 13 * SCALE, size=17 * SCALE, color=CUP_GOLD)
         title_text = f"КУБОК КПЛ 2026  •  {stage_display}"
-        draw.text((CARD_PADDING + 40 * SCALE, curr_y + 14 * SCALE), title_text, font=font_row_hd, fill=CUP_GOLD)
+        draw.text((CARD_PADDING + 42 * SCALE, curr_y + 14 * SCALE), title_text, font=font_row_hd, fill=CUP_GOLD)
 
         cup_desc = f"Серия против «{opp}»  |  Счёт серии: {c_w} : {o_w}  |  {'Завершена' if status == 'completed' else 'В процессе'}"
-        draw.text((CARD_PADDING + 18 * SCALE, curr_y + 41 * SCALE), cup_desc, font=font_sub, fill=TEXT_SECONDARY)
+        draw.text((CARD_PADDING + 18 * SCALE, curr_y + 42 * SCALE), cup_desc, font=font_sub, fill=TEXT_SECONDARY)
 
         curr_y += CUP_BAR_H + 12 * SCALE
 
@@ -368,26 +421,35 @@ def generate_club_card(data: dict, avatar_path: str | None = None) -> io.BytesIO
     if not top_scorers:
         draw.text((CARD_PADDING + 18 * SCALE, curr_y + 54 * SCALE), "Нет забитых голов", font=font_sub, fill=MUTED)
     else:
+        rank_colors = [GOLD_RANK, SILVER_RANK, BRONZE_RANK]
         for s_idx, sc in enumerate(top_scorers[:3]):
-            sy = curr_y + 48 * SCALE + s_idx * 34 * SCALE
+            sy = curr_y + 46 * SCALE + s_idx * 36 * SCALE
             p_n = sc["player_name"]
             p_g = sc["goals"]
             
-            draw.text((CARD_PADDING + 16 * SCALE, sy + 2 * SCALE), f"{s_idx + 1}.", font=font_lbl, fill=MUTED)
-            draw.text((CARD_PADDING + 36 * SCALE, sy + 2 * SCALE), p_n, font=font_row_val, fill=WHITE)
+            # Stylized rank badge circle
+            r_color = rank_colors[s_idx] if s_idx < len(rank_colors) else MUTED
+            draw.ellipse((CARD_PADDING + 14 * SCALE, sy + 3 * SCALE, CARD_PADDING + 30 * SCALE, sy + 19 * SCALE),
+                         fill=(28, 34, 48), outline=r_color, width=1 * SCALE)
+            r_text = str(s_idx + 1)
+            rb = draw.textbbox((0, 0), r_text, font=font_rank_num)
+            draw.text((CARD_PADDING + 14 * SCALE + (16 * SCALE - (rb[2] - rb[0])) // 2,
+                       sy + 3 * SCALE + (16 * SCALE - (rb[3] - rb[1])) // 2), r_text, font=font_rank_num, fill=r_color)
+
+            draw.text((CARD_PADDING + 38 * SCALE, sy + 3 * SCALE), p_n, font=font_row_val, fill=WHITE)
             
             # Goal pill badge with mini ball icon
             g_str = str(p_g)
             g_bbox = draw.textbbox((0, 0), g_str, font=font_pill)
             num_w = g_bbox[2] - g_bbox[0]
-            pill_w = num_w + 30 * SCALE
+            pill_w = num_w + 32 * SCALE
             pill_h = 24 * SCALE
             pill_x = CARD_PADDING + half_w - 14 * SCALE - pill_w
 
             _draw_rounded_rect(draw, (pill_x, sy, pill_x + pill_w, sy + pill_h),
-                               radius=6 * SCALE, fill=(20, 45, 30), outline=(34, 197, 94), width=1)
+                               radius=6 * SCALE, fill=(18, 42, 28), outline=(34, 197, 94), width=1)
             _draw_ball_icon(draw, pill_x + 6 * SCALE, sy + 5 * SCALE, size=14 * SCALE)
-            draw.text((pill_x + 24 * SCALE, sy + 2 * SCALE), g_str, font=font_pill, fill=GOAL_COLOR)
+            draw.text((pill_x + 25 * SCALE, sy + 2 * SCALE), g_str, font=font_pill, fill=GOAL_COLOR)
 
     # Right: Top Assists
     right_x = CARD_PADDING + half_w + 12 * SCALE
@@ -403,38 +465,47 @@ def generate_club_card(data: dict, avatar_path: str | None = None) -> io.BytesIO
     if not top_assists:
         draw.text((right_x + 18 * SCALE, curr_y + 54 * SCALE), "Нет голевых передач", font=font_sub, fill=MUTED)
     else:
+        rank_colors = [GOLD_RANK, SILVER_RANK, BRONZE_RANK]
         for a_idx, ac in enumerate(top_assists[:3]):
-            ay = curr_y + 48 * SCALE + a_idx * 34 * SCALE
+            ay = curr_y + 46 * SCALE + a_idx * 36 * SCALE
             p_n = ac["player_name"]
             p_a = ac["assists"]
             
-            draw.text((right_x + 16 * SCALE, ay + 2 * SCALE), f"{a_idx + 1}.", font=font_lbl, fill=MUTED)
-            draw.text((right_x + 36 * SCALE, ay + 2 * SCALE), p_n, font=font_row_val, fill=WHITE)
+            # Stylized rank badge circle
+            r_color = rank_colors[a_idx] if a_idx < len(rank_colors) else MUTED
+            draw.ellipse((right_x + 14 * SCALE, ay + 3 * SCALE, right_x + 30 * SCALE, ay + 19 * SCALE),
+                         fill=(28, 34, 48), outline=r_color, width=1 * SCALE)
+            r_text = str(a_idx + 1)
+            rb = draw.textbbox((0, 0), r_text, font=font_rank_num)
+            draw.text((right_x + 14 * SCALE + (16 * SCALE - (rb[2] - rb[0])) // 2,
+                       ay + 3 * SCALE + (16 * SCALE - (rb[3] - rb[1])) // 2), r_text, font=font_rank_num, fill=r_color)
+
+            draw.text((right_x + 38 * SCALE, ay + 3 * SCALE), p_n, font=font_row_val, fill=WHITE)
             
             # Assist pill badge with target icon
             a_str = str(p_a)
             a_bbox = draw.textbbox((0, 0), a_str, font=font_pill)
             num_w = a_bbox[2] - a_bbox[0]
-            pill_w = num_w + 30 * SCALE
+            pill_w = num_w + 32 * SCALE
             pill_h = 24 * SCALE
             pill_x = right_x + half_w - 14 * SCALE - pill_w
 
             _draw_rounded_rect(draw, (pill_x, ay, pill_x + pill_w, ay + pill_h),
-                               radius=6 * SCALE, fill=(18, 38, 55), outline=(56, 189, 248), width=1)
+                               radius=6 * SCALE, fill=(16, 36, 52), outline=(56, 189, 248), width=1)
             _draw_target_icon(draw, pill_x + 6 * SCALE, ay + 5 * SCALE, size=14 * SCALE, color=ASSIST_COLOR)
-            draw.text((pill_x + 24 * SCALE, ay + 2 * SCALE), a_str, font=font_pill, fill=ASSIST_COLOR)
+            draw.text((pill_x + 25 * SCALE, ay + 2 * SCALE), a_str, font=font_pill, fill=ASSIST_COLOR)
 
     curr_y += LEADERS_H + 14 * SCALE
 
-    # ── 6. OWNER / MANAGER FOOTER CARD (Avatar + Tag) ─────────────────────
+    # ── 6. OWNER / MANAGER FOOTER CARD (Avatar + Tag + Warn Dots) ─────────
     _draw_rounded_rect(draw, (CARD_PADDING, curr_y, CARD_WIDTH - CARD_PADDING, curr_y + OWNER_CARD_H),
                        radius=14 * SCALE, fill=SURFACE_COLOR, outline=BORDER_LIGHT, width=2)
 
-    av_size = 46 * SCALE
+    av_size = 50 * SCALE
     av_x = CARD_PADDING + 14 * SCALE
     av_y = curr_y + (OWNER_CARD_H - av_size) // 2
 
-    # Draw Owner Avatar (Telegram Profile Photo if available, or stylized initial badge)
+    # Draw Owner Avatar
     avatar_loaded = False
     if avatar_path and os.path.exists(avatar_path):
         try:
@@ -460,32 +531,32 @@ def generate_club_card(data: dict, avatar_path: str | None = None) -> io.BytesIO
 
     ow_text_x = av_x + av_size + 16 * SCALE
     owner_title = f"{mgr_name}" if manager else "Клуб свободен"
-    draw.text((ow_text_x, curr_y + 12 * SCALE), owner_title, font=font_owner, fill=WHITE if manager else MUTED)
+    draw.text((ow_text_x, curr_y + 13 * SCALE), owner_title, font=font_owner, fill=WHITE if manager else MUTED)
 
-    # Subtitle with shield/warn icon
-    mgr_sub_y = curr_y + 40 * SCALE
+    # Subtitle with visual Warn Meter dots
+    mgr_sub_y = curr_y + 42 * SCALE
     draw.text((ow_text_x, mgr_sub_y), "Владелец клуба  • ", font=font_sm, fill=TEXT_SECONDARY)
     
-    warn_icon_x = ow_text_x + 104 * SCALE
+    warn_dots_x = ow_text_x + 104 * SCALE
     if warn_count > 0:
-        _draw_warning_icon(draw, warn_icon_x, mgr_sub_y + 1 * SCALE, size=11 * SCALE, color=LOSS_COLOR)
-        draw.text((warn_icon_x + 14 * SCALE, mgr_sub_y), f"Нарушения: {warn_count}/4", font=font_sm, fill=LOSS_COLOR)
+        _draw_warning_icon(draw, warn_dots_x, mgr_sub_y + 1 * SCALE, size=11 * SCALE, color=LOSS_COLOR)
+        draw.text((warn_dots_x + 14 * SCALE, mgr_sub_y), f"Нарушения: {warn_count}/4", font=font_sm, fill=LOSS_COLOR)
     else:
-        _draw_shield_check_icon(draw, warn_icon_x, mgr_sub_y + 1 * SCALE, size=11 * SCALE, color=WIN_COLOR)
-        draw.text((warn_icon_x + 14 * SCALE, mgr_sub_y), "Без нарушений (0/4)", font=font_sm, fill=WIN_COLOR)
+        _draw_shield_check_icon(draw, warn_dots_x, mgr_sub_y + 1 * SCALE, size=11 * SCALE, color=WIN_COLOR)
+        draw.text((warn_dots_x + 14 * SCALE, mgr_sub_y), "Без нарушений (0/4)", font=font_sm, fill=WIN_COLOR)
 
     # Right side: Verified Owner Pill Badge
     pill_text = "ВЛАДЕЛЕЦ" if manager else "СВОБОДЕН"
     pill_color = ACCENT_CYAN if manager else MUTED
     op_bbox = draw.textbbox((0, 0), pill_text, font=font_badge_sm)
-    op_w = (op_bbox[2] - op_bbox[0]) + 20 * SCALE
-    op_h = 28 * SCALE
+    op_w = (op_bbox[2] - op_bbox[0]) + 22 * SCALE
+    op_h = 30 * SCALE
     op_x = CARD_WIDTH - CARD_PADDING - 16 * SCALE - op_w
     op_y = curr_y + (OWNER_CARD_H - op_h) // 2
     _draw_rounded_rect(draw, (op_x, op_y, op_x + op_w, op_y + op_h),
-                       radius=8 * SCALE, fill=(18, 30, 48) if manager else (24, 28, 36),
+                       radius=8 * SCALE, fill=(16, 28, 44) if manager else (24, 28, 36),
                        outline=pill_color, width=1)
-    draw.text((op_x + 10 * SCALE, op_y + 5 * SCALE), pill_text, font=font_badge_sm, fill=pill_color)
+    draw.text((op_x + 11 * SCALE, op_y + 6 * SCALE), pill_text, font=font_badge_sm, fill=pill_color)
 
     curr_y += OWNER_CARD_H + 16 * SCALE
 
