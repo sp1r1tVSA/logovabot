@@ -20,6 +20,19 @@ import player_card_generator
 import club_card_generator
 import club_schedule_generator
 
+def check_group_card_access(update: Update) -> bool:
+    """
+    Check if the user is permitted to interact with club cards/catalogs in the current chat.
+    In groups/supergroups/channels, only admins are permitted.
+    In private chats, all users are permitted.
+    """
+    chat = update.effective_chat
+    user = update.effective_user
+    if chat and chat.type in ("group", "supergroup", "channel"):
+        if not user or not is_admin(user.id):
+            return False
+    return True
+
 def match_squad_player_names(raw_players: list[str], squad_list: list[str]) -> dict[str, int]:
     counts = {}
     for raw in raw_players:
@@ -213,6 +226,11 @@ async def show_cabinet(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if query:
         await query.answer()
 
+    if not check_group_card_access(update):
+        if query:
+            await query.answer("⛔ Просмотр и управление карточками в общем чате доступны только администраторам. Откройте ЛС с ботом!", show_alert=True)
+        return
+
     user = update.effective_user
     if not user:
         return
@@ -317,6 +335,11 @@ async def show_club_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if query:
         await query.answer()
 
+    if not check_group_card_access(update):
+        if query:
+            await query.answer("⛔ Просмотр и управление карточками в общем чате доступны только администраторам. Откройте ЛС с ботом!", show_alert=True)
+        return
+
     user = update.effective_user
     if not user:
         return
@@ -406,6 +429,10 @@ async def show_player_card(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if not query:
         return
     await query.answer()
+
+    if not check_group_card_access(update):
+        await query.answer("⛔ Просмотр и управление карточками в общем чате доступны только администраторам. Откройте ЛС с ботом!", show_alert=True)
+        return
 
     data = query.data or ""
     player_name = None
@@ -635,6 +662,11 @@ async def show_my_club_card(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if query:
         await query.answer()
 
+    if not check_group_card_access(update):
+        if query:
+            await query.answer("⛔ Просмотр и управление карточками в общем чате доступны только администраторам. Откройте ЛС с ботом!", show_alert=True)
+        return
+
     user = update.effective_user
     if not user:
         return
@@ -662,6 +694,10 @@ async def show_specific_club_card(update: Update, context: ContextTypes.DEFAULT_
         return
     await query.answer()
 
+    if not check_group_card_access(update):
+        await query.answer("⛔ Просмотр и управление карточками в общем чате доступны только администраторам. Откройте ЛС с ботом!", show_alert=True)
+        return
+
     raw_team = query.data.replace("view_club_", "")
     await send_or_edit_club_card(update, context, raw_team, back_cb="cb_clubs_catalog")
 
@@ -672,6 +708,11 @@ async def show_club_graphic_card(update: Update, context: ContextTypes.DEFAULT_T
     if not query:
         return
     await query.answer()
+
+    if not check_group_card_access(update):
+        await query.answer("⛔ Просмотр и управление карточками в общем чате доступны только администраторам. Откройте ЛС с ботом!", show_alert=True)
+        return
+
     team_name = query.data.replace("img_club_", "")
     await send_or_edit_club_card(update, context, team_name, back_cb="cb_clubs_catalog")
 
@@ -682,6 +723,10 @@ async def show_club_squad(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if not query:
         return
     await query.answer()
+
+    if not check_group_card_access(update):
+        await query.answer("⛔ Просмотр и управление карточками в общем чате доступны только администраторам. Откройте ЛС с ботом!", show_alert=True)
+        return
 
     team_name = query.data.replace("clsquad_", "")
     canon = database.resolve_team_name(team_name) or team_name
@@ -742,6 +787,10 @@ async def show_club_history(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return
     await query.answer()
 
+    if not check_group_card_access(update):
+        await query.answer("⛔ Просмотр и управление карточками в общем чате доступны только администраторам. Откройте ЛС с ботом!", show_alert=True)
+        return
+
     team_name = query.data.replace("clhist_", "")
     await send_or_edit_club_schedule(update, context, team_name, back_cb=f"view_club_{team_name}")
 
@@ -751,6 +800,12 @@ async def show_game_history_stub(update: Update, context: ContextTypes.DEFAULT_T
     query = update.callback_query
     if query:
         await query.answer()
+
+    if not check_group_card_access(update):
+        if query:
+            await query.answer("⛔ Просмотр и управление карточками в общем чате доступны только администраторам. Откройте ЛС с ботом!", show_alert=True)
+        return
+
     user = update.effective_user
     if not user:
         return
@@ -770,7 +825,11 @@ async def show_clubs_catalog(update: Update, context: ContextTypes.DEFAULT_TYPE)
         except Exception:
             pass
 
-    user_id = query.from_user.id if query else update.effective_user.id
+    if not check_group_card_access(update):
+        if query:
+            await query.answer("⛔ Просмотр и управление карточками в общем чате доступны только администраторам. Откройте ЛС с ботом!", show_alert=True)
+        return
+
     clubs = await asyncio.to_thread(database.get_all_clubs_summary)
 
     text = (
@@ -796,28 +855,48 @@ async def show_clubs_catalog(update: Update, context: ContextTypes.DEFAULT_TYPE)
     buttons.append([InlineKeyboardButton("« Назад в меню", callback_data="main_menu")])
     markup = InlineKeyboardMarkup(buttons)
 
+    target_chat_id = query.message.chat_id if query and query.message else (update.effective_chat.id if update.effective_chat else update.effective_user.id)
+    thread_id = query.message.message_thread_id if query and query.message and query.message.is_topic_message else None
+
     if query:
         if query.message and query.message.photo:
             try:
                 await query.message.delete()
             except Exception:
                 pass
-            await context.bot.send_message(chat_id=user_id, text=text, parse_mode="HTML", reply_markup=markup)
+            await context.bot.send_message(chat_id=target_chat_id, message_thread_id=thread_id, text=text, parse_mode="HTML", reply_markup=markup)
         else:
             try:
                 await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
             except Exception:
-                await context.bot.send_message(chat_id=user_id, text=text, parse_mode="HTML", reply_markup=markup)
+                try:
+                    await query.message.delete()
+                except Exception:
+                    pass
+                await context.bot.send_message(chat_id=target_chat_id, message_thread_id=thread_id, text=text, parse_mode="HTML", reply_markup=markup)
     elif update.message:
         await update.message.reply_text(text, parse_mode="HTML", reply_markup=markup)
 
 
 async def club_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handler for /club [team_name] command."""
+    chat = update.effective_chat
+    user = update.effective_user
+    user_id = user.id if user else 0
+    if chat and chat.type in ("group", "supergroup", "channel") and not is_admin(user_id):
+        bot_me = await context.bot.get_me()
+        bot_username = bot_me.username or "logovobot"
+        if update.message:
+            await update.message.reply_text(
+                f"ℹ️ Просмотр карточек клубов доступен в личном кабинете бота: @{bot_username}\n"
+                f"В общем чате эта команда доступна только администраторам.",
+                parse_mode="HTML"
+            )
+        return
+
     args = context.args or []
     if not args:
-        user = update.effective_user
-        team = await asyncio.to_thread(database.get_user_team, user.id) if user else None
+        team = await asyncio.to_thread(database.get_user_team, user_id) if user else None
         if team:
             await send_or_edit_club_card(update, context, team, back_cb="cb_clubs_catalog")
         else:
@@ -827,11 +906,12 @@ async def club_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     req_team = " ".join(args).strip()
     canon = database.resolve_team_name(req_team)
     if not canon:
-        await update.message.reply_text(
-            f"❌ Клуб «{html.escape(req_team)}» не найден в Лиге КПЛ.\n"
-            f"Используйте команду <code>/club</code> без параметров, чтобы открыть каталог всех клубов.",
-            parse_mode="HTML"
-        )
+        if update.message:
+            await update.message.reply_text(
+                f"❌ Клуб «{html.escape(req_team)}» не найден в Лиге КПЛ.\n"
+                f"Используйте команду <code>/club</code> без параметров, чтобы открыть каталог всех клубов.",
+                parse_mode="HTML"
+            )
         return
 
     await send_or_edit_club_card(update, context, canon, back_cb="cb_clubs_catalog")
@@ -1009,6 +1089,11 @@ async def show_my_matches(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if not query:
         return
     await query.answer()
+
+    if not check_group_card_access(update):
+        await query.answer("⛔ Просмотр и управление карточками в общем чате доступны только администраторам. Откройте ЛС с ботом!", show_alert=True)
+        return
+
     user_id = query.from_user.id
     matches = await asyncio.to_thread(database.get_pending_matches, user_id)
     
@@ -2800,6 +2885,11 @@ async def show_my_squad(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         user = query.from_user
     else:
         user = update.effective_user
+
+    if not check_group_card_access(update):
+        if query:
+            await query.answer("⛔ Просмотр и управление карточками в общем чате доступны только администраторам. Откройте ЛС с ботом!", show_alert=True)
+        return ConversationHandler.END
 
     db_user = await asyncio.to_thread(database.get_user, user.id)
     if not db_user:

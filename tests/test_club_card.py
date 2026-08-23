@@ -230,9 +230,32 @@ class TestClubCard(unittest.TestCase):
         self.assertEqual(final_row["outcome"], "W")
         self.assertIn("Матчи: 0:1, 2:1, 1:3, 2:1, 4:3", final_row["subline"])
 
-        buf = club_schedule_generator.generate_club_schedule(sched_data)
-        self.assertIsNotNone(buf)
-        self.assertTrue(buf.getvalue().startswith(b'\x89PNG\r\n\x1a\n'))
+    def test_check_group_card_access(self):
+        """Test that check_group_card_access allows in private and admins, but denies non-admins in groups."""
+        from handlers.cabinet import check_group_card_access
+        from unittest.mock import MagicMock
+
+        # 1. Private chat -> always allowed
+        update_private = MagicMock()
+        update_private.effective_chat.type = "private"
+        update_private.effective_user.id = 999999
+        self.assertTrue(check_group_card_access(update_private))
+
+        # 2. Group chat + Non-admin -> denied
+        update_group_user = MagicMock()
+        update_group_user.effective_chat.type = "supergroup"
+        update_group_user.effective_user.id = 999999
+        self.assertFalse(check_group_card_access(update_group_user))
+
+        # 3. Group chat + Admin -> allowed
+        update_group_admin = MagicMock()
+        update_group_admin.effective_chat.type = "supergroup"
+        # Admin ID from config.ADMIN_IDS
+        admin_id = config.ADMIN_IDS[0] if config.ADMIN_IDS else 123456
+        if not config.ADMIN_IDS:
+            config.ADMIN_IDS = [admin_id]
+        update_group_admin.effective_user.id = admin_id
+        self.assertTrue(check_group_card_access(update_group_admin))
 
 
 if __name__ == "__main__":

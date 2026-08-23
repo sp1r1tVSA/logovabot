@@ -434,6 +434,17 @@ async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_T
         return True
 
     if action in ("клуб", "карточка_клуба", "клуб_инфо", "club") or full_cmd.startswith("клуб") or full_cmd.startswith("карточка клуба"):
+        chat = update.effective_chat
+        if chat and chat.type in ("group", "supergroup", "channel") and not is_adm:
+            bot_me = await context.bot.get_me()
+            bot_username = bot_me.username or "logovobot"
+            await msg.reply_text(
+                f"ℹ️ Просмотр карточек клубов доступен в личном кабинете бота: @{bot_username}\n"
+                f"В общем чате эта команда доступна только администраторам.",
+                parse_mode="HTML"
+            )
+            return True
+
         target_club_raw = re.sub(r"^(?:карточка\s+клуба|клуб(?:\s+инфо)?)\s*", "", cmd_text, flags=re.IGNORECASE).strip()
         if not target_club_raw:
             user = update.effective_user
