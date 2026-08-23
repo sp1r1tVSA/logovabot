@@ -1,3 +1,8 @@
+import os
+import io
+import json
+import urllib.request
+import urllib.error
 import asyncio
 import datetime
 import sqlite3
