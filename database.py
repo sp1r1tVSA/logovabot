@@ -2642,14 +2642,117 @@ def get_club_match_history(team_name: str, limit: int = 20) -> list[dict]:
 def get_club_schedule_and_results(team_name: str, limit: int = 25) -> dict:
     """
     Retrieve chronological match schedule (both played results and upcoming/pending matches) for a club.
+    Aggregates cup series so that 1 row = 1 cup stage/series.
     """
     with transaction() as conn:
         cursor = conn.cursor()
         canon = resolve_team_name(team_name) or team_name.strip()
 
+        # 1. Fetch Cup Series for this club
+        cursor.execute("""
+            SELECT id, stage, series_num, team1_name, team2_name, team1_wins, team2_wins, winner_name, status
+            FROM cup_series
+            WHERE (LOWER(team1_name) = LOWER(?) OR LOWER(team2_name) = LOWER(?))
+            ORDER BY id ASC
+        """, (canon, canon))
+        cup_rows = [dict(r) for r in cursor.fetchall()]
+
+        stage_order_map = {"1/8": 1, "1/4": 2, "1/2": 3, "final": 4}
+        stage_title_map = {"1/8": "1/8", "1/4": "1/4", "1/2": "1/2", "final": "ФИНАЛ"}
+
+        cup_items = []
+        for s in cup_rows:
+            s_id = s["id"]
+            st_raw = (s.get("stage") or "1/8").lower()
+            st_label = stage_title_map.get(st_raw, st_raw.upper())
+            tour_title = f"КУБОК • {st_label}"
+
+            t1_name = resolve_team_name(s["team1_name"]) or s["team1_name"]
+            t2_name = resolve_team_name(s["team2_name"]) or s["team2_name"]
+            is_club_t1 = teams_match(t1_name, canon)
+            opp_team = t2_name if is_club_t1 else t1_name
+
+            # Fetch matches for this cup series
+            cursor.execute("""
+                SELECT id, game_num_in_series, player1_team, player2_team, player1_score, player2_score, status
+                FROM matches
+                WHERE cup_series_id = ?
+                ORDER BY game_num_in_series ASC
+            """, (s_id,))
+            s_matches = [dict(m) for m in cursor.fetchall()]
+
+            # Fetch goalscorers for the club across all matches in this series
+            cursor.execute("""
+                SELECT me.player_name, SUM(me.count) AS total_goals
+                FROM match_events me
+                JOIN matches m ON me.match_id = m.id
+                WHERE m.cup_series_id = ? AND LOWER(me.team_name) = LOWER(?) AND me.event_type = 'goal'
+                GROUP BY LOWER(me.player_name)
+                ORDER BY total_goals DESC, me.player_name ASC
+            """, (s_id, canon))
+            club_scorers = [f"{g['player_name']} ({g['total_goals']})" if g['total_goals'] > 1 else g['player_name'] for g in cursor.fetchall()]
+
+            # Confirmed games list
+            confirmed_matches = [m for m in s_matches if m["status"] == "confirmed" and m["player1_score"] is not None]
+            games_scores = [f"{m['player1_score']}:{m['player2_score']}" for m in confirmed_matches]
+
+            has_played_games = len(confirmed_matches) > 0
+            is_completed = (s["status"] == "completed")
+
+            w1 = s["team1_wins"] or 0
+            w2 = s["team2_wins"] or 0
+            winner = s["winner_name"]
+
+            if is_completed and winner:
+                outcome = "W" if teams_match(winner, canon) else "L"
+            elif has_played_games:
+                c_wins = w1 if is_club_t1 else w2
+                o_wins = w2 if is_club_t1 else w1
+                if c_wins > o_wins:
+                    outcome = "W"
+                elif c_wins < o_wins:
+                    outcome = "L"
+                else:
+                    outcome = "D"
+            else:
+                outcome = "PENDING"
+
+            games_str = ", ".join(games_scores)
+            if games_str and club_scorers:
+                subline = f"Матчи: {games_str} • Голы: {', '.join(club_scorers)}"
+            elif games_str:
+                subline = f"Матчи: {games_str}"
+            elif club_scorers:
+                subline = f"Голы клуба: {', '.join(club_scorers)}"
+            else:
+                subline = ""
+
+            cup_items.append({
+                "match_id": s_id,
+                "round_number": -1,
+                "stage_order": stage_order_map.get(st_raw, 0),
+                "tour_title": tour_title,
+                "is_cup": True,
+                "home_team": t1_name,
+                "away_team": t2_name,
+                "home_score": w1 if (has_played_games or is_completed) else None,
+                "away_score": w2 if (has_played_games or is_completed) else None,
+                "club_score": w1 if is_club_t1 else w2,
+                "opponent_score": w2 if is_club_t1 else w1,
+                "is_home": is_club_t1,
+                "opponent_team": opp_team,
+                "status": "confirmed" if (is_completed or has_played_games) else "pending",
+                "outcome": outcome,
+                "scorers": club_scorers,
+                "subline": subline,
+                "is_completed": is_completed,
+                "has_played": has_played_games,
+            })
+
+        # 2. Fetch League Matches for this club
         cursor.execute("""
             SELECT 
-                m.id, m.round_number, m.tournament_type, m.cup_stage, m.cup_series_id, m.game_num_in_series,
+                m.id, m.round_number, m.tournament_type,
                 m.player1_team, m.player2_team, m.player1_score, m.player2_score, m.status,
                 r.is_open, r.deadline,
                 u1.username AS p1_username, u2.username AS p2_username
@@ -2657,39 +2760,28 @@ def get_club_schedule_and_results(team_name: str, limit: int = 25) -> dict:
             LEFT JOIN rounds r ON m.round_number = r.round_number
             LEFT JOIN users u1 ON LOWER(m.player1_team) = LOWER(u1.team_name)
             LEFT JOIN users u2 ON LOWER(m.player2_team) = LOWER(u2.team_name)
-            WHERE (LOWER(m.player1_team) = LOWER(?) OR LOWER(m.player2_team) = LOWER(?))
-            ORDER BY 
-                CASE WHEN m.status = 'confirmed' THEN 1 ELSE 0 END DESC,
-                CASE WHEN m.tournament_type = 'cup' OR m.round_number = -1 THEN 999 ELSE m.round_number END DESC,
-                m.id DESC
-            LIMIT ?
-        """, (canon, canon, limit))
+            WHERE (m.tournament_type IS NULL OR m.tournament_type = 'league' OR m.tournament_type = '')
+              AND (m.round_number IS NOT NULL AND m.round_number > 0)
+              AND (LOWER(m.player1_team) = LOWER(?) OR LOWER(m.player2_team) = LOWER(?))
+            ORDER BY m.round_number ASC
+        """, (canon, canon))
+        league_rows = [dict(r) for r in cursor.fetchall()]
 
-        matches = []
-        played_count = 0
-        pending_count = 0
-
-        for r in cursor.fetchall():
+        league_items = []
+        for r in league_rows:
             is_p1 = teams_match(r["player1_team"], canon)
             home_team = resolve_team_name(r["player1_team"]) or r["player1_team"]
             away_team = resolve_team_name(r["player2_team"]) or r["player2_team"]
             opp_team = away_team if is_p1 else home_team
             opp_user = r["p2_username"] if is_p1 else r["p1_username"]
-            is_cup = bool(r["tournament_type"] == "cup" or r["round_number"] == -1 or (r["cup_series_id"] and r["cup_series_id"] > 0))
 
-            if is_cup:
-                st_name = (r["cup_stage"] or "1/8").upper()
-                g_num = f" (ИГРА {r['game_num_in_series']})" if r["game_num_in_series"] else ""
-                tour_title = f"КУБОК • {st_name}{g_num}"
-            else:
-                tour_title = f"ТУР {r['round_number']}"
+            tour_title = f"ТУР {r['round_number']}"
 
-            if r["status"] == "confirmed":
-                played_count += 1
-                club_score = r["player1_score"] if is_p1 else r["player2_score"]
-                opp_score = r["player2_score"] if is_p1 else r["player1_score"]
-                if club_score > opp_score: outcome = "W"
-                elif club_score < opp_score: outcome = "L"
+            if r["status"] == "confirmed" and r["player1_score"] is not None and r["player2_score"] is not None:
+                c_score = r["player1_score"] if is_p1 else r["player2_score"]
+                o_score = r["player2_score"] if is_p1 else r["player1_score"]
+                if c_score > o_score: outcome = "W"
+                elif c_score < o_score: outcome = "L"
                 else: outcome = "D"
 
                 cursor.execute("""
@@ -2698,37 +2790,59 @@ def get_club_schedule_and_results(team_name: str, limit: int = 25) -> dict:
                     WHERE match_id = ? AND LOWER(team_name) = LOWER(?) AND event_type = 'goal'
                 """, (r["id"], canon))
                 scorers = [f"{g['player_name']} ({g['count']})" if g['count'] > 1 else g['player_name'] for g in cursor.fetchall()]
+                subline = f"Голы клуба: {', '.join(scorers)}" if scorers else ""
             else:
-                pending_count += 1
-                club_score = None
-                opp_score = None
                 outcome = "PENDING"
                 scorers = []
+                subline = ""
 
-            matches.append({
+            league_items.append({
                 "match_id": r["id"],
                 "round_number": r["round_number"],
+                "stage_order": 0,
                 "tour_title": tour_title,
-                "is_cup": is_cup,
+                "is_cup": False,
                 "home_team": home_team,
                 "away_team": away_team,
                 "home_score": r["player1_score"] if r["status"] == "confirmed" else None,
                 "away_score": r["player2_score"] if r["status"] == "confirmed" else None,
-                "club_score": club_score,
-                "opponent_score": opp_score,
+                "club_score": r["player1_score"] if is_p1 else r["player2_score"],
+                "opponent_score": r["player2_score"] if is_p1 else r["player1_score"],
                 "is_home": is_p1,
                 "opponent_team": opp_team,
                 "opponent_username": opp_user,
                 "status": r["status"],
                 "outcome": outcome,
                 "scorers": scorers,
+                "subline": subline,
+                "is_completed": (r["status"] == "confirmed"),
+                "has_played": (r["status"] == "confirmed"),
             })
+
+        # 3. Combine and Sort:
+        played_cup = [c for c in cup_items if c["has_played"] or c["is_completed"]]
+        played_cup.sort(key=lambda x: -x["stage_order"]) # Final first, then 1/2, 1/4, 1/8
+
+        played_league = [l for l in league_items if l["is_completed"]]
+        played_league.sort(key=lambda x: -x["round_number"]) # Recent rounds first
+
+        pending_cup = [c for c in cup_items if not (c["has_played"] or c["is_completed"])]
+        pending_cup.sort(key=lambda x: x["stage_order"])
+
+        pending_league = [l for l in league_items if not l["is_completed"]]
+        pending_league.sort(key=lambda x: x["round_number"])
+
+        all_items = played_cup + played_league + pending_cup + pending_league
+
+        # Calculate counts
+        played_count = len(played_cup) + len(played_league)
+        pending_count = len(pending_cup) + len(pending_league)
 
         return {
             "team_name": canon,
             "played_count": played_count,
             "pending_count": pending_count,
-            "matches": matches,
+            "matches": all_items[:limit],
         }
 
 

@@ -151,7 +151,7 @@ def generate_club_schedule(data: dict, max_matches: int = 12) -> io.BytesIO:
 
     row_heights = []
     for m in matches:
-        if m.get("scorers"):
+        if m.get("subline") or m.get("scorers"):
             row_heights.append(76 * SCALE)
         else:
             row_heights.append(58 * SCALE)
@@ -226,7 +226,7 @@ def generate_club_schedule(data: dict, max_matches: int = 12) -> io.BytesIO:
             # Left Tour / Stage Badge
             tour_title = m.get("tour_title", f"ТУР {m.get('round_number', 1)}")
             is_cup = m.get("is_cup", False)
-            tour_badge_w = 118 * SCALE
+            tour_badge_w = 126 * SCALE
             tour_badge_h = 30 * SCALE
             tour_badge_x = CARD_PADDING + 14 * SCALE
             tour_badge_y = curr_y + 14 * SCALE
@@ -321,6 +321,10 @@ def generate_club_schedule(data: dict, max_matches: int = 12) -> io.BytesIO:
                 out_fill, out_lbl = (48, 20, 20), "ПОРАЖЕНИЕ"
                 out_txt_c = LOSS_COLOR
                 dot_c = LOSS_COLOR
+            elif outcome == "IN_PROGRESS":
+                out_fill, out_lbl = (20, 36, 48), "СЕРИЯ"
+                out_txt_c = ACCENT_CYAN
+                dot_c = ACCENT_CYAN
             else:
                 out_fill, out_lbl = (28, 32, 44), "ПРЕДСТОИТ"
                 out_txt_c = MUTED
@@ -338,9 +342,13 @@ def generate_club_schedule(data: dict, max_matches: int = 12) -> io.BytesIO:
                        out_y + (out_h - (o_bbox[3] - o_bbox[1])) // 2),
                       out_lbl, font=font_badge_sm, fill=out_txt_c)
 
-            # Subrow: Goalscorers with mini ball icon
+            # Subrow: Match scores / Goalscorers with mini ball icon
+            subline = m.get("subline")
             scorers = m.get("scorers") or []
-            if scorers:
+            if subline:
+                _draw_ball_icon(draw, CARD_PADDING + 16 * SCALE, curr_y + 50 * SCALE, size=11 * SCALE)
+                draw.text((CARD_PADDING + 32 * SCALE, curr_y + 49 * SCALE), subline, font=font_scorers, fill=MUTED)
+            elif scorers:
                 _draw_ball_icon(draw, CARD_PADDING + 16 * SCALE, curr_y + 50 * SCALE, size=11 * SCALE)
                 sc_str = f"Голы клуба: {', '.join(scorers)}"
                 draw.text((CARD_PADDING + 32 * SCALE, curr_y + 49 * SCALE), sc_str, font=font_scorers, fill=MUTED)

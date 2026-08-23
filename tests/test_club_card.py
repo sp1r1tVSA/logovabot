@@ -200,6 +200,40 @@ class TestClubCard(unittest.TestCase):
         self.assertIsNotNone(buf)
         self.assertTrue(buf.getvalue().startswith(b'\x89PNG\r\n\x1a\n'))
 
+    def test_club_schedule_cup_stage_aggregation(self):
+        """Test that multiple games in a cup series are aggregated into 1 row per stage."""
+        import club_schedule_generator
+        with database.transaction() as conn:
+            c = conn.cursor()
+            c.execute(
+                "INSERT INTO cup_series (stage, series_num, team1_name, team2_name, team1_wins, team2_wins, winner_name, status) "
+                "VALUES ('final', 1, 'Расинг', 'Брага', 3, 2, 'Расинг', 'completed')"
+            )
+            s_id = c.lastrowid
+            # 5 games in the series
+            for g_num, (h_s, a_s) in enumerate([(0, 1), (2, 1), (1, 3), (2, 1), (4, 3)], 1):
+                c.execute(
+                    "INSERT INTO matches (round_number, player1_team, player2_team, player1_score, player2_score, status, tournament_type, cup_stage, cup_series_id, game_num_in_series) "
+                    "VALUES (-1, 'Расинг', 'Брага', ?, ?, 'confirmed', 'cup', 'final', ?, ?)",
+                    (h_s, a_s, s_id, g_num)
+                )
+                m_id = c.lastrowid
+                c.execute("INSERT INTO match_events (match_id, player_name, team_name, event_type, count) VALUES (?, 'Giacomo Raspadori', 'Расинг', 'goal', 1)", (m_id,))
+
+        sched_data = database.get_club_schedule_and_results("Расинг")
+        # Should aggregate all 5 final games into 1 row for КУБОК • ФИНАЛ
+        final_rows = [m for m in sched_data["matches"] if m.get("tour_title") == "КУБОК • ФИНАЛ"]
+        self.assertEqual(len(final_rows), 1)
+        final_row = final_rows[0]
+        self.assertEqual(final_row["home_score"], 3)
+        self.assertEqual(final_row["away_score"], 2)
+        self.assertEqual(final_row["outcome"], "W")
+        self.assertIn("Матчи: 0:1, 2:1, 1:3, 2:1, 4:3", final_row["subline"])
+
+        buf = club_schedule_generator.generate_club_schedule(sched_data)
+        self.assertIsNotNone(buf)
+        self.assertTrue(buf.getvalue().startswith(b'\x89PNG\r\n\x1a\n'))
+
 
 if __name__ == "__main__":
     unittest.main()
