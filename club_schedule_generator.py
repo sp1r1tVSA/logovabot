@@ -51,6 +51,50 @@ def _draw_vertical_gradient(img: Image.Image, top_color: tuple, bot_color: tuple
         draw.line([(0, y), (w, y)], fill=(r, g, b, 255))
 
 
+def _draw_ball_icon(draw: ImageDraw.ImageDraw, x: int, y: int, size: int = 14 * SCALE):
+    """Draw a clean vector soccer ball icon."""
+    draw.ellipse((x, y, x + size, y + size), fill=(245, 248, 255), outline=(100, 115, 140), width=1)
+    cx, cy = x + size / 2, y + size / 2
+    p_r = size * 0.28
+    draw.polygon([
+        (cx, cy - p_r),
+        (cx + p_r * 0.95, cy - p_r * 0.31),
+        (cx + p_r * 0.59, cy + p_r * 0.81),
+        (cx - p_r * 0.59, cy + p_r * 0.81),
+        (cx - p_r * 0.95, cy - p_r * 0.31),
+    ], fill=(24, 28, 38))
+
+
+def _draw_trophy_icon(draw: ImageDraw.ImageDraw, x: int, y: int, size: int = 14 * SCALE, color: tuple = CUP_GOLD):
+    """Draw a vector gold trophy icon."""
+    bowl_top_w = size * 0.7
+    bowl_bot_w = size * 0.35
+    bowl_h = size * 0.45
+    cx = x + size / 2
+
+    draw.polygon([
+        (cx - bowl_top_w / 2, y + 2 * SCALE),
+        (cx + bowl_top_w / 2, y + 2 * SCALE),
+        (cx + bowl_bot_w / 2, y + bowl_h),
+        (cx - bowl_bot_w / 2, y + bowl_h),
+    ], fill=color)
+
+    draw.arc((x, y + 2 * SCALE, x + size * 0.35, y + bowl_h * 0.85), start=90, end=270, fill=color, width=2 * SCALE)
+    draw.arc((x + size * 0.65, y + 2 * SCALE, x + size, y + bowl_h * 0.85), start=270, end=90, fill=color, width=2 * SCALE)
+
+    draw.rectangle((cx - 1 * SCALE, y + bowl_h, cx + 1 * SCALE, y + size * 0.75), fill=color)
+    base_w = size * 0.55
+    draw.rounded_rectangle((cx - base_w / 2, y + size * 0.75, cx + base_w / 2, y + size), radius=2 * SCALE, fill=color)
+
+
+def _draw_calendar_icon(draw: ImageDraw.ImageDraw, x: int, y: int, size: int = 14 * SCALE, color: tuple = TEXT_SECONDARY):
+    """Draw a vector calendar icon."""
+    draw.rounded_rectangle((x, y, x + size, y + size), radius=3 * SCALE, outline=color, width=1 * SCALE)
+    draw.line([(x, y + size * 0.32), (x + size, y + size * 0.32)], fill=color, width=1 * SCALE)
+    draw.line([(x + size * 0.3, y - 2 * SCALE), (x + size * 0.3, y + size * 0.2)], fill=color, width=1 * SCALE)
+    draw.line([(x + size * 0.7, y - 2 * SCALE), (x + size * 0.7, y + size * 0.2)], fill=color, width=1 * SCALE)
+
+
 _logo_cache: dict[str, Image.Image] = {}
 
 
@@ -146,8 +190,9 @@ def generate_club_schedule(data: dict, max_matches: int = 12) -> io.BytesIO:
     text_x = logo_x + logo_size + 18 * SCALE
     draw.text((text_x, curr_y + 2 * SCALE), team_name.upper(), font=font_title, fill=WHITE)
 
+    _draw_calendar_icon(draw, text_x, curr_y + 45 * SCALE, size=13 * SCALE, color=TEXT_SECONDARY)
     sub_title = "РАСПИСАНИЕ И РЕЗУЛЬТАТЫ МАТЧЕЙ • КПЛ 2026"
-    draw.text((text_x, curr_y + 44 * SCALE), sub_title, font=font_sub, fill=TEXT_SECONDARY)
+    draw.text((text_x + 18 * SCALE, curr_y + 44 * SCALE), sub_title, font=font_sub, fill=TEXT_SECONDARY)
 
     # Right Stats Pill (Played / Upcoming)
     stat_pill_w = 170 * SCALE
@@ -190,10 +235,13 @@ def generate_club_schedule(data: dict, max_matches: int = 12) -> io.BytesIO:
             _draw_rounded_rect(draw, (tour_badge_x, tour_badge_y, tour_badge_x + tour_badge_w, tour_badge_y + tour_badge_h),
                                radius=6 * SCALE, fill=tb_fill, outline=tb_border, width=1)
             
-            tb_bbox = draw.textbbox((0, 0), tour_title, font=font_badge_sm)
-            draw.text((tour_badge_x + (tour_badge_w - (tb_bbox[2] - tb_bbox[0])) // 2,
-                       tour_badge_y + (tour_badge_h - (tb_bbox[3] - tb_bbox[1])) // 2),
-                      tour_title, font=font_badge_sm, fill=tb_text_color)
+            if is_cup:
+                _draw_trophy_icon(draw, tour_badge_x + 6 * SCALE, tour_badge_y + 8 * SCALE, size=13 * SCALE, color=CUP_GOLD)
+                tb_text_x = tour_badge_x + 22 * SCALE
+            else:
+                tb_text_x = tour_badge_x + 8 * SCALE
+
+            draw.text((tb_text_x, tour_badge_y + 7 * SCALE), tour_title, font=font_badge_sm, fill=tb_text_color)
 
             # Center Match Display: Home Team - Score - Away Team
             center_x = (CARD_WIDTH) // 2 + 10 * SCALE
@@ -288,11 +336,12 @@ def generate_club_schedule(data: dict, max_matches: int = 12) -> io.BytesIO:
                        out_y + (out_h - (o_bbox[3] - o_bbox[1])) // 2),
                       out_lbl, font=font_badge_sm, fill=out_txt_c)
 
-            # Subrow: Goalscorers
+            # Subrow: Goalscorers with mini ball icon
             scorers = m.get("scorers") or []
             if scorers:
+                _draw_ball_icon(draw, CARD_PADDING + 16 * SCALE, curr_y + 50 * SCALE, size=11 * SCALE)
                 sc_str = f"Голы клуба: {', '.join(scorers)}"
-                draw.text((CARD_PADDING + 18 * SCALE, curr_y + 50 * SCALE), sc_str, font=font_scorers, fill=MUTED)
+                draw.text((CARD_PADDING + 32 * SCALE, curr_y + 49 * SCALE), sc_str, font=font_scorers, fill=MUTED)
 
             curr_y += rh + 10 * SCALE
 
