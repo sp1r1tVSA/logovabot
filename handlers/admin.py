@@ -1,5 +1,11 @@
+import os
+import io
+import json
+import urllib.request
+import urllib.error
 import asyncio
 import datetime
+import sqlite3
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.error import BadRequest, TelegramError, Forbidden
 from telegram.ext import ContextTypes, ConversationHandler
@@ -76,7 +82,7 @@ async def show_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     query = update.callback_query
     chat_mode = database.get_config("chat_mode") or "temshik"
-    mode_label = "Темшик 🍺" if chat_mode == "temshik" else "Персона 2 🎭"
+    mode_label = "Темшик 🍺" if chat_mode == "temshik" else "Булли 😈"
     keyboard = [
         [InlineKeyboardButton("👥 Управление игроками", callback_data="admin_manage_players")],
         [InlineKeyboardButton("📋 Составы команд", callback_data="admin_manage_squads")],
@@ -94,6 +100,8 @@ async def show_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await update.message.reply_text(text, parse_mode="HTML", reply_markup=markup)
     elif query:
         await query.answer()
+        target_chat_id = query.message.chat_id if query.message else query.from_user.id
+        thread_id = query.message.message_thread_id if query.message and query.message.is_topic_message else None
         try:
             await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
         except Exception:
@@ -101,7 +109,7 @@ async def show_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 await query.message.delete()
             except Exception:
                 pass
-            await context.bot.send_message(chat_id=query.from_user.id, text=text, parse_mode="HTML", reply_markup=markup)
+            await context.bot.send_message(chat_id=target_chat_id, message_thread_id=thread_id, text=text, parse_mode="HTML", reply_markup=markup)
 
 @admin_only
 async def admin_toggle_chat_mode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -114,7 +122,7 @@ async def admin_toggle_chat_mode(update: Update, context: ContextTypes.DEFAULT_T
     new_mode = "persona2" if current == "temshik" else "temshik"
     database.set_config("chat_mode", new_mode)
     await query.message.reply_text(
-        f"✅ Режим общения ИИ изменён: <b>{'Персона 2 🎭' if new_mode == 'persona2' else 'Темшик 🍺'}</b>",
+        f"✅ Режим общения ИИ изменён: <b>{'Булли 😈' if new_mode == 'persona2' else 'Темшик 🍺'}</b>",
         parse_mode="HTML"
     )
 
@@ -515,9 +523,19 @@ async def _build_debts_summary() -> tuple[str | None, int]:
     # Map club name (lowercased) -> user info to group debts by participant
     user_by_team: dict[str, dict] = {}
     for u in users:
-        team = (u["team_name"] or "").strip()
+        u_dict = dict(u) if isinstance(u, sqlite3.Row) else dict(u) if hasattr(u, "keys") else u
+        team = (u_dict.get("team_name") or "").strip()
         if team:
-            user_by_team.setdefault(team.lower(), {"telegram_id": u["telegram_id"], "username": u["username"], "team_name": team})
+            w_cnt = int(u_dict.get("warn_count") or 0)
+            user_by_team.setdefault(
+                team.lower(),
+                {
+                    "telegram_id": u_dict.get("telegram_id"),
+                    "username": u_dict.get("username"),
+                    "team_name": team,
+                    "warn_count": w_cnt,
+                }
+            )
 
     participants: dict[str, dict] = {}
 
@@ -530,6 +548,7 @@ async def _build_debts_summary() -> tuple[str | None, int]:
             {
                 "team_name": team,
                 "username": info["username"] if info else None,
+                "warn_count": info["warn_count"] if info else 0,
                 "league": [],
                 "cup": [],
             },
@@ -577,11 +596,13 @@ async def _build_debts_summary() -> tuple[str | None, int]:
 
     bar = "━━━━━━━━━━━━━━━━━━━━━━"
 
-    for idx, p in enumerate(sorted(participants.values(), key=lambda x: len(x["league"]) + len(x["cup"]), reverse=True), 1):
+    for idx, p in enumerate(sorted(participants.values(), key=lambda x: (len(x["league"]) + len(x["cup"]), x.get("warn_count", 0)), reverse=True), 1):
         uname_str = f"@{p['username']}" if p['username'] else p['team_name']
         total_n = len(p["league"]) + len(p["cup"])
+        w_cnt = p.get("warn_count", 0)
+        warn_badge = f" ⚠️ <b>{w_cnt}/{MAX_WARNS_LIMIT}</b>" if w_cnt > 0 else f" 🟢 <b>0/{MAX_WARNS_LIMIT}</b>"
         card: list[str] = [bar]
-        card.append(f"{idx}. 👤 <b>{html.escape(uname_str)}</b> [{html.escape(p['team_name'])}] — {total_n} матч.")
+        card.append(f"{idx}. 👤 <b>{html.escape(uname_str)}</b> [{html.escape(p['team_name'])}] — {total_n} долг. |{warn_badge}")
         if p["league"]:
             card.append("⚙️ <b>ЛИГА:</b>")
             for line in p["league"]:
@@ -1369,7 +1390,7 @@ async def admin_close_round(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     await query.answer()
     
     round_number = int(query.data.replace("admin_close_round_", ""))
-    await asyncio.to_thread(database.update_round_status, round_number, is_open=False, deadline=None)
+    await asyncio.to_thread(database.update_round_status, round_number, is_open=False)
     
     keyboard = [[InlineKeyboardButton("« Вернуться", callback_data=f"admin_manage_round_{round_number}")]]
     await query.edit_message_text(
@@ -1409,12 +1430,15 @@ async def admin_round_matches(update: Update, context: ContextTypes.DEFAULT_TYPE
     keyboard.append([InlineKeyboardButton("« Назад к турам", callback_data="admin_manage_matches_info")])
     
     text = f"📅 **Матчи {round_number}-го тура (Панель Администратора):**\n\nВыберите матч для ввода счета или сброса:"
+    target_chat_id = query.message.chat_id if query and query.message else query.from_user.id
+    thread_id = query.message.message_thread_id if query and query.message and query.message.is_topic_message else None
+
     if query.message and query.message.photo:
         try:
             await query.message.delete()
         except Exception:
             pass
-        await context.bot.send_message(chat_id=query.from_user.id, text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+        await context.bot.send_message(chat_id=target_chat_id, message_thread_id=thread_id, text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
     else:
         try:
             await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
@@ -1423,7 +1447,7 @@ async def admin_round_matches(update: Update, context: ContextTypes.DEFAULT_TYPE
                 await query.message.delete()
             except Exception:
                 pass
-            await context.bot.send_message(chat_id=query.from_user.id, text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+            await context.bot.send_message(chat_id=target_chat_id, message_thread_id=thread_id, text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
 @admin_only
 async def admin_view_match(update: Update, context: ContextTypes.DEFAULT_TYPE, match_id: int | None = None) -> None:
@@ -1501,12 +1525,15 @@ async def admin_view_match(update: Update, context: ContextTypes.DEFAULT_TYPE, m
         keyboard.append([InlineKeyboardButton("📸 Просмотр скриншота матча", callback_data=f"admin_view_match_photo_{match_id}")])
     keyboard.append([back_button])
 
+    target_chat_id = query.message.chat_id if query and query.message else query.from_user.id
+    thread_id = query.message.message_thread_id if query and query.message and query.message.is_topic_message else None
+
     if query.message and query.message.photo:
         try:
             await query.message.delete()
         except Exception:
             pass
-        await context.bot.send_message(chat_id=query.from_user.id, text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+        await context.bot.send_message(chat_id=target_chat_id, message_thread_id=thread_id, text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
     else:
         try:
             await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
@@ -1515,7 +1542,7 @@ async def admin_view_match(update: Update, context: ContextTypes.DEFAULT_TYPE, m
                 await query.message.delete()
             except Exception:
                 pass
-            await context.bot.send_message(chat_id=query.from_user.id, text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+            await context.bot.send_message(chat_id=target_chat_id, message_thread_id=thread_id, text=text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
 @admin_only
 async def admin_view_match_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1548,8 +1575,11 @@ async def admin_view_match_photo(update: Update, context: ContextTypes.DEFAULT_T
     )
     back_button = InlineKeyboardMarkup([[InlineKeyboardButton("« Назад к карточке матча", callback_data=f"admin_view_match_{match_id}")]])
 
+    target_chat_id = query.message.chat_id if query and query.message else query.from_user.id
+    thread_id = query.message.message_thread_id if query and query.message and query.message.is_topic_message else None
+
     try:
-        await context.bot.send_photo(chat_id=query.from_user.id, photo=photo_id, caption=caption, parse_mode="HTML", reply_markup=back_button)
+        await context.bot.send_photo(chat_id=target_chat_id, message_thread_id=thread_id, photo=photo_id, caption=caption, parse_mode="HTML", reply_markup=back_button)
     except BadRequest as e:
         logger.warning(f"Failed to resend screenshot for match #{match_id}: {e}")
         await safe_edit_or_reply(query, context, "📸 Не удалось отобразить скриншот (файл недоступен).")
@@ -2079,7 +2109,7 @@ async def admin_set_score_text(update: Update, context: ContextTypes.DEFAULT_TYP
         try:
             await context.bot.send_message(chat_id=p_id, text=player_text, parse_mode="Markdown")
         except Exception as e:
-            logger.exception("Не удалось отправить уведомление игроку {p_id}")
+            logger.exception(f"Не удалось отправить уведомление игроку {p_id}")
 
     # Notify Telegram Group
     group_id = await asyncio.to_thread(database.get_group_id)
@@ -2741,6 +2771,7 @@ async def admin_view_squad(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         text = f"👥 <b>Состав команды {html.escape(club)}:</b>\n\n<i>Состав пуст.</i>"
 
     keyboard = [
+        [InlineKeyboardButton("🏛 Карточка клуба", callback_data=f"view_club_{club}")],
         [InlineKeyboardButton("📊 Загрузить состав", callback_data=f"admin_squad_upload_{club}")],
         [InlineKeyboardButton("➕ Добавить игрока", callback_data=f"admin_squad_add_player_{club}")],
         [InlineKeyboardButton("➖ Удалить игрока", callback_data=f"admin_squad_rm_menu_{club}")],
@@ -3125,7 +3156,7 @@ async def notify_players_rounds_opened(context: ContextTypes.DEFAULT_TYPE, round
             try:
                 await context.bot.send_message(chat_id=pid, text="\n".join(lines), parse_mode="HTML", reply_markup=InlineKeyboardMarkup(kb))
             except Exception as e:
-                logger.exception("Failed to send multi-match card to player {pid}")
+                logger.exception(f"Failed to send multi-match card to player {pid}")
 
 async def send_round_reminders(
     context: ContextTypes.DEFAULT_TYPE, 
@@ -3240,13 +3271,16 @@ async def admin_remind_round(update: Update, context: ContextTypes.DEFAULT_TYPE,
     if round_number is None:
         round_number = int(query.data.replace("admin_remind_round_", ""))
 
+    target_chat_id = query.message.chat_id if query and query.message else query.from_user.id
+    thread_id = query.message.message_thread_id if query and query.message and query.message.is_topic_message else None
+
     unplayed = await asyncio.to_thread(database.get_unplayed_matches_by_round, round_number)
     if not unplayed:
         keyboard = [[InlineKeyboardButton("« Назад к туру", callback_data=f"admin_manage_round_{round_number}")]]
         try:
             await query.edit_message_text("🎉 В этом туре нет несыгранных матчей!", reply_markup=InlineKeyboardMarkup(keyboard))
         except Exception:
-            await context.bot.send_message(chat_id=query.from_user.id, text="🎉 В этом туре нет несыгранных матчей!", reply_markup=InlineKeyboardMarkup(keyboard))
+            await context.bot.send_message(chat_id=target_chat_id, message_thread_id=thread_id, text="🎉 В этом туре нет несыгранных матчей!", reply_markup=InlineKeyboardMarkup(keyboard))
         return
 
     selected_key = f"remind_selected_{round_number}"
@@ -3286,7 +3320,7 @@ async def admin_remind_round(update: Update, context: ContextTypes.DEFAULT_TYPE,
             await query.message.delete()
         except Exception:
             pass
-        await context.bot.send_message(chat_id=query.from_user.id, text=text, reply_markup=markup, parse_mode="HTML")
+        await context.bot.send_message(chat_id=target_chat_id, message_thread_id=thread_id, text=text, reply_markup=markup, parse_mode="HTML")
     else:
         try:
             await query.edit_message_text(text, reply_markup=markup, parse_mode="HTML")
@@ -3295,7 +3329,7 @@ async def admin_remind_round(update: Update, context: ContextTypes.DEFAULT_TYPE,
                 await query.message.delete()
             except Exception:
                 pass
-            await context.bot.send_message(chat_id=query.from_user.id, text=text, reply_markup=markup, parse_mode="HTML")
+            await context.bot.send_message(chat_id=target_chat_id, message_thread_id=thread_id, text=text, reply_markup=markup, parse_mode="HTML")
 
 @admin_only
 async def admin_toggle_remind_match(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -3364,12 +3398,15 @@ async def admin_send_selected_reminders(update: Update, context: ContextTypes.DE
     except Exception:
         pass
 
+    target_chat_id = query.message.chat_id if query and query.message else query.from_user.id
+    thread_id = query.message.message_thread_id if query and query.message and query.message.is_topic_message else None
+
     round_number = int(query.data.replace("admin_send_selected_reminders_", ""))
     selected_key = f"remind_selected_{round_number}"
     selected_ids = context.user_data.get(selected_key, set())
 
     if not selected_ids:
-        await context.bot.send_message(chat_id=query.from_user.id, text="⚠️ Не выбрано ни одного матча!")
+        await query.answer("⚠️ Не выбрано ни одного матча!", show_alert=True)
         return
 
     pm_sent, count_matches = await send_round_reminders(context, round_number, target_match_ids=selected_ids)
@@ -3388,7 +3425,7 @@ async def admin_send_selected_reminders(update: Update, context: ContextTypes.DE
     try:
         await query.edit_message_text(text, reply_markup=markup, parse_mode="HTML")
     except Exception:
-        await context.bot.send_message(chat_id=query.from_user.id, text=text, reply_markup=markup, parse_mode="HTML")
+        await context.bot.send_message(chat_id=target_chat_id, message_thread_id=thread_id, text=text, reply_markup=markup, parse_mode="HTML")
 
 async def job_check_deadlines_and_remind(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Periodic job checking open rounds for approaching deadlines and sending automated reminders."""
@@ -3481,12 +3518,14 @@ async def job_debt_lifecycle_tracker(context: ContextTypes.DEFAULT_TYPE) -> None
             p1_user = await asyncio.to_thread(database.find_user_by_team, m.get("player1_team"))
             if p1_user:
                 p1_id = p1_user["telegram_id"]
+        p1_user = dict(p1_user) if p1_user else None
 
         p2_user = await asyncio.to_thread(database.get_user, p2_id) if p2_id else None
         if not p2_user and m.get("player2_team"):
             p2_user = await asyncio.to_thread(database.find_user_by_team, m.get("player2_team"))
             if p2_user:
                 p2_id = p2_user["telegram_id"]
+        p2_user = dict(p2_user) if p2_user else None
 
         p1_valid = bool(p1_id and p1_id > 0)
         p2_valid = bool(p2_id and p2_id > 0)
@@ -3579,7 +3618,8 @@ async def job_debt_lifecycle_tracker(context: ContextTypes.DEFAULT_TYPE) -> None
         # Only trigger at most ONE milestone per match per run to prevent cascades
         for req_hours, stage_key, label in warn_milestones:
             if hours_overdue >= req_hours and not (await asyncio.to_thread(database.has_debt_stage, m_id, stage_key)):
-                warns_updated = True
+                warned_p1 = False
+                warned_p2 = False
 
                 # Apply warn to Player 1 (only if active, has club, and not warned within 20h)
                 if p1_id and p1_valid:
@@ -3592,6 +3632,8 @@ async def job_debt_lifecycle_tracker(context: ContextTypes.DEFAULT_TYPE) -> None
                         new_cnt1, is_exceeded1 = await asyncio.to_thread(
                             database.add_warn, p1_id, None, f"Авто-варн: просрочка {label} по {rn} туру"
                         )
+                        warned_p1 = True
+                        warns_updated = True
                         dm_warn1 = (
                             f"🚨 <b>Вам начислен АВТО-ВАРН за задержку тура!</b>\n\n"
                             f"Причина: Просрочка матча {rn}-го тура (vs {u2}) более {label}.\n"
@@ -3616,6 +3658,8 @@ async def job_debt_lifecycle_tracker(context: ContextTypes.DEFAULT_TYPE) -> None
                         new_cnt2, is_exceeded2 = await asyncio.to_thread(
                             database.add_warn, p2_id, None, f"Авто-варн: просрочка {label} по {rn} туру"
                         )
+                        warned_p2 = True
+                        warns_updated = True
                         dm_warn2 = (
                             f"🚨 <b>Вам начислен АВТО-ВАРН за задержку тура!</b>\n\n"
                             f"Причина: Просрочка матча {rn}-го тура (vs {u1}) более {label}.\n"
@@ -3629,20 +3673,21 @@ async def job_debt_lifecycle_tracker(context: ContextTypes.DEFAULT_TYPE) -> None
                         if is_exceeded2:
                             await _auto_kick_player(context, p2_id, m.get("p2_username"), m.get("player2_team"))
 
-                # Post group notice to ПРЕДЫ topic
-                p1_warn_now = await asyncio.to_thread(database.get_user_warn_count, p1_id) if p1_id else 0
-                p2_warn_now = await asyncio.to_thread(database.get_user_warn_count, p2_id) if p2_id else 0
-                thread_notice = (
-                    f"⚠️ <b>АВТО-ВАРН ЗА ПРОСРОЧКУ ТУРА</b>\n\n"
-                    f"👤 Участники: <b>{u1}</b> [{t1}] и <b>{u2}</b> [{t2}]\n"
-                    f"🏆 Матч: {rn}-й тур (Просрочка: {label})\n"
-                    f"📊 Текущий баланс варнов:\n"
-                    f"• {u1}: <b>{p1_warn_now}/{MAX_WARNS_LIMIT}</b>\n"
-                    f"• {u2}: <b>{p2_warn_now}/{MAX_WARNS_LIMIT}</b>\n\n"
-                    f"<i>Матч необходимо срочно доиграть и внести результат.</i>"
-                )
-                await _send_to_warns_thread(context, thread_notice)
-                await asyncio.to_thread(database.record_debt_stage, m_id, stage_key)
+                # Post group notice to ПРЕДЫ topic and record milestone ONLY if someone was actually warned
+                if warned_p1 or warned_p2:
+                    p1_warn_now = await asyncio.to_thread(database.get_user_warn_count, p1_id) if p1_id else 0
+                    p2_warn_now = await asyncio.to_thread(database.get_user_warn_count, p2_id) if p2_id else 0
+                    thread_notice = (
+                        f"⚠️ <b>АВТО-ВАРН ЗА ПРОСРОЧКУ ТУРА</b>\n\n"
+                        f"👤 Участники: <b>{u1}</b> [{t1}] и <b>{u2}</b> [{t2}]\n"
+                        f"🏆 Матч: {rn}-й тур (Просрочка: {label})\n"
+                        f"📊 Текущий баланс варнов:\n"
+                        f"• {u1}: <b>{p1_warn_now}/{MAX_WARNS_LIMIT}</b>\n"
+                        f"• {u2}: <b>{p2_warn_now}/{MAX_WARNS_LIMIT}</b>\n\n"
+                        f"<i>Матч необходимо срочно доиграть и внести результат.</i>"
+                    )
+                    await _send_to_warns_thread(context, thread_notice)
+                    await asyncio.to_thread(database.record_debt_stage, m_id, stage_key)
 
                 # Crucial: break so only 1 milestone is handled per match per 30m run
                 break
@@ -4035,6 +4080,7 @@ async def admin_warn_execute(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
         keyboard = [[InlineKeyboardButton("« К карточке игрока", callback_data=f"admin_view_player_{p_id}")]]
         await query.edit_message_text(result_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+        await _post_or_update_debts_in_warns(context)
 
     finally:
         _warn_action_locks.discard(p_id)
@@ -4107,6 +4153,7 @@ async def admin_warn_remove_execute(update: Update, context: ContextTypes.DEFAUL
         result_text = f"✅ Варн снят. Счётчик: <b>{new_count} / {MAX_WARNS_LIMIT}</b>"
         keyboard = [[InlineKeyboardButton("« К карточке игрока", callback_data=f"admin_view_player_{p_id}")]]
         await query.edit_message_text(result_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+        await _post_or_update_debts_in_warns(context)
 
     finally:
         _warn_action_locks.discard(p_id)
@@ -4205,6 +4252,7 @@ async def admin_amnesty_execute(update: Update, context: ContextTypes.DEFAULT_TY
     result_text = f"✅ Амнистия применена к <b>{html.escape(username_str)}</b>. Счётчик: <b>0 / {MAX_WARNS_LIMIT}</b>"
     keyboard = [[InlineKeyboardButton("« К карточке игрока", callback_data=f"admin_view_player_{p_id}")]]
     await query.edit_message_text(result_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+    await _post_or_update_debts_in_warns(context)
 
 
 @admin_only
@@ -4223,11 +4271,12 @@ async def admin_reset_season_warns(update: Update, context: ContextTypes.DEFAULT
         "✅ Все предупреждения сброшены (новый сезон).",
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Назад в админку", callback_data="admin_main_menu")]])
     )
+    await _post_or_update_debts_in_warns(context)
 
 
 @admin_only
 async def admin_reset_debts_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Admin command /reset_debts: resets all warns, clears debt timers, and confirms start datetime."""
+    """Admin command /reset_debts or /reset_warns: resets all warns, clears debt timers, and confirms start datetime."""
     user_id = update.effective_user.id
     if not is_admin(user_id):
         await update.message.reply_text("❌ Нет прав.")
@@ -4245,6 +4294,63 @@ async def admin_reset_debts_command(update: Update, context: ContextTypes.DEFAUL
         f"<i>До {start_str} бот не будет выписывать авто-варны и исключать участников.</i>"
     )
     await update.message.reply_text(text, parse_mode="HTML")
+    await _post_or_update_debts_in_warns(context)
+
+
+@admin_only
+async def admin_unwarn_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Admin command /unwarn <@user / team>: removes 1 warn from user, or /unwarn all <@user> resets to 0."""
+    user_id = update.effective_user.id
+    if not is_admin(user_id):
+        await update.message.reply_text("❌ Нет прав.")
+        return
+
+    args = context.args or []
+    if not args:
+        await update.message.reply_text(
+            "ℹ️ <b>Использование:</b>\n"
+            "• <code>/unwarn @username</code> — снять 1 варн с игрока\n"
+            "• <code>/unwarn all @username</code> — полностью обнулить варны игрока\n"
+            "• <code>/reset_debts</code> — сбросить все варны и стадии долгов всей лиги",
+            parse_mode="HTML"
+        )
+        return
+
+    is_all = (args[0].lower() == "all" and len(args) > 1)
+    target_ref = args[1] if is_all else args[0]
+    target_ref = target_ref.lstrip("@").strip()
+
+    target_user = await asyncio.to_thread(database.find_user_by_ref, target_ref)
+    if not target_user:
+        await update.message.reply_text(f"❌ Пользователь <b>{html.escape(target_ref)}</b> не найден.", parse_mode="HTML")
+        return
+
+    target_user = dict(target_user)
+    t_id = target_user["telegram_id"]
+    u_name = f"@{target_user.get('username')}" if target_user.get('username') else f"ID {t_id}"
+    t_name = target_user.get('team_name') or "без клуба"
+
+    if is_all:
+        await asyncio.to_thread(database.reset_user_warns, t_id, user_id)
+        await update.message.reply_text(
+            f"✅ Все варны игрока <b>{html.escape(u_name)}</b> [{html.escape(t_name)}] полностью аннулированы (0/{MAX_WARNS_LIMIT}).",
+            parse_mode="HTML"
+        )
+    else:
+        new_cnt, removed = await asyncio.to_thread(database.remove_warn, t_id, user_id, "Снято администратором")
+        if removed:
+            await update.message.reply_text(
+                f"✅ С игрока <b>{html.escape(u_name)}</b> [{html.escape(t_name)}] снят 1 варн.\n"
+                f"📊 Текущие варны: <b>{new_cnt}/{MAX_WARNS_LIMIT}</b>",
+                parse_mode="HTML"
+            )
+        else:
+            await update.message.reply_text(
+                f"ℹ️ У игрока <b>{html.escape(u_name)}</b> [{html.escape(t_name)}] нет активных варнов (0/{MAX_WARNS_LIMIT}).",
+                parse_mode="HTML"
+            )
+
+    await _post_or_update_debts_in_warns(context)
 
 
 @admin_only

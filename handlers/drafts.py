@@ -108,26 +108,11 @@ async def _process_draft_group_delayed(buffer_key: str, update: Update, context:
         reply_to_message_id=reply_to_id
     )
     
-    squad_hints = {}
-    if caption:
-        try:
-            caption_norm = database.normalize_team_name(caption)
-            all_teams = await asyncio.to_thread(database.get_all_teams)
-            for t in all_teams:
-                t_norm = database.normalize_team_name(t)
-                if t_norm and (t_norm in caption_norm or t.lower() in caption.lower()):
-                    sq = await asyncio.to_thread(database.get_squad, t)
-                    if sq:
-                        squad_hints[t] = sq
-        except Exception as e:
-            logger.warning(f"Failed to load squad hints from DB: {e}")
-
     try:
         ai_res = await asyncio.to_thread(
             recognize_match_screenshots_bytes,
             photos,
-            caption=caption,
-            squad_hints=squad_hints
+            caption=caption
         )
     except Exception as e:
         logger.exception("Error in draft AI processing")
@@ -140,20 +125,27 @@ async def _process_draft_group_delayed(buffer_key: str, update: Update, context:
         
     matches_list = ai_res.get("matches") or [ai_res]
     
-    # 1. Check team names
-    t1_raw = matches_list[0].get("team1")
-    t2_raw = matches_list[0].get("team2")
+    # 1. Determine team names (by player names / squads first, then fallback to OCR / caption)
+    s1_all_p = (matches_list[0].get("side1_goals") or matches_list[0].get("left_goals") or []) + \
+               (matches_list[0].get("side1_assists") or matches_list[0].get("left_assists") or [])
+    s2_all_p = (matches_list[0].get("side2_goals") or matches_list[0].get("right_goals") or []) + \
+               (matches_list[0].get("side2_assists") or matches_list[0].get("right_assists") or [])
+
+    detected_t1, detected_t2 = await asyncio.to_thread(database.detect_teams_from_players, s1_all_p, s2_all_p, caption)
+    
+    t1_raw = detected_t1 or matches_list[0].get("team1")
+    t2_raw = detected_t2 or matches_list[0].get("team2")
     if not t1_raw or not t2_raw:
-        await status_msg.edit_text("🤖 ИИ распознал счет, но не смог определить названия команд. Пожалуйста, напишите их текстом в описании к фото.")
+        await status_msg.edit_text("🤖 ИИ распознал счет, но не смог определить команды по составам игроков. Пожалуйста, укажите названия клубов текстом в описании к фото.")
         return
         
     t1 = database.resolve_team_name(t1_raw) or t1_raw
     t2 = database.resolve_team_name(t2_raw) or t2_raw
         
-    # 2. Find first active match
-    first_match = database.get_active_match_by_teams(t1, t2, caption=caption)
+    # 2. Find active match and determine the round automatically
+    first_match = await asyncio.to_thread(database.get_active_match_by_teams, t1, t2, caption)
     if not first_match:
-        await status_msg.edit_text(f"❌ Не найден активный матч между командами {html.escape(t1)} и {html.escape(t2)}.\nВозможно, названия команд в подписи указаны неточно.")
+        await status_msg.edit_text(f"❌ Не найден активный матч между командами {html.escape(t1)} и {html.escape(t2)}.\nВозможно, этот тур уже подтвержден или названия клубов не совпадают.")
         return
 
     is_cup = first_match.get("tournament_type") == "cup"
@@ -229,6 +221,35 @@ async def _process_draft_group_delayed(buffer_key: str, update: Update, context:
             h_score = h_g_count
         if a_score < a_g_count:
             a_score = a_g_count
+
+        # Mathematical rule: assists cannot exceed score
+        h_a_count = sum(h_assists.values())
+        if h_a_count > h_score:
+            excess = h_a_count - h_score
+            for p in list(h_assists.keys()):
+                if excess <= 0:
+                    break
+                if p in h_goals:
+                    if h_assists[p] <= excess:
+                        excess -= h_assists[p]
+                        del h_assists[p]
+                    else:
+                        h_assists[p] -= excess
+                        excess = 0
+
+        a_a_count = sum(a_assists.values())
+        if a_a_count > a_score:
+            excess = a_a_count - a_score
+            for p in list(a_assists.keys()):
+                if excess <= 0:
+                    break
+                if p in a_goals:
+                    if a_assists[p] <= excess:
+                        excess -= a_assists[p]
+                        del a_assists[p]
+                    else:
+                        a_assists[p] -= excess
+                        excess = 0
                 
         events = []
         for p, c in h_goals.items(): events.append((home_team, p, "goal", c))
@@ -479,6 +500,15 @@ async def cb_draft_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             )
             if next_stage:
                 last_next_stage = next_stage
+
+            # Reward players with -1 warn if this was an overdue debt match
+            try:
+                from handlers.cabinet import handle_debt_played_rewards
+                await handle_debt_played_rewards(
+                    context, m_id, g.get('round_number', 0), g.get('player1_id'), g.get('player2_id')
+                )
+            except Exception as e:
+                logger.warning(f"Failed to handle debt rewards in draft confirm: {e}")
         except Exception as e:
             logger.exception(f"Failed to confirm match {m_id}")
             

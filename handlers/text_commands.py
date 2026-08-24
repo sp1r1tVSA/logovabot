@@ -433,6 +433,52 @@ async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_T
         )
         return True
 
+    if action in ("автоварны", "проверить_долги", "чекер_долгов") or full_cmd.startswith("автоварны") or full_cmd.startswith("проверить долги") or full_cmd.startswith("проверка долгов"):
+        if not is_adm:
+            await msg.reply_text("⚠️ Эта команда доступна только администраторам турнира.")
+            return True
+
+        from handlers.admin import job_debt_lifecycle_tracker
+        await msg.reply_text("⏳ <b>Запуск проверки долгов и начисления авто-варнов...</b>", parse_mode="HTML")
+        await job_debt_lifecycle_tracker(context)
+        await msg.reply_text("✅ <b>Проверка долгов и авто-варнов успешно завершена!</b>", parse_mode="HTML")
+        return True
+
+    if action in ("клуб", "карточка_клуба", "клуб_инфо", "club") or full_cmd.startswith("клуб") or full_cmd.startswith("карточка клуба"):
+        chat = update.effective_chat
+        if chat and chat.type in ("group", "supergroup", "channel") and not is_adm:
+            bot_me = await context.bot.get_me()
+            bot_username = bot_me.username or "logovobot"
+            await msg.reply_text(
+                f"ℹ️ Просмотр карточек клубов доступен в личном кабинете бота: @{bot_username}\n"
+                f"В общем чате эта команда доступна только администраторам.",
+                parse_mode="HTML"
+            )
+            return True
+
+        target_club_raw = re.sub(r"^(?:карточка\s+клуба|клуб(?:\s+инфо)?)\s*", "", cmd_text, flags=re.IGNORECASE).strip()
+        if not target_club_raw:
+            user = update.effective_user
+            team = await asyncio.to_thread(database.get_user_team, user.id) if user else None
+            target_club_raw = team or ""
+
+        if not target_club_raw:
+            from handlers.cabinet import show_clubs_catalog
+            await show_clubs_catalog(update, context)
+            return True
+
+        canon = database.resolve_team_name(target_club_raw)
+        if not canon:
+            await msg.reply_text(
+                f"❌ Клуб <b>{html.escape(target_club_raw)}</b> не найден в Лиге КПЛ. Напишите <code>/club</code>, чтобы посмотреть весь список.",
+                parse_mode="HTML"
+            )
+            return True
+
+        from handlers.cabinet import send_or_edit_club_card
+        await send_or_edit_club_card(update, context, canon, back_cb="cb_clubs_catalog")
+        return True
+
     if action in ("анонс_кубок", "анонс_финал", "анонс") or full_cmd.startswith("анонс кубок") or full_cmd.startswith("анонс финал") or full_cmd.startswith("кубок анонс"):
         if not is_adm:
             await msg.reply_text("⚠️ Эта команда доступна только администраторам турнира.")
@@ -568,6 +614,7 @@ async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_T
             await msg.reply_text(f"❌ Пользователь <b>{html.escape(target_ref)}</b> не найден в базе данных.", parse_mode="HTML")
             return True
 
+        target_user = dict(target_user)
         t_id = target_user["telegram_id"]
         new_cnt, exceeded = await asyncio.to_thread(database.add_warn, t_id, user_id, reason)
         from config import MAX_WARNS_LIMIT
@@ -597,6 +644,13 @@ async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_T
                 )
             except Exception as e:
                 logger.warning(f"Failed to post warn to warns topic: {e}")
+
+        try:
+            from handlers.admin import _post_or_update_debts_in_warns
+            await _post_or_update_debts_in_warns(context)
+        except Exception as e:
+            logger.warning(f"Failed to refresh debts in warns topic: {e}")
+
         return True
 
     if action in ("снять_варн", "unwarn", "разварн") or full_cmd.startswith("снять варн"):
@@ -614,6 +668,7 @@ async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_T
             await msg.reply_text(f"❌ Пользователь <b>{html.escape(clean_ref)}</b> не найден в базе данных.", parse_mode="HTML")
             return True
 
+        target_user = dict(target_user)
         t_id = target_user["telegram_id"]
         new_cnt, removed = await asyncio.to_thread(database.remove_warn, t_id, user_id, "Снято администратором")
         if removed:
@@ -627,6 +682,13 @@ async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_T
                 f"ℹ️ У игрока @{html.escape(target_user.get('username') or str(t_id))} нет активных варнов.",
                 parse_mode="HTML"
             )
+
+        try:
+            from handlers.admin import _post_or_update_debts_in_warns
+            await _post_or_update_debts_in_warns(context)
+        except Exception as e:
+            logger.warning(f"Failed to refresh debts in warns topic: {e}")
+
         return True
 
     if action in ("варны", "список_варнов", "warns"):

@@ -16,11 +16,15 @@ CARD_PADDING_1X = 36
 CARD_WIDTH   = CARD_WIDTH_1X * SCALE
 CARD_PADDING = CARD_PADDING_1X * SCALE
 
-# Colors (same dark theme)
+# Colors (EA FC / Dark UI)
 BG_COLOR       = (20, 20, 22)        # #141416
 SURFACE_COLOR  = (26, 26, 30)        # #1A1A1E
 BORDER_COLOR   = (45, 45, 52)        # #2D2D34
-RED_ACCENT     = (239, 68, 68)       # #EF4444
+
+CUP_SURFACE    = (34, 28, 18)        # subtle warm gold tint
+CUP_BORDER     = (85, 65, 25)
+CUP_GOLD       = (251, 191, 36)      # #FBBF24
+
 WHITE          = (255, 255, 255)
 MUTED          = (156, 163, 175)     # #9CA3AF
 GOAL_COLOR     = (34, 197, 94)       # #22C55E  green
@@ -42,38 +46,65 @@ def generate_player_card(stats: dict) -> io.BytesIO:
         "team_name":   str,
         "total_goals": int,
         "total_assists": int,
-        "rounds": {round_number: {"goals": int, "assists": int}, ...}
+        "league_goals": int,
+        "league_assists": int,
+        "cup_goals": int,
+        "cup_assists": int,
+        "items": [
+            {"title": "Кубок КПЛ" or "Тур 1", "goals": int, "assists": int, "total": int, "is_cup": bool},
+            ...
+        ],
+        "rounds": dict (fallback)
       }
 
     Returns io.BytesIO PNG buffer.
     """
-    player_name   = stats.get("player_name", "—")
-    team_name     = stats.get("team_name", "—")
-    total_goals   = stats.get("total_goals", 0)
-    total_assists = stats.get("total_assists", 0)
-    rounds: dict  = stats.get("rounds", {})
+    player_name    = stats.get("player_name", "—")
+    team_name      = stats.get("team_name", "—")
+    total_goals    = stats.get("total_goals", 0)
+    total_assists  = stats.get("total_assists", 0)
+    league_goals   = stats.get("league_goals", total_goals)
+    league_assists = stats.get("league_assists", total_assists)
+    cup_goals      = stats.get("cup_goals", 0)
+    cup_assists    = stats.get("cup_assists", 0)
+    
+    items: list[dict] = stats.get("items", [])
+    if not items and stats.get("rounds"):
+        for rn, rd in sorted(stats["rounds"].items(), key=lambda x: int(x[0])):
+            is_c = (int(rn) == -1)
+            g = rd.get("goals", 0)
+            a = rd.get("assists", 0)
+            items.append({
+                "title": "Кубок КПЛ" if is_c else f"Тур {rn}",
+                "goals": g,
+                "assists": a,
+                "total": g + a,
+                "is_cup": is_c
+            })
 
     # ── 2x Scaled Fonts ────────────────────────────────────────────────────
     font_player   = load_font(24 * SCALE, bold=True)
     font_team     = load_font(14 * SCALE)
     font_label    = load_font(12 * SCALE)
+    font_sub_lbl  = load_font(11 * SCALE)
     font_big_num  = load_font(42 * SCALE, bold=True)
     font_stat_lbl = load_font(13 * SCALE, bold=True)
     font_round_hd = load_font(14 * SCALE, bold=True)
     font_round    = load_font(14 * SCALE)
+    font_round_b  = load_font(14 * SCALE, bold=True)
     font_season   = load_font(13 * SCALE, bold=True)
 
     # ── Dynamic height ─────────────────────────────────────────────────────
     HEADER_H      = 100 * SCALE
-    BIG_STATS_H   = 100 * SCALE
+    BIG_STATS_H   = (108 if (cup_goals > 0 or cup_assists > 0) else 100) * SCALE
     ROUNDS_HEADER = 38 * SCALE
     ROW_H         = 40 * SCALE
     FOOTER_H      = 32 * SCALE
     SECTION_GAP   = 16 * SCALE
 
-    num_rounds = len(rounds)
-    rounds_section_h = (ROUNDS_HEADER + num_rounds * ROW_H) if num_rounds > 0 else 0
-    no_rounds_h      = 44 * SCALE if num_rounds == 0 else 0
+    num_rows = len(items)
+    rounds_section_h = (ROUNDS_HEADER + num_rows * ROW_H) if num_rows > 0 else 0
+    no_rounds_h      = 44 * SCALE if num_rows == 0 else 0
 
     total_h = (
         CARD_PADDING
@@ -81,7 +112,7 @@ def generate_player_card(stats: dict) -> io.BytesIO:
         + SECTION_GAP
         + BIG_STATS_H
         + SECTION_GAP
-        + (rounds_section_h if num_rounds > 0 else no_rounds_h)
+        + (rounds_section_h if num_rows > 0 else no_rounds_h)
         + SECTION_GAP
         + FOOTER_H
         + CARD_PADDING
@@ -187,6 +218,8 @@ def generate_player_card(stats: dict) -> io.BytesIO:
     stats_y0 = y
     stats_h  = BIG_STATS_H
 
+    has_cup = (cup_goals > 0 or cup_assists > 0)
+
     # Goals block
     goal_bg_x0 = CARD_PADDING
     goal_bg_x1 = CARD_PADDING + col_w - 8 * SCALE
@@ -196,10 +229,18 @@ def generate_player_card(stats: dict) -> io.BytesIO:
     g_num_w   = int(draw.textlength(g_num_str, font=font_big_num))
     g_center_x = (goal_bg_x0 + goal_bg_x1) // 2
 
-    draw.text((g_center_x - g_num_w // 2, stats_y0 + 10 * SCALE), g_num_str, fill=GOAL_COLOR, font=font_big_num)
+    num_top_offset = (8 if has_cup else 10) * SCALE
+    lbl_top_offset = (58 if has_cup else 62) * SCALE
+
+    draw.text((g_center_x - g_num_w // 2, stats_y0 + num_top_offset), g_num_str, fill=GOAL_COLOR, font=font_big_num)
     g_lbl = "ГОЛОВ"
     g_lbl_w = int(draw.textlength(g_lbl, font=font_stat_lbl))
-    draw.text((g_center_x - g_lbl_w // 2, stats_y0 + 62 * SCALE), g_lbl, fill=MUTED, font=font_stat_lbl)
+    draw.text((g_center_x - g_lbl_w // 2, stats_y0 + lbl_top_offset), g_lbl, fill=MUTED, font=font_stat_lbl)
+
+    if has_cup:
+        g_sub = f"Лига: {league_goals}  •  Кубок: {cup_goals}"
+        g_sub_w = int(draw.textlength(g_sub, font=font_sub_lbl))
+        draw.text((g_center_x - g_sub_w // 2, stats_y0 + 82 * SCALE), g_sub, fill=MUTED, font=font_sub_lbl)
 
     # Assists block
     ast_bg_x0 = CARD_PADDING + col_w + 8 * SCALE
@@ -210,17 +251,22 @@ def generate_player_card(stats: dict) -> io.BytesIO:
     a_num_w   = int(draw.textlength(a_num_str, font=font_big_num))
     a_center_x = (ast_bg_x0 + ast_bg_x1) // 2
 
-    draw.text((a_center_x - a_num_w // 2, stats_y0 + 10 * SCALE), a_num_str, fill=ASSIST_COLOR, font=font_big_num)
+    draw.text((a_center_x - a_num_w // 2, stats_y0 + num_top_offset), a_num_str, fill=ASSIST_COLOR, font=font_big_num)
     a_lbl = "АССИСТОВ"
     a_lbl_w = int(draw.textlength(a_lbl, font=font_stat_lbl))
-    draw.text((a_center_x - a_lbl_w // 2, stats_y0 + 62 * SCALE), a_lbl, fill=MUTED, font=font_stat_lbl)
+    draw.text((a_center_x - a_lbl_w // 2, stats_y0 + lbl_top_offset), a_lbl, fill=MUTED, font=font_stat_lbl)
+
+    if has_cup:
+        a_sub = f"Лига: {league_assists}  •  Кубок: {cup_assists}"
+        a_sub_w = int(draw.textlength(a_sub, font=font_sub_lbl))
+        draw.text((a_center_x - a_sub_w // 2, stats_y0 + 82 * SCALE), a_sub, fill=MUTED, font=font_sub_lbl)
 
     y += stats_h + SECTION_GAP
 
     # ══════════════════════════════════════════════════════════════════════
     # 3. PER-ROUND TABLE
     # ══════════════════════════════════════════════════════════════════════
-    if num_rounds == 0:
+    if num_rows == 0:
         no_data = "Нет статистики по турам"
         nd_w = int(draw.textlength(no_data, font=font_stat_lbl))
         draw.text(((CARD_WIDTH - nd_w) // 2, y + 10 * SCALE), no_data, fill=MUTED, font=font_stat_lbl)
@@ -240,8 +286,14 @@ def generate_player_card(stats: dict) -> io.BytesIO:
         y += ROUNDS_HEADER
         draw.line([(CARD_PADDING, y - 4 * SCALE), (CARD_WIDTH - CARD_PADDING, y - 4 * SCALE)], fill=BORDER_COLOR, width=1 * SCALE)
 
-        for idx, (rn, rd) in enumerate(sorted(rounds.items(), key=lambda x: int(x[0]))):
-            row_bg = SURFACE_COLOR if idx % 2 == 0 else BG_COLOR
+        for idx, item in enumerate(items):
+            is_cup = item.get("is_cup", False)
+            
+            if is_cup:
+                row_bg = CUP_SURFACE
+            else:
+                row_bg = SURFACE_COLOR if idx % 2 == 0 else BG_COLOR
+
             draw.rectangle(
                 [(CARD_PADDING - 4 * SCALE, y), (CARD_WIDTH - CARD_PADDING + 4 * SCALE, y + ROW_H - 2 * SCALE)],
                 fill=row_bg
@@ -249,11 +301,20 @@ def generate_player_card(stats: dict) -> io.BytesIO:
 
             row_center_y = y + ROW_H // 2
 
-            draw.text((col_round_x, row_center_y), f"Тур {rn}", fill=TEXT_SECONDARY, font=font_round, anchor="lm")
+            title_text = item.get("title", "")
+            opp_text   = item.get("opponent", "")
+            title_color = CUP_GOLD if is_cup else TEXT_SECONDARY
+            title_fnt   = font_round_b if is_cup else font_round
+            draw.text((col_round_x, row_center_y), title_text, fill=title_color, font=title_fnt, anchor="lm")
 
-            goals   = rd.get("goals", 0)
-            assists = rd.get("assists", 0)
-            total   = goals + assists
+            if opp_text and not is_cup:
+                title_w = int(draw.textlength(title_text, font=title_fnt))
+                opp_str = f"vs {opp_text}"
+                draw.text((col_round_x + title_w + 14 * SCALE, row_center_y), opp_str, fill=MUTED, font=font_round, anchor="lm")
+
+            goals   = item.get("goals", 0)
+            assists = item.get("assists", 0)
+            total   = item.get("total", goals + assists)
 
             g_str = str(goals) if goals > 0 else "—"
             g_col = GOAL_COLOR if goals > 0 else MUTED
@@ -289,22 +350,3 @@ def generate_player_card(stats: dict) -> io.BytesIO:
     resampled_img.save(buf, format="PNG")
     buf.seek(0)
     return buf
-
-
-if __name__ == "__main__":
-    test_stats = {
-        "player_name": "Криштиану Роналду",
-        "team_name": "Спортинг",
-        "total_goals": 12,
-        "total_assists": 5,
-        "rounds": {
-            1: {"goals": 2, "assists": 1},
-            3: {"goals": 1, "assists": 0},
-            5: {"goals": 0, "assists": 2},
-            7: {"goals": 3, "assists": 1},
-        },
-    }
-    buf = generate_player_card(test_stats)
-    with open("test_player_card.png", "wb") as f:
-        f.write(buf.getvalue())
-    print("test_player_card.png saved")

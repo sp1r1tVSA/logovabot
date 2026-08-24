@@ -1,3 +1,5 @@
+import os
+import io
 import datetime
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from telegram.ext import ContextTypes, ConversationHandler
@@ -15,6 +17,21 @@ import ai_recognizer
 import config
 from config import MAX_WARNS_LIMIT
 import player_card_generator
+import club_card_generator
+import club_schedule_generator
+
+def check_group_card_access(update: Update) -> bool:
+    """
+    Check if the user is permitted to interact with club cards/catalogs in the current chat.
+    In groups/supergroups/channels, only admins are permitted.
+    In private chats, all users are permitted.
+    """
+    chat = update.effective_chat
+    user = update.effective_user
+    if chat and chat.type in ("group", "supergroup", "channel"):
+        if not user or not is_admin(user.id):
+            return False
+    return True
 
 def match_squad_player_names(raw_players: list[str], squad_list: list[str]) -> dict[str, int]:
     counts = {}
@@ -61,14 +78,20 @@ def match_and_enrich_squad(raw_side1_goals: list[str], raw_side2_goals: list[str
         for squad_p in squad_list:
             sp_lower = squad_p.lower().strip()
             sp_norm = _normalize_name_translit(sp_lower)
-            if raw_lower == sp_lower or raw_lower in sp_lower or sp_lower in raw_lower:
+            # 1. Exact match (case / translit)
+            if raw_lower == sp_lower or raw_norm == sp_norm:
                 return squad_p
-            if raw_norm == sp_norm or raw_norm in sp_norm or sp_norm in raw_norm:
+            # 2. Substring match only for meaningful length (>=4) to prevent false matches on short words
+            if len(raw_lower) >= 4 and (raw_lower in sp_lower or sp_lower in raw_lower):
                 return squad_p
-            raw_parts = raw_norm.split()
-            sp_parts = sp_norm.split()
-            if any(p in sp_parts or any(p in spp or spp in p for spp in sp_parts) for p in raw_parts if len(p) > 2):
+            if len(raw_norm) >= 4 and (raw_norm in sp_norm or sp_norm in raw_norm):
                 return squad_p
+            # 3. Token-level matching
+            raw_parts = [p for p in raw_norm.split() if len(p) >= 3]
+            sp_parts = [p for p in sp_norm.split() if len(p) >= 3]
+            if raw_parts and sp_parts:
+                if any(p in sp_parts or any(p == spp for spp in sp_parts) for p in raw_parts):
+                    return squad_p
         return None
 
     # If single timeline had everything dumped into one list and second list is empty
@@ -88,13 +111,9 @@ def match_and_enrich_squad(raw_side1_goals: list[str], raw_side2_goals: list[str
                 away_g[a_match] = away_g.get(a_match, 0) + 1
             elif not raw_side1_goals and raw_side2_goals:
                 use_name = a_match or raw_clean
-                database.add_squad(away_team, [use_name])
-                away_squad.append(use_name)
                 away_g[use_name] = away_g.get(use_name, 0) + 1
             else:
                 use_name = h_match or raw_clean
-                database.add_squad(home_team, [use_name])
-                home_squad.append(use_name)
                 home_g[use_name] = home_g.get(use_name, 0) + 1
         return home_g, away_g, {}, {}, True
 
@@ -120,26 +139,28 @@ def match_and_enrich_squad(raw_side1_goals: list[str], raw_side2_goals: list[str
         side1_team, side2_team = home_team, away_team
         side1_squad, side2_squad = home_squad, away_squad
 
-    def process_side_events(raw_list, team_name, squad_list):
+    def process_side_events(raw_list, this_squad, opp_squad):
         counts = {}
         for raw in raw_list:
             raw_clean = raw.strip()
             if not raw_clean:
                 continue
-            matched_name = find_squad_match(raw_clean, squad_list)
+            matched_name = find_squad_match(raw_clean, this_squad)
             if matched_name:
-                use_name = matched_name
+                counts[matched_name] = counts.get(matched_name, 0) + 1
             else:
-                use_name = raw_clean
-                database.add_squad(team_name, [use_name])
-                squad_list.append(use_name)
-            counts[use_name] = counts.get(use_name, 0) + 1
+                # If player does NOT belong to this team's squad, check if they belong to opponent squad
+                if opp_squad and find_squad_match(raw_clean, opp_squad):
+                    # Cross-column OCR bleed detected! Do not assign opponent player to this team
+                    continue
+                # If player is in neither squad (e.g. unregistered player or bench sub), keep raw name
+                counts[raw_clean] = counts.get(raw_clean, 0) + 1
         return counts
 
-    side1_goals = process_side_events(raw_side1_goals, side1_team, side1_squad)
-    side2_goals = process_side_events(raw_side2_goals, side2_team, side2_squad)
-    side1_assists = process_side_events(raw_side1_assists, side1_team, side1_squad)
-    side2_assists = process_side_events(raw_side2_assists, side2_team, side2_squad)
+    side1_goals = process_side_events(raw_side1_goals, side1_squad, side2_squad)
+    side2_goals = process_side_events(raw_side2_goals, side2_squad, side1_squad)
+    side1_assists = process_side_events(raw_side1_assists, side1_squad, side2_squad)
+    side2_assists = process_side_events(raw_side2_assists, side2_squad, side1_squad)
 
     if is_side1_home:
         return side1_goals, side2_goals, side1_assists, side2_assists, True
@@ -186,10 +207,10 @@ async def safe_send_notification(bot, chat_id: int, text: str, reply_markup=None
         await asyncio.sleep(e.retry_after)
         return await safe_send_notification(bot, chat_id, text, reply_markup, parse_mode)
     except telegram.error.TelegramError as e:
-        logger.exception("Telegram error sending to {chat_id}")
+        logger.exception(f"Telegram error sending to {chat_id}")
         return False
     except Exception as e:
-        logger.exception("Unexpected error sending to {chat_id}")
+        logger.exception(f"Unexpected error sending to {chat_id}")
         return False
 
 # Conversation states
@@ -204,6 +225,11 @@ async def show_cabinet(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     query = update.callback_query
     if query:
         await query.answer()
+
+    if not check_group_card_access(update):
+        if query:
+            await query.answer("⛔ Просмотр и управление карточками в общем чате доступны только администраторам. Откройте ЛС с ботом!", show_alert=True)
+        return
 
     user = update.effective_user
     if not user:
@@ -220,8 +246,23 @@ async def show_cabinet(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             text = "⚠️ <b>Доступ ограничен</b>\n\nВы еще не зарегистрированы в системе лиги."
             keyboard = [[InlineKeyboardButton("« Назад в меню", callback_data="main_menu")]]
             markup = InlineKeyboardMarkup(keyboard)
-            if query:
-                await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
+            target_chat_id = query.message.chat_id if query and query.message else (update.effective_chat.id if update.effective_chat else update.effective_user.id)
+            thread_id = query.message.message_thread_id if query and query.message and query.message.is_topic_message else None
+            if query and query.message and (query.message.photo or query.message.document):
+                try:
+                    await query.message.delete()
+                except Exception:
+                    pass
+                await context.bot.send_message(chat_id=target_chat_id, message_thread_id=thread_id, text=text, parse_mode="HTML", reply_markup=markup)
+            elif query:
+                try:
+                    await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
+                except Exception:
+                    try:
+                        await query.message.delete()
+                    except Exception:
+                        pass
+                    await context.bot.send_message(chat_id=target_chat_id, message_thread_id=thread_id, text=text, parse_mode="HTML", reply_markup=markup)
             elif update.message:
                 await update.message.reply_text(text, parse_mode="HTML", reply_markup=markup)
             return
@@ -250,15 +291,32 @@ async def show_cabinet(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     )
 
     keyboard = [
-        [InlineKeyboardButton("📋 Мои матчи", callback_data="cabinet_my_matches")],
-        [InlineKeyboardButton("📸 Мой состав", callback_data="cabinet_my_squad")],
-        [InlineKeyboardButton("⚽ Бомбардиры и ассистенты", callback_data="cabinet_club_stats")],
-        [InlineKeyboardButton("📜 История игр", callback_data="cabinet_game_history")],
+        [
+            InlineKeyboardButton("🏛 Карточка клуба", callback_data="cb_my_club_card"),
+            InlineKeyboardButton("📸 Состав", callback_data="cabinet_my_squad"),
+        ],
+        [
+            InlineKeyboardButton("📋 Мои матчи", callback_data="cabinet_my_matches"),
+            InlineKeyboardButton("📜 История игр", callback_data="cabinet_game_history"),
+        ],
+        [
+            InlineKeyboardButton("⚽ Топ клуба", callback_data="cabinet_club_stats"),
+            InlineKeyboardButton("🌍 Все клубы", callback_data="cb_clubs_catalog"),
+        ],
         [InlineKeyboardButton("« Назад в меню", callback_data="main_menu")]
     ]
     markup = InlineKeyboardMarkup(keyboard)
 
-    if query:
+    target_chat_id = query.message.chat_id if query and query.message else (update.effective_chat.id if update.effective_chat else update.effective_user.id)
+    thread_id = query.message.message_thread_id if query and query.message and query.message.is_topic_message else None
+
+    if query and query.message and (query.message.photo or query.message.document):
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
+        await context.bot.send_message(chat_id=target_chat_id, message_thread_id=thread_id, text=text, parse_mode="HTML", reply_markup=markup)
+    elif query:
         try:
             await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
         except Exception:
@@ -266,7 +324,7 @@ async def show_cabinet(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 await query.message.delete()
             except Exception:
                 pass
-            await context.bot.send_message(chat_id=user.id, text=text, parse_mode="HTML", reply_markup=markup)
+            await context.bot.send_message(chat_id=target_chat_id, message_thread_id=thread_id, text=text, parse_mode="HTML", reply_markup=markup)
     elif update.message:
         await update.message.reply_text(text, parse_mode="HTML", reply_markup=markup)
 
@@ -276,6 +334,11 @@ async def show_club_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     query = update.callback_query
     if query:
         await query.answer()
+
+    if not check_group_card_access(update):
+        if query:
+            await query.answer("⛔ Просмотр и управление карточками в общем чате доступны только администраторам. Откройте ЛС с ботом!", show_alert=True)
+        return
 
     user = update.effective_user
     if not user:
@@ -342,17 +405,20 @@ async def show_club_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     buttons.append([InlineKeyboardButton("« Назад в кабинет", callback_data="menu_cabinet")])
     markup = InlineKeyboardMarkup(buttons)
 
+    target_chat_id = query.message.chat_id if query and query.message else (update.effective_chat.id if update.effective_chat else update.effective_user.id)
+    thread_id = query.message.message_thread_id if query and query.message and query.message.is_topic_message else None
+
     if query and query.message and (query.message.photo or query.message.caption):
         try:
             await query.message.delete()
         except Exception:
             pass
-        await context.bot.send_message(chat_id=query.from_user.id, text=text, parse_mode="HTML", reply_markup=markup)
+        await context.bot.send_message(chat_id=target_chat_id, message_thread_id=thread_id, text=text, parse_mode="HTML", reply_markup=markup)
     elif query:
         try:
             await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
         except Exception:
-            await context.bot.send_message(chat_id=query.from_user.id, text=text, parse_mode="HTML", reply_markup=markup)
+            await context.bot.send_message(chat_id=target_chat_id, message_thread_id=thread_id, text=text, parse_mode="HTML", reply_markup=markup)
     elif update.message:
         await update.message.reply_text(text, parse_mode="HTML", reply_markup=markup)
 
@@ -363,6 +429,10 @@ async def show_player_card(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if not query:
         return
     await query.answer()
+
+    if not check_group_card_access(update):
+        await query.answer("⛔ Просмотр и управление карточками в общем чате доступны только администраторам. Откройте ЛС с ботом!", show_alert=True)
+        return
 
     data = query.data or ""
     player_name = None
@@ -406,10 +476,16 @@ async def show_player_card(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     # Generate image in a thread
     buf = await asyncio.to_thread(player_card_generator.generate_player_card, stats)
 
+    pts = stats.get("total_points", stats["total_goals"] + stats["total_assists"])
     caption = (
-        f"<b>{html.escape(player_name)}</b> · {html.escape(team_name)}\n"
-        f"⚽ {stats['total_goals']} голов  |  🅰️ {stats['total_assists']} ассистов"
+        f"🃏 <b>{html.escape(player_name)}</b> · {html.escape(team_name)}\n"
+        f"⚽ <b>{stats['total_goals']}</b> голов (Лига: {stats.get('league_goals', 0)} · Кубок: {stats.get('cup_goals', 0)})\n"
+        f"🅰️ <b>{stats['total_assists']}</b> ассистов (Лига: {stats.get('league_assists', 0)} · Кубок: {stats.get('cup_assists', 0)})\n"
+        f"🔥 <b>{pts}</b> очков (Г+П)"
     )
+
+    target_chat_id = query.message.chat_id if query.message else (update.effective_chat.id if update.effective_chat else query.from_user.id)
+    thread_id = query.message.message_thread_id if query.message and query.message.is_topic_message else None
 
     if query.message:
         try:
@@ -418,7 +494,8 @@ async def show_player_card(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             pass
 
     await context.bot.send_photo(
-        chat_id=query.from_user.id,
+        chat_id=target_chat_id,
+        message_thread_id=thread_id,
         photo=buf,
         caption=caption,
         parse_mode="HTML",
@@ -426,28 +503,418 @@ async def show_player_card(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     )
 
 
+async def send_or_edit_club_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE, team_name: str, back_cb: str | None = None) -> None:
+    """Send or edit high-res graphic schedule and results card for a club."""
+    query = update.callback_query
+    msg = update.effective_message
+    chat = update.effective_chat
+
+    canon = database.resolve_team_name(team_name) or team_name
+    schedule_data = await asyncio.to_thread(database.get_club_schedule_and_results, canon, 12)
+    buf = await asyncio.to_thread(club_schedule_generator.generate_club_schedule, schedule_data)
+
+    target_back = back_cb or f"view_club_{canon}"
+    keyboard = [
+        [
+            InlineKeyboardButton("🏛 Карточка", callback_data=f"view_club_{canon}"),
+            InlineKeyboardButton("👥 Состав", callback_data=f"clsquad_{canon}"),
+        ],
+        [
+            InlineKeyboardButton("🌍 Все клубы", callback_data="cb_clubs_catalog"),
+            InlineKeyboardButton("« В кабинет", callback_data="menu_cabinet"),
+        ]
+    ]
+    markup = InlineKeyboardMarkup(keyboard)
+    caption = f"📅 <b>МАТЧИ И РАСПИСАНИЕ: {html.escape(canon.upper())}</b>"
+
+    if query:
+        if query.message:
+            try:
+                await query.message.delete()
+            except Exception:
+                pass
+        target_chat_id = query.message.chat_id if query.message else (chat.id if chat else update.effective_user.id)
+        thread_id = query.message.message_thread_id if query.message and query.message.is_topic_message else None
+        await context.bot.send_photo(
+            chat_id=target_chat_id,
+            message_thread_id=thread_id,
+            photo=buf,
+            caption=caption,
+            parse_mode="HTML",
+            reply_markup=markup
+        )
+    elif msg:
+        await msg.reply_photo(
+            photo=buf,
+            caption=caption,
+            parse_mode="HTML",
+            reply_markup=markup
+        )
+    elif chat:
+        await context.bot.send_photo(
+            chat_id=chat.id,
+            photo=buf,
+            caption=caption,
+            parse_mode="HTML",
+            reply_markup=markup
+        )
+
+
 async def show_my_matches_stub(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Stub for My Matches."""
+    """Show schedule/matches for user's club."""
+    await show_game_history_stub(update, context)
+
+
+AVATARS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "avatars")
+
+
+async def get_cached_or_fetch_user_avatar(bot, user_id: int | None) -> str | None:
+    """Fetch user avatar from Telegram, save locally to assets/avatars/{user_id}.jpg and return path."""
+    if not user_id or not bot:
+        return None
+    try:
+        os.makedirs(AVATARS_DIR, exist_ok=True)
+        local_path = os.path.join(AVATARS_DIR, f"{user_id}.jpg")
+        if os.path.exists(local_path) and os.path.getsize(local_path) > 0:
+            return local_path
+
+        photos = await bot.get_user_profile_photos(user_id=user_id, limit=1)
+        if photos and photos.total_count > 0 and len(photos.photos) > 0 and len(photos.photos[0]) > 0:
+            best_photo = photos.photos[0][-1]
+            file_obj = await bot.get_file(best_photo.file_id)
+            buf = io.BytesIO()
+            await file_obj.download_to_memory(buf)
+            buf.seek(0)
+            with open(local_path, "wb") as f:
+                f.write(buf.getvalue())
+            return local_path
+    except Exception as e:
+        logger.debug(f"Could not fetch avatar for user {user_id}: {e}")
+    return None
+
+
+async def send_or_edit_club_card(update: Update, context: ContextTypes.DEFAULT_TYPE, team_name: str, back_cb: str = "cb_clubs_catalog") -> None:
+    """Send or edit the high-res graphic club card with compact inline keyboard and no wall of text."""
+    query = update.callback_query
+    msg = update.effective_message
+    chat = update.effective_chat
+
+    canon = database.resolve_team_name(team_name) or team_name
+    card_data = await asyncio.to_thread(database.get_club_card_data, canon)
+    
+    # Fetch owner avatar if manager is assigned
+    mgr = card_data.get("manager")
+    mgr_id = mgr.get("telegram_id") if mgr else None
+    avatar_path = await get_cached_or_fetch_user_avatar(context.bot, mgr_id) if mgr_id else None
+
+    buf = await asyncio.to_thread(club_card_generator.generate_club_card, card_data, avatar_path)
+
+    # Compact inline keyboard (2 buttons per row, minimal labels)
+    keyboard = [
+        [
+            InlineKeyboardButton("👥 Состав", callback_data=f"clsquad_{canon}"),
+            InlineKeyboardButton("📅 Матчи", callback_data=f"clhist_{canon}"),
+        ],
+        [
+            InlineKeyboardButton("🌍 Все клубы", callback_data="cb_clubs_catalog"),
+            InlineKeyboardButton("« Назад", callback_data=back_cb),
+        ]
+    ]
+    markup = InlineKeyboardMarkup(keyboard)
+    caption = f"🏛 <b>{html.escape(canon.upper())}</b>"
+
+    if query:
+        if query.message:
+            try:
+                await query.message.delete()
+            except Exception:
+                pass
+        target_chat_id = query.message.chat_id if query.message else (chat.id if chat else update.effective_user.id)
+        thread_id = query.message.message_thread_id if query.message and query.message.is_topic_message else None
+        await context.bot.send_photo(
+            chat_id=target_chat_id,
+            message_thread_id=thread_id,
+            photo=buf,
+            caption=caption,
+            parse_mode="HTML",
+            reply_markup=markup
+        )
+    elif msg:
+        await msg.reply_photo(
+            photo=buf,
+            caption=caption,
+            parse_mode="HTML",
+            reply_markup=markup
+        )
+    elif chat:
+        await context.bot.send_photo(
+            chat_id=chat.id,
+            photo=buf,
+            caption=caption,
+            parse_mode="HTML",
+            reply_markup=markup
+        )
+
+
+async def show_my_club_card(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show the graphic club card of the current user."""
     query = update.callback_query
     if query:
         await query.answer()
-    keyboard = [[InlineKeyboardButton("« Назад в кабинет", callback_data="menu_cabinet")]]
-    markup = InlineKeyboardMarkup(keyboard)
-    text = "🚧 <b>В разработке</b>\n\nРаздел матчей находится в разработке."
-    if query:
-        await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
+
+    if not check_group_card_access(update):
+        if query:
+            await query.answer("⛔ Просмотр и управление карточками в общем чате доступны только администраторам. Откройте ЛС с ботом!", show_alert=True)
+        return
+
+    user = update.effective_user
+    if not user:
+        return
+
+    team = await asyncio.to_thread(database.get_user_team, user.id)
+    if not team:
+        if is_admin(user.id):
+            await show_clubs_catalog(update, context)
+            return
+        text = "⚠️ Вы не привязаны ни к одному клубу лиги."
+        keyboard = [[InlineKeyboardButton("« В кабинет", callback_data="menu_cabinet")]]
+        if query and query.message:
+            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+        elif update.message:
+            await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+
+    await send_or_edit_club_card(update, context, team, back_cb="menu_cabinet")
+
+
+async def show_specific_club_card(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show specific club card by callback (view_club_<name>)."""
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+
+    if not check_group_card_access(update):
+        await query.answer("⛔ Просмотр и управление карточками в общем чате доступны только администраторам. Откройте ЛС с ботом!", show_alert=True)
+        return
+
+    raw_team = query.data.replace("view_club_", "")
+    await send_or_edit_club_card(update, context, raw_team, back_cb="cb_clubs_catalog")
+
+
+async def show_club_graphic_card(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Alias for viewing club card."""
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+
+    if not check_group_card_access(update):
+        await query.answer("⛔ Просмотр и управление карточками в общем чате доступны только администраторам. Откройте ЛС с ботом!", show_alert=True)
+        return
+
+    team_name = query.data.replace("img_club_", "")
+    await send_or_edit_club_card(update, context, team_name, back_cb="cb_clubs_catalog")
+
+
+async def show_club_squad(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Display full squad with individual goals & assists and interactive player card buttons."""
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+
+    if not check_group_card_access(update):
+        await query.answer("⛔ Просмотр и управление карточками в общем чате доступны только администраторам. Откройте ЛС с ботом!", show_alert=True)
+        return
+
+    team_name = query.data.replace("clsquad_", "")
+    canon = database.resolve_team_name(team_name) or team_name
+    squad_stats = await asyncio.to_thread(database.get_club_squad_stats, canon)
+
+    text = (
+        f"👥 <b>СОСТАВ И СТАТИСТИКА ИГРОКОВ: {html.escape(canon.upper())}</b>\n\n"
+    )
+
+    if not squad_stats:
+        text += "<i>В клубе пока нет зарегистрированных игроков.</i>\n"
+    else:
+        for idx, p in enumerate(squad_stats, 1):
+            p_name = html.escape(p["player_name"])
+            g = p["goals"]
+            a = p["assists"]
+            reg_badge = "" if p["is_registered"] else " <i>(вне заявки)</i>"
+            text += f"<b>{idx}.</b> <b>{p_name}</b> — <b>{g}</b> ⚽ · <b>{a}</b> 🅰️{reg_badge}\n"
+
+    # Player card buttons
+    context.user_data["club_stats_team"] = canon
+    context.user_data["club_stats_players"] = [p["player_name"] for p in squad_stats]
+
+    buttons: list[list[InlineKeyboardButton]] = []
+    row: list[InlineKeyboardButton] = []
+    for idx, p in enumerate(squad_stats[:18]):
+        btn = InlineKeyboardButton(f"👤 {p['player_name']}", callback_data=f"pcard_{idx}")
+        row.append(btn)
+        if len(row) == 2:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
+
+    buttons.append([InlineKeyboardButton("« К карточке клуба", callback_data=f"view_club_{canon}")])
+    markup = InlineKeyboardMarkup(buttons)
+
+    target_chat_id = query.message.chat_id if query and query.message else (update.effective_chat.id if update.effective_chat else query.from_user.id)
+    thread_id = query.message.message_thread_id if query and query.message and query.message.is_topic_message else None
+
+    if query.message and query.message.photo:
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
+        await context.bot.send_message(chat_id=target_chat_id, message_thread_id=thread_id, text=text, parse_mode="HTML", reply_markup=markup)
+    else:
+        try:
+            await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
+        except Exception:
+            await context.bot.send_message(chat_id=target_chat_id, message_thread_id=thread_id, text=text, parse_mode="HTML", reply_markup=markup)
+
+
+async def show_club_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Display visual match schedule and history for a specific club."""
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+
+    if not check_group_card_access(update):
+        await query.answer("⛔ Просмотр и управление карточками в общем чате доступны только администраторам. Откройте ЛС с ботом!", show_alert=True)
+        return
+
+    team_name = query.data.replace("clhist_", "")
+    await send_or_edit_club_schedule(update, context, team_name, back_cb=f"view_club_{team_name}")
 
 
 async def show_game_history_stub(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Stub for Game History."""
+    """Show game history for the user's club."""
     query = update.callback_query
     if query:
         await query.answer()
-    keyboard = [[InlineKeyboardButton("« Назад в кабинет", callback_data="menu_cabinet")]]
-    markup = InlineKeyboardMarkup(keyboard)
-    text = "🚧 <b>В разработке</b>\n\nИстория игр находится в разработке."
+
+    if not check_group_card_access(update):
+        if query:
+            await query.answer("⛔ Просмотр и управление карточками в общем чате доступны только администраторам. Откройте ЛС с ботом!", show_alert=True)
+        return
+
+    user = update.effective_user
+    if not user:
+        return
+    team = await asyncio.to_thread(database.get_user_team, user.id)
+    if not team:
+        await show_clubs_catalog(update, context)
+        return
+    await send_or_edit_club_schedule(update, context, team, back_cb="menu_cabinet")
+
+
+async def show_clubs_catalog(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Display interactive grid of all KPL clubs."""
+    query = update.callback_query
     if query:
-        await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
+        try:
+            await query.answer()
+        except Exception:
+            pass
+
+    if not check_group_card_access(update):
+        if query:
+            await query.answer("⛔ Просмотр и управление карточками в общем чате доступны только администраторам. Откройте ЛС с ботом!", show_alert=True)
+        return
+
+    clubs = await asyncio.to_thread(database.get_all_clubs_summary)
+
+    text = (
+        "🌍 <b>КАТАЛОГ ВСЕХ КЛУБОВ ЛИГИ КПЛ 2026</b>\n\n"
+        "Выберите клуб для просмотра полной клубной карточки, статистики, формы и состава:\n"
+    )
+
+    buttons: list[list[InlineKeyboardButton]] = []
+    row: list[InlineKeyboardButton] = []
+
+    for c in clubs:
+        t_name = c["team_name"]
+        rank_p = f"#{c['rank']} " if c["rank"] > 0 else ""
+        btn_title = f"{rank_p}{t_name}"
+        btn = InlineKeyboardButton(btn_title, callback_data=f"view_club_{t_name}")
+        row.append(btn)
+        if len(row) == 2:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
+
+    buttons.append([InlineKeyboardButton("« Назад в меню", callback_data="main_menu")])
+    markup = InlineKeyboardMarkup(buttons)
+
+    target_chat_id = query.message.chat_id if query and query.message else (update.effective_chat.id if update.effective_chat else update.effective_user.id)
+    thread_id = query.message.message_thread_id if query and query.message and query.message.is_topic_message else None
+
+    if query:
+        if query.message and query.message.photo:
+            try:
+                await query.message.delete()
+            except Exception:
+                pass
+            await context.bot.send_message(chat_id=target_chat_id, message_thread_id=thread_id, text=text, parse_mode="HTML", reply_markup=markup)
+        else:
+            try:
+                await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
+            except Exception:
+                try:
+                    await query.message.delete()
+                except Exception:
+                    pass
+                await context.bot.send_message(chat_id=target_chat_id, message_thread_id=thread_id, text=text, parse_mode="HTML", reply_markup=markup)
+    elif update.message:
+        await update.message.reply_text(text, parse_mode="HTML", reply_markup=markup)
+
+
+async def club_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handler for /club [team_name] command."""
+    chat = update.effective_chat
+    user = update.effective_user
+    user_id = user.id if user else 0
+    if chat and chat.type in ("group", "supergroup", "channel") and not is_admin(user_id):
+        bot_me = await context.bot.get_me()
+        bot_username = bot_me.username or "logovobot"
+        if update.message:
+            await update.message.reply_text(
+                f"ℹ️ Просмотр карточек клубов доступен в личном кабинете бота: @{bot_username}\n"
+                f"В общем чате эта команда доступна только администраторам.",
+                parse_mode="HTML"
+            )
+        return
+
+    args = context.args or []
+    if not args:
+        team = await asyncio.to_thread(database.get_user_team, user_id) if user else None
+        if team:
+            await send_or_edit_club_card(update, context, team, back_cb="cb_clubs_catalog")
+        else:
+            await show_clubs_catalog(update, context)
+        return
+
+    req_team = " ".join(args).strip()
+    canon = database.resolve_team_name(req_team)
+    if not canon:
+        if update.message:
+            await update.message.reply_text(
+                f"❌ Клуб «{html.escape(req_team)}» не найден в Лиге КПЛ.\n"
+                f"Используйте команду <code>/club</code> без параметров, чтобы открыть каталог всех клубов.",
+                parse_mode="HTML"
+            )
+        return
+
+    await send_or_edit_club_card(update, context, canon, back_cb="cb_clubs_catalog")
 
 def is_valid_name(text: str) -> bool:
     """Validate entered text."""
@@ -560,34 +1027,45 @@ async def cancel_registration(update: Update, context: ContextTypes.DEFAULT_TYPE
     return ConversationHandler.END
 
 async def safe_edit_or_reply(query: CallbackQuery, context: ContextTypes.DEFAULT_TYPE, text: str, reply_markup=None, parse_mode: str = "HTML") -> None:
-    """Safely edit a message whether it's a text message or photo message, preventing BadRequest errors."""
+    """Safely edit a message whether it's a text message or photo message, preserving group/topic context."""
     if not query:
         return
-    user_id = query.from_user.id
+    
+    target_chat_id = query.message.chat_id if query.message else query.from_user.id
+    thread_id = query.message.message_thread_id if query.message and query.message.is_topic_message else None
 
     # 1. Проверяем, содержит ли исходное сообщение медиафайл (фотография)
     has_photo = bool(query.message and (query.message.photo or query.message.caption or query.message.document))
 
     if has_photo:
-        # Для фото-сообщений ВСЕГДА удаляем старое сообщение с картинкой и слаем новое текстовое
         try:
             await query.message.delete()
         except Exception as e:
             logger.debug(f"Could not delete photo message: {e}")
-        await context.bot.send_message(chat_id=user_id, text=text, parse_mode=parse_mode, reply_markup=reply_markup)
+        await context.bot.send_message(
+            chat_id=target_chat_id,
+            message_thread_id=thread_id,
+            text=text,
+            parse_mode=parse_mode,
+            reply_markup=reply_markup
+        )
     else:
-        # Для обычных текстовых сообщений пробуем отредактировать текст
         try:
             await query.edit_message_text(text, parse_mode=parse_mode, reply_markup=reply_markup)
         except telegram.error.BadRequest as e:
             err_msg = str(e).lower()
             if "there is no text in the message to edit" in err_msg or "message is not modified" in err_msg:
-                # Если сработал краевой случай Telegram — удаляем и пересоздаем
                 try:
                     await query.message.delete()
                 except Exception:
                     pass
-                await context.bot.send_message(chat_id=user_id, text=text, parse_mode=parse_mode, reply_markup=reply_markup)
+                await context.bot.send_message(
+                    chat_id=target_chat_id,
+                    message_thread_id=thread_id,
+                    text=text,
+                    parse_mode=parse_mode,
+                    reply_markup=reply_markup
+                )
             else:
                 logger.warning(f"safe_edit_or_reply BadRequest: {e}")
         except Exception as e:
@@ -596,7 +1074,13 @@ async def safe_edit_or_reply(query: CallbackQuery, context: ContextTypes.DEFAULT
                 await query.message.delete()
             except Exception:
                 pass
-            await context.bot.send_message(chat_id=user_id, text=text, parse_mode=parse_mode, reply_markup=reply_markup)
+            await context.bot.send_message(
+                chat_id=target_chat_id,
+                message_thread_id=thread_id,
+                text=text,
+                parse_mode=parse_mode,
+                reply_markup=reply_markup
+            )
 
 # --- Placeholders ---
 
@@ -605,6 +1089,11 @@ async def show_my_matches(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if not query:
         return
     await query.answer()
+
+    if not check_group_card_access(update):
+        await query.answer("⛔ Просмотр и управление карточками в общем чате доступны только администраторам. Откройте ЛС с ботом!", show_alert=True)
+        return
+
     user_id = query.from_user.id
     matches = await asyncio.to_thread(database.get_pending_matches, user_id)
     
@@ -953,7 +1442,7 @@ async def cb_admin_approve_result(update: Update, context: ContextTypes.DEFAULT_
             reply_markup=player_keyboard
         )
     except Exception as e:
-        logger.exception("Failed to notify player {player_id} about admin approval")
+        logger.exception(f"Failed to notify player {player_id} about admin approval")
 
     # Update admin's message to show it's been approved
     try:
@@ -1218,12 +1707,12 @@ async def start_score_reporting(update: Update, context: ContextTypes.DEFAULT_TY
     match = await asyncio.to_thread(database.get_match, match_id)
     if not match:
         if query:
-            await context.bot.send_message(chat_id=query.from_user.id, text="❌ Матч не найден.")
+            await query.answer("❌ Матч не найден.", show_alert=True)
         return
 
     if match['status'] == 'confirmed':
         if query:
-            await context.bot.send_message(chat_id=query.from_user.id, text="⛔ Результат этого матча уже занесён в таблицу!")
+            await query.answer("⛔ Результат этого матча уже занесён в таблицу!", show_alert=True)
         return
 
     user_id = query.from_user.id if query else update.effective_user.id
@@ -1263,11 +1752,11 @@ async def cb_report_choice_auto(update: Update, context: ContextTypes.DEFAULT_TY
 
     match = await asyncio.to_thread(database.get_match, match_id)
     if not match:
-        await context.bot.send_message(chat_id=query.from_user.id, text="❌ Матч не найден.")
+        await query.answer("❌ Матч не найден.", show_alert=True)
         return
 
     if match['status'] == 'confirmed':
-        await context.bot.send_message(chat_id=query.from_user.id, text="⛔ Результат этого матча уже занесён в таблицу!")
+        await query.answer("⛔ Результат этого матча уже занесён в таблицу!", show_alert=True)
         return
 
     user_id = query.from_user.id
@@ -1294,11 +1783,11 @@ async def cb_report_choice_manual(update: Update, context: ContextTypes.DEFAULT_
 
     match = await asyncio.to_thread(database.get_match, match_id)
     if not match:
-        await context.bot.send_message(chat_id=query.from_user.id, text="❌ Матч не найден.")
+        await query.answer("❌ Матч не найден.", show_alert=True)
         return
 
     if match['status'] == 'confirmed':
-        await context.bot.send_message(chat_id=query.from_user.id, text="⛔ Результат этого матча уже занесён в таблицу!")
+        await query.answer("⛔ Результат этого матча уже занесён в таблицу!", show_alert=True)
         return
 
     user_id = query.from_user.id
@@ -2016,11 +2505,11 @@ async def cb_confirm_ai_final(update: Update, context: ContextTypes.DEFAULT_TYPE
     match_id = int(query.data.replace("cb_confirm_ai_final_", ""))
     match = await asyncio.to_thread(database.get_match, match_id)
     if not match:
-        await context.bot.send_message(chat_id=query.from_user.id, text="❌ Матч не найден.")
+        await query.answer("❌ Матч не найден.", show_alert=True)
         return
 
     if match['status'] == 'confirmed':
-        await context.bot.send_message(chat_id=query.from_user.id, text="✅ Результат уже зафиксирован!")
+        await query.answer("✅ Результат уже зафиксирован!", show_alert=True)
         return
 
     user_id = query.from_user.id
@@ -2172,89 +2661,81 @@ async def submit_report_to_guest(update: Update, context: ContextTypes.DEFAULT_T
 
     match = await asyncio.to_thread(database.get_match, match_id) if match_id else None
     if not match:
-        await context.bot.send_message(chat_id=query.from_user.id, text="❌ Ошибка: матч не найден.")
+        await query.answer("❌ Ошибка: матч не найден.", show_alert=True)
         return
 
     if match['status'] == 'confirmed':
-        await context.bot.send_message(chat_id=query.from_user.id, text="⛔ Результат этого матча уже занесён в таблицу!")
+        await query.answer("⛔ Результат этого матча уже занесён в таблицу!", show_alert=True)
         return
 
     submitter_id = query.from_user.id
     is_submitter_home = (submitter_id == match['player1_id'])
+    opp_id = match['player2_id'] if is_submitter_home else match['player1_id']
+    opp_team = match['player2_team'] if is_submitter_home else match['player1_team']
 
-    submitter_team = match['player1_team'] or match['player1_nickname'] if is_submitter_home else match['player2_team'] or match['player2_nickname']
-    recipient_team = match['player2_team'] or match['player2_nickname'] if is_submitter_home else match['player1_team'] or match['player1_nickname']
-    recipient_id = match['player2_id'] if is_submitter_home else match['player1_id']
+    if not opp_id:
+        await query.answer("⚠️ Соперник не зарегистрирован в боте. Результат будет отправлен администратору.", show_alert=True)
+        await submit_report_to_admin(update, context)
+        return
 
-    hg = context.user_data.get("report_home_goals", 0)
-    ag = context.user_data.get("report_away_goals", 0)
-    photo_id = context.user_data.get("report_photo_id")
+    # Check opponent user status
+    opp_user = await asyncio.to_thread(database.get_user, opp_id)
+    opp_user = dict(opp_user) if opp_user else None
+    if not opp_user or not opp_user.get("telegram_id"):
+        await query.answer("⚠️ У соперника не найден Telegram ID. Отправляем администратору.", show_alert=True)
+        await submit_report_to_admin(update, context)
+        return
 
+    # Fetch recorded report details
     home_team = match['player1_team'] or match['player1_nickname']
     away_team = match['player2_team'] or match['player2_nickname']
+    h_score = context.user_data.get("report_home_score", 0)
+    a_score = context.user_data.get("report_away_score", 0)
+    scorers = context.user_data.get("report_scorers", [])
+    assists = context.user_data.get("report_assists", [])
+    mode = context.user_data.get("reporting_mode", "manual")
+    photos = context.user_data.get("ai_photos_list", [])
+    photo_id = photos[0] if photos else None
 
-    # Build events list for database (collects goals/assists for both teams if present)
-    events = []
-    h_goals = context.user_data.get("home_goals_count", {})
-    a_goals = context.user_data.get("away_goals_count", {})
-    h_assists = context.user_data.get("home_assists_count", {})
-    a_assists = context.user_data.get("away_assists_count", {})
+    # Format text for opponent confirmation
+    sc_text = "\n".join([f"⚽ {s['player_name']} ({s['team_name']}) — {s['count']}" for s in scorers]) if scorers else "<i>(нет голов)</i>"
+    ast_text = "\n".join([f"🎯 {a['player_name']} ({a['team_name']}) — {a['count']}" for a in assists]) if assists else "<i>(нет ассистов)</i>"
 
-    for p, c in h_goals.items():
-        events.append((home_team, p, "goal", c))
-    for p, c in a_goals.items():
-        events.append((away_team, p, "goal", c))
-    for p, c in h_assists.items():
-        events.append((home_team, p, "assist", c))
-    for p, c in a_assists.items():
-        events.append((away_team, p, "assist", c))
-
-    # Instant Match Finalization in DB
-    next_stage = await asyncio.to_thread(database.confirm_and_finalize_match, match_id, hg, ag, events, reporter_id=submitter_id, photo_id=photo_id)
-    if next_stage:
-        from handlers.admin import notify_cup_stage_opened
-        await notify_cup_stage_opened(context.bot, next_stage)
-    await refresh_debts_summary(context)
-    await refresh_league_table(context)
-
-    # 1. Respond to Submitter
-    submitter_msg = f"🎉 <b>Результат матча #{match_id} ({hg}:{ag}) успешно занесён в турнирную таблицу!</b>"
-    try:
-        await query.edit_message_caption(caption=submitter_msg, parse_mode="HTML")
-    except Exception:
-        try:
-            await query.edit_message_text(text=submitter_msg, parse_mode="HTML")
-        except Exception:
-            await context.bot.send_message(chat_id=submitter_id, text=submitter_msg, parse_mode="HTML")
-
-    # 2. Informative notification to players
-    h_summary = ", ".join([f"{p} ({c})" for p, c in h_goals.items()]) if h_goals else "Нет"
-    a_summary = ", ".join([f"{p} ({c})" for p, c in a_goals.items()]) if a_goals else "Нет"
-    h_ast_summary = ", ".join([f"{p} ({c})" for p, c in h_assists.items()]) if h_assists else "Нет"
-    a_ast_summary = ", ".join([f"{p} ({c})" for p, c in a_assists.items()]) if a_assists else "Нет"
-
-    notify_text = (
-        f"🔔 <b>Результат матча #{match_id} зафиксирован!</b>\n"
-        f"🏠 <b>{html.escape(home_team)}</b> {hg} : {ag} <b>{html.escape(away_team)}</b> ✈️\n\n"
-        f"⚽ <b>Голы ({html.escape(home_team)}):</b> {html.escape(h_summary)}\n"
-        f"🎯 <b>Ассисты ({html.escape(home_team)}):</b> {html.escape(h_ast_summary)}\n\n"
-        f"⚽ <b>Голы ({html.escape(away_team)}):</b> {html.escape(a_summary)}\n"
-        f"🎯 <b>Ассисты ({html.escape(away_team)}):</b> {html.escape(a_ast_summary)}\n\n"
-        f"📊 Данные внесены в турнирную таблицу."
+    text = (
+        f"🔔 <b>ПОДТВЕРЖДЕНИЕ РЕЗУЛЬТАТА МАТЧА #{match_id}</b>\n\n"
+        f"Соперник отправил результат вашей очной встречи:\n"
+        f"🏠 <b>{safe_escape(home_team)}</b> <b>{h_score} : {a_score}</b> <b>{safe_escape(away_team)}</b> ✈️\n\n"
+        f"<b>Авторы голов:</b>\n{sc_text}\n\n"
+        f"<b>Ассистенты:</b>\n{ast_text}\n\n"
+        f"Пожалуйста, подтвердите результат или отклоните его, если данные неверны."
     )
 
-    players_to_notify = [p_id for p_id in (match['player1_id'], match['player2_id']) if p_id and p_id != submitter_id]
-    for p_id in players_to_notify:
-        try:
-            if photo_id:
-                await context.bot.send_photo(chat_id=p_id, photo=photo_id, caption=notify_text, parse_mode="HTML")
-            else:
-                await context.bot.send_message(chat_id=p_id, text=notify_text, parse_mode="HTML")
-        except Exception as e:
-            logger.warning(f"Failed to send match notification to player {p_id}: {e}")
+    keyboard = [
+        [
+            InlineKeyboardButton("✅ Подтвердить", callback_data=f"cb_guest_confirm_{match_id}"),
+            InlineKeyboardButton("❌ Отклонить", callback_data=f"cb_guest_reject_{match_id}")
+        ]
+    ]
+    markup = InlineKeyboardMarkup(keyboard)
 
-    # 3. Post to Main Group & Update Standings Graphic
-    await notify_match_confirmed(context, match_id)
+    try:
+        if photo_id:
+            await context.bot.send_photo(chat_id=opp_id, photo=photo_id, caption=text, parse_mode="HTML", reply_markup=markup)
+        else:
+            await context.bot.send_message(chat_id=opp_id, text=text, parse_mode="HTML", reply_markup=markup)
+        
+        await safe_edit_or_reply(
+            query, context,
+            f"✅ <b>Результат матча #{match_id} отправлен сопернику на подтверждение!</b>\n\n"
+            f"Ожидайте подтверждения от второго игрока.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Назад в кабинет", callback_data="menu_cabinet")]])
+        )
+    except Exception as e:
+        logger.warning(f"Could not send match confirmation to opponent {opp_id}: {e}")
+        await query.answer("⚠️ Не удалось связаться с соперником. Отправляем администратору.", show_alert=True)
+        await submit_report_to_admin(update, context)
+
 
 async def refresh_debts_summary(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Refresh the debts summary in the ПРЕДЫ thread after a match result is recorded."""
@@ -2431,6 +2912,11 @@ async def show_my_squad(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     else:
         user = update.effective_user
 
+    if not check_group_card_access(update):
+        if query:
+            await query.answer("⛔ Просмотр и управление карточками в общем чате доступны только администраторам. Откройте ЛС с ботом!", show_alert=True)
+        return ConversationHandler.END
+
     db_user = await asyncio.to_thread(database.get_user, user.id)
     if not db_user:
         return ConversationHandler.END
@@ -2467,12 +2953,18 @@ async def start_upload_squad(update: Update, context: ContextTypes.DEFAULT_TYPE)
     text = "📤 **Загрузка состава**\n\nПожалуйста, отправьте скриншот вашего состава *одним фото*."
     keyboard = [[InlineKeyboardButton("Отмена", callback_data="cabinet_my_squad")]]
     
+    target_chat_id = query.message.chat_id if query and query.message else (update.effective_chat.id if update.effective_chat else update.effective_user.id)
+    thread_id = query.message.message_thread_id if query and query.message and query.message.is_topic_message else None
+
     if query:
         try:
             await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
         except Exception:
-            await query.message.delete()
-            await context.bot.send_message(chat_id=query.from_user.id, text=text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+            try:
+                await query.message.delete()
+            except Exception:
+                pass
+            await context.bot.send_message(chat_id=target_chat_id, message_thread_id=thread_id, text=text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
     else:
         await update.message.reply_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
         
@@ -2533,10 +3025,14 @@ async def cabinet_view_squad(update: Update, context: ContextTypes.DEFAULT_TYPE)
     photo_id = opp_user['squad_photo_id']
     team_name = opp_user['team_name'] or opp_user['username']
     
+    target_chat_id = query.message.chat_id if query and query.message else (update.effective_chat.id if update.effective_chat else query.from_user.id)
+    thread_id = query.message.message_thread_id if query and query.message and query.message.is_topic_message else None
+
     if photo_id:
         try:
             await context.bot.send_photo(
-                chat_id=query.from_user.id, 
+                chat_id=target_chat_id,
+                message_thread_id=thread_id,
                 photo=photo_id, 
                 caption=f"⚽ Состав команды <b>{html.escape(team_name)}</b>",
                 parse_mode="HTML"

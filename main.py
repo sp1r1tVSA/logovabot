@@ -1,5 +1,5 @@
 import logging
-from telegram.ext import ApplicationBuilder, Application, PicklePersistence
+from telegram.ext import ApplicationBuilder, Application
 from telegram import BotCommand
 from config import TOKEN
 from database import init_db
@@ -55,16 +55,6 @@ def main() -> None:
         application.run_polling()
     except (KeyboardInterrupt, SystemExit):
         logger.info("Bot stopped by user.")
-        
-    persistence = PicklePersistence(filepath="state/bot_persistence.pickle")
-
-    application = (
-        ApplicationBuilder()
-        .token(TOKEN)
-        .post_init(post_init)
-        .persistence(persistence) # <-- Подключаем персистентность
-        .build()
-    )
 
 if __name__ == "__main__":
     main()

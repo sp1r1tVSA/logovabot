@@ -87,6 +87,13 @@ from handlers.cabinet import (
     cb_admin_approve_result,
     cancel_score_report_and_navigate,
     show_player_card,
+    show_my_club_card,
+    show_specific_club_card,
+    show_club_graphic_card,
+    show_club_squad,
+    show_club_history,
+    show_clubs_catalog,
+    club_command,
 )
 
 # Import admin handlers
@@ -199,6 +206,7 @@ from handlers.admin import (
     admin_reset_season_warns,
     admin_reset_debts_command,
     admin_check_debts_command,
+    admin_unwarn_command,
 )
 
 logger = logging.getLogger(__name__)
@@ -230,6 +238,8 @@ async def track_group_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Log the error that occurred during update handling."""
+    if not context.error:
+        return
     err_str = str(context.error).lower()
     if "query is too old" in err_str or "message is not modified" in err_str:
         logger.debug(f"Telegram ошибка, игнорируется: {context.error}")
@@ -240,7 +250,7 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
     if isinstance(context.error, telegram.error.BadRequest):
         logger.debug(f"Telegram BadRequest (игнорируется): {context.error}")
         return
-    logger.exception("Исключение при обработке обновления:")
+    logger.error(f"Исключение при обработке обновления: {context.error}", exc_info=context.error)
 
 def _register_user_handlers(app: Application) -> None:
     """Register general user command and navigation handlers."""
@@ -279,6 +289,13 @@ def _register_user_handlers(app: Application) -> None:
     app.add_handler(CallbackQueryHandler(show_cup_stats, pattern="^show_cup_stats$"))
     app.add_handler(CallbackQueryHandler(send_cup_scorers_image, pattern="^img_cup_scorers$"))
     app.add_handler(CallbackQueryHandler(send_cup_assisters_image, pattern="^img_cup_assisters$"))
+    app.add_handler(CommandHandler("club", club_command))
+    app.add_handler(CallbackQueryHandler(show_my_club_card, pattern="^cb_my_club_card$"))
+    app.add_handler(CallbackQueryHandler(show_clubs_catalog, pattern="^cb_clubs_catalog$"))
+    app.add_handler(CallbackQueryHandler(show_specific_club_card, pattern="^view_club_.+$"))
+    app.add_handler(CallbackQueryHandler(show_club_graphic_card, pattern="^img_club_.+$"))
+    app.add_handler(CallbackQueryHandler(show_club_squad, pattern="^clsquad_.+$"))
+    app.add_handler(CallbackQueryHandler(show_club_history, pattern="^clhist_.+$"))
     app.add_handler(CallbackQueryHandler(show_round_matches, pattern="^show_round_matches_\\d+$"))
 
 def _register_cabinet_handlers(app: Application) -> None:
@@ -589,6 +606,9 @@ def _register_admin_handlers(app: Application) -> None:
     app.add_handler(CallbackQueryHandler(admin_amnesty_execute, pattern="^warn_amnesty_-?\\d+$"))
     app.add_handler(CallbackQueryHandler(admin_reset_season_warns, pattern="^admin_reset_season_warns$"))
     app.add_handler(CommandHandler("reset_debts", admin_reset_debts_command))
+    app.add_handler(CommandHandler("reset_warns", admin_reset_debts_command))
+    app.add_handler(CommandHandler("clear_warns", admin_reset_debts_command))
+    app.add_handler(CommandHandler("unwarn", admin_unwarn_command))
     app.add_handler(CommandHandler("check_debts", admin_check_debts_command))
     app.add_handler(CommandHandler("debug_debts", admin_check_debts_command))
 

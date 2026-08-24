@@ -19,7 +19,7 @@ def get_connection() -> sqlite3.Connection:
         conn.execute("PRAGMA foreign_keys = ON")
         return conn
     except sqlite3.Error as e:
-        logger.exception("Failed to connect to database at {DB_PATH}")
+        logger.exception(f"Failed to connect to database at {DB_PATH}")
         raise
 
 @contextmanager
@@ -472,7 +472,7 @@ def list_users() -> list[sqlite3.Row]:
     with transaction() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT telegram_id, username, team_name, league_name, role, registered_at FROM users ORDER BY registered_at DESC"
+            "SELECT telegram_id, username, team_name, league_name, role, registered_at, COALESCE(warn_count, 0) AS warn_count FROM users ORDER BY registered_at DESC"
         )
         return cursor.fetchall()
 
@@ -1681,7 +1681,7 @@ def get_user_warn_count(user_id: int) -> int:
 
 
 
-def add_warn(user_id: int, admin_id: int, reason: str) -> tuple[int, bool]:
+def add_warn(user_id: int, admin_id: int | None, reason: str) -> tuple[int, bool]:
     from config import MAX_WARNS_LIMIT
     with transaction() as conn:
         cursor = conn.cursor()
@@ -1689,17 +1689,18 @@ def add_warn(user_id: int, admin_id: int, reason: str) -> tuple[int, bool]:
         row = cursor.fetchone()
         current_count = row["warn_count"] if row and row["warn_count"] is not None else 0
         new_count = current_count + 1
+        now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
         cursor.execute("UPDATE users SET warn_count = ? WHERE telegram_id = ?", (new_count, user_id))
         cursor.execute(
-            "INSERT INTO user_warns (user_id, admin_id, reason, type) VALUES (?, ?, ?, 'WARN_ADD')",
-            (user_id, admin_id, reason)
+            "INSERT INTO user_warns (user_id, admin_id, reason, type, created_at) VALUES (?, ?, ?, 'WARN_ADD', ?)",
+            (user_id, admin_id, reason, now_str)
         )
         is_exceeded = new_count >= MAX_WARNS_LIMIT
         return new_count, is_exceeded
 
 
-def remove_warn(user_id: int, admin_id: int, reason: str) -> tuple[int, bool]:
+def remove_warn(user_id: int, admin_id: int | None, reason: str) -> tuple[int, bool]:
     with transaction() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT warn_count FROM users WHERE telegram_id = ?", (user_id,))
@@ -1710,10 +1711,11 @@ def remove_warn(user_id: int, admin_id: int, reason: str) -> tuple[int, bool]:
             return 0, False
             
         new_count = max(0, current_count - 1)
+        now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         cursor.execute("UPDATE users SET warn_count = ? WHERE telegram_id = ?", (new_count, user_id))
         cursor.execute(
-            "INSERT INTO user_warns (user_id, admin_id, reason, type) VALUES (?, ?, ?, 'WARN_REMOVE')",
-            (user_id, admin_id, reason)
+            "INSERT INTO user_warns (user_id, admin_id, reason, type, created_at) VALUES (?, ?, ?, 'WARN_REMOVE', ?)",
+            (user_id, admin_id, reason, now_str)
         )
         return new_count, True
 
@@ -1752,14 +1754,20 @@ def reset_season_warns() -> None:
         cursor.execute("DELETE FROM user_warns")
 
 
-def amnesty_player(user_id: int, admin_id: int) -> None:
+def amnesty_player(user_id: int, admin_id: int | None = None) -> None:
     with transaction() as conn:
         cursor = conn.cursor()
+        now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         cursor.execute("UPDATE users SET warn_count = 0 WHERE telegram_id = ?", (user_id,))
         cursor.execute(
-            "INSERT INTO user_warns (user_id, admin_id, reason, type) VALUES (?, ?, 'Амнистия (сброс варнов)', 'WARN_REMOVE')",
-            (user_id, admin_id)
+            "INSERT INTO user_warns (user_id, admin_id, reason, type, created_at) VALUES (?, ?, 'Амнистия (сброс варнов)', 'WARN_REMOVE', ?)",
+            (user_id, admin_id, now_str)
         )
+
+
+def reset_user_warns(user_id: int, admin_id: int | None = None) -> None:
+    """Reset all warns for a specific user to 0."""
+    amnesty_player(user_id, admin_id)
 
 
 def find_user_by_ref(ref: str) -> dict | None:
@@ -1940,15 +1948,16 @@ def add_missing_squad_players(team_name: str | None = None) -> int:
 
 
 def get_club_top_scorers(team_name: str) -> list[dict]:
-    """Get top goal scorers for a club across all matches."""
+    """Get top goal scorers for a club across confirmed matches."""
     with transaction() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT player_name, SUM(count) as total
-            FROM match_events
-            WHERE LOWER(team_name) = LOWER(?) AND event_type = 'goal'
-            GROUP BY player_name
-            ORDER BY total DESC, player_name ASC
+            SELECT me.player_name, SUM(me.count) as total
+            FROM match_events me
+            JOIN matches m ON me.match_id = m.id
+            WHERE LOWER(me.team_name) = LOWER(?) AND me.event_type = 'goal' AND m.status = 'confirmed'
+            GROUP BY me.player_name
+            ORDER BY total DESC, me.player_name ASC
         """, (team_name.strip(),))
         return [{"player_name": row["player_name"], "total": row["total"]} for row in cursor.fetchall()]
 
@@ -1987,10 +1996,16 @@ def get_round_info(round_number: int) -> dict | None:
 def update_round_status(round_number: int, is_open: bool, deadline: str | None = None) -> None:
     with transaction() as conn:
         cursor = conn.cursor()
-        cursor.execute(
-            "UPDATE rounds SET is_open = ?, deadline = ? WHERE round_number = ?",
-            (1 if is_open else 0, deadline, round_number)
-        )
+        if deadline is not None:
+            cursor.execute(
+                "UPDATE rounds SET is_open = ?, deadline = ? WHERE round_number = ?",
+                (1 if is_open else 0, deadline, round_number)
+            )
+        else:
+            cursor.execute(
+                "UPDATE rounds SET is_open = ? WHERE round_number = ?",
+                (1 if is_open else 0, round_number)
+            )
 
 
 def get_all_rounds() -> list[int]:
@@ -2001,15 +2016,16 @@ def get_all_rounds() -> list[int]:
         return [row["round_number"] for row in cursor.fetchall()]
 
 def get_club_top_assisters(team_name: str) -> list[dict]:
-    """Get top assist providers for a club across all matches."""
+    """Get top assist providers for a club across confirmed matches."""
     with transaction() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT player_name, SUM(count) as total
-            FROM match_events
-            WHERE LOWER(team_name) = LOWER(?) AND event_type = 'assist'
-            GROUP BY player_name
-            ORDER BY total DESC, player_name ASC
+            SELECT me.player_name, SUM(me.count) as total
+            FROM match_events me
+            JOIN matches m ON me.match_id = m.id
+            WHERE LOWER(me.team_name) = LOWER(?) AND me.event_type = 'assist' AND m.status = 'confirmed'
+            GROUP BY me.player_name
+            ORDER BY total DESC, me.player_name ASC
         """, (team_name.strip(),))
         return [{"player_name": row["player_name"], "total": row["total"]} for row in cursor.fetchall()]
 
@@ -2044,29 +2060,37 @@ def get_unplayed_matches_in_round(round_number: int) -> list[dict]:
         return [dict(row) for row in cursor.fetchall()]
 
 def get_top_scorers(limit: int = 20) -> list[dict]:
-    """Get top goalscorers in the league aggregated from match_events."""
+    """Get top goalscorers in the league aggregated from match_events (strictly confirmed league matches, round_number > 0)."""
     with transaction() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT player_name, team_name, SUM(count) AS total_goals
-            FROM match_events
-            WHERE event_type = 'goal'
-            GROUP BY player_name, team_name
-            ORDER BY total_goals DESC, player_name ASC
+            SELECT me.player_name, me.team_name, SUM(me.count) AS total_goals
+            FROM match_events me
+            JOIN matches m ON me.match_id = m.id
+            WHERE me.event_type = 'goal'
+              AND (m.tournament_type IS NULL OR m.tournament_type = 'league')
+              AND m.round_number > 0
+              AND m.status = 'confirmed'
+            GROUP BY me.player_name, me.team_name
+            ORDER BY total_goals DESC, me.player_name ASC
             LIMIT ?
         """, (limit,))
         return [dict(row) for row in cursor.fetchall()]
 
 def get_top_assists(limit: int = 20) -> list[dict]:
-    """Get top assist providers in the league aggregated from match_events."""
+    """Get top assist providers in the league aggregated from match_events (strictly confirmed league matches, round_number > 0)."""
     with transaction() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT player_name, team_name, SUM(count) AS total_assists
-            FROM match_events
-            WHERE event_type = 'assist'
-            GROUP BY player_name, team_name
-            ORDER BY total_assists DESC, player_name ASC
+            SELECT me.player_name, me.team_name, SUM(me.count) AS total_assists
+            FROM match_events me
+            JOIN matches m ON me.match_id = m.id
+            WHERE me.event_type = 'assist'
+              AND (m.tournament_type IS NULL OR m.tournament_type = 'league')
+              AND m.round_number > 0
+              AND m.status = 'confirmed'
+            GROUP BY me.player_name, me.team_name
+            ORDER BY total_assists DESC, me.player_name ASC
             LIMIT ?
         """, (limit,))
         return [dict(row) for row in cursor.fetchall()]
@@ -2116,45 +2140,153 @@ def get_all_unique_players() -> list[tuple[str, str]]:
         return [(row["player_name"], row["team_name"]) for row in cursor.fetchall()]
 
 
+def detect_teams_from_players(
+    side1_players: list[str],
+    side2_players: list[str],
+    caption: str | None = None
+) -> tuple[str | None, str | None]:
+    """
+    Determines team1 (left side) and team2 (right side) from OCR-extracted player names
+    (goals and assists) by matching them against club squads in the database.
+    Also incorporates any club names mentioned in user caption.
+    Returns (team1_name, team2_name).
+    """
+    all_squads = get_all_squads()
+    all_teams = get_all_teams()
+    for t in all_teams:
+        if t not in all_squads:
+            all_squads[t] = []
+
+    caption_clean = (caption or "").lower()
+    caption_teams = []
+    for t in all_teams:
+        t_clean = t.lower()
+        t_norm = normalize_team_name(t)
+        if t_clean in caption_clean or (t_norm and t_norm in normalize_team_name(caption_clean)):
+            caption_teams.append(t)
+
+    # Check words in caption with resolve_team_name
+    if caption:
+        for word in re.split(r'[\s,:;\-_/\\|]+', caption):
+            resolved = resolve_team_name(word)
+            if resolved and resolved in all_teams and resolved not in caption_teams:
+                caption_teams.append(resolved)
+
+    def score_side(player_list, squad_list):
+        score = 0
+        for p in player_list:
+            if not p:
+                continue
+            p_clean = str(p).strip().lower()
+            if not p_clean:
+                continue
+            for sp in squad_list:
+                sp_clean = str(sp).strip().lower()
+                if p_clean == sp_clean:
+                    score += 6
+                    break
+                elif len(p_clean) >= 4 and (p_clean in sp_clean or sp_clean in p_clean):
+                    score += 4
+                    break
+                else:
+                    p_parts = [x for x in p_clean.split() if len(x) >= 3]
+                    sp_parts = [x for x in sp_clean.split() if len(x) >= 3]
+                    if p_parts and sp_parts and any(x in sp_parts for x in p_parts):
+                        score += 3
+                        break
+        return score
+
+    # Compute scores for every team on side1 and side2
+    side1_scores = {}
+    side2_scores = {}
+    for team, squad in all_squads.items():
+        s1 = score_side(side1_players, squad)
+        s2 = score_side(side2_players, squad)
+        # If team is explicitly in caption, give a bonus
+        if team in caption_teams:
+            s1 += 2
+            s2 += 2
+        side1_scores[team] = s1
+        side2_scores[team] = s2
+
+    s1_sorted = sorted(side1_scores.items(), key=lambda x: x[1], reverse=True)
+    s2_sorted = sorted(side2_scores.items(), key=lambda x: x[1], reverse=True)
+
+    best_t1, best_s1 = s1_sorted[0] if s1_sorted else (None, 0)
+
+    best_t2 = None
+    best_s2 = 0
+    for t, s in s2_sorted:
+        if t != best_t1:
+            best_t2 = t
+            best_s2 = s
+            break
+
+    # If side1 or side2 had no player matches, fill from caption if available
+    if (best_s1 == 0 or not best_t1) and caption_teams:
+        for ct in caption_teams:
+            if ct != best_t2:
+                best_t1 = ct
+                break
+    if (best_s2 == 0 or not best_t2) and caption_teams:
+        for ct in caption_teams:
+            if ct != best_t1:
+                best_t2 = ct
+                break
+
+    return best_t1, best_t2
+
+
+
 
 def get_player_card_stats(player_name: str, team_name: str) -> dict:
     """
     Get full season stats for a specific player:
-    - total goals and assists
-    - breakdown by round (goals + assists per round)
+    - total goals and assists (overall, league, cup)
+    - per-round / per-stage breakdown.
     Only considers confirmed matches.
     """
     with transaction() as conn:
         cursor = conn.cursor()
+        p_name = player_name.strip()
+        t_name = team_name.strip()
 
-        # Total goals
+        # 1. Total overall goals & assists + breakdown by tournament
         cursor.execute("""
-            SELECT COALESCE(SUM(me.count), 0) AS total
+            SELECT 
+                COALESCE(SUM(CASE WHEN me.event_type = 'goal' THEN me.count ELSE 0 END), 0) AS total_goals,
+                COALESCE(SUM(CASE WHEN me.event_type = 'assist' THEN me.count ELSE 0 END), 0) AS total_assists,
+                COALESCE(SUM(CASE WHEN me.event_type = 'goal' AND (m.tournament_type IS NULL OR m.tournament_type = 'league') AND m.round_number > 0 THEN me.count ELSE 0 END), 0) AS league_goals,
+                COALESCE(SUM(CASE WHEN me.event_type = 'assist' AND (m.tournament_type IS NULL OR m.tournament_type = 'league') AND m.round_number > 0 THEN me.count ELSE 0 END), 0) AS league_assists,
+                COALESCE(SUM(CASE WHEN me.event_type = 'goal' AND (m.tournament_type = 'cup' OR m.round_number = -1 OR (m.cup_series_id IS NOT NULL AND m.cup_series_id > 0)) THEN me.count ELSE 0 END), 0) AS cup_goals,
+                COALESCE(SUM(CASE WHEN me.event_type = 'assist' AND (m.tournament_type = 'cup' OR m.round_number = -1 OR (m.cup_series_id IS NOT NULL AND m.cup_series_id > 0)) THEN me.count ELSE 0 END), 0) AS cup_assists
             FROM match_events me
             JOIN matches m ON me.match_id = m.id
             WHERE LOWER(me.player_name) = LOWER(?)
               AND LOWER(me.team_name) = LOWER(?)
-              AND me.event_type = 'goal'
               AND m.status = 'confirmed'
-        """, (player_name.strip(), team_name.strip()))
-        total_goals = cursor.fetchone()["total"]
+        """, (p_name, t_name))
+        summary_row = cursor.fetchone()
+        summary_dict = dict(summary_row) if summary_row else {}
+        
+        total_goals = summary_dict.get("total_goals", 0)
+        total_assists = summary_dict.get("total_assists", 0)
+        league_goals = summary_dict.get("league_goals", 0)
+        league_assists = summary_dict.get("league_assists", 0)
+        cup_goals = summary_dict.get("cup_goals", 0)
+        cup_assists = summary_dict.get("cup_assists", 0)
 
-        # Total assists
-        cursor.execute("""
-            SELECT COALESCE(SUM(me.count), 0) AS total
-            FROM match_events me
-            JOIN matches m ON me.match_id = m.id
-            WHERE LOWER(me.player_name) = LOWER(?)
-              AND LOWER(me.team_name) = LOWER(?)
-              AND me.event_type = 'assist'
-              AND m.status = 'confirmed'
-        """, (player_name.strip(), team_name.strip()))
-        total_assists = cursor.fetchone()["total"]
-
-        # Per-round breakdown
+        # 2. Detailed per-tour / stage breakdown
         cursor.execute("""
             SELECT
                 m.round_number,
+                m.tournament_type,
+                m.cup_stage,
+                m.cup_series_id,
+                CASE 
+                    WHEN LOWER(m.player1_team) = LOWER(?) THEN m.player2_team 
+                    ELSE m.player1_team 
+                END AS opponent,
                 me.event_type,
                 SUM(me.count) AS total
             FROM match_events me
@@ -2162,30 +2294,647 @@ def get_player_card_stats(player_name: str, team_name: str) -> dict:
             WHERE LOWER(me.player_name) = LOWER(?)
               AND LOWER(me.team_name) = LOWER(?)
               AND m.status = 'confirmed'
-            GROUP BY m.round_number, me.event_type
-            ORDER BY m.round_number ASC
-        """, (player_name.strip(), team_name.strip()))
+            GROUP BY 
+                CASE 
+                    WHEN m.tournament_type = 'cup' OR m.round_number = -1 OR (m.cup_series_id IS NOT NULL AND m.cup_series_id > 0) THEN -1
+                    ELSE m.round_number
+                END,
+                me.event_type
+            ORDER BY 
+                CASE 
+                    WHEN m.tournament_type = 'cup' OR m.round_number = -1 OR (m.cup_series_id IS NOT NULL AND m.cup_series_id > 0) THEN -1
+                    ELSE m.round_number
+                END ASC
+        """, (t_name, p_name, t_name))
 
-        rounds_raw = cursor.fetchall()
+        rows = cursor.fetchall()
+        
+        # Build grouped rounds dict: {round_key: {"title": str, "opponent": str, "goals": int, "assists": int, "is_cup": bool}}
+        rounds_dict = {}
+        for r in rows:
+            rn = r["round_number"]
+            is_cup = bool(r["tournament_type"] == "cup" or rn == -1 or (r["cup_series_id"] and r["cup_series_id"] > 0))
+            opp = "" if is_cup else (r["opponent"] or "")
+            
+            key = -1 if is_cup else rn
+            if key not in rounds_dict:
+                title = "Кубок КПЛ" if is_cup else f"Тур {rn}"
+                rounds_dict[key] = {
+                    "round_key": key,
+                    "title": title,
+                    "opponent": opp,
+                    "goals": 0,
+                    "assists": 0,
+                    "is_cup": is_cup
+                }
+            elif opp and not rounds_dict[key].get("opponent"):
+                rounds_dict[key]["opponent"] = opp
 
-        # Build a dict: {round_number: {"goals": n, "assists": n}}
-        rounds: dict[int, dict] = {}
-        for row in rounds_raw:
-            rn = row["round_number"]
-            if rn not in rounds:
-                rounds[rn] = {"goals": 0, "assists": 0}
-            if row["event_type"] == "goal":
-                rounds[rn]["goals"] = row["total"]
-            elif row["event_type"] == "assist":
-                rounds[rn]["assists"] = row["total"]
+            if r["event_type"] == "goal":
+                rounds_dict[key]["goals"] += r["total"]
+            elif r["event_type"] == "assist":
+                rounds_dict[key]["assists"] += r["total"]
+
+        items = []
+        for k in sorted(rounds_dict.keys()):
+            item = rounds_dict[k]
+            item["total"] = item["goals"] + item["assists"]
+            items.append(item)
 
         return {
             "player_name": player_name,
             "team_name": team_name,
             "total_goals": total_goals,
             "total_assists": total_assists,
-            "rounds": rounds,  # {round_number: {"goals": n, "assists": n}}
+            "total_points": total_goals + total_assists,
+            "league_goals": league_goals,
+            "league_assists": league_assists,
+            "cup_goals": cup_goals,
+            "cup_assists": cup_assists,
+            "items": items,
+            "rounds": {item["round_key"]: {"goals": item["goals"], "assists": item["assists"]} for item in items},
         }
+
+
+def get_club_card_data(team_name: str) -> dict:
+    """
+    Get comprehensive club profile & statistics independent of who the current manager is.
+    """
+    with transaction() as conn:
+        cursor = conn.cursor()
+        canon = resolve_team_name(team_name) or team_name.strip()
+
+        # 1. Current Manager
+        cursor.execute(
+            "SELECT telegram_id, username, warn_count, registered_at FROM users WHERE LOWER(team_name) = LOWER(?) LIMIT 1",
+            (canon,)
+        )
+        u_row = cursor.fetchone()
+        manager = None
+        if u_row:
+            manager = {
+                "telegram_id": u_row["telegram_id"],
+                "username": u_row["username"],
+                "warn_count": u_row["warn_count"] or 0,
+                "registered_at": u_row["registered_at"],
+            }
+
+        # 2. Standings & League Stats
+        standings = get_standings()
+        league_stats = {
+            "rank": 0,
+            "played": 0,
+            "wins": 0,
+            "draws": 0,
+            "losses": 0,
+            "goals_scored": 0,
+            "goals_conceded": 0,
+            "goal_diff": 0,
+            "points": 0,
+        }
+        for rank, row in enumerate(standings, 1):
+            if teams_match(row["team_name"], canon):
+                league_stats = {
+                    "rank": rank,
+                    "played": row["played"],
+                    "wins": row["wins"],
+                    "draws": row["draws"],
+                    "losses": row["losses"],
+                    "goals_scored": row["goals_scored"],
+                    "goals_conceded": row["goals_conceded"],
+                    "goal_diff": row["goals_scored"] - row["goals_conceded"],
+                    "points": row["points"],
+                }
+                break
+
+        # 3. Recent Form (Last 5 matches)
+        form_map = get_teams_recent_form(limit=5)
+        recent_form = form_map.get(canon.lower(), [])
+
+        # 4. Cup Stats
+        cursor.execute("""
+            SELECT id, stage, series_num, team1_name, team2_name, team1_wins, team2_wins, winner_name, status
+            FROM cup_series
+            WHERE LOWER(team1_name) = LOWER(?) OR LOWER(team2_name) = LOWER(?)
+            ORDER BY id DESC
+            LIMIT 1
+        """, (canon, canon))
+        c_row = cursor.fetchone()
+        cup_stats = None
+        if c_row:
+            is_t1 = teams_match(c_row["team1_name"], canon)
+            opp_name = c_row["team2_name"] if is_t1 else c_row["team1_name"]
+            c_wins = c_row["team1_wins"] if is_t1 else c_row["team2_wins"]
+            opp_wins = c_row["team2_wins"] if is_t1 else c_row["team1_wins"]
+            cup_stats = {
+                "series_id": c_row["id"],
+                "stage": c_row["stage"],
+                "series_num": c_row["series_num"],
+                "opponent": opp_name,
+                "club_wins": c_wins,
+                "opp_wins": opp_wins,
+                "status": c_row["status"],
+                "winner_name": c_row["winner_name"],
+                "is_winner": bool(c_row["winner_name"] and teams_match(c_row["winner_name"], canon)),
+                "is_eliminated": bool(c_row["winner_name"] and not teams_match(c_row["winner_name"], canon)),
+            }
+
+        # 5. Top Scorers and Assisters of the Club
+        cursor.execute("""
+            SELECT 
+                me.player_name,
+                COALESCE(SUM(CASE WHEN me.event_type = 'goal' THEN me.count ELSE 0 END), 0) AS goals,
+                COALESCE(SUM(CASE WHEN me.event_type = 'assist' THEN me.count ELSE 0 END), 0) AS assists
+            FROM match_events me
+            JOIN matches m ON me.match_id = m.id
+            WHERE LOWER(me.team_name) = LOWER(?) AND m.status = 'confirmed'
+            GROUP BY LOWER(me.player_name)
+            ORDER BY goals DESC, assists DESC, me.player_name ASC
+        """, (canon,))
+        event_players = [dict(r) for r in cursor.fetchall()]
+        
+        top_scorers = [p for p in sorted(event_players, key=lambda x: (x["goals"], x["assists"]), reverse=True) if p["goals"] > 0][:5]
+        top_assists = [p for p in sorted(event_players, key=lambda x: (x["assists"], x["goals"]), reverse=True) if p["assists"] > 0][:5]
+
+        # 6. Registered Squad
+        cursor.execute(
+            "SELECT player_name FROM squad_players WHERE LOWER(team_name) = LOWER(?) ORDER BY id ASC",
+            (canon,)
+        )
+        squad_names = [r["player_name"] for r in cursor.fetchall()]
+
+        # 7. Unplayed Matches & Debts
+        cursor.execute("""
+            SELECT 
+                m.id, m.round_number, m.tournament_type, m.cup_stage, m.game_num_in_series,
+                m.player1_team, m.player2_team, r.deadline, r.is_open
+            FROM matches m
+            LEFT JOIN rounds r ON m.round_number = r.round_number
+            WHERE m.status = 'pending' AND (LOWER(m.player1_team) = LOWER(?) OR LOWER(m.player2_team) = LOWER(?))
+            ORDER BY 
+                CASE WHEN m.tournament_type = 'cup' OR m.round_number = -1 THEN 999 ELSE m.round_number END ASC,
+                m.id ASC
+        """, (canon, canon))
+        pending_matches = []
+        debts_count = 0
+        now_dt = datetime.datetime.now()
+        start_dt = get_debt_tracking_start_datetime()
+
+        for pm in cursor.fetchall():
+            is_p1 = teams_match(pm["player1_team"], canon)
+            opp = pm["player2_team"] if is_p1 else pm["player1_team"]
+            is_cup = bool(pm["tournament_type"] == "cup" or pm["round_number"] == -1)
+            
+            # Check overdue
+            overdue = False
+            dl_str = pm["deadline"]
+            if dl_str and not is_cup:
+                try:
+                    dl_dt = datetime.datetime.strptime(dl_str, "%d.%m.%Y %H:%M")
+                    eff_dl = max(dl_dt, start_dt) if start_dt else dl_dt
+                    if now_dt > eff_dl:
+                        overdue = True
+                        debts_count += 1
+                except Exception:
+                    pass
+            elif not is_cup and pm["is_open"] == 0:
+                # Past closed round without deadline
+                overdue = True
+                debts_count += 1
+
+            pending_matches.append({
+                "match_id": pm["id"],
+                "round_number": pm["round_number"],
+                "tournament_type": pm["tournament_type"],
+                "cup_stage": pm["cup_stage"],
+                "game_num": pm["game_num_in_series"],
+                "opponent": opp,
+                "is_overdue": overdue,
+                "deadline": dl_str,
+            })
+
+        return {
+            "team_name": canon,
+            "manager": manager,
+            "league_stats": league_stats,
+            "recent_form": recent_form,
+            "cup_stats": cup_stats,
+            "top_scorers": top_scorers,
+            "top_assists": top_assists,
+            "squad_names": squad_names,
+            "squad_count": len(squad_names),
+            "pending_matches": pending_matches,
+            "debts_count": debts_count,
+        }
+
+
+def get_club_squad_stats(team_name: str) -> list[dict]:
+    """
+    Get full list of squad players for a club with their individual goal and assist stats.
+    """
+    with transaction() as conn:
+        cursor = conn.cursor()
+        canon = resolve_team_name(team_name) or team_name.strip()
+
+        cursor.execute(
+            "SELECT player_name FROM squad_players WHERE LOWER(team_name) = LOWER(?) ORDER BY id ASC",
+            (canon,)
+        )
+        squad_names = [r["player_name"] for r in cursor.fetchall()]
+
+        cursor.execute("""
+            SELECT 
+                me.player_name,
+                COALESCE(SUM(CASE WHEN me.event_type = 'goal' THEN me.count ELSE 0 END), 0) AS goals,
+                COALESCE(SUM(CASE WHEN me.event_type = 'assist' THEN me.count ELSE 0 END), 0) AS assists
+            FROM match_events me
+            JOIN matches m ON me.match_id = m.id
+            WHERE LOWER(me.team_name) = LOWER(?) AND m.status = 'confirmed'
+            GROUP BY LOWER(me.player_name)
+        """, (canon,))
+        stats_map = {r["player_name"].lower(): {"goals": r["goals"], "assists": r["assists"]} for r in cursor.fetchall()}
+
+        result = []
+        seen = set()
+        for p_name in squad_names:
+            p_lower = p_name.lower()
+            seen.add(p_lower)
+            p_stat = stats_map.get(p_lower, {"goals": 0, "assists": 0})
+            result.append({
+                "player_name": p_name,
+                "goals": p_stat["goals"],
+                "assists": p_stat["assists"],
+                "points": p_stat["goals"] + p_stat["assists"],
+                "is_registered": True,
+            })
+
+        for p_lower, p_stat in stats_map.items():
+            if p_lower not in seen:
+                result.append({
+                    "player_name": p_lower.title(),
+                    "goals": p_stat["goals"],
+                    "assists": p_stat["assists"],
+                    "points": p_stat["goals"] + p_stat["assists"],
+                    "is_registered": False,
+                })
+
+        return sorted(result, key=lambda x: (x["goals"], x["assists"], x["player_name"]), reverse=True)
+
+
+def get_club_match_history(team_name: str, limit: int = 20) -> list[dict]:
+    """
+    Retrieve chronological match history for a club (League + Cup).
+    """
+    with transaction() as conn:
+        cursor = conn.cursor()
+        canon = resolve_team_name(team_name) or team_name.strip()
+
+        cursor.execute("""
+            SELECT 
+                m.id, m.round_number, m.tournament_type, m.cup_stage, m.cup_series_id, m.game_num_in_series,
+                m.player1_team, m.player2_team, m.player1_score, m.player2_score, m.status,
+                u1.username AS p1_username, u2.username AS p2_username
+            FROM matches m
+            LEFT JOIN users u1 ON LOWER(m.player1_team) = LOWER(u1.team_name)
+            LEFT JOIN users u2 ON LOWER(m.player2_team) = LOWER(u2.team_name)
+            WHERE m.status = 'confirmed' AND (LOWER(m.player1_team) = LOWER(?) OR LOWER(m.player2_team) = LOWER(?))
+            ORDER BY 
+                CASE WHEN m.tournament_type = 'cup' OR m.round_number = -1 THEN 999 ELSE m.round_number END DESC,
+                m.id DESC
+            LIMIT ?
+        """, (canon, canon, limit))
+
+        matches = []
+        for r in cursor.fetchall():
+            is_p1 = teams_match(r["player1_team"], canon)
+            club_score = r["player1_score"] if is_p1 else r["player2_score"]
+            opp_score = r["player2_score"] if is_p1 else r["player1_score"]
+            opp_team = r["player2_team"] if is_p1 else r["player1_team"]
+            opp_user = r["p2_username"] if is_p1 else r["p1_username"]
+            club_user = r["p1_username"] if is_p1 else r["p2_username"]
+
+            if club_score > opp_score: outcome = "W"
+            elif club_score < opp_score: outcome = "L"
+            else: outcome = "D"
+
+            is_cup = bool(r["tournament_type"] == "cup" or r["round_number"] == -1 or (r["cup_series_id"] and r["cup_series_id"] > 0))
+
+            cursor.execute("""
+                SELECT player_name, count 
+                FROM match_events 
+                WHERE match_id = ? AND LOWER(team_name) = LOWER(?) AND event_type = 'goal'
+            """, (r["id"], canon))
+            scorers = [f"{g['player_name']} ({g['count']})" if g['count'] > 1 else g['player_name'] for g in cursor.fetchall()]
+
+            matches.append({
+                "match_id": r["id"],
+                "round_number": r["round_number"],
+                "tournament_type": r["tournament_type"],
+                "cup_stage": r["cup_stage"],
+                "game_num": r["game_num_in_series"],
+                "is_cup": is_cup,
+                "opponent_team": opp_team,
+                "opponent_username": opp_user,
+                "club_username": club_user,
+                "club_score": club_score,
+                "opponent_score": opp_score,
+                "outcome": outcome,
+                "scorers": scorers,
+            })
+
+        return matches
+
+
+def get_club_schedule_and_results(team_name: str, limit: int = 25) -> dict:
+    """
+    Retrieve chronological match schedule (both played results and upcoming/pending matches) for a club.
+    Aggregates cup series so that 1 row = 1 cup stage/series.
+    """
+    with transaction() as conn:
+        cursor = conn.cursor()
+        canon = resolve_team_name(team_name) or team_name.strip()
+
+        # 1. Fetch Cup Series for this club
+        cursor.execute("""
+            SELECT id, stage, series_num, team1_name, team2_name, team1_wins, team2_wins, winner_name, status
+            FROM cup_series
+            WHERE (LOWER(team1_name) = LOWER(?) OR LOWER(team2_name) = LOWER(?))
+            ORDER BY id ASC
+        """, (canon, canon))
+        cup_rows = [dict(r) for r in cursor.fetchall()]
+
+        stage_order_map = {"1/8": 1, "1/4": 2, "1/2": 3, "final": 4}
+        stage_title_map = {"1/8": "1/8", "1/4": "1/4", "1/2": "1/2", "final": "ФИНАЛ"}
+
+        cup_items = []
+        for s in cup_rows:
+            s_id = s["id"]
+            st_raw = (s.get("stage") or "1/8").lower()
+            st_label = stage_title_map.get(st_raw, st_raw.upper())
+            tour_title = f"КУБОК • {st_label}"
+
+            t1_name = resolve_team_name(s["team1_name"]) or s["team1_name"]
+            t2_name = resolve_team_name(s["team2_name"]) or s["team2_name"]
+            is_club_t1 = teams_match(t1_name, canon)
+            opp_team = t2_name if is_club_t1 else t1_name
+
+            # Fetch matches for this cup series
+            cursor.execute("""
+                SELECT id, game_num_in_series, player1_team, player2_team, player1_score, player2_score, status
+                FROM matches
+                WHERE cup_series_id = ?
+                ORDER BY game_num_in_series ASC
+            """, (s_id,))
+            s_matches = [dict(m) for m in cursor.fetchall()]
+
+            # Fetch goalscorers for the club across all matches in this series
+            cursor.execute("""
+                SELECT me.player_name, SUM(me.count) AS total_goals
+                FROM match_events me
+                JOIN matches m ON me.match_id = m.id
+                WHERE m.cup_series_id = ? AND LOWER(me.team_name) = LOWER(?) AND me.event_type = 'goal'
+                GROUP BY LOWER(me.player_name)
+                ORDER BY total_goals DESC, me.player_name ASC
+            """, (s_id, canon))
+            club_scorers = [f"{g['player_name']} ({g['total_goals']})" if g['total_goals'] > 1 else g['player_name'] for g in cursor.fetchall()]
+
+            # Confirmed games list
+            confirmed_matches = [m for m in s_matches if m["status"] == "confirmed" and m["player1_score"] is not None]
+            games_scores = [f"{m['player1_score']}:{m['player2_score']}" for m in confirmed_matches]
+
+            has_played_games = len(confirmed_matches) > 0
+            is_completed = (s["status"] == "completed")
+
+            w1 = s["team1_wins"] or 0
+            w2 = s["team2_wins"] or 0
+            winner = s["winner_name"]
+
+            if is_completed and winner:
+                outcome = "W" if teams_match(winner, canon) else "L"
+            elif has_played_games:
+                c_wins = w1 if is_club_t1 else w2
+                o_wins = w2 if is_club_t1 else w1
+                if c_wins > o_wins:
+                    outcome = "W"
+                elif c_wins < o_wins:
+                    outcome = "L"
+                else:
+                    outcome = "D"
+            else:
+                outcome = "PENDING"
+
+            games_str = ", ".join(games_scores)
+            if games_str and club_scorers:
+                subline = f"Матчи: {games_str} • Голы: {', '.join(club_scorers)}"
+            elif games_str:
+                subline = f"Матчи: {games_str}"
+            elif club_scorers:
+                subline = f"Голы клуба: {', '.join(club_scorers)}"
+            else:
+                subline = ""
+
+            cup_items.append({
+                "match_id": s_id,
+                "round_number": -1,
+                "stage_order": stage_order_map.get(st_raw, 0),
+                "tour_title": tour_title,
+                "is_cup": True,
+                "home_team": t1_name,
+                "away_team": t2_name,
+                "home_score": w1 if (has_played_games or is_completed) else None,
+                "away_score": w2 if (has_played_games or is_completed) else None,
+                "club_score": w1 if is_club_t1 else w2,
+                "opponent_score": w2 if is_club_t1 else w1,
+                "is_home": is_club_t1,
+                "opponent_team": opp_team,
+                "status": "confirmed" if (is_completed or has_played_games) else "pending",
+                "outcome": outcome,
+                "scorers": club_scorers,
+                "subline": subline,
+                "is_completed": is_completed,
+                "has_played": has_played_games,
+            })
+
+        # 2. Fetch League Matches for this club grouped by round_number
+        cursor.execute("""
+            SELECT 
+                m.id, m.round_number, m.tournament_type,
+                m.player1_team, m.player2_team, m.player1_score, m.player2_score, m.status,
+                r.is_open, r.deadline,
+                u1.username AS p1_username, u2.username AS p2_username
+            FROM matches m
+            LEFT JOIN rounds r ON m.round_number = r.round_number
+            LEFT JOIN users u1 ON LOWER(m.player1_team) = LOWER(u1.team_name)
+            LEFT JOIN users u2 ON LOWER(m.player2_team) = LOWER(u2.team_name)
+            WHERE (m.tournament_type IS NULL OR m.tournament_type = 'league' OR m.tournament_type = '')
+              AND (m.round_number IS NOT NULL AND m.round_number > 0)
+              AND (LOWER(m.player1_team) = LOWER(?) OR LOWER(m.player2_team) = LOWER(?))
+            ORDER BY m.round_number ASC, m.id ASC
+        """, (canon, canon))
+        league_rows = [dict(r) for r in cursor.fetchall()]
+
+        # Group by round_number
+        rounds_dict = {}
+        for r in league_rows:
+            rn = r["round_number"]
+            rounds_dict.setdefault(rn, []).append(r)
+
+        league_items = []
+        for rn, r_matches in rounds_dict.items():
+            first_m = r_matches[0]
+            is_p1 = teams_match(first_m["player1_team"], canon)
+            home_team = resolve_team_name(first_m["player1_team"]) or first_m["player1_team"]
+            away_team = resolve_team_name(first_m["player2_team"]) or first_m["player2_team"]
+            opp_team = away_team if is_p1 else home_team
+            opp_user = first_m["p2_username"] if is_p1 else first_m["p1_username"]
+
+            tour_title = f"ЛИГА • ТУР {rn}"
+
+            # Collect match events / goals for all matches in this round
+            m_ids = [m["id"] for m in r_matches]
+            placeholders = ",".join(["?"] * len(m_ids))
+            cursor.execute(f"""
+                SELECT me.player_name, SUM(me.count) AS cnt
+                FROM match_events me
+                WHERE me.match_id IN ({placeholders}) AND LOWER(me.team_name) = LOWER(?) AND me.event_type = 'goal'
+                GROUP BY LOWER(me.player_name)
+                ORDER BY cnt DESC, me.player_name ASC
+            """, (*m_ids, canon))
+            club_scorers = [f"{g['player_name']} ({g['cnt']})" if g['cnt'] > 1 else g['player_name'] for g in cursor.fetchall()]
+
+            confirmed_matches = [m for m in r_matches if m["status"] == "confirmed" and m["player1_score"] is not None and m["player2_score"] is not None]
+            has_played = len(confirmed_matches) > 0
+            all_confirmed = len(confirmed_matches) == len(r_matches)
+
+            if len(r_matches) == 1:
+                m = r_matches[0]
+                h_score = m["player1_score"] if m["status"] == "confirmed" else None
+                a_score = m["player2_score"] if m["status"] == "confirmed" else None
+                if m["status"] == "confirmed" and h_score is not None and a_score is not None:
+                    c_s = m["player1_score"] if is_p1 else m["player2_score"]
+                    o_s = m["player2_score"] if is_p1 else m["player1_score"]
+                    if c_s > o_s: outcome = "W"
+                    elif c_s < o_s: outcome = "L"
+                    else: outcome = "D"
+                    subline = f"Голы клуба: {', '.join(club_scorers)}" if club_scorers else ""
+                else:
+                    outcome = "PENDING"
+                    subline = ""
+            else:
+                games_scores = [f"{m['player1_score']}:{m['player2_score']}" for m in confirmed_matches]
+                tot_p1 = sum(m["player1_score"] for m in confirmed_matches)
+                tot_p2 = sum(m["player2_score"] for m in confirmed_matches)
+                h_score = tot_p1 if has_played else None
+                a_score = tot_p2 if has_played else None
+
+                if has_played:
+                    c_s = tot_p1 if is_p1 else tot_p2
+                    o_s = tot_p2 if is_p1 else tot_p1
+                    if c_s > o_s: outcome = "W"
+                    elif c_s < o_s: outcome = "L"
+                    else: outcome = "D"
+                else:
+                    outcome = "PENDING"
+
+                games_str = ", ".join(games_scores)
+                if games_str and club_scorers:
+                    subline = f"Матчи: {games_str} • Голы: {', '.join(club_scorers)}"
+                elif games_str:
+                    subline = f"Матчи: {games_str}"
+                elif club_scorers:
+                    subline = f"Голы клуба: {', '.join(club_scorers)}"
+                else:
+                    subline = ""
+
+            league_items.append({
+                "match_id": first_m["id"],
+                "round_number": rn,
+                "stage_order": 0,
+                "tour_title": tour_title,
+                "is_cup": False,
+                "home_team": home_team,
+                "away_team": away_team,
+                "home_score": h_score,
+                "away_score": a_score,
+                "club_score": h_score if is_p1 else a_score,
+                "opponent_score": a_score if is_p1 else h_score,
+                "is_home": is_p1,
+                "opponent_team": opp_team,
+                "opponent_username": opp_user,
+                "status": "confirmed" if (has_played and all_confirmed) else "pending",
+                "outcome": outcome,
+                "scorers": club_scorers,
+                "subline": subline,
+                "is_completed": all_confirmed and has_played,
+                "has_played": has_played,
+            })
+
+        # 3. Combine and Sort:
+        played_cup = [c for c in cup_items if c["has_played"] or c["is_completed"]]
+        played_cup.sort(key=lambda x: -x["stage_order"]) # Final first, then 1/2, 1/4, 1/8
+
+        played_league = [l for l in league_items if l["is_completed"]]
+        played_league.sort(key=lambda x: -x["round_number"]) # Recent rounds first
+
+        pending_cup = [c for c in cup_items if not (c["has_played"] or c["is_completed"])]
+        pending_cup.sort(key=lambda x: x["stage_order"])
+
+        pending_league = [l for l in league_items if not l["is_completed"]]
+        pending_league.sort(key=lambda x: x["round_number"])
+
+        all_items = played_cup + played_league + pending_cup + pending_league
+
+        # Calculate counts
+        played_count = len(played_cup) + len(played_league)
+        pending_count = len(pending_cup) + len(pending_league)
+
+        return {
+            "team_name": canon,
+            "played_count": played_count,
+            "pending_count": pending_count,
+            "matches": all_items[:limit],
+        }
+
+
+def get_all_clubs_summary() -> list[dict]:
+    """
+    Get summary list of all KPL clubs for the clubs catalog.
+    """
+    from config import KPL_TEAMS
+    standings = get_standings()
+    form_map = get_teams_recent_form(limit=5)
+    
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT telegram_id, username, team_name, warn_count FROM users WHERE team_name IS NOT NULL AND team_name != ''")
+        users = {resolve_team_name(u["team_name"]).lower(): dict(u) for u in cursor.fetchall() if resolve_team_name(u["team_name"])}
+
+    standings_map = {resolve_team_name(s["team_name"]).lower(): (rank, s) for rank, s in enumerate(standings, 1) if resolve_team_name(s["team_name"])}
+
+    result = []
+    for t in KPL_TEAMS:
+        canon = resolve_team_name(t) or t
+        canon_lower = canon.lower()
+        
+        rank, s_row = standings_map.get(canon_lower, (0, {"played": 0, "points": 0, "wins": 0, "draws": 0, "losses": 0}))
+        u_info = users.get(canon_lower)
+        form = form_map.get(canon_lower, [])
+
+        result.append({
+            "team_name": canon,
+            "rank": rank,
+            "manager_username": u_info.get("username") if u_info else None,
+            "manager_id": u_info.get("telegram_id") if u_info else None,
+            "warn_count": u_info.get("warn_count", 0) if u_info else 0,
+            "played": s_row["played"],
+            "points": s_row["points"],
+            "wins": s_row["wins"],
+            "draws": s_row["draws"],
+            "losses": s_row["losses"],
+            "recent_form": form,
+        })
+
+    return sorted(result, key=lambda x: (x["rank"] if x["rank"] > 0 else 999, -x["points"], x["team_name"]))
 
 
 def rename_player(old_name: str, new_name: str, team_name: str | None = None) -> tuple[int, int]:
@@ -2427,7 +3176,9 @@ def get_cup_top_scorers(limit: int = 20) -> list[dict]:
             SELECT me.player_name, me.team_name, SUM(me.count) AS total_goals
             FROM match_events me
             JOIN matches m ON me.match_id = m.id
-            WHERE me.event_type = 'goal' AND m.tournament_type = 'cup'
+            WHERE me.event_type = 'goal'
+              AND (m.tournament_type = 'cup' OR m.round_number = -1 OR m.cup_series_id IS NOT NULL OR m.cup_stage IS NOT NULL)
+              AND m.status = 'confirmed'
             GROUP BY me.player_name, me.team_name
             ORDER BY total_goals DESC, me.player_name ASC
             LIMIT ?
@@ -2442,12 +3193,112 @@ def get_cup_top_assists(limit: int = 20) -> list[dict]:
             SELECT me.player_name, me.team_name, SUM(me.count) AS total_assists
             FROM match_events me
             JOIN matches m ON me.match_id = m.id
-            WHERE me.event_type = 'assist' AND m.tournament_type = 'cup'
+            WHERE me.event_type = 'assist'
+              AND (m.tournament_type = 'cup' OR m.round_number = -1 OR m.cup_series_id IS NOT NULL OR m.cup_stage IS NOT NULL)
+              AND m.status = 'confirmed'
             GROUP BY me.player_name, me.team_name
             ORDER BY total_assists DESC, me.player_name ASC
             LIMIT ?
         """, (limit,))
         return [dict(row) for row in cursor.fetchall()]
+
+def get_full_cup_summary_for_ai() -> str:
+    """Generate a comprehensive summary of the KPL Cup: rules, bracket state, matches and top stats for AI context."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, stage, series_num, team1_name, team2_name, team1_wins, team2_wins, winner_name, status 
+            FROM cup_series 
+            ORDER BY CASE stage WHEN '1/8' THEN 1 WHEN '1/4' THEN 2 WHEN '1/2' THEN 3 WHEN 'final' THEN 4 ELSE 5 END, series_num ASC
+        """)
+        series_all = [dict(r) for r in cursor.fetchall()]
+        
+        stages_map = {"1/8": "1/8 ФИНАЛА", "1/4": "1/4 ФИНАЛА", "1/2": "ПОЛУФИНАЛ (1/2)", "final": "ФИНАЛ"}
+        
+        bracket_lines = []
+        if series_all:
+            grouped = {}
+            for s in series_all:
+                st = s["stage"]
+                grouped.setdefault(st, []).append(s)
+                
+            for st, s_list in grouped.items():
+                st_title = stages_map.get(st, st)
+                bracket_lines.append(f"\n--- {st_title} ---")
+                for s in s_list:
+                    t1 = s["team1_name"] or "TBD"
+                    t2 = s["team2_name"] or "TBD"
+                    w1 = s.get("team1_wins", 0)
+                    w2 = s.get("team2_wins", 0)
+                    status = s.get("status", "pending")
+                    winner = s.get("winner_name")
+                    
+                    cursor.execute("""
+                        SELECT game_num_in_series, player1_score, player2_score, status, player1_team, player2_team 
+                        FROM matches 
+                        WHERE cup_series_id = ? 
+                        ORDER BY game_num_in_series ASC
+                    """, (s["id"],))
+                    matches = cursor.fetchall()
+                    match_details = []
+                    for m in matches:
+                        if m["status"] == "confirmed":
+                            match_details.append(f"Игра {m['game_num_in_series']}: {m['player1_team']} {m['player1_score']}:{m['player2_score']} {m['player2_team']}")
+                        elif m["status"] in ("pending", "reported"):
+                            match_details.append(f"Игра {m['game_num_in_series']} (ожидает)")
+                            
+                    details_str = f" [{', '.join(match_details)}]" if match_details else ""
+                    
+                    if winner:
+                        bracket_lines.append(f"• Серия #{s['series_num']}: {t1} vs {t2} — Счёт серии: {w1}:{w2} (🏆 Победитель: {winner}){details_str}")
+                    elif status == "active":
+                        bracket_lines.append(f"• Серия #{s['series_num']}: {t1} vs {t2} — Счёт серии: {w1}:{w2} (🔥 Идёт серия){details_str}")
+                    else:
+                        bracket_lines.append(f"• Серия #{s['series_num']}: {t1} vs {t2} — Ожидает{details_str}")
+        else:
+            bracket_lines.append("Сетка кубка ещё не сформирована.")
+
+        # Cup Scorers
+        scorers = get_cup_top_scorers(limit=10)
+        scorers_lines = []
+        if scorers:
+            for i, sc in enumerate(scorers, 1):
+                scorers_lines.append(f"{i}. {sc['player_name']} ({sc['team_name']}) — {sc['total_goals']} голов")
+        else:
+            scorers_lines.append("Пока нет голов в кубке.")
+
+        # Cup Assists
+        assists = get_cup_top_assists(limit=10)
+        assists_lines = []
+        if assists:
+            for i, asst in enumerate(assists, 1):
+                assists_lines.append(f"{i}. {asst['player_name']} ({asst['team_name']}) — {asst['total_assists']} ассистов")
+        else:
+            assists_lines.append("Пока нет ассистов в кубке.")
+
+        cup_text = (
+            "🏆 ПОЛНАЯ ИНФОРМАЦИЯ О КУБКЕ КПЛ (РЕГЛАМЕНТ, СЕТКА И СТАТИСТИКА):\n\n"
+            "📋 РЕГЛАМЕНТ И ПРАВИЛА КУБКА:\n"
+            "• Формат турнира: Олимпийская система плей-офф (1/8 финала ➔ 1/4 финала ➔ 1/2 финала ➔ Финал).\n"
+            "• Формат противостояний: Best-of-3 (серия до 2 побед одного из участников).\n"
+            "  - Игра 1: Дома играет первая команда.\n"
+            "  - Игра 2: Дома играет вторая команда.\n"
+            "  - Игра 3 (при счёте 1:1 в серии): Решающий матч за выход дальше.\n"
+            "• Правила матча: Ничьих в кубке не бывает — при равном счете в игре проводится дополнительное время (овертайм) и серия пенальти.\n"
+            "• Награды и бонусы: За каждую победу в матче кубка клуб получает +1 тренировку. Победитель Кубка КПЛ получает кубковый трофей и гарантированную путевку в Еврокубки (Суперкубок / ЛЕ / ЛК).\n\n"
+            "📜 ИСТОРИЯ ПОБЕДИТЕЛЕЙ КУБКА КПЛ:\n"
+            "• Сезон 1: 🏆 АЕК (@Snikers2121) — обладатель Кубка КПЛ.\n"
+            "• Сезон 2: 🏆 Бенфика (@vtrrgyg) — обладатель Кубка КПЛ (в финале обыграла Расинг 3:1 по сумме).\n"
+            "• Прошлые триумфаторы: 🏆 Бока Хуниорс (2x обладатель Кубка — 2 и 3 сезоны), 🏆 Порту (3 сезон).\n\n"
+            "⚔️ АКТУАЛЬНАЯ СЕТКА И РЕЗУЛЬТАТЫ СЕРИЙ КУБКА КПЛ:\n"
+            + "\n".join(bracket_lines) + "\n\n"
+            "⚽ БОМБАРДИРЫ КУБКА КПЛ:\n"
+            + "\n".join(scorers_lines) + "\n\n"
+            "🎯 АССИСТЕНТЫ КУБКА КПЛ:\n"
+            + "\n".join(assists_lines)
+        )
+        return cup_text
+
 
 def process_cup_match_completion(match_id: int) -> str | None:
     """
@@ -2696,9 +3547,10 @@ def record_debt_stage(match_id: int, stage: str) -> None:
     """Record a debt lifecycle stage for a match (e.g. 'deadline_passed', 'warn_24h', 'warn_48h', etc.)."""
     with transaction() as conn:
         cursor = conn.cursor()
+        now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         cursor.execute(
-            "INSERT OR IGNORE INTO debt_reminders (match_id, stage, sent_at) VALUES (?, ?, CURRENT_TIMESTAMP)",
-            (match_id, stage)
+            "INSERT OR REPLACE INTO debt_reminders (match_id, stage, sent_at) VALUES (?, ?, ?)",
+            (match_id, stage, now_str)
         )
 
 
@@ -2714,11 +3566,12 @@ def record_debt_12h_reminder(match_id: int) -> None:
     """Record timestamp of 12h cycle debt reminder."""
     with transaction() as conn:
         cursor = conn.cursor()
+        now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         cursor.execute("""
             INSERT INTO debt_reminders (match_id, stage, sent_at)
-            VALUES (?, 'cycle_reminder_last', CURRENT_TIMESTAMP)
-            ON CONFLICT(match_id, stage) DO UPDATE SET sent_at = CURRENT_TIMESTAMP
-        """, (match_id,))
+            VALUES (?, 'cycle_reminder_last', ?)
+            ON CONFLICT(match_id, stage) DO UPDATE SET sent_at = ?
+        """, (match_id, now_str, now_str))
 
 
 def get_last_debt_12h_reminder(match_id: int) -> datetime.datetime | None:
@@ -2735,9 +3588,9 @@ def get_last_debt_12h_reminder(match_id: int) -> datetime.datetime | None:
 def get_detailed_overdue_matches() -> list[dict]:
     """
     Retrieve all pending league matches that are legitimately overdue:
-    - Round is currently open (is_open = 1) AND has an expired deadline (deadline_dt <= now).
-    - Or round is a past round with an explicitly recorded expired deadline.
-    - NEVER includes future unopened rounds (is_open = 0 and deadline IS NULL).
+    - Round has an expired deadline (deadline_dt <= now).
+    - Or round is currently open (is_open = 1) without a deadline, and start_dt <= now.
+    - Or round is a past round (rn < max_open_round or is_open = 0 with unplayed matches).
     - Club participants are strictly resolved from current owners in users table.
     """
     with transaction() as conn:
@@ -2750,8 +3603,11 @@ def get_detailed_overdue_matches() -> list[dict]:
         rounds_rows = cursor.fetchall()
 
         round_info_map: dict[int, dict] = {}
+        max_open_round = 0
         for r_num, is_open, dl_str in rounds_rows:
             parsed_dl = parse_flexible_datetime(dl_str)
+            if is_open and r_num > max_open_round:
+                max_open_round = r_num
             round_info_map[r_num] = {
                 "is_open": bool(is_open),
                 "deadline_str": dl_str,
@@ -2792,21 +3648,25 @@ def get_detailed_overdue_matches() -> list[dict]:
         for m in matches:
             rn = m["round_number"]
             r_info = round_info_map.get(rn)
-            if not r_info:
-                continue
 
-            dl_dt = r_info.get("deadline_dt")
-            is_open = r_info.get("is_open", False)
+            dl_dt = r_info.get("deadline_dt") if r_info else None
+            is_open = r_info.get("is_open", False) if r_info else False
 
-            # CRITICAL: A round is ONLY overdue if:
-            # 1. is_open == True and dl_dt is set and dl_dt <= now
-            # 2. Or is_open == True and dl_dt is None and now >= start_dt
-            # 3. Or dl_dt is set in the past (past round with explicit deadline)
-            # Future rounds (is_open == False and deadline is NULL) are NEVER overdue!
+            # CRITICAL: A pending league match is overdue if:
+            # 1. dl_dt is set and dl_dt <= now
+            # 2. Or is_open == True and dl_dt is None and start_dt and now >= start_dt
+            # 3. Or rn < max_open_round (past tour before current open tours)
+            # 4. Or is_open == False and rn <= max_open_round (closed tour with pending matches)
             is_overdue = False
             if dl_dt and dl_dt <= now:
                 is_overdue = True
             elif is_open and dl_dt is None:
+                if start_dt and now >= start_dt:
+                    is_overdue = True
+            elif max_open_round > 0 and rn < max_open_round:
+                if start_dt and now >= start_dt:
+                    is_overdue = True
+            elif not is_open and r_info and max_open_round > 0 and rn <= max_open_round:
                 if start_dt and now >= start_dt:
                     is_overdue = True
 
@@ -2836,7 +3696,7 @@ def get_detailed_overdue_matches() -> list[dict]:
             else:
                 hours_overdue = 0.0
 
-            m["deadline_str"] = r_info.get("deadline_str") or (start_dt.strftime("%d.%m.%Y %H:%M") if start_dt else "—")
+            m["deadline_str"] = r_info.get("deadline_str") if r_info and r_info.get("deadline_str") else (start_dt.strftime("%d.%m.%Y %H:%M") if start_dt else "—")
             m["deadline_dt"] = effective_dl
             m["hours_overdue"] = max(0.0, hours_overdue)
             overdue_list.append(m)
@@ -2877,6 +3737,10 @@ def is_match_overdue(match_id: int) -> bool:
         start_dt = get_debt_tracking_start_datetime()
         now = datetime.datetime.now()
 
+        cursor.execute("SELECT MAX(round_number) FROM rounds WHERE is_open = 1")
+        max_row = cursor.fetchone()
+        max_open = max_row[0] if max_row and max_row[0] is not None else 0
+
         if dl_dt:
             effective_dl = dl_dt
             if start_dt and dl_dt < start_dt:
@@ -2884,6 +3748,9 @@ def is_match_overdue(match_id: int) -> bool:
             return now >= effective_dl
 
         if is_open and start_dt:
+            return now >= start_dt
+
+        if max_open > 0 and rn < max_open and start_dt:
             return now >= start_dt
 
         return False
@@ -2921,7 +3788,7 @@ def has_user_been_warned_recently(user_id: int, hours: float = 20.0) -> bool:
         cursor.execute("""
             SELECT created_at FROM user_warns 
             WHERE user_id = ? AND type = 'WARN_ADD'
-            ORDER BY created_at DESC LIMIT 1
+            ORDER BY created_at DESC, id DESC LIMIT 1
         """, (user_id,))
         row = cursor.fetchone()
         if not row or not row["created_at"]:
@@ -2929,7 +3796,8 @@ def has_user_been_warned_recently(user_id: int, hours: float = 20.0) -> bool:
         warn_dt = parse_flexible_datetime(row["created_at"])
         if not warn_dt:
             return False
-        return abs((datetime.datetime.now() - warn_dt).total_seconds()) < hours * 3600.0
+        diff_sec = (datetime.datetime.now() - warn_dt).total_seconds()
+        return 0 <= diff_sec < (hours * 3600.0)
 
 
 
