@@ -88,7 +88,7 @@ class TestClubCard(unittest.TestCase):
         # 4. Change manager: Replace porto_boss with new_boss
         with database.transaction() as conn:
             conn.execute("UPDATE users SET team_name = NULL WHERE telegram_id = 1001")
-            database.register_user(1003, "new_porto_boss", "manager", "Порту")
+        database.register_user(1003, "new_porto_boss", "manager", "Порту")
 
         # Club card should still have all 3 goals, 1 win, and squad intact, but with new manager!
         card_after = database.get_club_card_data("Порту")

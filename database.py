@@ -439,6 +439,23 @@ def get_user(telegram_id: int) -> sqlite3.Row | None:
         """, (telegram_id,))
         return cursor.fetchone()
 
+def register_user(telegram_id: int, username: str | None, role: str = 'player', team_name: str | None = None, league_name: str | None = None) -> None:
+    """Create or update user profile with team and league assignment."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT 1 FROM users WHERE telegram_id = ?", (telegram_id,))
+        if cursor.fetchone():
+            cursor.execute(
+                "UPDATE users SET username = ?, role = ?, team_name = COALESCE(?, team_name), league_name = COALESCE(?, league_name) WHERE telegram_id = ?",
+                (username, role, team_name, league_name, telegram_id)
+            )
+        else:
+            cursor.execute(
+                "INSERT INTO users (telegram_id, username, role, team_name, league_name) VALUES (?, ?, ?, ?, ?)",
+                (telegram_id, username, role, team_name, league_name)
+            )
+
+
 def upsert_user(telegram_id: int, username: str | None, role: str = 'user') -> None:
     """Create a new user or update their username and role if they exist."""
     with transaction() as conn:
@@ -1825,6 +1842,10 @@ def get_team_squad_photo(team_name: str) -> str | None:
         )
         row = cursor.fetchone()
         return row[0] if row and row[0] else None
+
+def save_squad_players(team_name: str, player_names: list[str]) -> int:
+    """Save or add players to a club squad."""
+    return add_squad(team_name, player_names)
 
 def add_squad(team_name: str, player_names: list[str]) -> int:
     """Add players to a club's squad. Returns count of newly added players."""

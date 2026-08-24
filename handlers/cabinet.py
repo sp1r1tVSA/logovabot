@@ -2782,13 +2782,22 @@ async def handle_debt_played_rewards(
             if u2:
                 p2_id = u2["telegram_id"]
 
+    results_summary = []
     for p_id in (p1_id, p2_id):
         if not p_id:
             continue
         try:
+            u_info = await asyncio.to_thread(database.get_user, p_id)
             new_warns, was_unwarned = await asyncio.to_thread(
                 database.apply_debt_played_reward, p_id, round_number
             )
+            results_summary.append({
+                "user_id": p_id,
+                "username": u_info.get("username") if u_info else None,
+                "team_name": u_info.get("team_name") if u_info else None,
+                "new_warns": new_warns,
+                "was_unwarned": was_unwarned
+            })
             if was_unwarned:
                 reward_text = (
                     f"🎉 <b>Матч-долг закрыт: Снят 1 варн!</b>\n\n"
@@ -2817,6 +2826,26 @@ async def handle_debt_played_rewards(
                 await context.bot.send_message(chat_id=p_id, text=all_clear_text, parse_mode="HTML")
         except Exception as e:
             logger.warning(f"Failed to process debt played reward for user {p_id}: {e}")
+
+    # Post unwarn notification to ПРЕДЫ thread
+    if results_summary:
+        try:
+            from handlers.admin import _send_to_warns_thread
+            lines = [
+                f"🟢 <b>ДОЛГ СЫГРАН: СНЯТИЕ ВАРНОВ</b>\n",
+                f"🏆 <b>{round_number}-й тур</b> (Матч #{match_id})\n",
+                f"📊 <b>Текущий баланс варнов участников:</b>"
+            ]
+            for r in results_summary:
+                u_tag = f"@{html.escape(r['username'])}" if r.get("username") else f"ID {r['user_id']}"
+                t_tag = f" [{html.escape(r['team_name'])}]" if r.get("team_name") else ""
+                badge = "🎁 <i>(Снят 1 варн)</i>" if r["was_unwarned"] else "✅ <i>(Баланс чист)</i>"
+                lines.append(f"• {u_tag}{t_tag} — <b>{r['new_warns']}/{MAX_WARNS_LIMIT}</b> {badge}")
+
+            lines.append("\n<i>Результат матча внесён в таблицу лиги.</i>")
+            await _send_to_warns_thread(context, "\n".join(lines))
+        except Exception as e:
+            logger.warning(f"Failed to send unwarn summary to warns thread: {e}")
 
 
 async def notify_match_confirmed(context: ContextTypes.DEFAULT_TYPE, match_id: int) -> None:
