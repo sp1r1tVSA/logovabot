@@ -180,6 +180,39 @@ class TestDebtLifecycle(unittest.TestCase):
         self.assertIsNotNone(u)
         self.assertEqual(u["telegram_id"], 301)
 
+        # Test count_user_remaining_debts
+        self.assertEqual(database.count_user_remaining_debts(301), 2)
+        self.assertEqual(database.count_user_remaining_debts(302), 2)
+        self.assertEqual(database.count_user_remaining_debts(999), 0)
+
+    def test_debt_played_reward_cross_round_and_stages(self):
+        """Test that playing any debt match clears warn regardless of which round originated the warn."""
+        user_id = 401
+        with database.transaction() as conn:
+            conn.execute("INSERT INTO users (telegram_id, username, team_name, warn_count) VALUES (?, 'debt_player', 'Челси', 0)", (user_id,))
+            conn.execute("INSERT INTO users (telegram_id, username, team_name, warn_count) VALUES (402, 'opp1', 'Арсенал', 0)")
+            conn.execute("INSERT INTO users (telegram_id, username, team_name, warn_count) VALUES (403, 'opp2', 'Тоттенхэм', 0)")
+            conn.execute("INSERT INTO rounds (round_number, is_open, deadline) VALUES (1, 1, '01.01.2026 12:00')")
+            conn.execute("INSERT INTO rounds (round_number, is_open, deadline) VALUES (2, 1, '02.01.2026 12:00')")
+            conn.execute("INSERT INTO matches (id, round_number, player1_id, player2_id, player1_team, player2_team, status) VALUES (601, 1, 401, 402, 'Челси', 'Арсенал', 'pending')")
+            conn.execute("INSERT INTO matches (id, round_number, player1_id, player2_id, player1_team, player2_team, status) VALUES (602, 2, 401, 403, 'Челси', 'Тоттенхэм', 'pending')")
+            # Record stage on match 601
+            conn.execute("INSERT INTO debt_reminders (match_id, stage) VALUES (601, 'warn_24h')")
+
+        # Give warn for round 1
+        database.add_warn(user_id, None, "Авто-варн: просрочка 24ч по 1 туру")
+        self.assertEqual(database.get_user_warn_count(user_id), 1)
+
+        # Verify is_match_overdue recognizes recorded debt stage
+        self.assertTrue(database.is_match_overdue(601))
+        self.assertTrue(database.is_match_overdue(602))
+
+        # User plays match 602 (Round 2) -> should successfully remove the warn from Round 1!
+        new_cnt, unwarned = database.apply_debt_played_reward(user_id, round_number=2)
+        self.assertTrue(unwarned)
+        self.assertEqual(new_cnt, 0)
+        self.assertEqual(database.get_user_warn_count(user_id), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

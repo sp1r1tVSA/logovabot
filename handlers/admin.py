@@ -1154,55 +1154,51 @@ async def admin_manage_round(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 @admin_only
 async def admin_extend_match_execute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Allow players to submit scores for an overdue match."""
+    """Toggle deadline extension / freeze auto-warns for an overdue match."""
     query = update.callback_query
     if not query or not is_admin(query.from_user.id): return
     await query.answer()
     
     match_id = int(query.data.replace("admin_extend_match_", ""))
-    await asyncio.to_thread(database.extend_match_deadline, match_id)
+    new_val = await asyncio.to_thread(database.extend_match_deadline, match_id)
     
-    keyboard = [[InlineKeyboardButton("« Вернуться к матчу", callback_data=f"admin_view_match_{match_id}")]]
-    await query.edit_message_text(
-        "✅ Дедлайн для этого матча индивидуально продлен. Теперь игроки смогут ввести счет.",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+    if new_val == 1:
+        await query.answer("⏸ Дедлайн продлен (авто-варны заморожены)", show_alert=True)
+    else:
+        await query.answer("▶️ Продление снято (авто-варны возобновлены)", show_alert=True)
+
+    await admin_view_match(update, context, match_id=match_id)
 
 @admin_only
 async def admin_list_overdue(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Display all overdue matches."""
+    """Display all overdue matches and quick debt actions."""
     query = update.callback_query
     if not query or not is_admin(query.from_user.id): return
     await query.answer()
     
-    matches = await asyncio.to_thread(database.get_open_pending_matches)
-    now = datetime.datetime.now()
-    overdue_matches = []
+    overdue_matches = await asyncio.to_thread(database.get_detailed_overdue_matches)
     
-    for m in matches:
-        if m.get("deadline"):
-            try:
-                dt = datetime.datetime.strptime(m["deadline"], "%d.%m.%Y %H:%M")
-                if now > dt:
-                    overdue_matches.append(m)
-            except ValueError:
-                pass
-                
     keyboard = []
-    for m in overdue_matches:
-        opp1 = m["player1_nickname"]
-        opp2 = m["player2_nickname"]
-        btn_text = f"Тур {m['round_number']}: {opp1} vs {opp2}"
-        keyboard.append([InlineKeyboardButton(btn_text, callback_data=f"admin_view_match_{m['id']}")])
-        
-    keyboard.append([InlineKeyboardButton("« Назад", callback_data="admin_manage_matches_info")])
-    
     if overdue_matches:
-        text = "⏰ **Просроченные матчи:**\n\nВыберите матч для выставления технического результата или индивидуального продления дедлайна."
-    else:
-        text = "⏰ Просроченных матчей нет."
+        for m in overdue_matches:
+            rn = m.get("round_number", "?")
+            t1 = m.get("player1_team") or m.get("p1_username") or "К1"
+            t2 = m.get("player2_team") or m.get("p2_username") or "К2"
+            hrs = int(m.get("hours_overdue", 0))
+            ext_tag = " [⏸ Продлен]" if m.get("is_extended") else f" (⏳ {hrs}ч)"
+            btn_text = f"Тур {rn}: {t1} vs {t2}{ext_tag}"
+            keyboard.append([InlineKeyboardButton(btn_text, callback_data=f"admin_view_match_{m['id']}")])
         
-    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+        keyboard.append([InlineKeyboardButton("📋 Отправить сводку долгов в тему «ПРЕДЫ»", callback_data="admin_send_debts_to_warns")])
+        keyboard.append([InlineKeyboardButton("📢 Рассылка всем должникам в ЛС", callback_data="admin_broadcast_all_debts_execute")])
+        text = f"⏰ <b>Просроченные матчи лиги ({len(overdue_matches)}):</b>\n\nВыберите матч для выставления счёта, ТП или индивидуального продления:"
+    else:
+        text = "⏰ <b>Просроченных матчей-долгов нет!</b>\n\nВсе текущие матчи сыграны или дедлайны ещё не истекли."
+        
+    keyboard.append([InlineKeyboardButton("« Назад к турам", callback_data="admin_manage_matches_info")])
+    keyboard.append([InlineKeyboardButton("« В админ-панель", callback_data="admin_main_menu")])
+    
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
 @admin_only
 async def admin_open_round_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -1470,12 +1466,21 @@ async def admin_view_match(update: Update, context: ContextTypes.DEFAULT_TYPE, m
     p2_name = html.escape(str(match['player2_nickname'] or match['player2_team'] or ""))
     score_str = f"<code>{match['player1_score']} : {match['player2_score']}</code>" if match['player1_score'] is not None else "Не сыгран"
     
+    is_overdue = await asyncio.to_thread(database.is_match_overdue, match_id)
+    is_extended = bool(match.get("is_extended", 0))
+    extra_status = ""
+    if match.get("status") == "pending":
+        if is_extended:
+            extra_status = "\n• <b>Авто-варны:</b> ⏸ <i>Заморожены (продлен админом)</i>"
+        elif is_overdue:
+            extra_status = "\n• <b>Статус долга:</b> ⏳ <b>Матч-долг (идет начисление авто-варнов)</b>"
+
     text = (
         f"{header_title}\n\n"
         f"⚔️ <b>{p1_name}</b>{club1}\n"
         f" 🆚 <b>{p2_name}</b>{club2}\n\n"
         f"• <b>Текущий счет:</b> {score_str}\n"
-        f"• <b>Статус:</b> {html.escape(status_map.get(match['status'], match['status']))}\n"
+        f"• <b>Статус:</b> {html.escape(status_map.get(match['status'], match['status']))}{extra_status}\n"
         f"📜 <a href=\"https://t.me/fifulatyrniru/3405\">Правила турнира</a>"
     )
     
@@ -1485,6 +1490,9 @@ async def admin_view_match(update: Update, context: ContextTypes.DEFAULT_TYPE, m
         [InlineKeyboardButton("✍️ Внести результат вручную", callback_data=f"cb_report_choice_manual_{match_id}")],
         [InlineKeyboardButton("🚫 ТП 1:0 (Хозяева)", callback_data=f"admin_tp_home_{match_id}"), InlineKeyboardButton("🚫 ТП 0:1 (Гости)", callback_data=f"admin_tp_away_{match_id}")],
     ]
+    if match.get("status") == "pending":
+        btn_ext = "▶️ Снять продление (Возобновить варны)" if is_extended else "⏸ Продлить матч (Заморозить варны)"
+        keyboard.append([InlineKeyboardButton(btn_ext, callback_data=f"admin_extend_match_{match_id}")])
     if not is_cup:
         keyboard.append([InlineKeyboardButton("🤝 ТН 0:0 (Ничья)", callback_data=f"admin_tp_draw_{match_id}"), InlineKeyboardButton("🔄 Сбросить результат", callback_data=f"admin_reset_match_execute_{match_id}")])
     else:
@@ -2092,6 +2100,20 @@ async def admin_set_score_text(update: Update, context: ContextTypes.DEFAULT_TYP
         await post_league_table_to_reports(context)
     except Exception:
         logger.exception("Failed to refresh league table after manual score")
+
+    # Process debt reward (-1 warn) and all-debts-cleared notification
+    try:
+        from handlers.cabinet import handle_debt_played_rewards, refresh_debts_summary
+        await handle_debt_played_rewards(
+            context,
+            match_id=match_id,
+            round_number=match['round_number'],
+            p1_id=match.get('player1_id'),
+            p2_id=match.get('player2_id')
+        )
+        await refresh_debts_summary(context)
+    except Exception as e:
+        logger.warning(f"Failed to process debt reward for admin score set: {e}")
 
     return ConversationHandler.END
 

@@ -2146,6 +2146,15 @@ async def cb_confirm_ai_final(update: Update, context: ContextTypes.DEFAULT_TYPE
         except Exception as e:
             logger.exception("Failed to post result to group")
 
+    # Process debt reward (-1 warn) and all-debts-cleared notification
+    await handle_debt_played_rewards(
+        context,
+        match_id=match_id,
+        round_number=match['round_number'],
+        p1_id=match.get('player1_id'),
+        p2_id=match.get('player2_id')
+    )
+
 async def submit_report_to_guest(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     if not query:
@@ -2268,13 +2277,29 @@ async def handle_debt_played_rewards(
     context: ContextTypes.DEFAULT_TYPE,
     match_id: int,
     round_number: int,
-    p1_id: int | None,
-    p2_id: int | None
+    p1_id: int | None = None,
+    p2_id: int | None = None
 ) -> None:
     """Check if the completed match was overdue and reward players with -1 warn."""
     is_overdue = await asyncio.to_thread(database.is_match_overdue, match_id)
     if not is_overdue:
         return
+
+    match = await asyncio.to_thread(database.get_match, match_id)
+    if match:
+        if not p1_id and match.get("player1_id"):
+            p1_id = match["player1_id"]
+        if not p1_id and match.get("player1_team"):
+            u1 = await asyncio.to_thread(database.find_user_by_team, match.get("player1_team"))
+            if u1:
+                p1_id = u1["telegram_id"]
+
+        if not p2_id and match.get("player2_id"):
+            p2_id = match["player2_id"]
+        if not p2_id and match.get("player2_team"):
+            u2 = await asyncio.to_thread(database.find_user_by_team, match.get("player2_team"))
+            if u2:
+                p2_id = u2["telegram_id"]
 
     for p_id in (p1_id, p2_id):
         if not p_id:

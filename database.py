@@ -795,7 +795,7 @@ def get_match(match_id: int) -> dict | None:
         cursor = conn.cursor()
         cursor.execute("""
             SELECT 
-                m.id, m.round_number, u1.telegram_id AS player1_id, u2.telegram_id AS player2_id,
+                m.id, m.round_number, COALESCE(u1.telegram_id, m.player1_id) AS player1_id, COALESCE(u2.telegram_id, m.player2_id) AS player2_id,
                 m.player1_score, m.player2_score, m.status, m.played_at, m.is_extended,
                 m.photo_id, m.dispute_photos, m.reported_by,
                 m.proposed_time, m.proposed_by, m.time_status,
@@ -814,6 +814,20 @@ def get_match(match_id: int) -> dict | None:
         d = dict(row)
         d['player1_team'] = d['direct_p1_team'] or d['u1_team']
         d['player2_team'] = d['direct_p2_team'] or d['u2_team']
+        if not d.get('player1_id') and d.get('player1_team'):
+            u1 = find_user_by_team(d['player1_team'])
+            if u1:
+                d['player1_id'] = u1['telegram_id']
+                if not d.get('player1_username'):
+                    d['player1_username'] = u1.get('username')
+                    d['player1_nickname'] = u1.get('username')
+        if not d.get('player2_id') and d.get('player2_team'):
+            u2 = find_user_by_team(d['player2_team'])
+            if u2:
+                d['player2_id'] = u2['telegram_id']
+                if not d.get('player2_username'):
+                    d['player2_username'] = u2.get('username')
+                    d['player2_nickname'] = u2.get('username')
         return d
 
 def confirm_and_finalize_match(match_id: int, p1_score: int, p2_score: int, events: list, reporter_id: int = None, photo_id: str = None) -> str | None:
@@ -1367,11 +1381,16 @@ def get_open_pending_matches() -> list[dict]:
         """)
         return [dict(row) for row in cursor.fetchall()]
 
-def extend_match_deadline(match_id: int) -> None:
-    """Allow players to report score for an overdue match."""
+def extend_match_deadline(match_id: int) -> int:
+    """Toggle is_extended between 0 and 1 for an overdue match. Returns new value."""
     with transaction() as conn:
         cursor = conn.cursor()
-        cursor.execute("UPDATE matches SET is_extended = 1 WHERE id = ?", (match_id,))
+        cursor.execute("SELECT is_extended FROM matches WHERE id = ?", (match_id,))
+        row = cursor.fetchone()
+        cur = row["is_extended"] if row and row["is_extended"] else 0
+        new_val = 0 if cur == 1 else 1
+        cursor.execute("UPDATE matches SET is_extended = ? WHERE id = ?", (new_val, match_id))
+        return new_val
 
 def get_matches_by_round(round_number: int) -> list[dict]:
     """Retrieve all matches for a specific round with player details."""
@@ -2006,19 +2025,6 @@ def reset_match(match_id: int) -> bool:
         )
         return cursor.rowcount > 0
 
-
-def set_technical_result(match_id: int, p1_score: int, p2_score: int) -> bool:
-    """Set technical result for a match without detailed player events."""
-    with transaction() as conn:
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM match_events WHERE match_id = ?", (match_id,))
-        cursor.execute(
-            "UPDATE matches SET status = 'confirmed', player1_score = ?, player2_score = ?, played_at = CURRENT_TIMESTAMP WHERE id = ?",
-            (p1_score, p2_score, match_id)
-        )
-        res = cursor.rowcount > 0
-    process_cup_match_completion(match_id)
-    return res
 
 
 def get_unplayed_matches_in_round(round_number: int) -> list[dict]:
@@ -2847,9 +2853,14 @@ def get_debt_tracking_start_datetime() -> datetime.datetime | None:
 
 
 def is_match_overdue(match_id: int) -> bool:
-    """Check if a match is overdue."""
+    """Check if a match is overdue or was recorded as a debt."""
     with transaction() as conn:
         cursor = conn.cursor()
+        # 1. If any debt stages/reminders were already recorded for this match, it is legitimately a debt
+        cursor.execute("SELECT 1 FROM debt_reminders WHERE match_id = ? LIMIT 1", (match_id,))
+        if cursor.fetchone():
+            return True
+
         cursor.execute("SELECT round_number FROM matches WHERE id = ?", (match_id,))
         row = cursor.fetchone()
         if not row:
@@ -2972,6 +2983,17 @@ def apply_debt_played_reward(user_id: int, round_number: int) -> tuple[int, bool
             (user_id, f"Снятие варна за закрытие долга ({round_number} тур)")
         )
         return new_warns, True
+
+
+def count_user_remaining_debts(user_id: int) -> int:
+    """Count how many overdue/debt matches currently remain for a given user."""
+    overdue_matches = get_detailed_overdue_matches()
+    count = 0
+    for m in overdue_matches:
+        if m.get("player1_id") == user_id or m.get("player2_id") == user_id:
+            count += 1
+    return count
+
 
 
 
