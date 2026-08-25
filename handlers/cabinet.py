@@ -3016,18 +3016,33 @@ async def handle_debt_played_rewards(
                 p2_id = u2["telegram_id"]
 
     results_summary = []
+    rewards_applied = False
     for p_id in (p1_id, p2_id):
         if not p_id:
             continue
         try:
-            u_info = await asyncio.to_thread(database.get_user, p_id)
+            # get_user returns a raw sqlite3.Row (no .get) — convert to dict.
+            # NOTE: the unwarn below is applied BEFORE building the summary
+            # entry, so record_debt_stage("reward_given") must run even if
+            # something here fails — otherwise the reward would re-fire.
+            u_info_row = await asyncio.to_thread(database.get_user, p_id)
             new_warns, was_unwarned = await asyncio.to_thread(
                 database.apply_debt_played_reward, p_id, round_number
             )
+            # The unwarn has now been committed — from this point the stage
+            # marker MUST be recorded even if summary/DM building fails.
+            rewards_applied = True
+            u_info = (
+                {
+                    "username": u_info_row["username"] if "username" in u_info_row.keys() else None,
+                    "team_name": u_info_row["team_name"] if "team_name" in u_info_row.keys() else None,
+                }
+                if u_info_row is not None else {}
+            )
             results_summary.append({
                 "user_id": p_id,
-                "username": u_info.get("username") if u_info else None,
-                "team_name": u_info.get("team_name") if u_info else None,
+                "username": u_info.get("username"),
+                "team_name": u_info.get("team_name"),
                 "new_warns": new_warns,
                 "was_unwarned": was_unwarned
             })
@@ -3060,12 +3075,12 @@ async def handle_debt_played_rewards(
         except Exception as e:
             logger.warning(f"Failed to process debt played reward for user {p_id}: {e}")
 
-    if results_summary:
+    if rewards_applied:
         # Mark rewards as granted for this match so repeat invocations are no-ops
         try:
             await asyncio.to_thread(database.record_debt_stage, match_id, "reward_given")
         except Exception as e:
-            logger.warning(f"Failed to record reward_given stage for match {match_id}: {e}")
+            logger.error(f"CRITICAL: failed to record reward_given stage for match {match_id}: {e}")
 
     # Post unwarn notification to ПРЕДЫ thread
     if results_summary:
