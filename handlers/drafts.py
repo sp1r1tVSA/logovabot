@@ -529,7 +529,16 @@ async def cb_draft_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             match_id=m_id,
             is_draft=False
         )
-        
+
+        # Append "debt closed" note when the match was an overdue debt
+        try:
+            from handlers.cabinet import build_debt_footer
+            _m_row = await asyncio.to_thread(database.get_match, m_id)
+            if _m_row:
+                official_text += await build_debt_footer(_m_row)
+        except Exception as e:
+            logger.warning(f"Failed to build debt footer for match {m_id}: {e}")
+
         if main_group_id:
             try:
                 kwargs = {"chat_id": main_group_id, "parse_mode": "HTML"}

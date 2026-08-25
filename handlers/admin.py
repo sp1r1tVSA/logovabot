@@ -1637,7 +1637,14 @@ async def _notify_group_about_tp(context: ContextTypes.DEFAULT_TYPE, match_id: i
         res_text = f"{p1} <b>0:0</b> {p2} (ТН)"
 
     text = f"🚨 <b>Администратор назначил результат:</b>\n\n🏆 <b>{tour_text}</b>\n🎮 {res_text}"
-    
+
+    # Append "debt closed" note when the match was an overdue debt
+    try:
+        from handlers.cabinet import build_debt_footer
+        text += await build_debt_footer(match)
+    except Exception as e:
+        logger.warning(f"Failed to build debt footer for TP #{match_id}: {e}")
+
     kwargs = {"chat_id": group_id, "text": text, "parse_mode": "HTML"}
     if reports_topic_id:
         kwargs["message_thread_id"] = int(reports_topic_id)

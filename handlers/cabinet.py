@@ -2493,6 +2493,44 @@ def build_formatted_match_post(
 
     return f"{header}{events_block}{footer}"
 
+async def build_debt_footer(match: dict) -> str:
+    """Short note appended to result posts when the match was an overdue debt:
+    lists each participant and the warn that will be removed (new balance)."""
+    try:
+        match_id = match["id"]
+        if not await asyncio.to_thread(database.is_match_overdue, match_id):
+            return ""
+        if await asyncio.to_thread(database.has_debt_stage, match_id, "reward_given"):
+            # Already rewarded earlier — no note on re-posted results
+            return ""
+
+        parts = []
+        seen = set()
+        for pid_key, team_key in (("player1_id", "player1_team"), ("player2_id", "player2_team")):
+            p_id = match.get(pid_key)
+            if not p_id and match.get(team_key):
+                u = await asyncio.to_thread(database.find_user_by_team, match.get(team_key))
+                p_id = dict(u)["telegram_id"] if u else None
+            if not p_id or p_id in seen:
+                continue
+            seen.add(p_id)
+
+            u_row = await asyncio.to_thread(database.get_user, p_id)
+            u = dict(u_row) if u_row else {}
+            cur = u.get("warn_count") or 0
+            new_w = max(0, cur - 1)
+            tag = f"@{u['username']}" if u.get("username") else f"ID {p_id}"
+            suffix = "" if cur > 0 else " (был 0)"
+            parts.append(f"{html.escape(tag)} → <b>{new_w}/{MAX_WARNS_LIMIT}</b>{suffix}")
+
+        if not parts:
+            return ""
+        return "\n\n🎁 <b>Матч был долгом — списан 1 варн:</b> " + " · ".join(parts)
+    except Exception as e:
+        logger.warning(f"build_debt_footer failed for match {match.get('id')}: {e}")
+        return ""
+
+
 async def cb_confirm_ai_final(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Instantly save and finalize match score in database from AI Vision result."""
     query = update.callback_query
@@ -2540,6 +2578,9 @@ async def cb_confirm_ai_final(update: Update, context: ContextTypes.DEFAULT_TYPE
     await refresh_debts_summary(context)
     await refresh_league_table(context)
 
+    # Short "debt closed" note appended to result posts when applicable
+    debt_note = await build_debt_footer(match)
+
     # 1. PM to reporter
     reporter_text = build_formatted_match_post(
         round_number=match['round_number'],
@@ -2555,7 +2596,7 @@ async def cb_confirm_ai_final(update: Update, context: ContextTypes.DEFAULT_TYPE
         is_pm=True,
         pm_title="🎉 <b>Результат успешно занесен в лигу!</b>",
         match_id=match_id
-    )
+    ) + debt_note
 
     is_admin_user = is_admin(user_id) or context.user_data.get("is_admin_reporting", False)
     if is_admin_user:
@@ -2595,7 +2636,7 @@ async def cb_confirm_ai_final(update: Update, context: ContextTypes.DEFAULT_TYPE
         is_pm=True,
         pm_title="🔔 <b>Результат вашего матча занесен в лигу!</b>",
         match_id=match_id
-    )
+    ) + debt_note
 
     for p_id in set(players_to_notify):
         await safe_send_notification(context.bot, p_id, opp_text)
@@ -2619,7 +2660,7 @@ async def cb_confirm_ai_final(update: Update, context: ContextTypes.DEFAULT_TYPE
             is_single_timeline=is_single_tl,
             is_pm=False,
             match_id=match_id
-        )
+        ) + debt_note
         try:
             kwargs = {"chat_id": main_group_id, "caption": group_text, "parse_mode": "HTML"}
             if results_topic_id:
@@ -3121,6 +3162,9 @@ async def notify_match_confirmed(context: ContextTypes.DEFAULT_TYPE, match_id: i
     home_assists = [f"{e['player_name']} ({e['count']})" if e['count'] > 1 else f"{e['player_name']} (1)" for e in events if e['event_type'] == 'assist' and e['team_name'].lower() == home_team.lower()]
     away_assists = [f"{e['player_name']} ({e['count']})" if e['count'] > 1 else f"{e['player_name']} (1)" for e in events if e['event_type'] == 'assist' and e['team_name'].lower() == away_team.lower()]
 
+    # Short "debt closed" note for result posts
+    debt_note = await build_debt_footer(match)
+
     pm_text = build_formatted_match_post(
         round_number=match['round_number'],
         home_team=home_team,
@@ -3134,7 +3178,7 @@ async def notify_match_confirmed(context: ContextTypes.DEFAULT_TYPE, match_id: i
         is_pm=True,
         pm_title="✅ <b>Матч успешно подтвержден и сыгран!</b>",
         match_id=match_id
-    )
+    ) + debt_note
 
     for p_id in (match['player1_id'], match['player2_id']):
         if p_id:
@@ -3169,7 +3213,7 @@ async def notify_match_confirmed(context: ContextTypes.DEFAULT_TYPE, match_id: i
             a_assists=away_assists,
             is_pm=False,
             match_id=match_id
-        )
+        ) + debt_note
 
         photo_id = match.get("photo_id")
         try:
