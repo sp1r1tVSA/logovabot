@@ -3,6 +3,7 @@ import sqlite3
 import datetime
 import re
 import difflib
+import threading
 from typing import Generator
 from contextlib import contextmanager
 from config import DB_PATH
@@ -22,18 +23,40 @@ def get_connection() -> sqlite3.Connection:
         logger.exception(f"Failed to connect to database at {DB_PATH}")
         raise
 
+
+_tx_local = threading.local()
+
+
 @contextmanager
 def transaction() -> Generator[sqlite3.Connection, None, None]:
-    """Provide a transactional scope around database operations."""
+    """Provide a transactional scope around database operations.
+
+    Re-entrant: a nested transaction() call on the same thread joins the
+    outer transaction (returns the same connection) instead of opening an
+    independent one. Commit happens only when the OUTERMOST scope exits;
+    a rollback rolls back the entire multi-step operation. This makes
+    composite actions (e.g. confirm match + update cup series) atomic.
+    """
+    stack = getattr(_tx_local, "stack", None)
+    if stack:
+        # Nested scope: reuse the outer connection, never commit/close here.
+        yield stack[-1]
+        return
+
     conn = get_connection()
+    _tx_local.stack = [conn]
     try:
         yield conn
         conn.commit()
     except Exception as e:
-        conn.rollback()
+        try:
+            conn.rollback()
+        except sqlite3.Error:
+            pass
         logger.exception("Transaction rolled back due to error")
         raise
     finally:
+        _tx_local.stack = []
         conn.close()
 
 def init_db() -> None:
@@ -127,6 +150,14 @@ def init_db() -> None:
                 FOREIGN KEY(user_id) REFERENCES users(telegram_id) ON DELETE CASCADE
             )
         """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS pending_reports (
+                match_id INTEGER PRIMARY KEY,
+                reporter_id INTEGER NOT NULL,
+                payload TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
         try:
             cursor.execute("ALTER TABLE users ADD COLUMN warn_count INTEGER DEFAULT 0")
         except sqlite3.OperationalError:
@@ -139,6 +170,11 @@ def init_db() -> None:
             
         try:
             cursor.execute("ALTER TABLE matches ADD COLUMN is_extended INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
+
+        try:
+            cursor.execute("ALTER TABLE users ADD COLUMN pending_notification INTEGER DEFAULT 0")
         except sqlite3.OperationalError:
             pass
             
@@ -171,6 +207,8 @@ def init_db() -> None:
             ("game_num_in_series", "INTEGER DEFAULT 1"),
             ("player1_team", "TEXT"),
             ("player2_team", "TEXT"),
+            ("frozen_seconds", "INTEGER DEFAULT 0"),
+            ("frozen_at", "TEXT"),
         )
         for col_name, col_type in SAFE_COLUMNS:
             try:
@@ -185,6 +223,20 @@ def init_db() -> None:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_matches_status ON matches(status)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_matches_tourn ON matches(tournament_type)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_match ON match_events(match_id)")
+
+        # Enforce one owner per club: de-duplicate team_name (prefer a real
+        # positive telegram_id over a temporary negative one) then add a UNIQUE
+        # index. Prevents duplicated cup debt rows and warns being attributed
+        # to the wrong duplicate account.
+        cursor.execute("""
+            UPDATE users SET team_name = NULL
+            WHERE team_name IS NOT NULL AND telegram_id NOT IN (
+                SELECT MAX(telegram_id) FROM users WHERE team_name IS NOT NULL GROUP BY LOWER(TRIM(team_name))
+            )
+        """)
+        cursor.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_team_name_unique ON users(LOWER(TRIM(team_name)))"
+        )
 
         # Persistent chat history for AI mode
         cursor.execute("""
@@ -389,21 +441,34 @@ def teams_match(team_a: str | None, team_b: str | None) -> bool:
     """Check if two team names refer to the same team (smart fuzzy/normalized match)."""
     if not team_a or not team_b:
         return False
-    
+
     res_a = resolve_team_name(team_a)
     res_b = resolve_team_name(team_b)
     if res_a and res_b and res_a.lower() == res_b.lower():
         return True
-        
+
+    # Two distinct canonical clubs must never be conflated by fuzzy matching
+    # (e.g. "Атлетико" vs "Атлетик" score ~0.93 on plain string similarity).
+    try:
+        from config import CLUBS as _KPL_CLUBS
+        canon = {normalize_team_name(c) for c in (_KPL_CLUBS or []) if isinstance(c, str)}
+        a_c = normalize_team_name(team_a)
+        b_c = normalize_team_name(team_b)
+        if canon and a_c in canon and b_c in canon and a_c != b_c:
+            return False
+    except Exception:
+        pass
+
     a_norm = normalize_team_name(team_a)
     b_norm = normalize_team_name(team_b)
     if not a_norm or not b_norm:
         return False
     if a_norm == b_norm or a_norm in b_norm or b_norm in a_norm:
         return True
-        
-    # Fuzzy ratio check
-    if difflib.SequenceMatcher(None, a_norm, b_norm).ratio() >= 0.70:
+
+    # Fuzzy ratio check (raised to 0.85 so similar-but-distinct clubs like
+    # "Атлетик"/"Атлетико" are not matched).
+    if difflib.SequenceMatcher(None, a_norm, b_norm).ratio() >= 0.85:
         return True
         
     # Word-level match
@@ -574,11 +639,8 @@ def get_pending_matches(telegram_id: int, only_expired_deadlines: bool = False) 
             for r_num, dl_str in cursor.fetchall():
                 if not dl_str:
                     continue
-                try:
-                    dl_dt = datetime.datetime.strptime(dl_str, "%d.%m.%Y %H:%M")
-                except ValueError:
-                    continue
-                if dl_dt <= now:
+                dl_dt = parse_flexible_datetime(dl_str)
+                if dl_dt and dl_dt <= now:
                     expired_rounds.add(r_num)
 
         league_condition = (
@@ -814,6 +876,7 @@ def get_match(match_id: int) -> dict | None:
             SELECT 
                 m.id, m.round_number, COALESCE(u1.telegram_id, m.player1_id) AS player1_id, COALESCE(u2.telegram_id, m.player2_id) AS player2_id,
                 m.player1_score, m.player2_score, m.status, m.played_at, m.is_extended,
+                COALESCE(m.frozen_seconds, 0) AS frozen_seconds, m.frozen_at,
                 m.photo_id, m.dispute_photos, m.reported_by,
                 m.proposed_time, m.proposed_by, m.time_status,
                 m.tournament_type, m.cup_stage, m.cup_series_id, m.game_num_in_series,
@@ -883,6 +946,39 @@ def set_technical_result(match_id: int, p1_score: int, p2_score: int) -> str | N
         cursor.execute("DELETE FROM match_events WHERE match_id = ?", (match_id,))
     return process_cup_match_completion(match_id)
 
+def save_pending_report(match_id: int, reporter_id: int, payload: dict) -> None:
+    """Persist a pending match report payload (JSON) awaiting opponent/admin confirmation."""
+    import json
+    with transaction() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO pending_reports (match_id, reporter_id, payload) VALUES (?, ?, ?)",
+            (match_id, reporter_id, json.dumps(payload, ensure_ascii=False))
+        )
+
+
+def get_pending_report(match_id: int) -> dict | None:
+    """Load a pending report payload. Returns dict with reporter_id and parsed payload fields."""
+    import json
+    with transaction() as conn:
+        row = conn.execute(
+            "SELECT reporter_id, payload FROM pending_reports WHERE match_id = ?", (match_id,)
+        ).fetchone()
+        if not row:
+            return None
+        data = dict(row)
+        try:
+            data.update(json.loads(data.pop("payload")))
+        except Exception:
+            return None
+        return data
+
+
+def delete_pending_report(match_id: int) -> None:
+    """Remove a stored pending report after final decision."""
+    with transaction() as conn:
+        conn.execute("DELETE FROM pending_reports WHERE match_id = ?", (match_id,))
+
+
 def reset_match(match_id: int) -> None:
     """Reset match status to pending, clear scores/events, and update cup series if cup match."""
     with transaction() as conn:
@@ -895,7 +991,15 @@ def reset_match(match_id: int) -> None:
             "UPDATE matches SET status = 'pending', player1_score = NULL, player2_score = NULL, reported_by = NULL, photo_id = NULL, dispute_photos = NULL WHERE id = ?",
             (match_id,)
         )
+        # A fresh start also drops any freeze state from the previous result
+        cursor.execute(
+            "UPDATE matches SET is_extended = 0, frozen_at = NULL, frozen_seconds = 0 WHERE id = ?",
+            (match_id,)
+        )
         cursor.execute("DELETE FROM match_events WHERE match_id = ?", (match_id,))
+        # Reset debt lifecycle: recorded warn milestones and pending confirmation reports
+        cursor.execute("DELETE FROM debt_reminders WHERE match_id = ?", (match_id,))
+        cursor.execute("DELETE FROM pending_reports WHERE match_id = ?", (match_id,))
 
         if s_id:
             # Recalculate cup_series wins
@@ -1034,12 +1138,9 @@ def get_active_match_by_teams(team1: str, team2: str, caption: str | None = None
                 is_deadline_expired = False
                 dl_str = d.get('round_deadline')
                 if dl_str:
-                    try:
-                        dl_dt = datetime.datetime.strptime(dl_str, "%d.%m.%Y %H:%M")
-                        if dl_dt <= now:
-                            is_deadline_expired = True
-                    except ValueError:
-                        pass
+                    dl_dt = parse_flexible_datetime(dl_str)
+                    if dl_dt and dl_dt <= now:
+                        is_deadline_expired = True
                 
                 if is_cup_hint:
                     if t_type == 'cup':
@@ -1399,15 +1500,71 @@ def get_open_pending_matches() -> list[dict]:
         return [dict(row) for row in cursor.fetchall()]
 
 def extend_match_deadline(match_id: int) -> int:
-    """Toggle is_extended between 0 and 1 for an overdue match. Returns new value."""
+    """Toggle is_extended between 0 and 1 for an overdue match. Returns new value.
+    Freeze time is accumulated so auto-warn schedules shift, not skip."""
     with transaction() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT is_extended FROM matches WHERE id = ?", (match_id,))
         row = cursor.fetchone()
         cur = row["is_extended"] if row and row["is_extended"] else 0
         new_val = 0 if cur == 1 else 1
-        cursor.execute("UPDATE matches SET is_extended = ? WHERE id = ?", (new_val, match_id))
+        _apply_freeze_state(cursor, match_id, new_val)
         return new_val
+
+
+def set_match_extended(match_id: int, value: int) -> None:
+    """Explicitly set is_extended (1 = freeze auto-warns, 0 = resume). No toggle.
+    Freeze intervals are recorded so that hours_overdue excludes frozen time."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        _apply_freeze_state(cursor, match_id, 1 if value else 0)
+
+
+def _apply_freeze_state(cursor: sqlite3.Cursor, match_id: int, new_val: int) -> None:
+    """Shared freeze bookkeeping: stamp frozen_at on freeze, accumulate elapsed
+    seconds into frozen_seconds on unfreeze."""
+    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    if new_val == 1:
+        # Start freezing: remember when (idempotent if already frozen)
+        cursor.execute(
+            "UPDATE matches SET is_extended = 1, "
+            "frozen_at = COALESCE(frozen_at, ?) WHERE id = ?",
+            (now_str, match_id)
+        )
+    else:
+        # Resume: bank the elapsed frozen interval, then clear the marker
+        cursor.execute("SELECT frozen_at, COALESCE(frozen_seconds, 0) AS fs FROM matches WHERE id = ?", (match_id,))
+        row = cursor.fetchone()
+        extra = 0
+        if row and row["frozen_at"]:
+            f_at = parse_flexible_datetime(row["frozen_at"])
+            if f_at:
+                extra = max(0, int((datetime.datetime.now() - f_at).total_seconds()))
+        cursor.execute(
+            "UPDATE matches SET is_extended = 0, frozen_at = NULL, "
+            "frozen_seconds = COALESCE(frozen_seconds, 0) + ? WHERE id = ?",
+            (extra, match_id)
+        )
+
+
+def get_match_frozen_seconds(match_id: int) -> float:
+    """Total seconds the match has spent frozen, INCLUDING the current ongoing
+    freeze interval (if is_extended=1 right now)."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT is_extended, frozen_at, COALESCE(frozen_seconds, 0) AS fs FROM matches WHERE id = ?",
+            (match_id,)
+        )
+        row = cursor.fetchone()
+        if not row:
+            return 0.0
+        total = float(row["fs"] or 0)
+        if row["is_extended"] and row["frozen_at"]:
+            f_at = parse_flexible_datetime(row["frozen_at"])
+            if f_at:
+                total += max(0.0, (datetime.datetime.now() - f_at).total_seconds())
+        return total
 
 def get_matches_by_round(round_number: int) -> list[dict]:
     """Retrieve all matches for a specific round with player details."""
@@ -1426,16 +1583,6 @@ def get_matches_by_round(round_number: int) -> list[dict]:
             ORDER BY m.id ASC
         """, (round_number,))
         return [dict(row) for row in cursor.fetchall()]
-
-def reset_match(match_id: int) -> None:
-    """Reset a match result, setting status back to 'pending' and clearing scores and events."""
-    with transaction() as conn:
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM match_events WHERE match_id = ?", (match_id,))
-        cursor.execute(
-            "UPDATE matches SET player1_score = NULL, player2_score = NULL, status = 'pending', played_at = NULL WHERE id = ?",
-            (match_id,)
-        )
 
 def get_admins() -> list[dict]:
     """Retrieve all users with admin role."""
@@ -1564,7 +1711,39 @@ def set_player_club(player_ref: str, new_club: str) -> tuple[bool, str]:
         if not row:
             return False, "Игрок не найден."
         p_id = row[0]
-        cursor.execute("UPDATE users SET team_name = ? WHERE telegram_id = ?", (new_club.strip(), p_id))
+
+        cursor.execute("SELECT team_name FROM users WHERE telegram_id = ?", (p_id,))
+        old_club_row = cursor.fetchone()
+        old_club = (old_club_row[0] or "").strip() if old_club_row else ""
+
+        cursor.execute("UPDATE users SET team_name = ?, warn_count = 0 WHERE telegram_id = ?", (new_club.strip(), p_id))
+
+        # Keep pending fixtures and active cup series pointing at the club the
+        # player now owns, so they don't become orphaned debts of the old club.
+        if old_club and old_club.lower() != new_club.strip().lower():
+            cursor.execute(
+                "UPDATE matches SET player1_team = ? WHERE status = 'pending' AND LOWER(player1_team) = LOWER(?)",
+                (new_club.strip(), old_club)
+            )
+            cursor.execute(
+                "UPDATE matches SET player2_team = ? WHERE status = 'pending' AND LOWER(player2_team) = LOWER(?)",
+                (new_club.strip(), old_club)
+            )
+            cursor.execute(
+                "UPDATE cup_series SET team1_name = ? WHERE status = 'active' AND LOWER(team1_name) = LOWER(?)",
+                (new_club.strip(), old_club)
+            )
+            cursor.execute(
+                "UPDATE cup_series SET team2_name = ? WHERE status = 'active' AND LOWER(team2_name) = LOWER(?)",
+                (new_club.strip(), old_club)
+            )
+            # Fresh debt lifecycle for the transferred fixtures
+            cursor.execute(
+                "DELETE FROM debt_reminders WHERE match_id IN "
+                "(SELECT id FROM matches WHERE status = 'pending' AND (LOWER(player1_team) = LOWER(?) OR LOWER(player2_team) = LOWER(?)))",
+                (new_club.strip(), new_club.strip())
+            )
+
         return True, f"Клуб игрока **@{player_ref_clean}** изменен на **{new_club.strip()}**."
 
 def update_player_username(telegram_id: int, username: str) -> tuple[bool, str]:
@@ -1638,17 +1817,40 @@ def assign_player_to_club(username: str, club: str) -> tuple[int, str | None]:
         old_username = None
         if old_player:
             old_id, old_username = old_player[0], old_player[1]
-            # Unlink / delete old player
-            cursor.execute("DELETE FROM users WHERE telegram_id = ?", (old_id,))
-            # Also clean up unplayed matches for the deleted player
+            # Detach played matches from the old owner (preserve league history),
+            # then remove their unplayed fixtures BEFORE deleting the user row
+            # (FK constraint requires children gone first).
+            cursor.execute(
+                "UPDATE matches SET player1_id = NULL WHERE player1_id = ? AND status != 'pending'",
+                (old_id,)
+            )
+            cursor.execute(
+                "UPDATE matches SET player2_id = NULL WHERE player2_id = ? AND status != 'pending'",
+                (old_id,)
+            )
             cursor.execute("DELETE FROM matches WHERE player1_id = ? OR player2_id = ?", (old_id, old_id))
-            
+            cursor.execute("DELETE FROM users WHERE telegram_id = ?", (old_id,))
+
+            # Fresh debt lifecycle for the club's remaining pending fixtures:
+            # the new owner must not inherit recorded auto-warn milestones.
+            cursor.execute("""
+                DELETE FROM debt_reminders WHERE match_id IN (
+                    SELECT id FROM matches
+                    WHERE status = 'pending'
+                      AND (LOWER(player1_team) = LOWER(?) OR LOWER(player2_team) = LOWER(?))
+                )
+            """, (club_clean, club_clean))
+
         # 2. Check if the new player already exists in the system
         cursor.execute("SELECT telegram_id FROM users WHERE LOWER(username) = LOWER(?)", (username_clean,))
         exists = cursor.fetchone()
         if exists:
             new_id = exists[0]
-            cursor.execute("UPDATE users SET team_name = ? WHERE telegram_id = ?", (club_clean, new_id))
+            # Reset warns so a previously excluded player does not get instantly re-kicked
+            cursor.execute(
+                "UPDATE users SET team_name = ?, warn_count = 0 WHERE telegram_id = ?",
+                (club_clean, new_id)
+            )
         else:
             # Generate negative temp ID
             cursor.execute("SELECT MIN(telegram_id) FROM users")
@@ -1702,13 +1904,16 @@ def add_warn(user_id: int, admin_id: int | None, reason: str) -> tuple[int, bool
     from config import MAX_WARNS_LIMIT
     with transaction() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT warn_count FROM users WHERE telegram_id = ?", (user_id,))
-        row = cursor.fetchone()
-        current_count = row["warn_count"] if row and row["warn_count"] is not None else 0
-        new_count = current_count + 1
         now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
-        cursor.execute("UPDATE users SET warn_count = ? WHERE telegram_id = ?", (new_count, user_id))
+
+        # Atomic increment inside the write transaction: two concurrent callers
+        # can no longer read the same warn_count and lose an increment.
+        cursor.execute("UPDATE users SET warn_count = warn_count + 1 WHERE telegram_id = ?", (user_id,))
+        if cursor.rowcount == 0:
+            return 0, False
+        cursor.execute("SELECT warn_count FROM users WHERE telegram_id = ?", (user_id,))
+        new_count = cursor.fetchone()["warn_count"] or 0
+
         cursor.execute(
             "INSERT INTO user_warns (user_id, admin_id, reason, type, created_at) VALUES (?, ?, ?, 'WARN_ADD', ?)",
             (user_id, admin_id, reason, now_str)
@@ -1750,16 +1955,18 @@ def get_user_warns(user_id: int) -> list[dict]:
 
 
 def ban_and_remove_from_league(user_id: int) -> str | None:
+    from config import MAX_WARNS_LIMIT
     with transaction() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT team_name FROM users WHERE telegram_id = ?", (user_id,))
         row = cursor.fetchone()
         team_name = row["team_name"] if row else None
-        
+
         cursor.execute("UPDATE users SET team_name = NULL WHERE telegram_id = ?", (user_id,))
+        now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         cursor.execute(
-            "INSERT INTO user_warns (user_id, admin_id, reason, type) VALUES (?, NULL, 'Превышен лимит варнов (4/4). Авто-удаление из клуба.', 'AUTO_KICK')",
-            (user_id,)
+            "INSERT INTO user_warns (user_id, admin_id, reason, type, created_at) VALUES (?, NULL, ?, 'AUTO_KICK', ?)",
+            (user_id, f"Превышен лимит варнов ({MAX_WARNS_LIMIT}/{MAX_WARNS_LIMIT}). Авто-удаление из клуба.", now_str)
         )
         return team_name
 
@@ -2015,6 +2222,10 @@ def get_round_info(round_number: int) -> dict | None:
         return dict(row) if row else None
 
 def update_round_status(round_number: int, is_open: bool, deadline: str | None = None) -> None:
+    """Open/close a round. When opening without an explicit deadline, any stale
+    stored deadline is cleared so it cannot instantly mark matches as overdue.
+    Whenever the deadline is (re)set, per-round reminder flags are reset so
+    the 24h/6h/1h pipeline works for the new deadline window."""
     with transaction() as conn:
         cursor = conn.cursor()
         if deadline is not None:
@@ -2022,11 +2233,20 @@ def update_round_status(round_number: int, is_open: bool, deadline: str | None =
                 "UPDATE rounds SET is_open = ?, deadline = ? WHERE round_number = ?",
                 (1 if is_open else 0, deadline, round_number)
             )
+        elif is_open:
+            # Re-opening without a new deadline: drop the stale one
+            cursor.execute(
+                "UPDATE rounds SET is_open = ?, deadline = NULL WHERE round_number = ?",
+                (1, round_number)
+            )
         else:
             cursor.execute(
                 "UPDATE rounds SET is_open = ? WHERE round_number = ?",
-                (1 if is_open else 0, round_number)
+                (0, round_number)
             )
+
+        if deadline is not None:
+            cursor.execute("DELETE FROM round_reminders WHERE round_number = ?", (round_number,))
 
 
 def get_all_rounds() -> list[int]:
@@ -2049,19 +2269,6 @@ def get_club_top_assisters(team_name: str) -> list[dict]:
             ORDER BY total DESC, me.player_name ASC
         """, (team_name.strip(),))
         return [{"player_name": row["player_name"], "total": row["total"]} for row in cursor.fetchall()]
-
-
-def reset_match(match_id: int) -> bool:
-    """Reset a match status back to pending and clear scores/events."""
-    with transaction() as conn:
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM match_events WHERE match_id = ?", (match_id,))
-        cursor.execute(
-            "UPDATE matches SET status = 'pending', player1_score = NULL, player2_score = NULL, played_at = NULL WHERE id = ?",
-            (match_id,)
-        )
-        return cursor.rowcount > 0
-
 
 
 def get_unplayed_matches_in_round(round_number: int) -> list[dict]:
@@ -2510,14 +2717,12 @@ def get_club_card_data(team_name: str) -> dict:
             overdue = False
             dl_str = pm["deadline"]
             if dl_str and not is_cup:
-                try:
-                    dl_dt = datetime.datetime.strptime(dl_str, "%d.%m.%Y %H:%M")
+                dl_dt = parse_flexible_datetime(dl_str)
+                if dl_dt:
                     eff_dl = max(dl_dt, start_dt) if start_dt else dl_dt
                     if now_dt > eff_dl:
                         overdue = True
                         debts_count += 1
-                except Exception:
-                    pass
             elif not is_cup and pm["is_open"] == 0:
                 # Past closed round without deadline
                 overdue = True
@@ -3468,17 +3673,21 @@ def parse_flexible_datetime(dt_str: str | None) -> datetime.datetime | None:
 
 
 def get_all_unplayed_league_matches() -> list[dict]:
-    """Retrieve all pending league matches in open rounds or past rounds with expired deadlines."""
+    """Retrieve pending league matches that are overdue: expired deadlines or past rounds."""
     with transaction() as conn:
         cursor = conn.cursor()
         now = datetime.datetime.now()
+        start_dt = get_debt_tracking_start_datetime()
 
         cursor.execute("SELECT round_number, is_open, deadline FROM rounds")
         rounds_rows = cursor.fetchall()
 
         round_info_map: dict[int, dict] = {}
+        max_open_round = 0
         for r_num, is_open, dl_str in rounds_rows:
             parsed_dl = parse_flexible_datetime(dl_str)
+            if is_open and r_num > max_open_round:
+                max_open_round = r_num
             round_info_map[r_num] = {
                 "is_open": bool(is_open),
                 "deadline_dt": parsed_dl
@@ -3521,23 +3730,40 @@ def get_all_unplayed_league_matches() -> list[dict]:
             dl_dt = r_info.get("deadline_dt")
             is_open = r_info.get("is_open", False)
 
-            # Include ONLY if round is currently open OR has an explicit passed deadline
-            # Future unopened rounds (is_open=0 and deadline is None) are ignored
-            if is_open or (dl_dt and dl_dt <= now):
-                t1 = m.get("player1_team")
-                t2 = m.get("player2_team")
-                u1 = get_team_owner(t1)
-                u2 = get_team_owner(t2)
+            # Include ONLY if the match is actually overdue:
+            # 1. Deadline is set and has passed
+            # 2. Round is open without deadline and debt tracking started
+            # 3. Round is a past round (before max open round, or closed) and tracking started
+            # Future unopened rounds and open rounds with future deadlines are ignored
+            is_debt = False
+            if dl_dt and dl_dt <= now:
+                is_debt = True
+            elif is_open and dl_dt is None:
+                if start_dt and now >= start_dt:
+                    is_debt = True
+            elif r_info and max_open_round > 0 and rn <= max_open_round:
+                # Skip any round (open or closed) whose deadline is still in the future
+                if not (dl_dt and dl_dt > now):
+                    if start_dt and now >= start_dt:
+                        is_debt = True
 
-                m["player1_id"] = u1.get("telegram_id") if u1 else None
-                m["p1_username"] = u1.get("username") if u1 else None
-                m["p1_team"] = t1
+            if not is_debt:
+                continue
 
-                m["player2_id"] = u2.get("telegram_id") if u2 else None
-                m["p2_username"] = u2.get("username") if u2 else None
-                m["p2_team"] = t2
+            t1 = m.get("player1_team")
+            t2 = m.get("player2_team")
+            u1 = get_team_owner(t1)
+            u2 = get_team_owner(t2)
 
-                unplayed.append(m)
+            m["player1_id"] = u1.get("telegram_id") if u1 else None
+            m["p1_username"] = u1.get("username") if u1 else None
+            m["p1_team"] = t1
+
+            m["player2_id"] = u2.get("telegram_id") if u2 else None
+            m["p2_username"] = u2.get("username") if u2 else None
+            m["p2_team"] = t2
+
+            unplayed.append(m)
 
         return unplayed
 
@@ -3639,6 +3865,8 @@ def get_detailed_overdue_matches() -> list[dict]:
         cursor.execute("""
             SELECT 
                 m.id, m.round_number, COALESCE(m.is_extended, 0) AS is_extended,
+                COALESCE(m.frozen_seconds, 0) AS frozen_seconds,
+                m.frozen_at,
                 m.player1_team, m.player2_team
             FROM matches m
             WHERE (m.tournament_type IS NULL OR m.tournament_type = 'league')
@@ -3685,11 +3913,15 @@ def get_detailed_overdue_matches() -> list[dict]:
                 if start_dt and now >= start_dt:
                     is_overdue = True
             elif max_open_round > 0 and rn < max_open_round:
-                if start_dt and now >= start_dt:
-                    is_overdue = True
+                # Skip any round whose own deadline is still in the future
+                if not (dl_dt and dl_dt > now):
+                    if start_dt and now >= start_dt:
+                        is_overdue = True
             elif not is_open and r_info and max_open_round > 0 and rn <= max_open_round:
-                if start_dt and now >= start_dt:
-                    is_overdue = True
+                # Closed past round — but never overdue while its deadline is in the future
+                if not (dl_dt and dl_dt > now):
+                    if start_dt and now >= start_dt:
+                        is_overdue = True
 
             if not is_overdue:
                 continue
@@ -3717,8 +3949,19 @@ def get_detailed_overdue_matches() -> list[dict]:
             else:
                 hours_overdue = 0.0
 
+            # Exclude frozen time from the overdue clock: an admin freeze must
+            # SHIFT the auto-warn schedule, not let it burn through milestones
+            # the moment the match is unfrozen.
+            frozen_total = float(m.get("frozen_seconds") or 0)
+            if m.get("is_extended") and m.get("frozen_at"):
+                f_at = parse_flexible_datetime(m["frozen_at"])
+                if f_at and now > f_at:
+                    frozen_total += (now - f_at).total_seconds()
+            hours_overdue -= frozen_total / 3600.0
+
             m["deadline_str"] = r_info.get("deadline_str") if r_info and r_info.get("deadline_str") else (start_dt.strftime("%d.%m.%Y %H:%M") if start_dt else "—")
             m["deadline_dt"] = effective_dl
+            m["frozen_hours"] = max(0.0, frozen_total / 3600.0)
             m["hours_overdue"] = max(0.0, hours_overdue)
             overdue_list.append(m)
 
@@ -3818,7 +4061,9 @@ def has_user_been_warned_recently(user_id: int, hours: float = 20.0) -> bool:
         if not warn_dt:
             return False
         diff_sec = (datetime.datetime.now() - warn_dt).total_seconds()
-        return 0 <= diff_sec < (hours * 3600.0)
+        # Negative diff (clock stepped backwards) also counts as "recently warned"
+        # so a rollback of the system clock cannot defeat the rate limiter.
+        return diff_sec < (hours * 3600.0)
 
 
 
@@ -3845,7 +4090,11 @@ def restore_user_team(telegram_id: int, team_name: str) -> None:
     with transaction() as conn:
         cursor = conn.cursor()
         cursor.execute("UPDATE users SET team_name = ?, warn_count = 0 WHERE telegram_id = ?", (team_name, telegram_id))
-        cursor.execute("INSERT INTO user_warns (user_id, admin_id, reason, type) VALUES (?, NULL, 'Восстановление клуба и сброс варнов', 'RESTORE')", (telegram_id,))
+        now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        cursor.execute(
+            "INSERT INTO user_warns (user_id, admin_id, reason, type, created_at) VALUES (?, NULL, 'Восстановление клуба и сброс варнов', 'RESTORE', ?)",
+            (telegram_id, now_str)
+        )
 
 
 
@@ -3867,9 +4116,10 @@ def apply_debt_played_reward(user_id: int, round_number: int) -> tuple[int, bool
         
         new_warns = max(0, current_warns - 1)
         cursor.execute("UPDATE users SET warn_count = ? WHERE telegram_id = ?", (new_warns, user_id))
+        now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         cursor.execute(
-            "INSERT INTO user_warns (user_id, admin_id, reason, type) VALUES (?, NULL, ?, 'DEBT_UNWARN')",
-            (user_id, f"Снятие варна за закрытие долга ({round_number} тур)")
+            "INSERT INTO user_warns (user_id, admin_id, reason, type, created_at) VALUES (?, NULL, ?, 'DEBT_UNWARN', ?)",
+            (user_id, f"Снятие варна за закрытие долга ({round_number} тур)", now_str)
         )
         return new_warns, True
 

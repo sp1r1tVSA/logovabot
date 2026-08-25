@@ -72,6 +72,8 @@ from handlers.cabinet import (
     save_report_photo,
     ai_recognize_now,
     submit_report_to_guest,
+    cb_guest_confirm,
+    cb_guest_reject,
     REPORT_SCORE_PHOTO,
     SQUAD_PHOTO,
     MATCH_CUSTOM_TIME,
@@ -400,6 +402,8 @@ def _register_cabinet_handlers(app: Application) -> None:
     app.add_handler(CallbackQueryHandler(cb_pick_assist, pattern="^cb_pick_assist_idx_\\d+$"))
     app.add_handler(CallbackQueryHandler(cb_skip_assists, pattern="^cb_skip_assists$"))
     app.add_handler(CallbackQueryHandler(submit_report_to_guest, pattern="^cb_submit_report_to_guest(_\\d+)?$"))
+    app.add_handler(CallbackQueryHandler(cb_guest_confirm, pattern="^cb_guest_confirm_\\d+$"))
+    app.add_handler(CallbackQueryHandler(cb_guest_reject, pattern="^cb_guest_reject_\\d+$"))
     app.add_handler(CallbackQueryHandler(ai_recognize_now, pattern="^ai_recognize_now_\\d+$"))
 
     async def global_photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

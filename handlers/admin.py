@@ -1647,6 +1647,26 @@ async def _notify_group_about_tp(context: ContextTypes.DEFAULT_TYPE, match_id: i
     except Exception as e:
         logger.error(f"Failed to send TP notification to group: {e}")
 
+async def _process_tp_debt_rewards(context: ContextTypes.DEFAULT_TYPE, match_id: int) -> None:
+    """A technical result also counts as a played debt: clear 1 warn per player
+    (same treatment as a normally confirmed overdue match)."""
+    try:
+        from handlers.cabinet import handle_debt_played_rewards, refresh_debts_summary
+        m = await asyncio.to_thread(database.get_match, match_id)
+        if not m:
+            return
+        await handle_debt_played_rewards(
+            context,
+            match_id=match_id,
+            round_number=m.get('round_number', 0) or 0,
+            p1_id=m.get('player1_id'),
+            p2_id=m.get('player2_id'),
+        )
+        await refresh_debts_summary(context)
+    except Exception as e:
+        logger.warning(f"Failed to process debt rewards for technical result #{match_id}: {e}")
+
+
 @admin_only
 async def admin_set_tp_home_execute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
@@ -1657,6 +1677,7 @@ async def admin_set_tp_home_execute(update: Update, context: ContextTypes.DEFAUL
     if next_stage:
         await notify_cup_stage_opened(context.bot, next_stage)
     await _notify_group_about_tp(context, match_id, "home")
+    await _process_tp_debt_rewards(context, match_id)
     await query.answer("✅ Назначено ТП 1:0 (Победа Хозяев)", show_alert=True)
     await admin_view_match(update, context, match_id=match_id)
 
@@ -1670,6 +1691,7 @@ async def admin_set_tp_away_execute(update: Update, context: ContextTypes.DEFAUL
     if next_stage:
         await notify_cup_stage_opened(context.bot, next_stage)
     await _notify_group_about_tp(context, match_id, "away")
+    await _process_tp_debt_rewards(context, match_id)
     await query.answer("✅ Назначено ТП 0:1 (Победа Гостей)", show_alert=True)
     await admin_view_match(update, context, match_id=match_id)
 
@@ -1681,6 +1703,7 @@ async def admin_set_tp_draw_execute(update: Update, context: ContextTypes.DEFAUL
     match_id = int(query.data.replace("admin_tp_draw_", ""))
     await asyncio.to_thread(database.set_technical_result, match_id, 0, 0)
     await _notify_group_about_tp(context, match_id, "draw")
+    await _process_tp_debt_rewards(context, match_id)
     await query.answer("✅ Назначена Техническая ничья 0:0", show_alert=True)
     await admin_view_match(update, context, match_id=match_id)
 
@@ -3439,9 +3462,8 @@ async def job_check_deadlines_and_remind(context: ContextTypes.DEFAULT_TYPE) -> 
         r_num = r["round_number"]
         dl_str = r["deadline"]
 
-        try:
-            dl_dt = datetime.datetime.strptime(dl_str, "%d.%m.%Y %H:%M")
-        except ValueError:
+        dl_dt = database.parse_flexible_datetime(dl_str)
+        if not dl_dt:
             continue
 
         time_diff = dl_dt - now
@@ -3473,6 +3495,11 @@ async def job_post_debts_to_warns(context: ContextTypes.DEFAULT_TYPE) -> None:
     await _post_or_update_debts_in_warns(context)
 
 
+# Prevents concurrent runs (scheduled tick + manual /check_debts trigger)
+# from double-issuing auto-warns for the same overdue match.
+_debt_tracker_lock = asyncio.Lock()
+
+
 async def job_debt_lifecycle_tracker(context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Automated debt lifecycle tracking:
@@ -3483,6 +3510,14 @@ async def job_debt_lifecycle_tracker(context: ContextTypes.DEFAULT_TYPE) -> None
     - If is_extended == 1: auto-warns and auto-kick are paused.
     - Safety guard: Max 1 warn per player per 24 hours. No auto-warns before DEBT_TRACKING_START_DATETIME.
     """
+    if _debt_tracker_lock.locked():
+        logger.info("Debt tracker run skipped: another run is already in progress.")
+        return
+    async with _debt_tracker_lock:
+        await _run_debt_lifecycle_tracker(context)
+
+
+async def _run_debt_lifecycle_tracker(context: ContextTypes.DEFAULT_TYPE) -> None:
     overdue_matches = await asyncio.to_thread(database.get_detailed_overdue_matches)
     if not overdue_matches:
         return
@@ -3531,25 +3566,40 @@ async def job_debt_lifecycle_tracker(context: ContextTypes.DEFAULT_TYPE) -> None
         p2_valid = bool(p2_id and p2_id > 0)
 
         # 1. Initial Notification: Moment deadline passed (0h)
-        if not (await asyncio.to_thread(database.has_debt_stage, m_id, "deadline_passed")):
-            start_hint = f" с {start_dt.strftime('%d.%m.%Y %H:%M')}" if (start_dt and now < start_dt) else ""
+        # Gated on auto_warns_active (no "deadline passed" claims before tracking starts)
+        # and skipped for extended matches.
+        if not is_extended and auto_warns_active and not (
+            await asyncio.to_thread(database.has_debt_stage, m_id, "deadline_passed")
+        ):
             dm_initial_text = (
                 f"⏳ <b>Внимание: дедлайн тура истёк!</b>\n\n"
                 f"Матч переведён в категорию <b>ДОЛГ</b>:\n"
                 f"🏆 <b>{rn}-й тур</b>\n"
                 f"🏠 <b>{t1}</b> ({u1}) 🆚 ✈️ <b>{t2}</b> ({u2})\n\n"
-                f"⚠️ <i>Каждые 24 часа просрочки{start_hint} бот будет начислять авто-варн (+1 варн). "
+                f"⚠️ <i>Каждые 24 часа просрочки бот будет начислять авто-варн (+1 варн). "
                 f"При накоплении {MAX_WARNS_LIMIT}/{MAX_WARNS_LIMIT} варнов участник автоматически исключается из лиги.</i>\n"
                 f"🎁 <i>Каждый сыгранный матч-долг списывает 1 варн!</i>"
             )
+            initial_delivered = False
             for pid, is_v in ((p1_id, p1_valid), (p2_id, p2_valid)):
                 if pid and is_v:
                     try:
                         await context.bot.send_message(chat_id=pid, text=dm_initial_text, parse_mode="HTML")
+                        initial_delivered = True
                     except Exception:
                         pass
-            await asyncio.to_thread(database.record_debt_stage, m_id, "deadline_passed")
-            await asyncio.to_thread(database.record_debt_12h_reminder, m_id)
+            # Only persist the stage once at least one DM reached a player;
+            # otherwise the next run retries the initial notification.
+            if initial_delivered:
+                await asyncio.to_thread(database.record_debt_stage, m_id, "deadline_passed")
+                await asyncio.to_thread(database.record_debt_12h_reminder, m_id)
+
+        # Skip reminders AND warns for extended matches, before tracking start,
+        # or when either participant cannot be resolved to an active player
+        # (e.g. opponent was kicked / club vacant) — an unplayable match must
+        # never generate warnings or reminder spam for the remaining player.
+        if is_extended or not auto_warns_active or not (p1_valid and p2_valid):
+            continue
 
         # 2. Cycle Reminders in DM (every 12 hours)
         last_remind_dt = await asyncio.to_thread(database.get_last_debt_12h_reminder, m_id)
@@ -3569,6 +3619,8 @@ async def job_debt_lifecycle_tracker(context: ContextTypes.DEFAULT_TYPE) -> None
                 next_warn_in_hours = max(1, 24 - (hours_overdue_int % 24))
                 warn_time_str = f"~{next_warn_in_hours}ч"
 
+            delivered_any = False
+
             # Send to player 1
             if p1_id and p1_valid:
                 p1_warns = p1_user.get("warn_count", 0) if p1_user else 0
@@ -3582,6 +3634,7 @@ async def job_debt_lifecycle_tracker(context: ContextTypes.DEFAULT_TYPE) -> None
                 )
                 try:
                     await context.bot.send_message(chat_id=p1_id, text=p1_dm, parse_mode="HTML")
+                    delivered_any = True
                 except Exception:
                     pass
 
@@ -3598,15 +3651,18 @@ async def job_debt_lifecycle_tracker(context: ContextTypes.DEFAULT_TYPE) -> None
                 )
                 try:
                     await context.bot.send_message(chat_id=p2_id, text=p2_dm, parse_mode="HTML")
+                    delivered_any = True
                 except Exception:
                     pass
 
-            await asyncio.to_thread(database.record_debt_12h_reminder, m_id)
+            # Persist the 12h timestamp ONLY if at least one DM was actually
+            # delivered — otherwise the next run retries immediately instead of
+            # silently losing the reminder window for 12 hours.
+            if delivered_any:
+                await asyncio.to_thread(database.record_debt_12h_reminder, m_id)
 
         # 3. 24-hour Auto-Warn Cycles (+24h, +48h, +72h, +96h)
-        # Skip if match extended by admin or if global start datetime not reached yet
-        if is_extended or not auto_warns_active:
-            continue
+        # (extended / not-active / invalid-opponent cases already skipped above)
 
         warn_milestones = [
             (24.0, "warn_24h", "24ч"),
@@ -3615,9 +3671,20 @@ async def job_debt_lifecycle_tracker(context: ContextTypes.DEFAULT_TYPE) -> None
             (96.0, "warn_96h", "96ч"),
         ]
 
-        # Only trigger at most ONE milestone per match per run to prevent cascades
+        # Only trigger at most ONE milestone per match per run to prevent cascades.
+        # Milestone stages are tracked PER PLAYER (warn_24h_p1 / warn_24h_p2) so a
+        # rate-limited player does not permanently lose the milestone because the
+        # other player got warned first. Legacy generic stages (warn_24h etc.)
+        # are still honoured for backwards compatibility.
         for req_hours, stage_key, label in warn_milestones:
-            if hours_overdue >= req_hours and not (await asyncio.to_thread(database.has_debt_stage, m_id, stage_key)):
+            generic_done = await asyncio.to_thread(database.has_debt_stage, m_id, stage_key)
+            p1_stage = f"{stage_key}_p1"
+            p2_stage = f"{stage_key}_p2"
+            if hours_overdue >= req_hours and not (
+                generic_done
+                or (await asyncio.to_thread(database.has_debt_stage, m_id, p1_stage))
+                or (await asyncio.to_thread(database.has_debt_stage, m_id, p2_stage))
+            ):
                 warned_p1 = False
                 warned_p2 = False
 
@@ -3673,8 +3740,13 @@ async def job_debt_lifecycle_tracker(context: ContextTypes.DEFAULT_TYPE) -> None
                         if is_exceeded2:
                             await _auto_kick_player(context, p2_id, m.get("p2_username"), m.get("player2_team"))
 
-                # Post group notice to ПРЕДЫ topic and record milestone ONLY if someone was actually warned
+                # Post group notice to ПРЕДЫ topic and record per-player milestone
+                # stages ONLY for players who were actually warned.
                 if warned_p1 or warned_p2:
+                    if warned_p1:
+                        await asyncio.to_thread(database.record_debt_stage, m_id, p1_stage)
+                    if warned_p2:
+                        await asyncio.to_thread(database.record_debt_stage, m_id, p2_stage)
                     p1_warn_now = await asyncio.to_thread(database.get_user_warn_count, p1_id) if p1_id else 0
                     p2_warn_now = await asyncio.to_thread(database.get_user_warn_count, p2_id) if p2_id else 0
                     thread_notice = (
@@ -3687,7 +3759,6 @@ async def job_debt_lifecycle_tracker(context: ContextTypes.DEFAULT_TYPE) -> None
                         f"<i>Матч необходимо срочно доиграть и внести результат.</i>"
                     )
                     await _send_to_warns_thread(context, thread_notice)
-                    await asyncio.to_thread(database.record_debt_stage, m_id, stage_key)
 
                 # Crucial: break so only 1 milestone is handled per match per 30m run
                 break
@@ -3921,14 +3992,20 @@ async def _auto_kick_player(context: ContextTypes.DEFAULT_TYPE, user_id: int, us
     """Ban player from league and soft-kick from group when warn limit exceeded."""
     await asyncio.to_thread(database.ban_and_remove_from_league, user_id)
 
-    # Soft kick from Telegram group
+    # Soft kick from Telegram group: ban and unban are handled separately so a
+    # failed unban (which would leave a permanent ban instead of a kick) is logged.
     group_id = GROUP_ID or await asyncio.to_thread(database.get_group_id)
     if group_id:
         try:
             await context.bot.ban_chat_member(chat_id=group_id, user_id=user_id)
+        except (BadRequest, TelegramError) as e:
+            logger.warning(f"Could not ban user {user_id} from group (DB ban already applied): {e}")
+            return
+        try:
             await context.bot.unban_chat_member(chat_id=group_id, user_id=user_id)
         except (BadRequest, TelegramError) as e:
-            logger.warning(f"Could not kick user {user_id} from group: {e}")
+            # User is now hard-banned instead of soft-kicked — surface loudly.
+            logger.exception(f"User {user_id} banned but NOT unbanned after auto-kick: {e}")
 
     # DM to player
     uname = f"@{username}" if username else f"ID {user_id}"
@@ -4037,6 +4114,15 @@ async def admin_warn_execute(update: Update, context: ContextTypes.DEFAULT_TYPE)
         reason = WARN_REASONS[reason_idx] if 0 <= reason_idx < len(WARN_REASONS) else WARN_REASONS[0]
         admin_id = query.from_user.id
         admin_username = query.from_user.username or str(admin_id)
+
+        # A player without a club was already auto-kicked — issuing more warns
+        # would trigger a duplicate kick and duplicate public announcements.
+        if not player.get('team_name'):
+            await query.answer(
+                "⛔ Игрок без клуба уже исключён из лиги. Выдача варнов заблокирована.",
+                show_alert=True
+            )
+            return
 
         new_count, is_exceeded = await asyncio.to_thread(database.add_warn, p_id, admin_id, reason)
 

@@ -720,13 +720,10 @@ async def show_round_matches(update: Update, context: ContextTypes.DEFAULT_TYPE)
         deadline_text = info["deadline"]
         
         if is_open and deadline_text:
-            try:
-                dt = datetime.datetime.strptime(deadline_text, "%d.%m.%Y %H:%M")
-                if datetime.datetime.now() > dt:
-                    text += "Статус: 🔴 Дедлайн истек (результаты принимаются только администратором)\n"
-                else:
-                    text += f"Статус: 🟢 Открыт\nДедлайн: {deadline_text}\n"
-            except ValueError:
+            dt = database.parse_flexible_datetime(deadline_text)
+            if dt and datetime.datetime.now() > dt:
+                text += "Статус: 🔴 Дедлайн истек (результаты принимаются только администратором)\n"
+            else:
                 text += f"Статус: 🟢 Открыт\nДедлайн: {deadline_text}\n"
         else:
             text += f"Статус: {'🟢 Открыт' if is_open else '🔴 Закрыт'}\n"

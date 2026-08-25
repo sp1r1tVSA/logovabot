@@ -1137,12 +1137,9 @@ async def cabinet_view_match(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     is_overdue = False
     if deadline_text:
-        try:
-            dt = datetime.datetime.strptime(deadline_text, "%d.%m.%Y %H:%M")
-            if datetime.datetime.now() > dt:
-                is_overdue = True
-        except ValueError:
-            pass
+        dt = database.parse_flexible_datetime(deadline_text)
+        if dt and datetime.datetime.now() > dt:
+            is_overdue = True
             
     if m['player1_id'] == user_id:
         opp_id = m['player2_id']
@@ -1414,8 +1411,9 @@ async def cb_admin_approve_result(update: Update, context: ContextTypes.DEFAULT_
         await query.answer(f"Матч уже имеет статус: {m['status']}.", show_alert=True)
         return
 
-    # Unlock the match — set is_extended = 1 so overdue check is bypassed for the player
-    await asyncio.to_thread(database.extend_match_deadline, match_id)
+    # Unlock the match — set is_extended = 1 (explicit set, NOT a toggle:
+    # a toggle could accidentally unfreeze a match an admin froze earlier)
+    await asyncio.to_thread(database.set_match_extended, match_id, 1)
 
     team1 = m.get('player1_team') or m.get('player1_nickname') or '?'
     team2 = m.get('player2_team') or m.get('player2_nickname') or '?'
@@ -2697,6 +2695,15 @@ async def submit_report_to_guest(update: Update, context: ContextTypes.DEFAULT_T
     photos = context.user_data.get("ai_photos_list", [])
     photo_id = photos[0] if photos else None
 
+    # Persist report so the opponent (or an admin) can finalize it later from their own chat
+    await asyncio.to_thread(database.save_pending_report, match_id, submitter_id, {
+        "h_score": h_score,
+        "a_score": a_score,
+        "scorers": scorers,
+        "assists": assists,
+        "photo_id": photo_id,
+    })
+
     # Format text for opponent confirmation
     sc_text = "\n".join([f"⚽ {s['player_name']} ({s['team_name']}) — {s['count']}" for s in scorers]) if scorers else "<i>(нет голов)</i>"
     ast_text = "\n".join([f"🎯 {a['player_name']} ({a['team_name']}) — {a['count']}" for a in assists]) if assists else "<i>(нет ассистов)</i>"
@@ -2737,6 +2744,227 @@ async def submit_report_to_guest(update: Update, context: ContextTypes.DEFAULT_T
         await submit_report_to_admin(update, context)
 
 
+async def _build_pending_report_card(context: ContextTypes.DEFAULT_TYPE, match: dict, pending: dict) -> tuple[str, str | None]:
+    """Build the human-readable confirmation card from a stored pending report."""
+    home_team = match['player1_team'] or match['player1_nickname']
+    away_team = match['player2_team'] or match['player2_nickname']
+    h_score = pending.get("h_score", 0)
+    a_score = pending.get("a_score", 0)
+    scorers = pending.get("scorers") or []
+    assists = pending.get("assists") or []
+    sc_text = "\n".join([f"⚽ {s['player_name']} ({s['team_name']}) — {s['count']}" for s in scorers]) if scorers else "<i>(нет голов)</i>"
+    ast_text = "\n".join([f"🎯 {a['player_name']} ({a['team_name']}) — {a['count']}" for a in assists]) if assists else "<i>(нет ассистов)</i>"
+    text = (
+        f"🔔 <b>ПОДТВЕРЖДЕНИЕ РЕЗУЛЬТАТА МАТЧА #{match['id']}</b>\n\n"
+        f"🏠 <b>{safe_escape(str(home_team))}</b> <b>{h_score} : {a_score}</b> <b>{safe_escape(str(away_team))}</b> ✈️\n\n"
+        f"<b>Авторы голов:</b>\n{sc_text}\n\n"
+        f"<b>Ассистенты:</b>\n{ast_text}\n\n"
+        f"Пожалуйста, подтвердите результат или отклоните его."
+    )
+    return text, pending.get("photo_id")
+
+
+def _pending_report_events(match: dict, pending: dict) -> list:
+    """Convert stored scorers/assists into confirm_and_finalize_match event tuples."""
+    home_team = match['player1_team'] or match['player1_nickname']
+    away_team = match['player2_team'] or match['player2_nickname']
+    events = []
+    for s in (pending.get("scorers") or []):
+        team = s.get('team_name') or home_team
+        events.append((team, s['player_name'], "goal", s.get('count', 1)))
+    for a in (pending.get("assists") or []):
+        team = a.get('team_name') or home_team
+        events.append((team, a['player_name'], "assist", a.get('count', 1)))
+    return events
+
+
+async def cb_guest_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Opponent (or admin) confirms a manually submitted result stored in pending_reports."""
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+
+    try:
+        match_id = int(query.data.rsplit("_", 1)[-1])
+    except ValueError:
+        return
+
+    presser_id = query.from_user.id
+    match = await asyncio.to_thread(database.get_match, match_id)
+    if not match:
+        await query.answer("❌ Матч не найден.", show_alert=True)
+        return
+
+    is_participant = presser_id in (match['player1_id'], match['player2_id'])
+    if not (is_participant or is_admin(presser_id)):
+        await query.answer("⛔ Подтвердить результат могут только участники матча или администраторы.", show_alert=True)
+        return
+
+    if match['status'] == 'confirmed':
+        await query.answer("✅ Результат уже зафиксирован!", show_alert=True)
+        try:
+            await query.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        return
+
+    pending = await asyncio.to_thread(database.get_pending_report, match_id)
+    if not pending:
+        await query.answer("⚠️ Данные отчёта не найдены. Попросите соперника отправить результат заново.", show_alert=True)
+        return
+
+    h_score = int(pending.get("h_score", 0))
+    a_score = int(pending.get("a_score", 0))
+    events = _pending_report_events(match, pending)
+
+    next_stage = await asyncio.to_thread(
+        database.confirm_and_finalize_match,
+        match_id, h_score, a_score, events,
+        reporter_id=pending.get("reporter_id"),
+        photo_id=pending.get("photo_id"),
+    )
+    await asyncio.to_thread(database.delete_pending_report, match_id)
+
+    if next_stage:
+        from handlers.admin import notify_cup_stage_opened
+        await notify_cup_stage_opened(context.bot, next_stage)
+
+    # Full post-confirmation pipeline: PMs to both players, debt rewards, group post
+    await notify_match_confirmed(context, match_id)
+    await refresh_debts_summary(context)
+    await refresh_league_table(context)
+
+    reporter_tag = f"@{pending['reporter_id']}"
+    try:
+        await query.edit_message_caption(
+            caption=f"✅ <b>Результат матча #{match_id} подтверждён и занесён в таблицу!</b>",
+            parse_mode="HTML",
+            reply_markup=None,
+        )
+    except Exception:
+        try:
+            await query.edit_message_text(
+                f"✅ <b>Результат матча #{match_id} подтверждён и занесён в таблицу!</b>",
+                parse_mode="HTML",
+                reply_markup=None,
+            )
+        except Exception:
+            pass
+
+
+async def cb_guest_reject(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Opponent (or admin) rejects a manually submitted result."""
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+
+    try:
+        match_id = int(query.data.rsplit("_", 1)[-1])
+    except ValueError:
+        return
+
+    presser_id = query.from_user.id
+    match = await asyncio.to_thread(database.get_match, match_id)
+    if not match:
+        await query.answer("❌ Матч не найден.", show_alert=True)
+        return
+
+    is_participant = presser_id in (match['player1_id'], match['player2_id'])
+    if not (is_participant or is_admin(presser_id)):
+        await query.answer("⛔ Отклонить результат могут только участники матча или администраторы.", show_alert=True)
+        return
+
+    pending = await asyncio.to_thread(database.get_pending_report, match_id)
+    await asyncio.to_thread(database.delete_pending_report, match_id)
+
+    try:
+        await query.edit_message_text(
+            f"❌ <b>Результат матча #{match_id} отклонён.</b>\n\n"
+            f"Матч остаётся несыгранным. Свяжитесь с соперником и согласуйте верный счёт.",
+            parse_mode="HTML",
+            reply_markup=None,
+        )
+    except Exception:
+        pass
+
+    reporter_id = pending.get("reporter_id") if pending else None
+    if reporter_id and reporter_id != presser_id:
+        try:
+            await context.bot.send_message(
+                chat_id=reporter_id,
+                text=(
+                    f"❌ <b>Ваш результат матча #{match_id} был отклонён</b> "
+                    f"({'администратором' if is_admin(presser_id) else 'соперником'})."
+                ),
+                parse_mode="HTML",
+            )
+        except Exception:
+            pass
+
+
+async def submit_report_to_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Fallback route: send the entered result card to all admins with apply/reject buttons."""
+    from config import ADMIN_IDS
+
+    query = update.callback_query
+    match_id = context.user_data.get("reporting_match_id")
+    if not match_id and query and query.data:
+        try:
+            match_id = int(query.data.rsplit("_", 1)[-1])
+        except ValueError:
+            match_id = None
+    if not match_id:
+        return
+
+    match = await asyncio.to_thread(database.get_match, match_id)
+    if not match or match['status'] == 'confirmed':
+        return
+
+    submitter_id = query.from_user.id if query and query.from_user else 0
+    photos = context.user_data.get("ai_photos_list", [])
+    photo_id = photos[0] if photos else None
+    payload = {
+        "h_score": context.user_data.get("report_home_score", 0),
+        "a_score": context.user_data.get("report_away_score", 0),
+        "scorers": context.user_data.get("report_scorers", []),
+        "assists": context.user_data.get("report_assists", []),
+        "photo_id": photo_id,
+    }
+    await asyncio.to_thread(database.save_pending_report, match_id, submitter_id, payload)
+
+    text, photo_id = await _build_pending_report_card(context, match, payload)
+    text += "\n\n<i>Отправлено администратору на проверку.</i>"
+    markup = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ Занести результат", callback_data=f"cb_guest_confirm_{match_id}"),
+            InlineKeyboardButton("❌ Отклонить", callback_data=f"cb_guest_reject_{match_id}"),
+        ]
+    ])
+
+    sent_any = False
+    for aid in set(ADMIN_IDS):
+        try:
+            if photo_id:
+                await context.bot.send_photo(chat_id=aid, photo=photo_id, caption=text, parse_mode="HTML", reply_markup=markup)
+            else:
+                await context.bot.send_message(chat_id=aid, text=text, parse_mode="HTML", reply_markup=markup)
+            sent_any = True
+        except Exception as e:
+            logger.warning(f"Failed to forward report #{match_id} to admin {aid}: {e}")
+
+    if submitter_id and sent_any:
+        try:
+            await context.bot.send_message(
+                chat_id=submitter_id,
+                text=f"📨 Результат матча #{match_id} отправлен администрации на проверку.",
+                parse_mode="HTML",
+            )
+        except Exception:
+            pass
+
+
 async def refresh_debts_summary(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Refresh the debts summary in the ПРЕДЫ thread after a match result is recorded."""
     try:
@@ -2764,6 +2992,11 @@ async def handle_debt_played_rewards(
     """Check if the completed match was overdue and reward players with -1 warn."""
     is_overdue = await asyncio.to_thread(database.is_match_overdue, match_id)
     if not is_overdue:
+        return
+
+    # Idempotency guard: reward only once per match even if the confirmation
+    # pipeline fires multiple times (draft confirm + admin re-entry, etc.)
+    if await asyncio.to_thread(database.has_debt_stage, match_id, "reward_given"):
         return
 
     match = await asyncio.to_thread(database.get_match, match_id)
@@ -2826,6 +3059,13 @@ async def handle_debt_played_rewards(
                 await context.bot.send_message(chat_id=p_id, text=all_clear_text, parse_mode="HTML")
         except Exception as e:
             logger.warning(f"Failed to process debt played reward for user {p_id}: {e}")
+
+    if results_summary:
+        # Mark rewards as granted for this match so repeat invocations are no-ops
+        try:
+            await asyncio.to_thread(database.record_debt_stage, match_id, "reward_given")
+        except Exception as e:
+            logger.warning(f"Failed to record reward_given stage for match {match_id}: {e}")
 
     # Post unwarn notification to ПРЕДЫ thread
     if results_summary:

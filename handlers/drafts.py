@@ -544,23 +544,10 @@ async def cb_draft_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             except Exception as e:
                 logger.error(f"Failed to send match post to group: {e}")
 
-        # Process debt played reward (-1 warn) if it was an overdue league match
-        try:
-            from handlers.cabinet import handle_debt_played_rewards
-            await handle_debt_played_rewards(
-                context,
-                match_id=m_id,
-                round_number=g.get('round_number', 1),
-                p1_id=g.get('p1_id'),
-                p2_id=g.get('p2_id')
-            )
-        except Exception as e:
-            logger.warning(f"Failed to process debt reward for draft match {m_id}: {e}")
-
     if last_next_stage:
         from handlers.admin import notify_cup_stage_opened
         await notify_cup_stage_opened(context.bot, last_next_stage)
-        
+
     admin_name = f"@{query.from_user.username}" if query.from_user.username else (query.from_user.first_name or "Администратор")
     original_text = query.message.caption if query.message.photo else query.message.text
     cleaned_text = (original_text or "").replace("⏳ <i>Ожидает подтверждения администратором...</i>", "").strip()
