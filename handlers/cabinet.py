@@ -2093,7 +2093,14 @@ async def prompt_photo_upload(update: Update, context: ContextTypes.DEFAULT_TYPE
         "📸 **Прикрепление скриншота результата**\n\n"
         "Пожалуйста, отправьте **от 1 до 3 скриншотов** результата сыгранной игры."
     )
-    keyboard = [[InlineKeyboardButton("❌ Отмена", callback_data=cancel_cb)]]
+    reporting_mode = context.user_data.get("reporting_mode", "auto")
+    if reporting_mode == "manual":
+        # Score/goals already entered — allow finishing without a screenshot
+        skip_btn = InlineKeyboardButton("⏭ Продолжить без скриншота", callback_data="cb_skip_report_photo")
+    else:
+        # Auto mode with nothing entered yet — jump to manual entry instead
+        skip_btn = InlineKeyboardButton("⌨️ Ввести вручную (без скриншота)", callback_data=f"cb_report_choice_manual_{match_id}")
+    keyboard = [[skip_btn], [InlineKeyboardButton("❌ Отмена", callback_data=cancel_cb)]]
     markup = InlineKeyboardMarkup(keyboard)
 
     if query:
@@ -2102,6 +2109,71 @@ async def prompt_photo_upload(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text(text, parse_mode="Markdown", reply_markup=markup)
 
     return REPORT_SCORE_PHOTO
+
+async def _show_manual_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE, photo_id: str | None) -> int:
+    """Build and send the final 'check your data' card of the manual flow.
+    Works with or without an attached screenshot."""
+    match_id = context.user_data.get("reporting_match_id")
+    match = await asyncio.to_thread(database.get_match, match_id) if match_id else None
+    home_team = match.get("player1_team") if match else "Хозяева"
+    away_team = match.get("player2_team") if match else "Гости"
+
+    h_goals = context.user_data.get("home_goals_count", {})
+    a_goals = context.user_data.get("away_goals_count", {})
+    h_assists = context.user_data.get("home_assists_count", {})
+    a_assists = context.user_data.get("away_assists_count", {})
+
+    h_goals_summary = ", ".join([f"{p} ({c})" for p, c in h_goals.items()]) if h_goals else "Нет"
+    a_goals_summary = ", ".join([f"{p} ({c})" for p, c in a_goals.items()]) if a_goals else "Нет"
+    h_assists_summary = ", ".join([f"{p} ({c})" for p, c in h_assists.items()]) if h_assists else "Нет"
+    a_assists_summary = ", ".join([f"{p} ({c})" for p, c in a_assists.items()]) if a_assists else "Нет"
+
+    h_score = context.user_data.get("report_home_goals", 0)
+    a_score = context.user_data.get("report_away_goals", 0)
+
+    photo_line = "📸 <i>Скриншот(ы) прикреплены.</i>" if photo_id else "🚫 <i>Скриншот не прикреплён (ввод без скрина).</i>"
+
+    text = (
+        f"📊 <b>Проверьте данные перед сохранением:</b>\n\n"
+        f"🏟 <b>Матч #{match_id}</b>\n"
+        f"🏠 <b>{safe_escape(home_team)}</b> {h_score} : {a_score} <b>{safe_escape(away_team)}</b> ✈️\n\n"
+        f"⚽ <b>Голы ({safe_escape(home_team)}):</b> {safe_escape(h_goals_summary)}\n"
+        f"🎯 <b>Ассисты ({safe_escape(home_team)}):</b> {safe_escape(h_assists_summary)}\n\n"
+        f"⚽ <b>Голы ({safe_escape(away_team)}):</b> {safe_escape(a_goals_summary)}\n"
+        f"🎯 <b>Ассисты ({safe_escape(away_team)}):</b> {safe_escape(a_assists_summary)}\n\n"
+        f"{photo_line}"
+    )
+
+    is_admin_user = is_admin(update.effective_user.id) or context.user_data.get("is_admin_reporting", False)
+    cancel_cb = f"admin_view_match_{match_id}" if is_admin_user else f"cabinet_view_match_{match_id}"
+    confirm_text = "✅ Сохранить и занести результат" if is_admin_user else "✅ Подтвердить и занести результат"
+
+    keyboard = [
+        [InlineKeyboardButton(confirm_text, callback_data=f"cb_submit_report_to_guest_{match_id}")],
+        [InlineKeyboardButton("❌ Отмена", callback_data=cancel_cb)]
+    ]
+    markup = InlineKeyboardMarkup(keyboard)
+
+    chat_id = update.effective_user.id
+    try:
+        if photo_id:
+            await context.bot.send_photo(chat_id=chat_id, photo=photo_id, caption=text, parse_mode="HTML", reply_markup=markup)
+        else:
+            await context.bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML", reply_markup=markup)
+    except Exception as e:
+        logger.warning(f"Failed to send manual confirmation card: {e}")
+        await context.bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML", reply_markup=markup)
+    return ConversationHandler.END
+
+
+async def cb_skip_report_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Manual flow: continue to the confirmation card WITHOUT a screenshot."""
+    query = update.callback_query
+    if query:
+        await query.answer()
+    context.user_data.pop("awaiting_report_photo", None)
+    return await _show_manual_confirmation(update, context, photo_id=None)
+
 
 async def save_report_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if not update.message or (update.effective_chat and update.effective_chat.type != "private"):
@@ -2168,42 +2240,7 @@ async def save_report_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     context.user_data["report_photo_id"] = photo_id
     context.user_data.pop("awaiting_report_photo", None)
 
-    h_goals = context.user_data.get("home_goals_count", {})
-    a_goals = context.user_data.get("away_goals_count", {})
-    h_assists = context.user_data.get("home_assists_count", {})
-    a_assists = context.user_data.get("away_assists_count", {})
-
-    h_goals_summary = ", ".join([f"{p} ({c})" for p, c in h_goals.items()]) if h_goals else "Нет"
-    a_goals_summary = ", ".join([f"{p} ({c})" for p, c in a_goals.items()]) if a_goals else "Нет"
-    h_assists_summary = ", ".join([f"{p} ({c})" for p, c in h_assists.items()]) if h_assists else "Нет"
-    a_assists_summary = ", ".join([f"{p} ({c})" for p, c in a_assists.items()]) if a_assists else "Нет"
-
-    h_score = context.user_data.get("report_home_goals", 0)
-    a_score = context.user_data.get("report_away_goals", 0)
-
-    text = (
-        f"📊 <b>Проверьте данные перед сохранением:</b>\n\n"
-        f"🏟 <b>Матч #{match_id}</b>\n"
-        f"🏠 <b>{safe_escape(home_team)}</b> {h_score} : {a_score} <b>{safe_escape(away_team)}</b> ✈️\n\n"
-        f"⚽ <b>Голы ({safe_escape(home_team)}):</b> {safe_escape(h_goals_summary)}\n"
-        f"🎯 <b>Ассисты ({safe_escape(home_team)}):</b> {safe_escape(h_assists_summary)}\n\n"
-        f"⚽ <b>Голы ({safe_escape(away_team)}):</b> {safe_escape(a_goals_summary)}\n"
-        f"🎯 <b>Ассисты ({safe_escape(away_team)}):</b> {safe_escape(a_assists_summary)}\n\n"
-        f"📸 <i>Скриншот(ы) прикреплены.</i>"
-    )
-
-    is_admin_user = is_admin(update.effective_user.id) or context.user_data.get("is_admin_reporting", False)
-    cancel_cb = f"admin_view_match_{match_id}" if is_admin_user else f"cabinet_view_match_{match_id}"
-    confirm_text = "✅ Сохранить и занести результат" if is_admin_user else "✅ Подтвердить и занести результат"
-
-    keyboard = [
-        [InlineKeyboardButton(confirm_text, callback_data=f"cb_submit_report_to_guest_{match_id}")],
-        [InlineKeyboardButton("❌ Отмена", callback_data=cancel_cb)]
-    ]
-    markup = InlineKeyboardMarkup(keyboard)
-
-    await context.bot.send_photo(chat_id=update.effective_user.id, photo=photo_id, caption=text, parse_mode="HTML", reply_markup=markup)
-    return ConversationHandler.END
+    return await _show_manual_confirmation(update, context, photo_id=photo_id)
 
 async def ai_recognize_now(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Run AI recognition on all collected screenshots and show the result for confirmation."""
