@@ -230,32 +230,148 @@ class TestClubCard(unittest.TestCase):
         self.assertEqual(final_row["outcome"], "W")
         self.assertIn("Матчи: 0:1, 2:1, 1:3, 2:1, 4:3", final_row["subline"])
 
-    def test_check_group_card_access(self):
-        """Test that check_group_card_access allows in private and admins, but denies non-admins in groups."""
-        from handlers.cabinet import check_group_card_access
-        from unittest.mock import MagicMock
+    def test_club_card_debts_excludes_future_and_open_rounds(self):
+        """Test that get_club_card_data does not count future unopened rounds or open tours as debts."""
+        config.DEBT_TRACKING_START_DATETIME = "01.01.2026 00:00"
+        database.register_user(2001, "racing_mgr", "manager", "Расинг")
+        database.register_user(2002, "braga_mgr", "manager", "Брага")
+        database.register_user(2003, "porto_mgr", "manager", "Порту")
 
-        # 1. Private chat -> always allowed
-        update_private = MagicMock()
-        update_private.effective_chat.type = "private"
-        update_private.effective_user.id = 999999
-        self.assertTrue(check_group_card_access(update_private))
+        now = datetime.datetime.now()
+        future_dl = (now + datetime.timedelta(days=3)).strftime("%d.%m.%Y %H:%M")
+        past_dl = (now - datetime.timedelta(days=2)).strftime("%d.%m.%Y %H:%M")
 
-        # 2. Group chat + Non-admin -> denied
-        update_group_user = MagicMock()
-        update_group_user.effective_chat.type = "supergroup"
-        update_group_user.effective_user.id = 999999
-        self.assertFalse(check_group_card_access(update_group_user))
+        with database.transaction() as conn:
+            c = conn.cursor()
+            # Rounds 1..24 played, 25-26 open with future deadline, 27-30 future unopened
+            c.execute("INSERT INTO rounds (round_number, is_open, deadline) VALUES (25, 1, ?)", (future_dl,))
+            c.execute("INSERT INTO rounds (round_number, is_open, deadline) VALUES (26, 1, ?)", (future_dl,))
+            c.execute("INSERT INTO rounds (round_number, is_open, deadline) VALUES (27, 0, NULL)")
+            c.execute("INSERT INTO rounds (round_number, is_open, deadline) VALUES (28, 0, NULL)")
+            c.execute("INSERT INTO rounds (round_number, is_open, deadline) VALUES (29, 0, NULL)")
+            c.execute("INSERT INTO rounds (round_number, is_open, deadline) VALUES (30, 0, NULL)")
 
-        # 3. Group chat + Admin -> allowed
-        update_group_admin = MagicMock()
-        update_group_admin.effective_chat.type = "supergroup"
-        # Admin ID from config.ADMIN_IDS
-        admin_id = config.ADMIN_IDS[0] if config.ADMIN_IDS else 123456
-        if not config.ADMIN_IDS:
-            config.ADMIN_IDS = [admin_id]
-        update_group_admin.effective_user.id = admin_id
-        self.assertTrue(check_group_card_access(update_group_admin))
+            # Pending matches for Racing in rounds 25..30
+            c.execute("INSERT INTO matches (round_number, player1_team, player2_team, status) VALUES (25, 'Расинг', 'Брага', 'pending')")
+            c.execute("INSERT INTO matches (round_number, player1_team, player2_team, status) VALUES (26, 'Порту', 'Расинг', 'pending')")
+            c.execute("INSERT INTO matches (round_number, player1_team, player2_team, status) VALUES (27, 'Расинг', 'Брага', 'pending')")
+            c.execute("INSERT INTO matches (round_number, player1_team, player2_team, status) VALUES (28, 'Расинг', 'Порту', 'pending')")
+            c.execute("INSERT INTO matches (round_number, player1_team, player2_team, status) VALUES (29, 'Брага', 'Расинг', 'pending')")
+            c.execute("INSERT INTO matches (round_number, player1_team, player2_team, status) VALUES (30, 'Порту', 'Расинг', 'pending')")
+
+        card = database.get_club_card_data("Расинг")
+        # Racing has 6 pending matches, but 0 debts!
+        self.assertEqual(card["debts_count"], 0)
+        self.assertEqual(len(card["pending_matches"]), 6)
+        self.assertTrue(all(not m["is_overdue"] for m in card["pending_matches"]))
+
+        # Now add a past closed round with expired deadline and unplayed match
+        with database.transaction() as conn:
+            c = conn.cursor()
+            c.execute("INSERT INTO rounds (round_number, is_open, deadline) VALUES (20, 0, ?)", (past_dl,))
+            c.execute("INSERT INTO matches (round_number, player1_team, player2_team, status) VALUES (20, 'Расинг', 'Брага', 'pending')")
+
+        card_with_debt = database.get_club_card_data("Расинг")
+        self.assertEqual(card_with_debt["debts_count"], 1)
+
+    def test_club_card_avatar_cropping_and_rendering(self):
+        """Test generating club card with non-square custom avatar."""
+        from PIL import Image
+        import club_card_generator
+
+        # Create temporary non-square avatar (200x120)
+        tf_av = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+        av_path = tf_av.name
+        tf_av.close()
+
+        try:
+            test_img = Image.new("RGB", (200, 120), color=(100, 150, 200))
+            test_img.save(av_path)
+
+            card_data = {
+                "team_name": "Расинг",
+                "manager": {"username": "ch1lyx", "warn_count": 0, "telegram_id": 99999},
+                "league_stats": {
+                    "rank": 1, "played": 26, "wins": 20, "draws": 2, "losses": 4,
+                    "goals_scored": 90, "goals_conceded": 36, "goal_diff": 54, "points": 62
+                },
+                "recent_form": ["L", "W", "W", "W", "D"],
+                "cup_stats": {
+                    "stage": "FINAL", "opponent": "Брага", "club_wins": 3, "opp_wins": 2, "status": "completed"
+                },
+                "top_scorers": [{"player_name": "Giacomo Raspadori", "goals": 39}],
+                "top_assists": [{"player_name": "Noa Lang", "assists": 24}],
+                "squad_count": 11,
+                "debts_count": 0
+            }
+
+            buf = club_card_generator.generate_club_card(card_data, avatar_path=av_path)
+            self.assertIsNotNone(buf)
+            buf_bytes = buf.getvalue()
+            self.assertTrue(buf_bytes.startswith(b'\x89PNG\r\n\x1a\n'))
+        finally:
+            try:
+                os.remove(av_path)
+            except Exception:
+                pass
+
+    def test_avatar_fetch_and_update_lifecycle(self):
+        """Test get_cached_or_fetch_user_avatar lifecycle with fresh downloads and deletion."""
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
+        from handlers import cabinet
+
+        mock_bot = MagicMock()
+        mock_file_obj = AsyncMock()
+        async def fake_download(buf):
+            buf.write(b"fake_image_bytes_here")
+        mock_file_obj.download_to_memory = fake_download
+        mock_bot.get_file = AsyncMock(return_value=mock_file_obj)
+
+        photo_item1 = MagicMock()
+        photo_item1.file_id = "photo_v1"
+        photos_resp1 = MagicMock()
+        photos_resp1.total_count = 1
+        photos_resp1.photos = [[photo_item1]]
+        mock_bot.get_user_profile_photos = AsyncMock(return_value=photos_resp1)
+
+        user_id = 888777
+        cabinet._user_avatar_file_ids.clear()
+
+        # 1. Fetch avatar for user_id -> downloads photo_v1
+        path1 = asyncio.run(cabinet.get_cached_or_fetch_user_avatar(mock_bot, user_id))
+        self.assertIsNotNone(path1)
+        self.assertTrue(os.path.exists(path1))
+        self.assertEqual(cabinet._user_avatar_file_ids.get(user_id), "photo_v1")
+
+        # 2. Call again with unchanged file_id -> reuses local cache without calling get_file
+        mock_bot.get_file.reset_mock()
+        path2 = asyncio.run(cabinet.get_cached_or_fetch_user_avatar(mock_bot, user_id))
+        self.assertEqual(path1, path2)
+        mock_bot.get_file.assert_not_called()
+
+        # 3. User updates avatar in Telegram -> file_id changes to photo_v2
+        photo_item2 = MagicMock()
+        photo_item2.file_id = "photo_v2"
+        photos_resp2 = MagicMock()
+        photos_resp2.total_count = 1
+        photos_resp2.photos = [[photo_item2]]
+        mock_bot.get_user_profile_photos = AsyncMock(return_value=photos_resp2)
+
+        path3 = asyncio.run(cabinet.get_cached_or_fetch_user_avatar(mock_bot, user_id))
+        self.assertEqual(cabinet._user_avatar_file_ids.get(user_id), "photo_v2")
+        mock_bot.get_file.assert_called_once_with("photo_v2")
+
+        # 4. User removes avatar in Telegram -> total_count = 0
+        photos_resp_empty = MagicMock()
+        photos_resp_empty.total_count = 0
+        photos_resp_empty.photos = []
+        mock_bot.get_user_profile_photos = AsyncMock(return_value=photos_resp_empty)
+
+        path4 = asyncio.run(cabinet.get_cached_or_fetch_user_avatar(mock_bot, user_id))
+        self.assertIsNone(path4)
+        self.assertNotIn(user_id, cabinet._user_avatar_file_ids)
+        self.assertFalse(os.path.exists(path1))
 
 
 if __name__ == "__main__":

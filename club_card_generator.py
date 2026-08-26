@@ -390,6 +390,12 @@ def generate_club_card(data: dict, avatar_path: str | None = None) -> io.BytesIO
     if avatar_path and os.path.exists(avatar_path):
         try:
             av_raw = Image.open(avatar_path).convert("RGBA")
+            # Center crop to square to prevent stretching/distortion
+            min_side = min(av_raw.size)
+            if min_side > 0:
+                crop_left = (av_raw.width - min_side) // 2
+                crop_top = (av_raw.height - min_side) // 2
+                av_raw = av_raw.crop((crop_left, crop_top, crop_left + min_side, crop_top + min_side))
             av_raw = av_raw.resize((av_size, av_size), Image.Resampling.LANCZOS)
             mask = Image.new("L", (av_size, av_size), 0)
             mask_draw = ImageDraw.Draw(mask)

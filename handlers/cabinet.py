@@ -566,30 +566,54 @@ async def show_my_matches_stub(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 AVATARS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "avatars")
+_user_avatar_file_ids: dict[int, str] = {}
 
 
 async def get_cached_or_fetch_user_avatar(bot, user_id: int | None) -> str | None:
-    """Fetch user avatar from Telegram, save locally to assets/avatars/{user_id}.jpg and return path."""
+    """
+    Fetch the latest user avatar from Telegram API every time.
+    Downloads and updates local cache if file_id changed or file missing.
+    Returns path to avatar image or None if user has no avatar.
+    """
     if not user_id or not bot:
         return None
     try:
         os.makedirs(AVATARS_DIR, exist_ok=True)
         local_path = os.path.join(AVATARS_DIR, f"{user_id}.jpg")
-        if os.path.exists(local_path) and os.path.getsize(local_path) > 0:
-            return local_path
 
         photos = await bot.get_user_profile_photos(user_id=user_id, limit=1)
         if photos and photos.total_count > 0 and len(photos.photos) > 0 and len(photos.photos[0]) > 0:
             best_photo = photos.photos[0][-1]
-            file_obj = await bot.get_file(best_photo.file_id)
+            cur_file_id = best_photo.file_id
+
+            # If already downloaded and file exists on disk, reuse fast
+            if _user_avatar_file_ids.get(user_id) == cur_file_id and os.path.exists(local_path) and os.path.getsize(local_path) > 0:
+                return local_path
+
+            # Download fresh avatar from Telegram
+            file_obj = await bot.get_file(cur_file_id)
             buf = io.BytesIO()
             await file_obj.download_to_memory(buf)
             buf.seek(0)
             with open(local_path, "wb") as f:
                 f.write(buf.getvalue())
+            _user_avatar_file_ids[user_id] = cur_file_id
             return local_path
+        else:
+            # User has no avatar on TG (or removed it)
+            _user_avatar_file_ids.pop(user_id, None)
+            if os.path.exists(local_path):
+                try:
+                    os.remove(local_path)
+                except Exception:
+                    pass
+            return None
     except Exception as e:
         logger.debug(f"Could not fetch avatar for user {user_id}: {e}")
+        # In case of network/rate-limit error, fallback to existing local avatar if present
+        local_path = os.path.join(AVATARS_DIR, f"{user_id}.jpg")
+        if os.path.exists(local_path) and os.path.getsize(local_path) > 0:
+            return local_path
     return None
 
 
@@ -1777,7 +1801,14 @@ async def cb_report_choice_manual(update: Update, context: ContextTypes.DEFAULT_
         return
     await query.answer()
 
-    match_id = int(query.data.replace("cb_report_choice_manual_", ""))
+    try:
+        match_id = int(query.data.replace("cb_report_choice_manual_", ""))
+    except (ValueError, TypeError):
+        await query.answer(
+            "⚠️ Сессия ввода устарела (бот перезапускался). Откройте матч и начните ввод результата заново.",
+            show_alert=True
+        )
+        return
 
     match = await asyncio.to_thread(database.get_match, match_id)
     if not match:
@@ -2087,6 +2118,24 @@ async def prompt_photo_upload(update: Update, context: ContextTypes.DEFAULT_TYPE
     context.user_data["awaiting_report_photo"] = True
     match_id = context.user_data.get('reporting_match_id')
     user_id = query.from_user.id if query else update.effective_user.id
+
+    # user_data is in-memory and is lost on bot restart — stale buttons from a
+    # previous session must not produce broken callbacks (e.g. "_None").
+    if not match_id:
+        expired_text = (
+            "⚠️ <b>Сессия ввода результата устарела</b> (бот перезапускался).\n\n"
+            "Откройте матч в кабинете и начните ввод результата заново."
+        )
+        if query:
+            await query.answer("⚠️ Сессия устарела. Откройте матч заново.", show_alert=True)
+            try:
+                await query.edit_message_text(expired_text, parse_mode="HTML")
+            except Exception:
+                pass
+        else:
+            await update.effective_message.reply_text(expired_text, parse_mode="HTML")
+        return ConversationHandler.END
+
     cancel_cb = get_match_cancel_cb(context, user_id, match_id)
 
     text = (
@@ -2172,6 +2221,15 @@ async def cb_skip_report_photo(update: Update, context: ContextTypes.DEFAULT_TYP
     if query:
         await query.answer()
     context.user_data.pop("awaiting_report_photo", None)
+
+    if not context.user_data.get("reporting_match_id"):
+        alert = "⚠️ Сессия ввода устарела (бот перезапускался). Откройте матч и начните ввод результата заново."
+        if query:
+            await query.answer(alert, show_alert=True)
+        else:
+            await update.effective_message.reply_text(alert)
+        return ConversationHandler.END
+
     return await _show_manual_confirmation(update, context, photo_id=None)
 
 
@@ -2786,6 +2844,45 @@ async def submit_report_to_guest(update: Update, context: ContextTypes.DEFAULT_T
         return
 
     submitter_id = query.from_user.id
+
+    # Admin-entered results are final by definition: save immediately instead
+    # of routing through the opponent-confirmation / admin-review pipeline.
+    if is_admin(submitter_id) or context.user_data.get("is_admin_reporting"):
+        payload = collect_report_payload(context, match)
+        events = _pending_report_events(match, payload)
+        next_stage = await asyncio.to_thread(
+            database.confirm_and_finalize_match,
+            match_id, payload["h_score"], payload["a_score"], events,
+            reporter_id=submitter_id,
+            photo_id=payload.get("photo_id"),
+        )
+        await asyncio.to_thread(database.delete_pending_report, match_id)
+
+        if next_stage:
+            from handlers.admin import notify_cup_stage_opened
+            await notify_cup_stage_opened(context.bot, next_stage)
+
+        await notify_match_confirmed(context, match_id)
+        await refresh_debts_summary(context)
+        await refresh_league_table(context)
+
+        try:
+            await query.edit_message_caption(
+                caption=f"✅ <b>Результат матча #{match_id} занесён в таблицу!</b>",
+                parse_mode="HTML",
+                reply_markup=None,
+            )
+        except Exception:
+            try:
+                await query.edit_message_text(
+                    f"✅ <b>Результат матча #{match_id} занесён в таблицу!</b>",
+                    parse_mode="HTML",
+                    reply_markup=None,
+                )
+            except Exception:
+                pass
+        return
+
     is_submitter_home = (submitter_id == match['player1_id'])
     opp_id = match['player2_id'] if is_submitter_home else match['player1_id']
     opp_team = match['player2_team'] if is_submitter_home else match['player1_team']
