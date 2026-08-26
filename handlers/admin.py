@@ -2123,18 +2123,25 @@ async def admin_set_score_text(update: Update, context: ContextTypes.DEFAULT_TYP
         return ConversationHandler.END
         
     await asyncio.to_thread(database.admin_set_match_score, match_id, s1, s2)
-    
+
+    # Debt note computed BEFORE rewards are applied
+    try:
+        from handlers.cabinet import build_debt_footer
+        debt_note = await build_debt_footer(match)
+    except Exception:
+        debt_note = ""
+
     await update.message.reply_text(
         f"✅ Счет матча #{match_id} изменен: **{s1}:{s2}**!",
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« К карточке матча", callback_data=f"admin_view_match_{match_id}")]])
     )
-    
+
     # Notify players
     player_text = (
         f"⚙️ **Администратор вручную установил результат вашего матча (Тур {match['round_number']})!**\n\n"
         f"⚔️ **{match['player1_nickname']}**  `{s1} : {s2}`  **{match['player2_nickname']}**\n\n"
         f"Результат подтвержден и обновлен в таблице."
-    )
+    ) + debt_note.replace("<b>", "**").replace("</b>", "**")
     for p_id in (match["player1_id"], match["player2_id"]):
         try:
             await context.bot.send_message(chat_id=p_id, text=player_text, parse_mode="Markdown")
@@ -2150,7 +2157,7 @@ async def admin_set_score_text(update: Update, context: ContextTypes.DEFAULT_TYP
             f"⚔️ **{match['player1_nickname']}** ({match['player1_team'] or 'нет'}) "
             f"**{s1} : {s2}** "
             f"**{match['player2_nickname']}** ({match['player2_team'] or 'нет'})"
-        )
+        ) + debt_note.replace("<b>", "**").replace("</b>", "**")
         try:
             await context.bot.send_message(chat_id=group_id, text=group_text, parse_mode="Markdown")
         except Exception as e:

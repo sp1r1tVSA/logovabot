@@ -930,8 +930,8 @@ def confirm_and_finalize_match(match_id: int, p1_score: int, p2_score: int, even
                 (match_id, t_name, p_name, e_type, cnt)
             )
         cursor.execute(
-            "UPDATE matches SET player1_score = ?, player2_score = ?, reported_by = ?, photo_id = ?, status = 'confirmed', played_at = CURRENT_TIMESTAMP WHERE id = ?",
-            (p1_score, p2_score, reporter_id, photo_id, match_id)
+            "UPDATE matches SET player1_score = ?, player2_score = ?, reported_by = ?, photo_id = ?, status = 'confirmed', played_at = ? WHERE id = ?",
+            (p1_score, p2_score, reporter_id, photo_id, datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), match_id)
         )
     return process_cup_match_completion(match_id)
 
@@ -940,8 +940,8 @@ def set_technical_result(match_id: int, p1_score: int, p2_score: int) -> str | N
     with transaction() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "UPDATE matches SET player1_score = ?, player2_score = ?, status = 'confirmed', played_at = CURRENT_TIMESTAMP WHERE id = ?",
-            (p1_score, p2_score, match_id)
+            "UPDATE matches SET player1_score = ?, player2_score = ?, status = 'confirmed', played_at = ? WHERE id = ?",
+            (p1_score, p2_score, datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), match_id)
         )
         cursor.execute("DELETE FROM match_events WHERE match_id = ?", (match_id,))
     return process_cup_match_completion(match_id)
@@ -1359,8 +1359,8 @@ def admin_set_match_score(match_id: int, player1_score: int, player2_score: int)
         cursor = conn.cursor()
         cursor.execute("DELETE FROM match_events WHERE match_id = ?", (match_id,))
         cursor.execute(
-            "UPDATE matches SET player1_score = ?, player2_score = ?, status = 'confirmed', played_at = CURRENT_TIMESTAMP WHERE id = ?",
-            (player1_score, player2_score, match_id)
+            "UPDATE matches SET player1_score = ?, player2_score = ?, status = 'confirmed', played_at = ? WHERE id = ?",
+            (player1_score, player2_score, datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), match_id)
         )
 
 def get_config(key: str) -> str | None:

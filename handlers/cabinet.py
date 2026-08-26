@@ -2493,6 +2493,47 @@ def build_formatted_match_post(
 
     return f"{header}{events_block}{footer}"
 
+def collect_report_payload(context: ContextTypes.DEFAULT_TYPE, match: dict) -> dict:
+    """Collect the entered report data from user_data into a storable payload.
+
+    Reads the ACTUAL keys written by both reporting flows:
+      - AI flow & manual flow: report_home_goals/report_away_goals +
+        home_goals_count/away_goals_count/home_assists_count/away_assists_count.
+    Returns {h_score, a_score, scorers[], assists[], photo_id} where
+    scorers/assists are [{player_name, team_name, count}] suitable for
+    confirm_and_finalize_match event conversion.
+    """
+    ud = context.user_data
+    home_team = match.get('player1_team') or match.get('player1_nickname') or "Хозяева"
+    away_team = match.get('player2_team') or match.get('player2_nickname') or "Гости"
+
+    scorers = []
+    assists = []
+    for name, cnt in (ud.get("home_goals_count") or {}).items():
+        if cnt:
+            scorers.append({"player_name": name, "team_name": home_team, "count": int(cnt)})
+    for name, cnt in (ud.get("away_goals_count") or {}).items():
+        if cnt:
+            scorers.append({"player_name": name, "team_name": away_team, "count": int(cnt)})
+    for name, cnt in (ud.get("home_assists_count") or {}).items():
+        if cnt:
+            assists.append({"player_name": name, "team_name": home_team, "count": int(cnt)})
+    for name, cnt in (ud.get("away_assists_count") or {}).items():
+        if cnt:
+            assists.append({"player_name": name, "team_name": away_team, "count": int(cnt)})
+
+    photos = ud.get("ai_photos_list") or []
+    photo_id = photos[0] if photos else ud.get("report_photo_id")
+
+    return {
+        "h_score": ud.get("report_home_goals", 0) or 0,
+        "a_score": ud.get("report_away_goals", 0) or 0,
+        "scorers": scorers,
+        "assists": assists,
+        "photo_id": photo_id,
+    }
+
+
 async def build_debt_footer(match: dict) -> str:
     """Short note appended to result posts when the match was an overdue debt:
     lists each participant and the warn that will be removed (new balance)."""
@@ -2725,25 +2766,17 @@ async def submit_report_to_guest(update: Update, context: ContextTypes.DEFAULT_T
         await submit_report_to_admin(update, context)
         return
 
-    # Fetch recorded report details
+    # Fetch recorded report details (real keys written by AI/manual flows)
+    payload = collect_report_payload(context, match)
     home_team = match['player1_team'] or match['player1_nickname']
     away_team = match['player2_team'] or match['player2_nickname']
-    h_score = context.user_data.get("report_home_score", 0)
-    a_score = context.user_data.get("report_away_score", 0)
-    scorers = context.user_data.get("report_scorers", [])
-    assists = context.user_data.get("report_assists", [])
-    mode = context.user_data.get("reporting_mode", "manual")
-    photos = context.user_data.get("ai_photos_list", [])
-    photo_id = photos[0] if photos else None
+    h_score = payload["h_score"]
+    a_score = payload["a_score"]
+    scorers = payload["scorers"]
+    assists = payload["assists"]
 
     # Persist report so the opponent (or an admin) can finalize it later from their own chat
-    await asyncio.to_thread(database.save_pending_report, match_id, submitter_id, {
-        "h_score": h_score,
-        "a_score": a_score,
-        "scorers": scorers,
-        "assists": assists,
-        "photo_id": photo_id,
-    })
+    await asyncio.to_thread(database.save_pending_report, match_id, submitter_id, payload)
 
     # Format text for opponent confirmation
     sc_text = "\n".join([f"⚽ {s['player_name']} ({s['team_name']}) — {s['count']}" for s in scorers]) if scorers else "<i>(нет голов)</i>"
@@ -2964,15 +2997,7 @@ async def submit_report_to_admin(update: Update, context: ContextTypes.DEFAULT_T
         return
 
     submitter_id = query.from_user.id if query and query.from_user else 0
-    photos = context.user_data.get("ai_photos_list", [])
-    photo_id = photos[0] if photos else None
-    payload = {
-        "h_score": context.user_data.get("report_home_score", 0),
-        "a_score": context.user_data.get("report_away_score", 0),
-        "scorers": context.user_data.get("report_scorers", []),
-        "assists": context.user_data.get("report_assists", []),
-        "photo_id": photo_id,
-    }
+    payload = collect_report_payload(context, match)
     await asyncio.to_thread(database.save_pending_report, match_id, submitter_id, payload)
 
     text, photo_id = await _build_pending_report_card(context, match, payload)
