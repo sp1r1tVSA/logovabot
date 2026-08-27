@@ -500,7 +500,7 @@ def get_user(telegram_id: int) -> sqlite3.Row | None:
     with transaction() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT telegram_id, username, team_name, league_name, role, registered_at, squad_photo_id, warn_count FROM users WHERE telegram_id = ?
+            SELECT telegram_id, username, team_name, league_name, role, registered_at, squad_photo_id, warn_count, pending_notification FROM users WHERE telegram_id = ?
         """, (telegram_id,))
         return cursor.fetchone()
 
@@ -1629,48 +1629,85 @@ def handle_user_startup(telegram_id: int, username: str | None, default_role: st
     with transaction() as conn:
         cursor = conn.cursor()
         
-        # 1. Check if the exact telegram_id already exists
-        cursor.execute("SELECT role FROM users WHERE telegram_id = ?", (telegram_id,))
-        exists = cursor.fetchone()
-        if exists:
-            # Update username
-            cursor.execute(
-                "UPDATE users SET username = ? WHERE telegram_id = ?",
-                (username, telegram_id)
-            )
-            return
-            
-        # 2. Check if there is a pre-registered user with this username (negative id)
+        # Check if there is a pre-registered user with this username (negative id)
+        pre_reg = None
         if username:
             cursor.execute(
-                "SELECT telegram_id FROM users WHERE LOWER(username) = LOWER(?) AND telegram_id < 0",
+                "SELECT * FROM users WHERE LOWER(username) = LOWER(?) AND telegram_id < 0",
                 (username.strip(),)
             )
             pre_reg = cursor.fetchone()
+
+        # 1. Check if the exact telegram_id already exists
+        cursor.execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,))
+        exists = cursor.fetchone()
+        
+        if exists:
             if pre_reg:
-                old_id = pre_reg[0]
+                old_id = pre_reg['telegram_id']
+                new_team = exists['team_name'] or pre_reg['team_name']
+                new_league = exists['league_name'] or pre_reg['league_name']
+                new_role = pre_reg['role'] if exists['role'] == 'user' else exists['role']
+                new_notif = 1 if (pre_reg['team_name'] and not exists['team_name']) else exists['pending_notification']
                 
-                # Fetch all data from the old user
-                cursor.execute("SELECT * FROM users WHERE telegram_id = ?", (old_id,))
-                old_user = cursor.fetchone()
+                # Free team_name on old record to prevent UNIQUE constraint conflict
+                cursor.execute("UPDATE users SET team_name = NULL WHERE telegram_id = ?", (old_id,))
                 
-                if old_user:
-                    # Insert the new record with the new ID, preserving all data
-                    cursor.execute(
-                        "INSERT INTO users (telegram_id, username, team_name, league_name, role, registered_at, pending_notification) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                        (telegram_id, username, old_user['team_name'], old_user['league_name'], old_user['role'], old_user['registered_at'], old_user['pending_notification'])
-                    )
-                    
-                    # Update matches table
-                    cursor.execute("UPDATE matches SET player1_id = ? WHERE player1_id = ?", (telegram_id, old_id))
-                    cursor.execute("UPDATE matches SET player2_id = ? WHERE player2_id = ?", (telegram_id, old_id))
-                    
-                    # Delete the old user
-                    cursor.execute("DELETE FROM users WHERE telegram_id = ?", (old_id,))
-                    
-                    logger.info(f"Matched pre-registered user @{username} (old_id: {old_id}) to real id: {telegram_id}")
-                    return
+                # Re-point references to real telegram_id (foreign keys valid since exists is already in users)
+                cursor.execute("UPDATE matches SET player1_id = ? WHERE player1_id = ?", (telegram_id, old_id))
+                cursor.execute("UPDATE matches SET player2_id = ? WHERE player2_id = ?", (telegram_id, old_id))
+                cursor.execute("UPDATE matches SET reported_by = ? WHERE reported_by = ?", (telegram_id, old_id))
+                cursor.execute("UPDATE matches SET proposed_by = ? WHERE proposed_by = ?", (telegram_id, old_id))
+                cursor.execute("UPDATE user_warns SET user_id = ? WHERE user_id = ?", (telegram_id, old_id))
+                cursor.execute("UPDATE pending_reports SET reporter_id = ? WHERE reporter_id = ?", (telegram_id, old_id))
                 
+                # Delete old temporary record
+                cursor.execute("DELETE FROM users WHERE telegram_id = ?", (old_id,))
+                
+                cursor.execute(
+                    "UPDATE users SET username = ?, team_name = ?, league_name = ?, role = ?, pending_notification = ? WHERE telegram_id = ?",
+                    (username, new_team, new_league, new_role, new_notif, telegram_id)
+                )
+                logger.info(f"Merged pre-registered user @{username} (old_id: {old_id}) into existing user {telegram_id}")
+            else:
+                cursor.execute(
+                    "UPDATE users SET username = ? WHERE telegram_id = ?",
+                    (username, telegram_id)
+                )
+            return
+
+        if pre_reg:
+            old_id = pre_reg['telegram_id']
+            old_team = pre_reg['team_name']
+            
+            # 1. Clear team_name on old record so inserting new record doesn't violate unique constraint
+            cursor.execute("UPDATE users SET team_name = NULL WHERE telegram_id = ?", (old_id,))
+            
+            # 2. Insert new user record first so foreign keys (matches, user_warns) can reference real telegram_id
+            cursor.execute(
+                "INSERT INTO users (telegram_id, username, team_name, league_name, role, registered_at, pending_notification, warn_count, squad_photo_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    telegram_id, username, old_team, pre_reg['league_name'], 
+                    pre_reg['role'], pre_reg['registered_at'], 1 if old_team else 0,
+                    pre_reg['warn_count'] if 'warn_count' in pre_reg.keys() else 0,
+                    pre_reg['squad_photo_id'] if 'squad_photo_id' in pre_reg.keys() else None
+                )
+            )
+            
+            # 3. Re-point references to real telegram_id
+            cursor.execute("UPDATE matches SET player1_id = ? WHERE player1_id = ?", (telegram_id, old_id))
+            cursor.execute("UPDATE matches SET player2_id = ? WHERE player2_id = ?", (telegram_id, old_id))
+            cursor.execute("UPDATE matches SET reported_by = ? WHERE reported_by = ?", (telegram_id, old_id))
+            cursor.execute("UPDATE matches SET proposed_by = ? WHERE proposed_by = ?", (telegram_id, old_id))
+            cursor.execute("UPDATE user_warns SET user_id = ? WHERE user_id = ?", (telegram_id, old_id))
+            cursor.execute("UPDATE pending_reports SET reporter_id = ? WHERE reporter_id = ?", (telegram_id, old_id))
+            
+            # 4. Delete old temporary record
+            cursor.execute("DELETE FROM users WHERE telegram_id = ?", (old_id,))
+            
+            logger.info(f"Matched pre-registered user @{username} (old_id: {old_id}) to real id: {telegram_id}")
+            return
+
         # 3. Fallback: regular insert
         cursor.execute(
             "INSERT INTO users (telegram_id, username, role) VALUES (?, ?, ?)",

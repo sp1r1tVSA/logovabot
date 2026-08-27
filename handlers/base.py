@@ -84,41 +84,56 @@ def get_main_inline_keyboard(telegram_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(keyboard)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Start command: welcomes user and displays inline main menu. Private chats only."""
+    """Start command: welcomes user and displays inline main menu."""
     if update.effective_chat.type != "private":
-        return  # Ignore group chats
+        try:
+            bot_info = context.bot.username
+            url = f"https://t.me/{bot_info}?start=menu" if bot_info else None
+            kb = [[InlineKeyboardButton("📱 Открыть меню в ЛС", url=url)]] if url else None
+            await update.message.reply_text(
+                "ℹ️ Главное меню и личный кабинет доступны в <b>личных сообщениях</b> с ботом.",
+                reply_markup=InlineKeyboardMarkup(kb) if kb else None,
+                parse_mode="HTML"
+            )
+        except Exception:
+            pass
+        return
 
     user = update.effective_user
     if not user:
         return
 
     # Clear old text keyboards if they are stuck
-    temp_msg = await update.message.reply_text("🔄 Загрузка...", reply_markup=ReplyKeyboardRemove())
     try:
+        temp_msg = await update.message.reply_text("🔄 Загрузка...", reply_markup=ReplyKeyboardRemove())
         await temp_msg.delete()
     except Exception:
         pass
 
     # Determine role and upsert/match user
     role = "admin" if is_admin(user.id) else "user"
-    await asyncio.to_thread(database.handle_user_startup, user.id, user.username, role)
+    try:
+        await asyncio.to_thread(database.handle_user_startup, user.id, user.username, role)
+    except Exception as e:
+        logger.exception(f"Error in handle_user_startup for user {user.id}: {e}")
 
     # Deliver pending notification if exists
-    if await asyncio.to_thread(database.get_pending_notification, user.id):
-        team = await asyncio.to_thread(database.get_user_team, user.id)
-        if team:
-            try:
+    try:
+        if await asyncio.to_thread(database.get_pending_notification, user.id):
+            team = await asyncio.to_thread(database.get_user_team, user.id)
+            if team:
                 await update.message.reply_text(
                     f"🎉 Организатор закрепил за вашим аккаунтом игровой клуб <b>{html.escape(team)}</b>! "
                     f"Теперь вам доступен Личный кабинет и участие в лиге.",
                     parse_mode="HTML"
                 )
-            except Exception:
-                pass
-            await asyncio.to_thread(database.set_pending_notification, user.id, 0)
+                await asyncio.to_thread(database.set_pending_notification, user.id, 0)
+    except Exception as e:
+        logger.warning(f"Error delivering notification to user {user.id}: {e}")
 
+    first_name_clean = html.escape(user.first_name or "Участник")
     welcome_text = (
-        f"⚽️ <b>Добро пожаловать в систему Лиги, {user.first_name}!</b>\n\n"
+        f"⚽️ <b>Добро пожаловать в систему Лиги, {first_name_clean}!</b>\n\n"
         f"🏆 Здесь вы можете управлять своей карьерой, следить за турнирной таблицей и статистикой клубов.\n\n"
         f"👇 Выберите нужный раздел в меню ниже:"
     )
@@ -143,8 +158,9 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     context.user_data.clear()
 
     user = query.from_user
+    first_name_clean = html.escape(user.first_name or "Участник")
     welcome_text = (
-        f"⚽️ <b>Добро пожаловать в систему Лиги, {user.first_name}!</b>\n\n"
+        f"⚽️ <b>Добро пожаловать в систему Лиги, {first_name_clean}!</b>\n\n"
         f"🏆 Здесь вы можете управлять своей карьерой, следить за турнирной таблицей и статистикой клубов.\n\n"
         f"👇 Выберите нужный раздел в меню ниже:"
     )
