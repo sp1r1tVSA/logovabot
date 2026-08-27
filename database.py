@@ -1594,18 +1594,30 @@ def get_admins() -> list[dict]:
 def pre_register_player(username: str, team_name: str) -> int:
     """Pre-register a player with a temporary negative ID."""
     username_clean = username.strip().lstrip("@")
+    team_name_clean = team_name.strip()
     with transaction() as conn:
         cursor = conn.cursor()
+        
+        # Unassign previous owner of this team if any
+        cursor.execute(
+            "UPDATE users SET team_name = NULL, warn_count = 0 WHERE LOWER(team_name) = LOWER(?) AND LOWER(username) != LOWER(?)",
+            (team_name_clean, username_clean)
+        )
+        cursor.execute(
+            "DELETE FROM user_warns WHERE user_id IN (SELECT telegram_id FROM users WHERE LOWER(team_name) = LOWER(?) AND LOWER(username) != LOWER(?))",
+            (team_name_clean, username_clean)
+        )
         
         # Check if username already exists in users table
         cursor.execute("SELECT telegram_id FROM users WHERE LOWER(username) = LOWER(?)", (username_clean,))
         row = cursor.fetchone()
         if row:
-            # Update club name and role if already exists
+            # Update club name, reset warns, set player role
             cursor.execute(
-                "UPDATE users SET team_name = ?, role = 'player' WHERE LOWER(username) = LOWER(?)",
-                (team_name.strip(), username_clean)
+                "UPDATE users SET team_name = ?, role = 'player', warn_count = 0 WHERE LOWER(username) = LOWER(?)",
+                (team_name_clean, username_clean)
             )
+            cursor.execute("DELETE FROM user_warns WHERE user_id = ?", (row[0],))
             return row[0]
         
         # Generate a new unique negative ID for pre-registration
@@ -1615,8 +1627,8 @@ def pre_register_player(username: str, team_name: str) -> int:
         temp_id = min(min_id - 1, -1)
         
         cursor.execute(
-            "INSERT INTO users (telegram_id, username, team_name, league_name, role) VALUES (?, ?, ?, ?, ?)",
-            (temp_id, username_clean, team_name.strip(), "Основная", "player")
+            "INSERT INTO users (telegram_id, username, team_name, league_name, role, warn_count) VALUES (?, ?, ?, ?, ?, 0)",
+            (temp_id, username_clean, team_name_clean, "Основная", "player")
         )
         return temp_id
 
@@ -1741,6 +1753,7 @@ def remove_player(player_ref: str) -> tuple[bool, str]:
 def set_player_club(player_ref: str, new_club: str) -> tuple[bool, str]:
     """Change player's club/team."""
     player_ref_clean = player_ref.strip().lstrip("@")
+    new_club_clean = new_club.strip()
     with transaction() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT telegram_id FROM users WHERE telegram_id = ? OR LOWER(username) = LOWER(?)", (player_ref_clean, player_ref_clean))
@@ -1753,7 +1766,18 @@ def set_player_club(player_ref: str, new_club: str) -> tuple[bool, str]:
         old_club_row = cursor.fetchone()
         old_club = (old_club_row[0] or "").strip() if old_club_row else ""
 
-        cursor.execute("UPDATE users SET team_name = ?, warn_count = 0 WHERE telegram_id = ?", (new_club.strip(), p_id))
+        # Unassign previous owner of new_club if any
+        cursor.execute(
+            "UPDATE users SET team_name = NULL, warn_count = 0 WHERE LOWER(team_name) = LOWER(?) AND telegram_id != ?",
+            (new_club_clean, p_id)
+        )
+        cursor.execute(
+            "DELETE FROM user_warns WHERE user_id IN (SELECT telegram_id FROM users WHERE LOWER(team_name) = LOWER(?) AND telegram_id != ?)",
+            (new_club_clean, p_id)
+        )
+
+        cursor.execute("UPDATE users SET team_name = ?, role = 'player', warn_count = 0 WHERE telegram_id = ?", (new_club_clean, p_id))
+        cursor.execute("DELETE FROM user_warns WHERE user_id = ?", (p_id,))
 
         # Keep pending fixtures and active cup series pointing at the club the
         # player now owns, so they don't become orphaned debts of the old club.
@@ -1999,7 +2023,7 @@ def ban_and_remove_from_league(user_id: int) -> str | None:
         row = cursor.fetchone()
         team_name = row["team_name"] if row else None
 
-        cursor.execute("UPDATE users SET team_name = NULL WHERE telegram_id = ?", (user_id,))
+        cursor.execute("UPDATE users SET team_name = NULL, warn_count = 0 WHERE telegram_id = ?", (user_id,))
         now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         cursor.execute(
             "INSERT INTO user_warns (user_id, admin_id, reason, type, created_at) VALUES (?, NULL, ?, 'AUTO_KICK', ?)",
@@ -2055,13 +2079,13 @@ def find_user_by_ref(ref: str) -> dict | None:
 
 
 def get_all_active_warns() -> list[dict]:
-    """Retrieve all users with warn_count > 0."""
+    """Retrieve all active league users (who currently own a club) with warn_count > 0."""
     with transaction() as conn:
         cursor = conn.cursor()
         cursor.execute("""
             SELECT telegram_id, username, team_name, warn_count 
             FROM users 
-            WHERE warn_count > 0 
+            WHERE warn_count > 0 AND team_name IS NOT NULL AND TRIM(team_name) != ''
             ORDER BY warn_count DESC, username ASC
         """)
         return [dict(row) for row in cursor.fetchall()]

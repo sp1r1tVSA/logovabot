@@ -727,6 +727,12 @@ async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_T
 
         user_ref, club_name = parts_p[0], parts_p[1].strip()
         ok, res_text = await asyncio.to_thread(database.set_player_club, user_ref, club_name)
+        if ok:
+            try:
+                from handlers.admin import _post_or_update_debts_in_warns
+                await _post_or_update_debts_in_warns(context)
+            except Exception as e:
+                logger.warning(f"Failed to update debts in warns: {e}")
         await msg.reply_text(f"{'✅' if ok else '❌'} {res_text}", parse_mode="HTML")
         return True
 

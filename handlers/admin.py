@@ -2680,6 +2680,11 @@ async def admin_edit_club_execute(update: Update, context: ContextTypes.DEFAULT_
     new_club = CLUBS[club_idx]
 
     success, msg = await asyncio.to_thread(database.set_player_club, str(p_id), new_club)
+    if success:
+        try:
+            await _post_or_update_debts_in_warns(context)
+        except Exception as e:
+            logger.warning(f"Failed to update debts in warns on club edit: {e}")
     # Use single query.answer() with the result message to avoid BadRequest: query already answered
     await query.answer(f"✅ {msg}" if success else f"❌ {msg}", show_alert=True)
 
@@ -2735,6 +2740,11 @@ async def admin_delete_player_execute(update: Update, context: ContextTypes.DEFA
     team_str = player['team_name'] or 'без названия'
 
     success, msg = await asyncio.to_thread(database.remove_player, str(p_id))
+    if success:
+        try:
+            await _post_or_update_debts_in_warns(context)
+        except Exception as e:
+            logger.warning(f"Failed to update debts in warns on player delete: {e}")
 
     # Send notice to Reports Topic
     main_group_id = await asyncio.to_thread(database.get_group_id)
@@ -4057,6 +4067,11 @@ async def _auto_kick_player(context: ContextTypes.DEFAULT_TYPE, user_id: int, us
             )
         except Exception:
             pass
+
+    try:
+        await _post_or_update_debts_in_warns(context)
+    except Exception as e:
+        logger.warning(f"Failed to update debts in warns on auto-kick: {e}")
 
 
 @admin_only
