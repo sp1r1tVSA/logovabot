@@ -380,18 +380,18 @@ def render_master_static_card(player_data: dict, style_id: str = "toty_gold") ->
 
         img.paste(player_img, (px, py), fade)
 
-    # 5. Top-Left OVR / Position Column
-    col_x = int(58 * SCALE)
-    ovr_y = int(44 * SCALE)
+    # 5. Top-Left OVR / Position Column (offset down so Telegram 'GIF' badge doesn't overlap)
+    col_x = int(62 * SCALE)
+    ovr_y = int(58 * SCALE)
 
-    font_ovr = load_card_font(52, bold=True)
+    font_ovr = load_card_font(46, bold=True)
     draw.text((col_x + int(2 * SCALE), ovr_y + int(2 * SCALE)), str(ovr), font=font_ovr, fill=(0, 0, 0, 180), anchor="mt")
     draw.text((col_x, ovr_y), str(ovr), font=font_ovr, fill=cfg["text_primary"], anchor="mt")
 
     # Position Pill
-    pos_y = ovr_y + int(56 * SCALE)
-    pos_w = int(54 * SCALE)
-    pos_h = int(26 * SCALE)
+    pos_y = ovr_y + int(52 * SCALE)
+    pos_w = int(52 * SCALE)
+    pos_h = int(24 * SCALE)
     draw.rounded_rectangle(
         [(col_x - pos_w // 2, pos_y), (col_x + pos_w // 2, pos_y + pos_h)],
         radius=int(6 * SCALE),
@@ -399,8 +399,8 @@ def render_master_static_card(player_data: dict, style_id: str = "toty_gold") ->
         outline=cfg["border_primary"],
         width=int(1.5 * SCALE)
     )
-    font_pos = load_card_font(20, bold=True)
-    draw.text((col_x, pos_y + int(3 * SCALE)), position, font=font_pos, fill=cfg["accent"], anchor="mt")
+    font_pos = load_card_font(19, bold=True)
+    draw.text((col_x, pos_y + int(2 * SCALE)), position, font=font_pos, fill=cfg["accent"], anchor="mt")
 
     # Club Crest
     logo_fn = get_team_logo_filename(team_name)
@@ -410,10 +410,10 @@ def render_master_static_card(player_data: dict, style_id: str = "toty_gold") ->
             try:
                 logo_img = Image.open(logo_path)
                 logo_img = clean_and_prepare_logo(logo_img)
-                l_size = int(50 * SCALE)
+                l_size = int(46 * SCALE)
                 logo_img.thumbnail((l_size, l_size), Image.Resampling.LANCZOS)
                 lx = col_x - (logo_img.width // 2)
-                ly = pos_y + int(36 * SCALE)
+                ly = pos_y + int(32 * SCALE)
                 img.paste(logo_img, (lx, ly), logo_img)
             except Exception:
                 pass
@@ -529,9 +529,9 @@ def generate_animated_ea_fc_card(player_data: dict, anim_style: str = "toty_gold
     style_id = _normalize_style_key(anim_style)
     cfg = CARD_STYLES[style_id]
 
-    # 1. Base High-Res Static Render & Resize to 400x600 for performance
+    # 1. Base High-Res Static Render & Resize to 350x510 for optimal Telegram display & file size
     base_img = render_master_static_card(player_data, style_id=style_id)
-    anim_w, anim_h = 400, 600
+    anim_w, anim_h = 350, 510
     base_img = base_img.resize((anim_w, anim_h), Image.Resampling.LANCZOS)
 
     num_frames = 20
