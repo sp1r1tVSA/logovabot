@@ -17,5 +17,10 @@ test_*.png
 chat_dump.txt
 channel_posts.txt
 telegram_dump_session.session
+assets/players/
+assets/tmp_crops/
+players_cache/
+sandbox/output/
+
 
 
