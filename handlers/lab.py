@@ -356,10 +356,11 @@ async def cb_lab_demo_anim(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         [InlineKeyboardButton("« В лабораторию", callback_data="admin_lab_menu")]
     ]
 
+    anim_filename = getattr(buf, "name", f"{anim_style}.mp4")
     await context.bot.send_animation(
         chat_id=user_id,
         animation=buf,
-        filename=f"{anim_style}.gif",
+        filename=anim_filename,
         caption=caption,
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(keyboard)

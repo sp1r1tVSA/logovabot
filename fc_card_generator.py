@@ -20,9 +20,16 @@ import io
 import math
 import logging
 import random
+import tempfile
+import numpy as np
 from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageChops
 import player_photos
 from table_generator import get_team_logo_filename, clean_and_prepare_logo
+
+try:
+    import cv2
+except ImportError:
+    cv2 = None
 
 logger = logging.getLogger(__name__)
 
@@ -531,13 +538,14 @@ def generate_animated_ea_fc_card(player_data: dict, anim_style: str = "toty_gold
     style_id = _normalize_style_key(anim_style)
     cfg = CARD_STYLES[style_id]
 
-    # 1. Base High-Res Static Render & Resize to 350x514 for optimal Telegram framing
+    # 1. Base High-Res Static Render & Resize to 600x900 for True HD 1080p Telegram Card Animation
     base_img = render_master_static_card(player_data, style_id=style_id)
-    anim_w, anim_h = 350, 514
+    anim_w, anim_h = 600, 900
     base_img = base_img.resize((anim_w, anim_h), Image.Resampling.LANCZOS)
 
-    num_frames = 20
-    frame_duration_ms = 50  # 20 FPS -> 1.0s loop
+    num_frames = 24
+    fps = 24.0
+    frame_duration_ms = int(1000.0 / fps)
     frames = []
 
     # Deterministic particle seeds for styles requiring particle physics
@@ -565,38 +573,38 @@ def generate_animated_ea_fc_card(player_data: dict, anim_style: str = "toty_gold
 
             spot_alpha = int(45 + 30 * math.sin(2 * math.pi * t))
             cx, cy = anim_w // 2, int(anim_h * 0.27)
-            fx_draw.ellipse([(cx - 140, cy - 140), (cx + 140, cy + 140)], fill=(255, 215, 0, spot_alpha))
-            fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(16))
+            fx_draw.ellipse([(cx - 200, cy - 200), (cx + 200, cy + 200)], fill=(255, 215, 0, spot_alpha))
+            fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(20))
 
         # ─── 2. VOID ECLIPSE: Accretion Disk & Inward Gravitational Pull ──────
         elif style_id == "void_eclipse":
             cx, cy = anim_w // 2, int(anim_h * 0.27)
             # Rotating accretion rings
-            for r_ring in [80, 120, 160]:
+            for r_ring in [120, 180, 240]:
                 angle = (2 * math.pi * t) + (r_ring * 0.05)
-                arc_x = cx + int(15 * math.cos(angle))
-                arc_y = cy + int(15 * math.sin(angle))
-                fx_draw.ellipse([(arc_x - r_ring, arc_y - r_ring), (arc_x + r_ring, arc_y + r_ring)], outline=(138, 43, 226, 40), width=3)
+                arc_x = cx + int(20 * math.cos(angle))
+                arc_y = cy + int(20 * math.sin(angle))
+                fx_draw.ellipse([(arc_x - r_ring, arc_y - r_ring), (arc_x + r_ring, arc_y + r_ring)], outline=(138, 43, 226, 40), width=4)
 
             # Inward gravitationally pulled stardust
             for (px_rel, py_rel, spd, rad, phase) in particles:
-                dist = (1.0 - (t * spd + py_rel) % 1.0) * 160
+                dist = (1.0 - (t * spd + py_rel) % 1.0) * 240
                 ang = phase + (2 * math.pi * t)
                 sx = cx + int(dist * math.cos(ang))
                 sy = cy + int(dist * math.sin(ang))
-                p_alpha = int(220 * (dist / 160.0))
-                fx_draw.ellipse([(sx - rad, sy - rad), (sx + rad, sy + rad)], fill=(0, 245, 255, p_alpha))
+                p_alpha = int(220 * (dist / 240.0))
+                fx_draw.ellipse([(sx - rad * 2, sy - rad * 2), (sx + rad * 2, sy + rad * 2)], fill=(0, 245, 255, p_alpha))
 
             fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(3))
 
         # ─── 3. CYBER HUD: Scanning Laser & Glitch Energy ────────────────────
         elif style_id == "cyber_hud":
             laser_y = int((t * anim_h * 1.2) % anim_h)
-            fx_draw.line([(10, laser_y), (anim_w - 10, laser_y)], fill=(0, 255, 224, 180), width=2)
-            fx_draw.line([(10, laser_y - 2), (anim_w - 10, laser_y - 2)], fill=(255, 0, 85, 120), width=1)
+            fx_draw.line([(16, laser_y), (anim_w - 16, laser_y)], fill=(0, 255, 224, 180), width=3)
+            fx_draw.line([(16, laser_y - 3), (anim_w - 16, laser_y - 3)], fill=(255, 0, 85, 120), width=2)
 
             pulse_a = int(60 + 50 * math.sin(2 * math.pi * t))
-            fx_draw.rounded_rectangle([(14, 14), (anim_w - 14, anim_h - 14)], radius=20, outline=(0, 255, 224, pulse_a), width=2)
+            fx_draw.rounded_rectangle([(20, 20), (anim_w - 20, anim_h - 20)], radius=24, outline=(0, 255, 224, pulse_a), width=3)
             fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(2))
 
         # ─── 4. HYPER GLASS: Fluid Caustics & Prismatic Shimmer ──────────────
@@ -606,23 +614,23 @@ def generate_animated_ea_fc_card(player_data: dict, anim_style: str = "toty_gold
 
             cx, cy = anim_w // 2, int(anim_h * 0.30)
             glow_a = int(40 + 25 * math.sin(2 * math.pi * t))
-            fx_draw.ellipse([(cx - 130, cy - 130), (cx + 130, cy + 130)], fill=(0, 255, 136, glow_a))
-            fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(14))
+            fx_draw.ellipse([(cx - 190, cy - 190), (cx + 190, cy + 190)], fill=(0, 255, 136, glow_a))
+            fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(18))
 
         # ─── 5. INFERNO MAGMA: Molten Lava Pulse & 35 Rising Embers ──────────
         elif style_id == "inferno_magma":
             cx, cy = anim_w // 2, int(anim_h * 0.28)
             lava_a = int(50 + 35 * math.sin(2 * math.pi * t))
-            fx_draw.ellipse([(cx - 120, cy - 120), (cx + 120, cy + 120)], fill=(255, 60, 0, lava_a))
+            fx_draw.ellipse([(cx - 180, cy - 180), (cx + 180, cy + 180)], fill=(255, 60, 0, lava_a))
 
             for (px_rel, py_rel, spd, rad, phase) in particles:
                 cur_y_pct = (py_rel - spd * t) % 1.0
-                cur_x = int(px_rel * (anim_w - 60) + 30 + math.sin(phase + 2 * math.pi * t) * 14)
-                cur_y = int(cur_y_pct * (anim_h - 80) + 30)
+                cur_x = int(px_rel * (anim_w - 80) + 40 + math.sin(phase + 2 * math.pi * t) * 18)
+                cur_y = int(cur_y_pct * (anim_h - 120) + 40)
                 y_norm = cur_y / float(anim_h)
                 p_alpha = int(230 * math.sin(math.pi * y_norm))
-                fx_draw.ellipse([(cur_x - rad - 2, cur_y - rad - 2), (cur_x + rad + 2, cur_y + rad + 2)], fill=(255, 120, 0, p_alpha // 2))
-                fx_draw.ellipse([(cur_x - rad, cur_y - rad), (cur_x + rad, cur_y + rad)], fill=(255, 230, 80, p_alpha))
+                fx_draw.ellipse([(cur_x - rad * 2 - 2, cur_y - rad * 2 - 2), (cur_x + rad * 2 + 2, cur_y + rad * 2 + 2)], fill=(255, 120, 0, p_alpha // 2))
+                fx_draw.ellipse([(cur_x - rad * 2, cur_y - rad * 2), (cur_x + rad * 2, cur_y + rad * 2)], fill=(255, 230, 80, p_alpha))
 
             fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(2))
 
@@ -633,16 +641,16 @@ def generate_animated_ea_fc_card(player_data: dict, anim_style: str = "toty_gold
 
             cx, cy = anim_w // 2, int(anim_h * 0.28)
             frost_a = int(45 + 30 * math.sin(2 * math.pi * t))
-            fx_draw.ellipse([(cx - 130, cy - 130), (cx + 130, cy + 130)], fill=(112, 214, 255, frost_a))
+            fx_draw.ellipse([(cx - 190, cy - 190), (cx + 190, cy + 190)], fill=(112, 214, 255, frost_a))
 
             for (px_rel, py_rel, spd, rad, phase) in particles[:18]:
                 cur_t = (t * spd + py_rel) % 1.0
                 star_a = int(240 * math.sin(math.pi * cur_t))
-                star_x = int(px_rel * (anim_w - 50) + 25)
-                star_y = int(py_rel * (anim_h - 100) + 40)
-                s_len = int(rad * 3)
-                fx_draw.line([(star_x - s_len, star_y), (star_x + s_len, star_y)], fill=(255, 255, 255, star_a), width=1)
-                fx_draw.line([(star_x, star_y - s_len), (star_x, star_y + s_len)], fill=(255, 255, 255, star_a), width=1)
+                star_x = int(px_rel * (anim_w - 70) + 35)
+                star_y = int(py_rel * (anim_h - 140) + 60)
+                s_len = int(rad * 4)
+                fx_draw.line([(star_x - s_len, star_y), (star_x + s_len, star_y)], fill=(255, 255, 255, star_a), width=2)
+                fx_draw.line([(star_x, star_y - s_len), (star_x, star_y + s_len)], fill=(255, 255, 255, star_a), width=2)
 
             fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(2))
 
@@ -650,17 +658,17 @@ def generate_animated_ea_fc_card(player_data: dict, anim_style: str = "toty_gold
         elif style_id == "anime_sakuga":
             cx, cy = anim_w // 2, int(anim_h * 0.28)
             flame_a = int(55 + 35 * math.sin(2 * math.pi * t))
-            fx_draw.ellipse([(cx - 120, cy - 140), (cx + 120, cy + 120)], fill=(0, 255, 240, flame_a))
+            fx_draw.ellipse([(cx - 180, cy - 200), (cx + 180, cy + 180)], fill=(0, 255, 240, flame_a))
 
             if f_idx % 3 == 0:
-                l_points = [(cx - 90, cy - 40)]
+                l_points = [(cx - 120, cy - 60)]
                 for step_i in range(5):
                     prev_x, prev_y = l_points[-1]
-                    next_x = prev_x + random.randint(20, 50)
-                    next_y = prev_y + random.randint(-25, 25)
+                    next_x = prev_x + random.randint(30, 70)
+                    next_y = prev_y + random.randint(-35, 35)
                     l_points.append((next_x, next_y))
                 for pt_idx in range(len(l_points) - 1):
-                    fx_draw.line([l_points[pt_idx], l_points[pt_idx + 1]], fill=(255, 255, 255, 220), width=2)
+                    fx_draw.line([l_points[pt_idx], l_points[pt_idx + 1]], fill=(255, 255, 255, 220), width=3)
 
             fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(3))
 
@@ -671,19 +679,19 @@ def generate_animated_ea_fc_card(player_data: dict, anim_style: str = "toty_gold
 
             cx, cy = anim_w // 2, int(anim_h * 0.30)
             v_a = int(35 + 20 * math.sin(2 * math.pi * t))
-            fx_draw.ellipse([(cx - 120, cy - 120), (cx + 120, cy + 120)], fill=(212, 175, 55, v_a))
-            fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(3))
+            fx_draw.ellipse([(cx - 180, cy - 180), (cx + 180, cy + 180)], fill=(212, 175, 55, v_a))
+            fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(4))
 
         # ─── 9. AERO CARBON: F1 Streamlines & Telemetry Blink ────────────────
         elif style_id == "aero_carbon":
             for s_idx in range(6):
-                stream_y = int((anim_h * 0.2) + s_idx * 55 + math.sin(t * 2 * math.pi + s_idx) * 10)
+                stream_y = int((anim_h * 0.2) + s_idx * 75 + math.sin(t * 2 * math.pi + s_idx) * 15)
                 s_prog = (t + s_idx * 0.18) % 1.0
                 stream_x = int(s_prog * anim_w)
-                fx_draw.line([(stream_x, stream_y), (stream_x + 45, stream_y)], fill=(0, 229, 255, 170), width=2)
+                fx_draw.line([(stream_x, stream_y), (stream_x + 65, stream_y)], fill=(0, 229, 255, 170), width=3)
 
             pulse_a = int(70 + 40 * math.sin(2 * math.pi * t))
-            fx_draw.rounded_rectangle([(14, 14), (anim_w - 14, anim_h - 14)], radius=20, outline=(255, 24, 1, pulse_a), width=2)
+            fx_draw.rounded_rectangle([(20, 20), (anim_w - 20, anim_h - 20)], radius=24, outline=(255, 24, 1, pulse_a), width=3)
             fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(2))
 
         # ─── 10. UCL NIGHT: Starlight Constellations & Chrome Shimmer ────────
@@ -694,25 +702,51 @@ def generate_animated_ea_fc_card(player_data: dict, anim_style: str = "toty_gold
             # Star constellation laser lines
             cx, cy = anim_w // 2, int(anim_h * 0.28)
             star_pts = [
-                (cx, cy - 80),
-                (cx + 70, cy - 20),
-                (cx + 45, cy + 65),
-                (cx - 45, cy + 65),
-                (cx - 70, cy - 20)
+                (cx, cy - 110),
+                (cx + 95, cy - 30),
+                (cx + 60, cy + 90),
+                (cx - 60, cy + 90),
+                (cx - 95, cy - 30)
             ]
             for s_i in range(len(star_pts)):
                 p1 = star_pts[s_i]
                 p2 = star_pts[(s_i + 1) % len(star_pts)]
                 s_a = int(120 + 80 * math.sin(2 * math.pi * t + s_i))
-                fx_draw.line([p1, p2], fill=(0, 212, 255, s_a), width=1)
-                fx_draw.ellipse([(p1[0] - 3, p1[1] - 3), (p1[0] + 3, p1[1] + 3)], fill=(255, 255, 255, s_a + 40))
+                fx_draw.line([p1, p2], fill=(0, 212, 255, s_a), width=2)
+                fx_draw.ellipse([(p1[0] - 4, p1[1] - 4), (p1[0] + 4, p1[1] + 4)], fill=(255, 255, 255, s_a + 40))
 
             fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(3))
 
         frame = Image.alpha_composite(frame, fx_layer)
         frames.append(frame.convert("RGB"))
 
-    # Convert frames using adaptive palette with Floyd-Steinberg dithering (Smooth continuous gradients)
+    # 1. Preferred Telegram Ultra-HD 1080p MP4 Video Encoder (TrueColor 24-bit, 0% banding, 0% noise)
+    if cv2 is not None:
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
+                tmp_path = tmp.name
+
+            fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+            writer = cv2.VideoWriter(tmp_path, fourcc, fps, (anim_w, anim_h))
+            for f in frames:
+                arr = np.array(f)
+                bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+                writer.write(bgr)
+            writer.release()
+
+            with open(tmp_path, "rb") as f_in:
+                buf = io.BytesIO(f_in.read())
+            buf.name = f"{style_id}.mp4"
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
+            buf.seek(0)
+            return buf
+        except Exception as e:
+            logger.warning(f"Failed to encode MP4 video with OpenCV: {e}")
+
+    # 2. High-DPI GIF Fallback with Floyd-Steinberg Dithering
     quantized_frames = [
         f.convert("P", palette=Image.Palette.ADAPTIVE, colors=256, dither=Image.Dither.FLOYDSTEINBERG)
         for f in frames
