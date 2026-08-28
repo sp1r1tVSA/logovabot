@@ -39,16 +39,16 @@ HEIGHT = 690 * SCALE
 
 CARD_STYLES = {
     "toty_gold": {
-        "title": "TOTY CELESTIAL GOLD",
-        "bg_top": (44, 34, 12),
-        "bg_bot": (10, 8, 4),
-        "border_primary": (245, 206, 112),
-        "border_secondary": (180, 140, 50),
+        "title": "EA FC 24 SPECIAL ITEM",
+        "bg_top": (8, 14, 28),             # Dark Navy Obsidian
+        "bg_bot": (4, 6, 12),              # Deep Stadium Night
+        "border_primary": (245, 208, 97),  # 24K Polished Gold Foil
+        "border_secondary": (195, 155, 60),# Brushed Gold Bevel
         "accent": (255, 225, 120),
-        "text_primary": (255, 252, 240),
-        "text_secondary": (245, 206, 112),
+        "text_primary": (255, 255, 255),
+        "text_secondary": (245, 208, 97),
         "glow_rgb": (255, 215, 0),
-        "desc": "Божественное жидкое золото и лучи Team of the Year",
+        "desc": "Dark navy obsidian & 24k polished gold special item",
     },
     "void_eclipse": {
         "title": "VOID ECLIPSE / DARK MATTER",
