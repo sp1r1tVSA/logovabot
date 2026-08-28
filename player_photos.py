@@ -219,6 +219,11 @@ def fetch_and_cache(player_name: str, team: str | None = None) -> str | None:
         return None
 
 
+def get_player_photo(player_name: str, team: str | None = None) -> str | None:
+    """Convenience alias to fetch and return cached photo path."""
+    return fetch_and_cache(player_name, team)
+
+
 def fetch_all_players(players: list[str] | list[tuple[str, str]]) -> dict[str, str | None]:
     """Bulk-fetch photos for a list of players."""
     results: dict[str, str | None] = {}

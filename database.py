@@ -258,6 +258,16 @@ def init_db() -> None:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+
+        # Feature flags for safe testing and staged rollout of new bot modules
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS feature_flags (
+                feature_key TEXT PRIMARY KEY,
+                status TEXT NOT NULL DEFAULT 'admin_only',
+                config_json TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
         # Standardize and migrate canonical team names across all tables
         migrate_team_names_canonical(cursor)
 
@@ -1379,6 +1389,75 @@ def set_config(key: str, value: str) -> None:
             "REPLACE INTO system_config (key, value) VALUES (?, ?)",
             (key, value)
         )
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Feature Flags (Admin Sandbox & Phased Feature Rollout)
+# ─────────────────────────────────────────────────────────────────────────────
+
+DEFAULT_FEATURE_FLAGS = {
+    "fc_player_cards": "admin_only",
+    "totw_infographics": "admin_only",
+    "hype_match_posters": "admin_only",
+    "match_roast_ai": "admin_only",
+    "betting_market": "disabled",
+    "fantasy_league": "disabled",
+    "achievements_hall_of_fame": "admin_only",
+}
+
+def get_feature_flag(key: str, default: str = "admin_only") -> str:
+    """Retrieve the status of a feature flag ('disabled', 'admin_only', 'public')."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT status FROM feature_flags WHERE feature_key = ?", (key,))
+        row = cursor.fetchone()
+        if row:
+            return row[0]
+        return DEFAULT_FEATURE_FLAGS.get(key, default)
+
+def set_feature_flag(key: str, status: str) -> None:
+    """Set the status of a feature flag ('disabled', 'admin_only', 'public')."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "REPLACE INTO feature_flags (feature_key, status, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)",
+            (key, status)
+        )
+
+def get_all_feature_flags() -> dict[str, str]:
+    """Retrieve all feature flags with defaults merged."""
+    flags = dict(DEFAULT_FEATURE_FLAGS)
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT feature_key, status FROM feature_flags")
+        rows = cursor.fetchall()
+        for r in rows:
+            flags[r[0]] = r[1]
+    return flags
+
+def is_feature_accessible(key: str, user_id: int) -> bool:
+    """
+    Check if a feature is accessible to a given user.
+    - 'public': accessible to all users
+    - 'admin_only': accessible ONLY to users in ADMIN_IDS or with admin role
+    - 'disabled': accessible to nobody (not even regular users, admins can test via lab)
+    """
+    status = get_feature_flag(key)
+    if status == "public":
+        return True
+    if status == "admin_only":
+        if not user_id:
+            return False
+        from config import ADMIN_IDS
+        if user_id in ADMIN_IDS:
+            return True
+        try:
+            user = get_user(user_id)
+            if user and user.get("role") == "admin":
+                return True
+        except Exception:
+            pass
+        return False
+    return False
 
 def get_group_id() -> int | None:
     """Retrieve the automatically tracked Telegram Group ID."""
