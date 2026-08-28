@@ -293,16 +293,17 @@ def render_master_static_card(player_data: dict, style_id: str = "toty_gold") ->
         b = int(tb + (bb - tb) * ratio)
         draw.line([(0, y), (WIDTH, y)], fill=(r, g, b, 255))
 
-    # 2. Dynamic Central Halo Spotlight
-    cx, cy = WIDTH // 2, int(HEIGHT * 0.27)
-    spotlight = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
-    s_draw = ImageDraw.Draw(spotlight)
+    # 2. Smooth Radial Ambient Glow (Zero Banding / Zero Concentric Rings)
+    cx, cy = WIDTH // 2, int(HEIGHT * 0.28)
+    spot_size = int(320 * SCALE)
+    spot_img = Image.new("RGBA", (128, 128), (0, 0, 0, 0))
+    s_draw = ImageDraw.Draw(spot_img)
     gr, gg, gb = cfg["glow_rgb"]
-    for r in range(int(240 * SCALE), 0, -int(14 * SCALE)):
-        alpha = int(85 * (1.0 - (r / (240 * SCALE)) ** 1.3))
-        s_draw.ellipse([(cx - r, cy - r), (cx + r, cy + r)], fill=(gr, gg, gb, alpha))
-    spotlight = spotlight.filter(ImageFilter.GaussianBlur(int(16 * SCALE)))
-    img = Image.alpha_composite(img, spotlight)
+    for r in range(60, 0, -2):
+        a = int(60 * (1.0 - (r / 60.0) ** 1.5))
+        s_draw.ellipse([(64 - r, 64 - r), (64 + r, 64 + r)], fill=(gr, gg, gb, a))
+    spot_img = spot_img.resize((spot_size, spot_size), Image.Resampling.BICUBIC)
+    img.paste(spot_img, (cx - spot_size // 2, cy - spot_size // 2), spot_img)
     draw = ImageDraw.Draw(img)
 
     # 3. Outer Frame Geometry (Generous Inset so card floats cleanly inside Telegram bubble)
@@ -349,36 +350,30 @@ def render_master_static_card(player_data: dict, style_id: str = "toty_gold") ->
         draw.polygon(poly, outline=cfg["border_primary"], width=int(4.5 * SCALE))
         draw.polygon(poly, outline=cfg["border_secondary"] + (180,), width=int(1.5 * SCALE))
 
-    # 4. Large & Heroic Player Cutout (Dominant 500px scale with 3D Rim Glow)
-    photo_w = int(480 * SCALE)
-    photo_h = int(440 * SCALE)
+    # 4. Large & Razor-Sharp Player Cutout (Centered with Clean Drop Shadow)
+    photo_w = int(440 * SCALE)
+    photo_h = int(410 * SCALE)
     player_img = _get_player_photo_image(player_name, team_name)
 
     if player_img:
         player_img.thumbnail((photo_w, photo_h), Image.Resampling.LANCZOS)
         pw, ph = player_img.size
 
-        # 4a. Ambient Rim Glow behind player
-        glow = Image.new("RGBA", (pw + int(36 * SCALE), ph + int(36 * SCALE)), (0, 0, 0, 0))
-        s_mask = player_img.split()[3] if "A" in player_img.getbands() else Image.new("L", (pw, ph), 255)
-        glow.paste(Image.new("RGBA", (pw, ph), cfg["glow_rgb"] + (95,)), (int(18 * SCALE), int(18 * SCALE)), s_mask)
-        glow = glow.filter(ImageFilter.GaussianBlur(int(14 * SCALE)))
-
-        # 4b. Deep drop shadow
+        # Clean soft drop shadow (No muddy halos)
         shadow = Image.new("RGBA", (pw + int(24 * SCALE), ph + int(24 * SCALE)), (0, 0, 0, 0))
-        shadow.paste(Image.new("RGBA", (pw, ph), (0, 0, 0, 210)), (int(10 * SCALE), int(10 * SCALE)), s_mask)
-        shadow = shadow.filter(ImageFilter.GaussianBlur(int(10 * SCALE)))
+        s_mask = player_img.split()[3] if "A" in player_img.getbands() else Image.new("L", (pw, ph), 255)
+        shadow.paste(Image.new("RGBA", (pw, ph), (0, 0, 0, 195)), (int(8 * SCALE), int(8 * SCALE)), s_mask)
+        shadow = shadow.filter(ImageFilter.GaussianBlur(int(8 * SCALE)))
 
         px = (WIDTH - pw) // 2
-        py = inset + int(6 * SCALE) + max(0, int(ph * 0.05))
+        py = inset + int(12 * SCALE) + max(0, int((photo_h - ph) * 0.4))
 
-        img.paste(glow, (px - int(18 * SCALE), py - int(18 * SCALE)), glow)
         img.paste(shadow, (px - int(4 * SCALE), py - int(4 * SCALE)), shadow)
 
         # Smooth baseline alpha fade
         fade = Image.new("L", (pw, ph), 255)
         f_draw = ImageDraw.Draw(fade)
-        f_start = int(ph * 0.74)
+        f_start = int(ph * 0.72)
         for y in range(f_start, ph):
             val = int(255 * (1.0 - ((y - f_start) / (ph - f_start)) ** 1.6))
             f_draw.line([(0, y), (pw, y)], fill=val)
@@ -536,9 +531,9 @@ def generate_animated_ea_fc_card(player_data: dict, anim_style: str = "toty_gold
     style_id = _normalize_style_key(anim_style)
     cfg = CARD_STYLES[style_id]
 
-    # 1. Base High-Res Static Render & Resize to 300x440 for optimal Telegram display & file size
+    # 1. Base High-Res Static Render & Resize to 350x514 for optimal Telegram framing
     base_img = render_master_static_card(player_data, style_id=style_id)
-    anim_w, anim_h = 300, 440
+    anim_w, anim_h = 350, 514
     base_img = base_img.resize((anim_w, anim_h), Image.Resampling.LANCZOS)
 
     num_frames = 20
@@ -636,40 +631,48 @@ def generate_animated_ea_fc_card(player_data: dict, anim_style: str = "toty_gold
             shimmer = _create_shimmer_streak(anim_w, anim_h, t, color=(160, 230, 255))
             frame = Image.alpha_composite(frame, shimmer)
 
-            for p_i, (px_rel, py_rel, spd, rad, phase) in enumerate(particles[:16]):
-                star_x = int(px_rel * (anim_w - 40) + 20)
-                star_y = int(py_rel * (anim_h - 40) + 20)
-                twinkle = int(240 * abs(math.sin(phase + 2 * math.pi * t * 2)))
-                fx_draw.line([(star_x - 5, star_y), (star_x + 5, star_y)], fill=(232, 247, 255, twinkle), width=2)
-                fx_draw.line([(star_x, star_y - 5), (star_x, star_y + 5)], fill=(232, 247, 255, twinkle), width=2)
+            cx, cy = anim_w // 2, int(anim_h * 0.28)
+            frost_a = int(45 + 30 * math.sin(2 * math.pi * t))
+            fx_draw.ellipse([(cx - 130, cy - 130), (cx + 130, cy + 130)], fill=(112, 214, 255, frost_a))
+
+            for (px_rel, py_rel, spd, rad, phase) in particles[:18]:
+                cur_t = (t * spd + py_rel) % 1.0
+                star_a = int(240 * math.sin(math.pi * cur_t))
+                star_x = int(px_rel * (anim_w - 50) + 25)
+                star_y = int(py_rel * (anim_h - 100) + 40)
+                s_len = int(rad * 3)
+                fx_draw.line([(star_x - s_len, star_y), (star_x + s_len, star_y)], fill=(255, 255, 255, star_a), width=1)
+                fx_draw.line([(star_x, star_y - s_len), (star_x, star_y + s_len)], fill=(255, 255, 255, star_a), width=1)
 
             fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(2))
 
-        # ─── 7. ANIME SAKUGA: Crackling Lightning & Ego Aura Flames ──────────
+        # ─── 7. ANIME SAKUGA: Blue Lock Ego Flame & Lightning Arcs ───────────
         elif style_id == "anime_sakuga":
-            cx, cy = anim_w // 2, int(anim_h * 0.26)
-            aura_a = int(60 + 35 * math.sin(4 * math.pi * t))
-            fx_draw.ellipse([(cx - 140, cy - 140), (cx + 140, cy + 140)], fill=(0, 255, 240, aura_a))
+            cx, cy = anim_w // 2, int(anim_h * 0.28)
+            flame_a = int(55 + 35 * math.sin(2 * math.pi * t))
+            fx_draw.ellipse([(cx - 120, cy - 140), (cx + 120, cy + 120)], fill=(0, 255, 240, flame_a))
 
-            # Lightning Arcs
-            for l_i in range(3):
-                lx1 = cx + int(100 * math.cos(l_i * 2 + t * 2 * math.pi))
-                ly1 = cy + int(100 * math.sin(l_i * 2 + t * 2 * math.pi))
-                lx2 = lx1 + random.randint(-20, 20)
-                ly2 = ly1 + random.randint(-30, 30)
-                fx_draw.line([(lx1, ly1), (lx2, ly2)], fill=(255, 255, 255, 220), width=2)
+            if f_idx % 3 == 0:
+                l_points = [(cx - 90, cy - 40)]
+                for step_i in range(5):
+                    prev_x, prev_y = l_points[-1]
+                    next_x = prev_x + random.randint(20, 50)
+                    next_y = prev_y + random.randint(-25, 25)
+                    l_points.append((next_x, next_y))
+                for pt_idx in range(len(l_points) - 1):
+                    fx_draw.line([l_points[pt_idx], l_points[pt_idx + 1]], fill=(255, 255, 255, 220), width=2)
 
-            fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(4))
+            fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(3))
 
-        # ─── 8. ROYAL 24K: Heavy Bullion Specular Glide & Velvet Sheen ───────
+        # ─── 8. ROYAL 24K: Velvet Sheen & Bullion Specular Glide ─────────────
         elif style_id == "royal_24k":
-            shimmer = _create_shimmer_streak(anim_w, anim_h, t, color=(255, 230, 160))
+            shimmer = _create_shimmer_streak(anim_w, anim_h, t, color=(255, 237, 179))
             frame = Image.alpha_composite(frame, shimmer)
 
             cx, cy = anim_w // 2, int(anim_h * 0.30)
             v_a = int(35 + 20 * math.sin(2 * math.pi * t))
             fx_draw.ellipse([(cx - 120, cy - 120), (cx + 120, cy + 120)], fill=(212, 175, 55, v_a))
-            fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(12))
+            fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(3))
 
         # ─── 9. AERO CARBON: F1 Streamlines & Telemetry Blink ────────────────
         elif style_id == "aero_carbon":
@@ -709,16 +712,9 @@ def generate_animated_ea_fc_card(player_data: dict, anim_style: str = "toty_gold
         frame = Image.alpha_composite(frame, fx_layer)
         frames.append(frame.convert("RGB"))
 
-    # Master Color Palette generation (Eliminates dithering grain, color banding, and jitter)
-    sample_h = anim_h * min(4, len(frames))
-    sample_img = Image.new("RGB", (anim_w, sample_h))
-    step = len(frames) // min(4, len(frames))
-    for i in range(min(4, len(frames))):
-        sample_img.paste(frames[i * step], (0, i * anim_h))
-
-    global_palette = sample_img.quantize(colors=256, method=Image.Quantize.MAXCOVERAGE)
+    # Convert frames using adaptive palette with Floyd-Steinberg dithering (Smooth continuous gradients)
     quantized_frames = [
-        f.quantize(palette=global_palette, dither=Image.Dither.NONE)
+        f.convert("P", palette=Image.Palette.ADAPTIVE, colors=256, dither=Image.Dither.FLOYDSTEINBERG)
         for f in frames
     ]
 
@@ -731,7 +727,7 @@ def generate_animated_ea_fc_card(player_data: dict, anim_style: str = "toty_gold
         append_images=quantized_frames[1:],
         duration=frame_duration_ms,
         loop=0,
-        disposal=2
+        optimize=True
     )
     buf.seek(0)
     return buf
