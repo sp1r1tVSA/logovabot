@@ -492,8 +492,10 @@ def render_master_static_card(player_data: dict, style_id: str = "toty_gold") ->
 
 def generate_ea_fc_card(player_data: dict, theme_name: str = "toty_gold") -> io.BytesIO:
     """Generate static PNG player card for any of the 10 styles."""
-    img = render_master_static_card(player_data, style_id=theme_name)
+    style_id = _normalize_style_key(theme_name)
+    img = render_master_static_card(player_data, style_id=style_id)
     buf = io.BytesIO()
+    buf.name = f"{style_id}.png"
     img.save(buf, format="PNG", optimize=True)
     buf.seek(0)
     return buf
@@ -701,6 +703,7 @@ def generate_animated_ea_fc_card(player_data: dict, anim_style: str = "toty_gold
         frames.append(frame.convert("RGB"))
 
     buf = io.BytesIO()
+    buf.name = f"{style_id}.gif"
     frames[0].save(
         buf,
         format="GIF",

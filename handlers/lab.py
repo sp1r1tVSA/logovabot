@@ -298,6 +298,7 @@ async def cb_lab_demo_card(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await context.bot.send_photo(
         chat_id=user_id,
         photo=buf,
+        filename=f"{style_id}.png",
         caption=caption,
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(keyboard)
@@ -358,6 +359,7 @@ async def cb_lab_demo_anim(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await context.bot.send_animation(
         chat_id=user_id,
         animation=buf,
+        filename=f"{anim_style}.gif",
         caption=caption,
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(keyboard)
