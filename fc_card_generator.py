@@ -305,12 +305,12 @@ def render_master_static_card(player_data: dict, style_id: str = "toty_gold") ->
     img = Image.alpha_composite(img, spotlight)
     draw = ImageDraw.Draw(img)
 
-    # 3. Outer Frame Geometry
-    inset = int(14 * SCALE)
+    # 3. Outer Frame Geometry (Generous Inset so card floats cleanly inside Telegram bubble)
+    inset = int(28 * SCALE)
     cut = int(36 * SCALE)
-    bot_y1 = int(HEIGHT * 0.82)
-    bot_mid_x = int(44 * SCALE)
-    bot_mid_y = int(HEIGHT * 0.92)
+    bot_y1 = int(HEIGHT * 0.81)
+    bot_mid_x = int(48 * SCALE)
+    bot_mid_y = int(HEIGHT * 0.90)
 
     if style_id in ["cyber_hud", "aero_carbon"]:
         # Hexagon/Mech Chamfered Frame
@@ -349,9 +349,9 @@ def render_master_static_card(player_data: dict, style_id: str = "toty_gold") ->
         draw.polygon(poly, outline=cfg["border_primary"], width=int(4.5 * SCALE))
         draw.polygon(poly, outline=cfg["border_secondary"] + (180,), width=int(1.5 * SCALE))
 
-    # 4. Large Player Cutout (Dominant 420px)
-    photo_w = int(420 * SCALE)
-    photo_h = int(390 * SCALE)
+    # 4. Large Player Cutout (Dominant & Centered)
+    photo_w = int(390 * SCALE)
+    photo_h = int(370 * SCALE)
     player_img = _get_player_photo_image(player_name, team_name)
 
     if player_img:
@@ -365,13 +365,13 @@ def render_master_static_card(player_data: dict, style_id: str = "toty_gold") ->
         shadow = shadow.filter(ImageFilter.GaussianBlur(int(9 * SCALE)))
 
         px = (WIDTH - pw) // 2
-        py = int(16 * SCALE) + (photo_h - ph)
+        py = inset + int(12 * SCALE) + (photo_h - ph)
         img.paste(shadow, (px - int(4 * SCALE), py - int(4 * SCALE)), shadow)
 
         # Smooth baseline alpha fade
         fade = Image.new("L", (pw, ph), 255)
         f_draw = ImageDraw.Draw(fade)
-        f_start = int(ph * 0.70)
+        f_start = int(ph * 0.72)
         for y in range(f_start, ph):
             val = int(255 * (1.0 - ((y - f_start) / (ph - f_start)) ** 1.6))
             f_draw.line([(0, y), (pw, y)], fill=val)
@@ -380,17 +380,17 @@ def render_master_static_card(player_data: dict, style_id: str = "toty_gold") ->
 
         img.paste(player_img, (px, py), fade)
 
-    # 5. Top-Left OVR / Position Column (offset down so Telegram 'GIF' badge doesn't overlap)
-    col_x = int(62 * SCALE)
-    ovr_y = int(58 * SCALE)
+    # 5. Top-Left OVR / Position Column (Generously offset inside the padded shield)
+    col_x = inset + int(48 * SCALE)
+    ovr_y = inset + int(36 * SCALE)
 
-    font_ovr = load_card_font(46, bold=True)
+    font_ovr = load_card_font(44, bold=True)
     draw.text((col_x + int(2 * SCALE), ovr_y + int(2 * SCALE)), str(ovr), font=font_ovr, fill=(0, 0, 0, 180), anchor="mt")
     draw.text((col_x, ovr_y), str(ovr), font=font_ovr, fill=cfg["text_primary"], anchor="mt")
 
     # Position Pill
-    pos_y = ovr_y + int(52 * SCALE)
-    pos_w = int(52 * SCALE)
+    pos_y = ovr_y + int(48 * SCALE)
+    pos_w = int(50 * SCALE)
     pos_h = int(24 * SCALE)
     draw.rounded_rectangle(
         [(col_x - pos_w // 2, pos_y), (col_x + pos_w // 2, pos_y + pos_h)],
@@ -399,7 +399,7 @@ def render_master_static_card(player_data: dict, style_id: str = "toty_gold") ->
         outline=cfg["border_primary"],
         width=int(1.5 * SCALE)
     )
-    font_pos = load_card_font(19, bold=True)
+    font_pos = load_card_font(18, bold=True)
     draw.text((col_x, pos_y + int(2 * SCALE)), position, font=font_pos, fill=cfg["accent"], anchor="mt")
 
     # Club Crest
@@ -410,19 +410,19 @@ def render_master_static_card(player_data: dict, style_id: str = "toty_gold") ->
             try:
                 logo_img = Image.open(logo_path)
                 logo_img = clean_and_prepare_logo(logo_img)
-                l_size = int(46 * SCALE)
+                l_size = int(44 * SCALE)
                 logo_img.thumbnail((l_size, l_size), Image.Resampling.LANCZOS)
                 lx = col_x - (logo_img.width // 2)
-                ly = pos_y + int(32 * SCALE)
+                ly = pos_y + int(30 * SCALE)
                 img.paste(logo_img, (lx, ly), logo_img)
             except Exception:
                 pass
 
     # 6. Player Name Ribbon
-    ribbon_w = int(370 * SCALE)
-    ribbon_h = int(44 * SCALE)
+    ribbon_w = int(350 * SCALE)
+    ribbon_h = int(42 * SCALE)
     rx = (WIDTH - ribbon_w) // 2
-    ry = int(352 * SCALE)
+    ry = int(356 * SCALE)
 
     draw.rounded_rectangle(
         [(rx, ry), (rx + ribbon_w, ry + ribbon_h)],
@@ -432,22 +432,22 @@ def render_master_static_card(player_data: dict, style_id: str = "toty_gold") ->
         width=int(1.5 * SCALE)
     )
 
-    name_size = 25 if len(player_name) <= 13 else (21 if len(player_name) <= 18 else 17)
+    name_size = 24 if len(player_name) <= 13 else (20 if len(player_name) <= 18 else 16)
     font_name = load_card_font(name_size, bold=True)
-    draw.text((WIDTH // 2, ry + int(8 * SCALE)), player_name, font=font_name, fill=cfg["text_primary"], anchor="mt")
+    draw.text((WIDTH // 2, ry + int(7 * SCALE)), player_name, font=font_name, fill=cfg["text_primary"], anchor="mt")
 
     # 7. Frosted Glass Bottom Plate for Stats
-    plate_w = int(396 * SCALE)
-    plate_h = int(236 * SCALE)
+    plate_w = int(370 * SCALE)
+    plate_h = int(230 * SCALE)
     plate_x = (WIDTH - plate_w) // 2
-    plate_y = int(342 * SCALE)
+    plate_y = int(346 * SCALE)
 
     # 8. 6-Attribute Stat Grid (2x3 with Vertical Separator)
     grid_y = ry + ribbon_h + int(14 * SCALE)
-    row_h = int(40 * SCALE)
+    row_h = int(38 * SCALE)
     sep_x = WIDTH // 2
 
-    draw.line([(sep_x, grid_y - int(2 * SCALE)), (sep_x, grid_y + int(116 * SCALE))], fill=cfg["border_secondary"] + (140,), width=int(1.5 * SCALE))
+    draw.line([(sep_x, grid_y - int(2 * SCALE)), (sep_x, grid_y + int(112 * SCALE))], fill=cfg["border_secondary"] + (140,), width=int(1.5 * SCALE))
 
     font_s_val = load_card_font(26, bold=True)
     font_s_lbl = load_card_font(18, bold=True)
@@ -529,9 +529,9 @@ def generate_animated_ea_fc_card(player_data: dict, anim_style: str = "toty_gold
     style_id = _normalize_style_key(anim_style)
     cfg = CARD_STYLES[style_id]
 
-    # 1. Base High-Res Static Render & Resize to 350x510 for optimal Telegram display & file size
+    # 1. Base High-Res Static Render & Resize to 300x440 for optimal Telegram display & file size
     base_img = render_master_static_card(player_data, style_id=style_id)
-    anim_w, anim_h = 350, 510
+    anim_w, anim_h = 300, 440
     base_img = base_img.resize((anim_w, anim_h), Image.Resampling.LANCZOS)
 
     num_frames = 20
