@@ -39,61 +39,64 @@ HEIGHT = HEIGHT_1X * SCALE
 
 THEMES = {
     "gold_rare": {
+        "canvas_bg": (14, 11, 6, 255),    # Solid dark gold background (no white Telegram corners)
         "bg_top": (46, 36, 16),           # Deep bronze-gold
         "bg_mid": (24, 18, 8),
         "bg_bottom": (12, 9, 4),
-        "spotlight": (255, 215, 0, 75),   # Golden glow burst
+        "spotlight": (255, 215, 0, 85),   # Golden glow burst
         "border_outer": (245, 206, 112),  # Polished bright gold
         "border_mid": (195, 152, 60),     # Brushed gold
         "border_inner": (95, 72, 28),     # Dark antique gold
         "accent": (255, 215, 0),          # Vivid gold
-        "plate_bg": (18, 14, 7, 220),     # Dark frosted glass plate
+        "plate_bg": (18, 14, 7, 245),     # Dark frosted glass plate
         "plate_border": (195, 152, 60, 180),
         "text_primary": (255, 252, 240),
         "text_secondary": (245, 206, 112),
         "stat_val": (255, 255, 255),
         "stat_lbl": (230, 190, 100),
-        "ribbon_bg": (32, 24, 10, 240),
+        "ribbon_bg": (32, 24, 10, 245),
         "badge_text": "GOLD RARE",
-        "badge_bg": (245, 206, 112, 40),
+        "badge_bg": (22, 18, 10, 245),
     },
     "totw": {
+        "canvas_bg": (10, 9, 12, 255),    # Solid dark obsidian background (no white Telegram corners)
         "bg_top": (28, 26, 32),           # Obsidian / Charcoal
         "bg_mid": (14, 13, 16),
         "bg_bottom": (7, 6, 8),
-        "spotlight": (255, 200, 30, 80),  # Electric gold spotlight
+        "spotlight": (255, 205, 35, 90),  # Electric gold spotlight
         "border_outer": (255, 205, 35),   # Neon electric gold
         "border_mid": (200, 155, 20),     # Rich gold
         "border_inner": (65, 52, 18),     # Deep shadow gold
         "accent": (255, 215, 0),
-        "plate_bg": (12, 11, 14, 235),    # Deep carbon plate
+        "plate_bg": (14, 13, 16, 250),    # Deep carbon plate
         "plate_border": (255, 205, 35, 190),
         "text_primary": (255, 255, 255),
         "text_secondary": (255, 205, 35),
         "stat_val": (255, 255, 255),
         "stat_lbl": (255, 205, 35),
-        "ribbon_bg": (18, 16, 20, 245),
+        "ribbon_bg": (18, 16, 20, 250),
         "badge_text": "TEAM OF THE WEEK",
-        "badge_bg": (255, 205, 35, 45),
+        "badge_bg": (18, 16, 20, 250),
     },
     "icon": {
+        "canvas_bg": (18, 16, 14, 255),   # Solid dark luxury backdrop
         "bg_top": (248, 245, 235),        # Pearl marble white
         "bg_mid": (225, 218, 205),
         "bg_bottom": (195, 188, 172),
-        "spotlight": (255, 255, 255, 110),# Bright celestial aura
+        "spotlight": (255, 255, 255, 120),# Bright celestial aura
         "border_outer": (225, 175, 45),   # Royal goldenrod
         "border_mid": (180, 140, 35),
         "border_inner": (130, 100, 30),
         "accent": (180, 135, 25),
-        "plate_bg": (235, 230, 218, 235), # Warm pearl plate
+        "plate_bg": (235, 230, 218, 245), # Warm pearl plate
         "plate_border": (180, 140, 35, 180),
         "text_primary": (25, 20, 15),
         "text_secondary": (140, 100, 25),
         "stat_val": (20, 16, 12),
         "stat_lbl": (130, 95, 25),
-        "ribbon_bg": (245, 240, 230, 245),
+        "ribbon_bg": (245, 240, 230, 250),
         "badge_text": "ICON LEGEND",
-        "badge_bg": (180, 140, 35, 40),
+        "badge_bg": (230, 222, 208, 245),
     }
 }
 
@@ -326,8 +329,8 @@ def generate_ea_fc_card(player_data: dict, theme_name: str = "gold_rare") -> io.
     def_stat = custom_stats.get("DEF", calc_stats["def"])
     phy = custom_stats.get("PHY", calc_stats["phy"])
 
-    # 1. Base Canvas (Transparent RGBA)
-    card = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
+    # 1. Base Canvas with solid dark theme backdrop (prevents Telegram JPEG white corners completely!)
+    card = Image.new("RGBA", (WIDTH, HEIGHT), theme["canvas_bg"])
 
     # 2. Gradient Background Canvas
     bg_gradient = Image.new("RGBA", (WIDTH, HEIGHT))
@@ -343,9 +346,9 @@ def generate_ea_fc_card(player_data: dict, theme_name: str = "gold_rare") -> io.
         bg_draw.line([(0, y), (WIDTH, y)], fill=(r, g, b, 255))
 
     # 3. Add Dynamic Radial Burst Glow behind player (depth & illumination)
-    spotlight_x = int(WIDTH * 0.62)
-    spotlight_y = int(HEIGHT * 0.32)
-    spotlight = draw_radial_spotlight((WIDTH, HEIGHT), (spotlight_x, spotlight_y), int(190 * SCALE), theme["spotlight"])
+    spotlight_x = int(WIDTH * 0.54)
+    spotlight_y = int(HEIGHT * 0.25)
+    spotlight = draw_radial_spotlight((WIDTH, HEIGHT), (spotlight_x, spotlight_y), int(230 * SCALE), theme["spotlight"])
     bg_gradient = Image.alpha_composite(bg_gradient, spotlight)
 
     # 4. Add Carbon Weave & Crystal Facets
@@ -357,10 +360,11 @@ def generate_ea_fc_card(player_data: dict, theme_name: str = "gold_rare") -> io.
     card.paste(bg_gradient, (0, 0), shield_mask)
 
     # 6. Player Photo Rendering with Dynamic Drop Shadow & Smooth Base Fade
-    photo_box_w = int(285 * SCALE)
-    photo_box_h = int(295 * SCALE)
-    photo_x = int(140 * SCALE)
-    photo_y = int(42 * SCALE)
+    # Scaled up for majestic presence and centered across the card
+    photo_box_w = int(350 * SCALE)
+    photo_box_h = int(350 * SCALE)
+    photo_x = int(75 * SCALE)
+    photo_y = int(18 * SCALE)
 
     player_img = None
     try:
@@ -377,11 +381,11 @@ def generate_ea_fc_card(player_data: dict, theme_name: str = "gold_rare") -> io.
             pw, ph = player_img.size
 
             # Soft drop shadow behind player
-            shadow = Image.new("RGBA", (pw + int(20 * SCALE), ph + int(20 * SCALE)), (0, 0, 0, 0))
+            shadow = Image.new("RGBA", (pw + int(24 * SCALE), ph + int(24 * SCALE)), (0, 0, 0, 0))
             shadow_mask = player_img.split()[3] if "A" in player_img.getbands() else Image.new("L", (pw, ph), 255)
-            shadow_fill = Image.new("RGBA", (pw, ph), (0, 0, 0, 160))
-            shadow.paste(shadow_fill, (int(8 * SCALE), int(8 * SCALE)), shadow_mask)
-            shadow = shadow.filter(ImageFilter.GaussianBlur(int(7 * SCALE)))
+            shadow_fill = Image.new("RGBA", (pw, ph), (0, 0, 0, 180))
+            shadow.paste(shadow_fill, (int(10 * SCALE), int(10 * SCALE)), shadow_mask)
+            shadow = shadow.filter(ImageFilter.GaussianBlur(int(8 * SCALE)))
 
             px = photo_x + (photo_box_w - pw) // 2
             py = photo_y + (photo_box_h - ph)
@@ -390,7 +394,7 @@ def generate_ea_fc_card(player_data: dict, theme_name: str = "gold_rare") -> io.
             # Smooth vertical gradient alpha fade at the torso baseline
             fade_mask = Image.new("L", (pw, ph), 255)
             f_mask_draw = ImageDraw.Draw(fade_mask)
-            fade_start_y = int(ph * 0.62)
+            fade_start_y = int(ph * 0.68)
             for fy in range(fade_start_y, ph):
                 fade_ratio = (fy - fade_start_y) / max(1, (ph - fade_start_y))
                 alpha_val = int(255 * (1.0 - (fade_ratio ** 1.6)))
@@ -407,13 +411,13 @@ def generate_ea_fc_card(player_data: dict, theme_name: str = "gold_rare") -> io.
         sil_layer = Image.new("RGBA", (photo_box_w, photo_box_h), (0, 0, 0, 0))
         sil_draw = ImageDraw.Draw(sil_layer)
         sc_x = photo_box_w // 2
-        head_r = int(34 * SCALE)
+        head_r = int(42 * SCALE)
         sil_draw.ellipse([(sc_x - head_r, int(22 * SCALE)), (sc_x + head_r, int(22 * SCALE) + 2 * head_r)], fill=theme["border_outer"] + (65,))
         torso_poly = [
-            (sc_x - int(80 * SCALE), photo_box_h),
-            (sc_x - int(60 * SCALE), int(100 * SCALE)),
-            (sc_x + int(60 * SCALE), int(100 * SCALE)),
-            (sc_x + int(80 * SCALE), photo_box_h),
+            (sc_x - int(100 * SCALE), photo_box_h),
+            (sc_x - int(75 * SCALE), int(115 * SCALE)),
+            (sc_x + int(75 * SCALE), int(115 * SCALE)),
+            (sc_x + int(100 * SCALE), photo_box_h),
         ]
         sil_draw.polygon(torso_poly, fill=theme["border_outer"] + (55,))
         card.paste(sil_layer, (photo_x, photo_y), sil_layer)
@@ -456,10 +460,10 @@ def generate_ea_fc_card(player_data: dict, theme_name: str = "gold_rare") -> io.
 
     # Position Tag (with sleek frosted pill backing)
     pos_y = ovr_y + int(56 * SCALE)
-    pos_w = int(50 * SCALE)
+    pos_w = int(52 * SCALE)
     pos_h = int(26 * SCALE)
     pos_rect = [(col_x - pos_w // 2, pos_y), (col_x + pos_w // 2, pos_y + pos_h)]
-    draw.rounded_rectangle(pos_rect, radius=int(6 * SCALE), fill=theme["badge_bg"], outline=theme["border_mid"] + (160,), width=int(1 * SCALE))
+    draw.rounded_rectangle(pos_rect, radius=int(6 * SCALE), fill=theme["badge_bg"], outline=theme["border_outer"] + (200,), width=int(1.5 * SCALE))
     draw.text((col_x, pos_y + int(3 * SCALE)), position, font=font_pos, fill=theme["text_secondary"], anchor="mt")
 
     # Club Crest
@@ -558,8 +562,8 @@ def generate_ea_fc_card(player_data: dict, theme_name: str = "gold_rare") -> io.
         [(footer_x, footer_y), (footer_x + footer_w, footer_y + footer_h)],
         radius=int(6 * SCALE),
         fill=theme["badge_bg"],
-        outline=theme["border_mid"] + (120,),
-        width=int(1 * SCALE)
+        outline=theme["border_outer"] + (180,),
+        width=int(1.5 * SCALE)
     )
 
     font_footer = load_card_font(11, bold=True)
