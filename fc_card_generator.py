@@ -1,20 +1,21 @@
 """
 fc_card_generator.py
 
-High-performance, retina-grade EA FC / FIFA Ultimate Team (FUT) style card generator using Pillow.
-Renders cards in multiple styles (Gold Rare, TOTW Inform, Icon / Legend, Champions) with:
-- Dynamic Overall Rating (OVR: 75-99)
-- Position, Club Crest, Country/League Flag
-- High-res Player Portrait (with automatic alpha gradient blending)
-- Dynamic 6-Attribute FIFA Grid (PAC, SHO, PAS, DRI, DEF, PHY)
-- Metallic gradients, hexagon facets, and sleek modern typography.
+Ultra-premium, retina-grade EA FC 25 / FIFA Ultimate Team (FUT) style card generator using Pillow.
+Renders broadcast-quality cards (Gold Rare, TOTW Inform, Icon / Legend) with:
+- Authentic 3D beveled FUT shield geometry with corner chamfers and tapered shield base
+- Multi-layer metallic gold borders with specular lighting and ambient drop shadows
+- High-tech carbon-weave & holographic geometric crystal facets
+- Dynamic radial burst spotlight behind player portraits for 3D depth
+- Frosted glass stat plates, athletic typography, and sleek attribute badges
+- 100% deterministic, high-speed Pillow rendering (no external dependencies required).
 """
 
 import os
 import io
 import math
 import logging
-from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageChops
+from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageChops, ImageEnhance
 import database
 from table_generator import get_team_logo_filename, clean_and_prepare_logo
 import player_photos
@@ -23,79 +24,89 @@ logger = logging.getLogger(__name__)
 
 BASE_DIR = os.path.dirname(__file__)
 LOGOS_DIR = os.path.join(BASE_DIR, "assets", "logos")
-ASSETS_DIR = os.path.join(BASE_DIR, "assets")
 
-# Dimensions for base render (Supersampled x2 for Retina broadcast crispness)
+# Scale factor for Retina 2x rendering
 SCALE = 2
 WIDTH_1X = 460
-HEIGHT_1X = 680
+HEIGHT_1X = 690
 
 WIDTH = WIDTH_1X * SCALE
 HEIGHT = HEIGHT_1X * SCALE
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Color Palettes & Card Themes
+# 🎨 Themes & Color Grading
 # ─────────────────────────────────────────────────────────────────────────────
 
 THEMES = {
     "gold_rare": {
-        "bg_top": (42, 33, 14),           # Deep bronze-gold
-        "bg_mid": (28, 22, 10),
-        "bg_bottom": (18, 14, 7),
-        "border_outer": (224, 185, 96),   # Shining gold
-        "border_inner": (148, 115, 45),   # Muted dark gold
-        "accent": (255, 215, 0),          # Bright gold
-        "text_primary": (255, 248, 220),  # Cornsilk gold-white
-        "text_secondary": (212, 175, 55),
-        "text_accent": (255, 223, 128),
-        "divider": (180, 145, 60, 180),
-        "stat_num": (255, 248, 230),
-        "stat_lbl": (212, 185, 120),
+        "bg_top": (46, 36, 16),           # Deep bronze-gold
+        "bg_mid": (24, 18, 8),
+        "bg_bottom": (12, 9, 4),
+        "spotlight": (255, 215, 0, 75),   # Golden glow burst
+        "border_outer": (245, 206, 112),  # Polished bright gold
+        "border_mid": (195, 152, 60),     # Brushed gold
+        "border_inner": (95, 72, 28),     # Dark antique gold
+        "accent": (255, 215, 0),          # Vivid gold
+        "plate_bg": (18, 14, 7, 220),     # Dark frosted glass plate
+        "plate_border": (195, 152, 60, 180),
+        "text_primary": (255, 252, 240),
+        "text_secondary": (245, 206, 112),
+        "stat_val": (255, 255, 255),
+        "stat_lbl": (230, 190, 100),
+        "ribbon_bg": (32, 24, 10, 240),
         "badge_text": "GOLD RARE",
+        "badge_bg": (245, 206, 112, 40),
     },
     "totw": {
-        "bg_top": (24, 24, 28),           # Pitch black / graphite
-        "bg_mid": (14, 14, 16),
-        "bg_bottom": (8, 8, 10),
-        "border_outer": (245, 197, 24),   # Electric neon gold
-        "border_inner": (80, 70, 30),
+        "bg_top": (28, 26, 32),           # Obsidian / Charcoal
+        "bg_mid": (14, 13, 16),
+        "bg_bottom": (7, 6, 8),
+        "spotlight": (255, 200, 30, 80),  # Electric gold spotlight
+        "border_outer": (255, 205, 35),   # Neon electric gold
+        "border_mid": (200, 155, 20),     # Rich gold
+        "border_inner": (65, 52, 18),     # Deep shadow gold
         "accent": (255, 215, 0),
+        "plate_bg": (12, 11, 14, 235),    # Deep carbon plate
+        "plate_border": (255, 205, 35, 190),
         "text_primary": (255, 255, 255),
-        "text_secondary": (245, 197, 24),
-        "text_accent": (245, 197, 24),
-        "divider": (245, 197, 24, 160),
-        "stat_num": (255, 255, 255),
-        "stat_lbl": (245, 197, 24),
+        "text_secondary": (255, 205, 35),
+        "stat_val": (255, 255, 255),
+        "stat_lbl": (255, 205, 35),
+        "ribbon_bg": (18, 16, 20, 245),
         "badge_text": "TEAM OF THE WEEK",
+        "badge_bg": (255, 205, 35, 45),
     },
     "icon": {
-        "bg_top": (240, 238, 230),        # Pearl white / marble
-        "bg_mid": (218, 214, 200),
-        "bg_bottom": (190, 185, 170),
-        "border_outer": (218, 165, 32),   # Goldenrod
-        "border_inner": (160, 130, 60),
-        "accent": (184, 134, 11),
-        "text_primary": (30, 25, 20),
-        "text_secondary": (120, 90, 30),
-        "text_accent": (140, 105, 35),
-        "divider": (184, 134, 11, 150),
-        "stat_num": (30, 25, 20),
-        "stat_lbl": (110, 85, 30),
-        "badge_text": "ICON",
+        "bg_top": (248, 245, 235),        # Pearl marble white
+        "bg_mid": (225, 218, 205),
+        "bg_bottom": (195, 188, 172),
+        "spotlight": (255, 255, 255, 110),# Bright celestial aura
+        "border_outer": (225, 175, 45),   # Royal goldenrod
+        "border_mid": (180, 140, 35),
+        "border_inner": (130, 100, 30),
+        "accent": (180, 135, 25),
+        "plate_bg": (235, 230, 218, 235), # Warm pearl plate
+        "plate_border": (180, 140, 35, 180),
+        "text_primary": (25, 20, 15),
+        "text_secondary": (140, 100, 25),
+        "stat_val": (20, 16, 12),
+        "stat_lbl": (130, 95, 25),
+        "ribbon_bg": (245, 240, 230, 245),
+        "badge_text": "ICON LEGEND",
+        "badge_bg": (180, 140, 35, 40),
     }
 }
 
 
-def load_card_font(size: int, bold: bool = False, condensed: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    """Load appropriate system font for athletic card layout."""
+def load_card_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    """Load high quality system font with size scaling."""
     size_scaled = size * SCALE
-    font_candidates = []
     if bold:
-        font_candidates.extend(["impact.ttf", "arialbd.ttf", "trebucbd.ttf", "DejaVuSans-Bold.ttf", "seguiemj.ttf"])
+        candidates = ["impact.ttf", "arialbd.ttf", "trebucbd.ttf", "DejaVuSans-Bold.ttf", "seguiemj.ttf"]
     else:
-        font_candidates.extend(["arial.ttf", "trebuc.ttf", "DejaVuSans.ttf"])
+        candidates = ["arial.ttf", "trebuc.ttf", "DejaVuSans.ttf"]
 
-    for fn in font_candidates:
+    for fn in candidates:
         try:
             return ImageFont.truetype(fn, size_scaled)
         except (IOError, OSError):
@@ -159,7 +170,6 @@ def calculate_fut_attributes(stats: dict) -> dict:
     else:
         ovr = int((pac + sho + pas + dri + def_stat + phy) / 6.0)
 
-    # Ensure competitive range
     ovr = max(75, min(99, ovr))
 
     return {
@@ -174,61 +184,131 @@ def calculate_fut_attributes(stats: dict) -> dict:
     }
 
 
-def create_fut_card_mask(size: tuple[int, int], radius: int = 36) -> Image.Image:
-    """Create a FUT shield shaped mask with rounded corners and bottom tapered bevel."""
+def get_fut_shield_polygon(size: tuple[int, int], inset: int = 0) -> list[tuple[int, int]]:
+    """
+    Returns authentic EA FC 25 FUT shield polygon vertices with:
+    - Top chamfered corner cuts (45-degree angle)
+    - Straight side edges
+    - Deep double-angled tapered bottom shield point
+    """
     w, h = size
-    mask = Image.new("L", (w, h), 0)
-    draw = ImageDraw.Draw(mask)
+    top_cut = int((30 - inset * 0.5) * SCALE)
+    bot_shoulder = int(h * 0.81)
+    bot_mid_y = int(h * 0.92)
+    bot_mid_x = int((45 - inset * 0.6) * SCALE)
 
-    # Main rounded body
-    draw.rounded_rectangle([(0, 0), (w, int(h * 0.88))], radius=radius * SCALE, fill=255)
+    x1 = inset
+    x2 = w - inset
+    y1 = inset
+    y2 = h - inset
 
-    # Bottom tapered shield point
-    poly_points = [
-        (0, int(h * 0.82)),
-        (w, int(h * 0.82)),
-        (w - int(30 * SCALE), int(h * 0.94)),
-        (int(w * 0.5), h - int(5 * SCALE)),
-        (int(30 * SCALE), int(h * 0.94)),
+    return [
+        (x1 + top_cut, y1),               # Top left chamfer end
+        (x2 - top_cut, y1),               # Top right chamfer start
+        (x2, y1 + top_cut),               # Top right chamfer end
+        (x2, bot_shoulder),               # Right side bottom shoulder
+        (x2 - bot_mid_x, bot_mid_y),      # Right lower taper
+        (w // 2, y2),                     # Bottom center point
+        (x1 + bot_mid_x, bot_mid_y),      # Left lower taper
+        (x1, bot_shoulder),               # Left side bottom shoulder
+        (x1, y1 + top_cut),               # Top left chamfer start
     ]
-    draw.polygon(poly_points, fill=255)
+
+
+def create_fut_shield_mask(size: tuple[int, int], inset: int = 0) -> Image.Image:
+    """Create a crisp binary mask for the FUT shield."""
+    mask = Image.new("L", size, 0)
+    draw = ImageDraw.Draw(mask)
+    poly = get_fut_shield_polygon(size, inset)
+    draw.polygon(poly, fill=255)
     return mask
 
 
-def draw_linear_gradient(draw: ImageDraw.ImageDraw, size: tuple[int, int], top_color: tuple, bot_color: tuple) -> Image.Image:
-    """Generate a vertical linear gradient canvas."""
-    w, h = size
-    base = Image.new("RGBA", (w, h), top_color)
-    top_r, top_g, top_b = top_color[:3]
-    bot_r, bot_g, bot_b = bot_color[:3]
+def draw_radial_spotlight(size: tuple[int, int], center: tuple[int, int], radius: int, color_rgba: tuple) -> Image.Image:
+    """Renders a soft radial glow burst for dramatic depth behind portraits."""
+    img = Image.new("RGBA", size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    cx, cy = center
+    r_max = radius
+    cr, cg, cb, ca = color_rgba
 
-    gradient = Image.new("RGBA", (w, h))
-    g_draw = ImageDraw.Draw(gradient)
-    for y in range(h):
-        ratio = y / max(1, h)
-        r = int(top_r + (bot_r - top_r) * ratio)
-        g = int(top_g + (bot_g - top_g) * ratio)
-        b = int(top_b + (bot_b - top_b) * ratio)
-        g_draw.line([(0, y), (w, y)], fill=(r, g, b, 255))
-    return gradient
+    # Draw concentric soft circles with quadratic falloff
+    steps = 40
+    for i in range(steps, 0, -1):
+        curr_r = int(r_max * (i / steps))
+        factor = 1.0 - (i / steps) ** 1.5
+        alpha = int(ca * factor)
+        draw.ellipse([(cx - curr_r, cy - curr_r), (cx + curr_r, cy + curr_r)], fill=(cr, cg, cb, alpha))
+
+    return img.filter(ImageFilter.GaussianBlur(int(12 * SCALE)))
+
+
+def draw_carbon_and_facets(size: tuple[int, int], theme: dict) -> Image.Image:
+    """Draws high-tech carbon weave and dynamic geometric crystal facets."""
+    w, h = size
+    layer = Image.new("RGBA", size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(layer)
+
+    # 1. Diagonal Carbon Micro-Lines
+    line_step = int(8 * SCALE)
+    line_col = theme["accent"] + (10,)
+    for diag in range(-h, w + h, line_step):
+        draw.line([(diag, 0), (diag + h, h)], fill=line_col, width=int(1.5 * SCALE))
+
+    # 2. Futuristic Geometric Crystal Facets (Triangles / Hexagons)
+    step_y = int(55 * SCALE)
+    step_x = int(65 * SCALE)
+    for row, y in enumerate(range(0, h, step_y)):
+        x_offset = (row % 2) * (step_x // 2)
+        for col, x in enumerate(range(-step_x, w + step_x, step_x)):
+            cx = x + x_offset
+            # Upper Triangle
+            t1 = [(cx, y), (cx + step_x // 2, y - step_y // 2), (cx + step_x, y)]
+            alpha1 = 18 if (row + col) % 3 == 0 else 8
+            draw.polygon(t1, fill=theme["accent"] + (alpha1,))
+
+            # Lower Triangle
+            t2 = [(cx, y), (cx + step_x, y), (cx + step_x // 2, y + step_y // 2)]
+            alpha2 = 14 if (row * 2 + col) % 4 == 0 else 6
+            draw.polygon(t2, fill=theme["accent"] + (alpha2,))
+
+    return layer
+
+
+def draw_metallic_frame(size: tuple[int, int], theme: dict) -> Image.Image:
+    """Draws multi-layered 3D beveled metallic borders with specular corners."""
+    w, h = size
+    layer = Image.new("RGBA", size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(layer)
+
+    # 1. Main outer border (Brushed & Polished Gold)
+    poly_outer = get_fut_shield_polygon(size, inset=int(10 * SCALE))
+    draw.polygon(poly_outer, outline=theme["border_outer"] + (255,), width=int(4 * SCALE))
+
+    # 2. Mid specular highlight line
+    poly_mid = get_fut_shield_polygon(size, inset=int(15 * SCALE))
+    draw.polygon(poly_mid, outline=theme["border_mid"] + (220,), width=int(1.5 * SCALE))
+
+    # 3. Inner shadow bevel
+    poly_inner = get_fut_shield_polygon(size, inset=int(20 * SCALE))
+    draw.polygon(poly_inner, outline=theme["border_inner"] + (180,), width=int(1.5 * SCALE))
+
+    # 4. Specular Corner Bracket Pins
+    pin_len = int(18 * SCALE)
+    pin_col = theme["border_outer"] + (255,)
+    # Top Left Corner Bracket
+    draw.line([(int(28 * SCALE), int(10 * SCALE)), (int(28 * SCALE) + pin_len, int(10 * SCALE))], fill=pin_col, width=int(2.5 * SCALE))
+    draw.line([(int(10 * SCALE), int(28 * SCALE)), (int(10 * SCALE), int(28 * SCALE) + pin_len)], fill=pin_col, width=int(2.5 * SCALE))
+    # Top Right Corner Bracket
+    draw.line([(w - int(28 * SCALE) - pin_len, int(10 * SCALE)), (w - int(28 * SCALE), int(10 * SCALE))], fill=pin_col, width=int(2.5 * SCALE))
+    draw.line([(w - int(10 * SCALE), int(28 * SCALE)), (w - int(10 * SCALE), int(28 * SCALE) + pin_len)], fill=pin_col, width=int(2.5 * SCALE))
+
+    return layer
 
 
 def generate_ea_fc_card(player_data: dict, theme_name: str = "gold_rare") -> io.BytesIO:
     """
-    Generate an EA FC / FUT player card as high-resolution PNG buffer.
-
-    player_data dict:
-    {
-        "player_name": "VINICIUS JR.",
-        "team_name": "Спортинг",
-        "position": "LW",       # optional
-        "ovr": 92,               # optional override
-        "total_goals": 14,
-        "total_assists": 7,
-        "matches_played": 8,
-        "theme": "gold_rare" / "totw" / "icon",
-        "custom_stats": {"PAC": 95, "SHO": 88, ...} # optional override
-    }
+    Generate an authentic broadcast-grade EA FC 25 / FUT player card as high-res PNG.
     """
     theme = THEMES.get(theme_name, THEMES["gold_rare"])
     calc_stats = calculate_fut_attributes(player_data)
@@ -246,119 +326,42 @@ def generate_ea_fc_card(player_data: dict, theme_name: str = "gold_rare") -> io.
     def_stat = custom_stats.get("DEF", calc_stats["def"])
     phy = custom_stats.get("PHY", calc_stats["phy"])
 
-    # 1. Base Canvas
+    # 1. Base Canvas (Transparent RGBA)
     card = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
 
-    # 2. Gradient Background
-    bg_gradient = draw_linear_gradient(
-        ImageDraw.Draw(card),
-        (WIDTH, HEIGHT),
-        theme["bg_top"],
-        theme["bg_bottom"]
-    )
+    # 2. Gradient Background Canvas
+    bg_gradient = Image.new("RGBA", (WIDTH, HEIGHT))
+    bg_draw = ImageDraw.Draw(bg_gradient)
+    top_r, top_g, top_b = theme["bg_top"]
+    bot_r, bot_g, bot_b = theme["bg_bottom"]
 
-    # 3. Add subtle hexagonal/facet texture pattern on background
-    facet_overlay = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
-    f_draw = ImageDraw.Draw(facet_overlay)
-    step_y = int(45 * SCALE)
-    for row, y in enumerate(range(0, HEIGHT, step_y)):
-        offset_x = int((row % 2) * 35 * SCALE)
-        for x in range(-offset_x, WIDTH + int(50 * SCALE), int(70 * SCALE)):
-            poly = [
-                (x, y),
-                (x + int(25 * SCALE), y - int(12 * SCALE)),
-                (x + int(50 * SCALE), y),
-                (x + int(50 * SCALE), y + int(25 * SCALE)),
-                (x + int(25 * SCALE), y + int(37 * SCALE)),
-                (x, y + int(25 * SCALE)),
-            ]
-            fill_alpha = 15 if (x + y) % 3 == 0 else 7
-            accent_col = theme["accent"] + (fill_alpha,)
-            f_draw.polygon(poly, fill=accent_col)
+    for y in range(HEIGHT):
+        ratio = y / max(1, HEIGHT)
+        r = int(top_r + (bot_r - top_r) * ratio)
+        g = int(top_g + (bot_g - top_g) * ratio)
+        b = int(top_b + (bot_b - top_b) * ratio)
+        bg_draw.line([(0, y), (WIDTH, y)], fill=(r, g, b, 255))
 
-    bg_combined = Image.alpha_composite(bg_gradient, facet_overlay)
+    # 3. Add Dynamic Radial Burst Glow behind player (depth & illumination)
+    spotlight_x = int(WIDTH * 0.62)
+    spotlight_y = int(HEIGHT * 0.32)
+    spotlight = draw_radial_spotlight((WIDTH, HEIGHT), (spotlight_x, spotlight_y), int(190 * SCALE), theme["spotlight"])
+    bg_gradient = Image.alpha_composite(bg_gradient, spotlight)
 
-    # Mask background into FUT Shield
-    card_mask = create_fut_card_mask((WIDTH, HEIGHT), radius=32)
-    card.paste(bg_combined, (0, 0), card_mask)
+    # 4. Add Carbon Weave & Crystal Facets
+    facets = draw_carbon_and_facets((WIDTH, HEIGHT), theme)
+    bg_gradient = Image.alpha_composite(bg_gradient, facets)
 
-    # 4. Outer & Inner Glowing Shield Borders
-    border_layer = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
-    b_draw = ImageDraw.Draw(border_layer)
+    # 5. Mask Background to FUT Shield Shape
+    shield_mask = create_fut_shield_mask((WIDTH, HEIGHT), inset=0)
+    card.paste(bg_gradient, (0, 0), shield_mask)
 
-    # Outer border
-    outer_poly = [
-        (int(14 * SCALE), int(14 * SCALE)),
-        (WIDTH - int(14 * SCALE), int(14 * SCALE)),
-        (WIDTH - int(14 * SCALE), int(HEIGHT * 0.82)),
-        (WIDTH - int(38 * SCALE), int(HEIGHT * 0.93)),
-        (int(WIDTH * 0.5), HEIGHT - int(16 * SCALE)),
-        (int(38 * SCALE), int(HEIGHT * 0.93)),
-        (int(14 * SCALE), int(HEIGHT * 0.82)),
-    ]
-    b_draw.polygon(outer_poly, outline=theme["border_outer"] + (255,), width=int(3.5 * SCALE))
+    # 6. Player Photo Rendering with Dynamic Drop Shadow & Smooth Base Fade
+    photo_box_w = int(285 * SCALE)
+    photo_box_h = int(295 * SCALE)
+    photo_x = int(140 * SCALE)
+    photo_y = int(42 * SCALE)
 
-    # Inner decorative border
-    inner_poly = [
-        (int(22 * SCALE), int(22 * SCALE)),
-        (WIDTH - int(22 * SCALE), int(22 * SCALE)),
-        (WIDTH - int(22 * SCALE), int(HEIGHT * 0.81)),
-        (WIDTH - int(44 * SCALE), int(HEIGHT * 0.92)),
-        (int(WIDTH * 0.5), HEIGHT - int(25 * SCALE)),
-        (int(44 * SCALE), int(HEIGHT * 0.92)),
-        (int(22 * SCALE), int(HEIGHT * 0.81)),
-    ]
-    b_draw.polygon(inner_poly, outline=theme["border_inner"] + (180,), width=int(1.5 * SCALE))
-
-    card = Image.alpha_composite(card, border_layer)
-    draw = ImageDraw.Draw(card)
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # 5. Top Left Column: OVR, Position, Club Logo, Badge
-    # ─────────────────────────────────────────────────────────────────────────
-    font_ovr = load_card_font(48, bold=True)
-    font_pos = load_card_font(20, bold=True)
-
-    col_x = int(58 * SCALE)
-    ovr_y = int(52 * SCALE)
-
-    # Draw OVR
-    ovr_str = str(ovr)
-    draw.text((col_x, ovr_y), ovr_str, font=font_ovr, fill=theme["text_primary"], anchor="mt")
-
-    # Draw Position
-    pos_y = ovr_y + int(52 * SCALE)
-    draw.text((col_x, pos_y), position, font=font_pos, fill=theme["text_secondary"], anchor="mt")
-
-    # Divider bar below pos
-    div_y = pos_y + int(28 * SCALE)
-    draw.line([(col_x - int(18 * SCALE), div_y), (col_x + int(18 * SCALE), div_y)], fill=theme["border_outer"] + (200,), width=int(2 * SCALE))
-
-    # Club Logo
-    logo_fn = get_team_logo_filename(team_name)
-    if logo_fn:
-        logo_path = os.path.join(LOGOS_DIR, logo_fn)
-        if os.path.exists(logo_path):
-            try:
-                logo_img = Image.open(logo_path)
-                logo_img = clean_and_prepare_logo(logo_img)
-                logo_size = int(46 * SCALE)
-                logo_img.thumbnail((logo_size, logo_size), Image.Resampling.LANCZOS)
-                logo_x = col_x - (logo_img.width // 2)
-                logo_y = div_y + int(16 * SCALE)
-                card.paste(logo_img, (logo_x, logo_y), logo_img)
-            except Exception as e:
-                logger.warning(f"Error loading club logo {logo_fn}: {e}")
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # 6. Player Photo (Center / Right with smooth alpha fade)
-    # ─────────────────────────────────────────────────────────────────────────
-    photo_box_w = int(270 * SCALE)
-    photo_box_h = int(270 * SCALE)
-    photo_x = int(145 * SCALE)
-    photo_y = int(45 * SCALE)
-
-    # Try fetching / loading player photo
     player_img = None
     try:
         photo_path = player_photos.get_player_photo(player_name, team_name)
@@ -369,25 +372,33 @@ def generate_ea_fc_card(player_data: dict, theme_name: str = "gold_rare") -> io.
 
     if player_img:
         try:
-            # Resize preserving aspect ratio to fill photo area
+            # Resize with Lanczos filtering
             player_img.thumbnail((photo_box_w, photo_box_h), Image.Resampling.LANCZOS)
             pw, ph = player_img.size
 
-            # Create vertical alpha gradient mask to fade the bottom of the photo smoothly into the card
-            fade_mask = Image.new("L", (pw, ph), 255)
-            f_mask_draw = ImageDraw.Draw(fade_mask)
-            fade_start_y = int(ph * 0.65)
-            for fy in range(fade_start_y, ph):
-                fade_ratio = (fy - fade_start_y) / max(1, (ph - fade_start_y))
-                alpha_val = int(255 * (1.0 - (fade_ratio ** 1.5)))
-                f_mask_draw.line([(0, fy), (pw, fy)], fill=alpha_val)
-
-            # Combine with existing image alpha if any
-            if "A" in player_img.getbands():
-                fade_mask = ImageChops.multiply(player_img.split()[3], fade_mask)
+            # Soft drop shadow behind player
+            shadow = Image.new("RGBA", (pw + int(20 * SCALE), ph + int(20 * SCALE)), (0, 0, 0, 0))
+            shadow_mask = player_img.split()[3] if "A" in player_img.getbands() else Image.new("L", (pw, ph), 255)
+            shadow_fill = Image.new("RGBA", (pw, ph), (0, 0, 0, 160))
+            shadow.paste(shadow_fill, (int(8 * SCALE), int(8 * SCALE)), shadow_mask)
+            shadow = shadow.filter(ImageFilter.GaussianBlur(int(7 * SCALE)))
 
             px = photo_x + (photo_box_w - pw) // 2
             py = photo_y + (photo_box_h - ph)
+            card.paste(shadow, (px - int(4 * SCALE), py - int(4 * SCALE)), shadow)
+
+            # Smooth vertical gradient alpha fade at the torso baseline
+            fade_mask = Image.new("L", (pw, ph), 255)
+            f_mask_draw = ImageDraw.Draw(fade_mask)
+            fade_start_y = int(ph * 0.62)
+            for fy in range(fade_start_y, ph):
+                fade_ratio = (fy - fade_start_y) / max(1, (ph - fade_start_y))
+                alpha_val = int(255 * (1.0 - (fade_ratio ** 1.6)))
+                f_mask_draw.line([(0, fy), (pw, fy)], fill=alpha_val)
+
+            if "A" in player_img.getbands():
+                fade_mask = ImageChops.multiply(player_img.split()[3], fade_mask)
+
             card.paste(player_img, (px, py), fade_mask)
         except Exception as e:
             logger.warning(f"Error drawing player photo: {e}")
@@ -396,88 +407,166 @@ def generate_ea_fc_card(player_data: dict, theme_name: str = "gold_rare") -> io.
         sil_layer = Image.new("RGBA", (photo_box_w, photo_box_h), (0, 0, 0, 0))
         sil_draw = ImageDraw.Draw(sil_layer)
         sc_x = photo_box_w // 2
-        # Head
-        head_r = int(32 * SCALE)
-        sil_draw.ellipse([(sc_x - head_r, int(20 * SCALE)), (sc_x + head_r, int(20 * SCALE) + 2 * head_r)], fill=theme["border_outer"] + (60,))
-        # Shoulders / Torso
+        head_r = int(34 * SCALE)
+        sil_draw.ellipse([(sc_x - head_r, int(22 * SCALE)), (sc_x + head_r, int(22 * SCALE) + 2 * head_r)], fill=theme["border_outer"] + (65,))
         torso_poly = [
-            (sc_x - int(75 * SCALE), photo_box_h),
-            (sc_x - int(55 * SCALE), int(95 * SCALE)),
-            (sc_x + int(55 * SCALE), int(95 * SCALE)),
-            (sc_x + int(75 * SCALE), photo_box_h),
+            (sc_x - int(80 * SCALE), photo_box_h),
+            (sc_x - int(60 * SCALE), int(100 * SCALE)),
+            (sc_x + int(60 * SCALE), int(100 * SCALE)),
+            (sc_x + int(80 * SCALE), photo_box_h),
         ]
-        sil_draw.polygon(torso_poly, fill=theme["border_outer"] + (50,))
+        sil_draw.polygon(torso_poly, fill=theme["border_outer"] + (55,))
         card.paste(sil_layer, (photo_x, photo_y), sil_layer)
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # 7. Player Name Banner & Divider Ribbon
-    # ─────────────────────────────────────────────────────────────────────────
-    name_banner_y = int(330 * SCALE)
+    # 7. Frosted Glass Stat Plate for bottom half
+    plate_w = int(390 * SCALE)
+    plate_h = int(230 * SCALE)
+    plate_x = (WIDTH - plate_w) // 2
+    plate_y = int(345 * SCALE)
 
-    # Golden ribbon separator
-    ribbon_w = int(380 * SCALE)
-    rx1 = (WIDTH - ribbon_w) // 2
-    rx2 = rx1 + ribbon_w
-    draw.line([(rx1, name_banner_y), (rx2, name_banner_y)], fill=theme["divider"], width=int(2.5 * SCALE))
+    plate = Image.new("RGBA", (plate_w, plate_h), (0, 0, 0, 0))
+    p_draw = ImageDraw.Draw(plate)
+    p_draw.rounded_rectangle(
+        [(0, 0), (plate_w, plate_h)],
+        radius=int(18 * SCALE),
+        fill=theme["plate_bg"],
+        outline=theme["plate_border"],
+        width=int(1.5 * SCALE)
+    )
+    card.paste(plate, (plate_x, plate_y), plate)
 
-    # Player Name Text (dynamic font scaling to avoid overflow)
-    name_font_size = 28
-    if len(player_name) > 14:
-        name_font_size = 22
-    if len(player_name) > 20:
-        name_font_size = 18
-
-    font_name = load_card_font(name_font_size, bold=True)
-    draw.text((WIDTH // 2, name_banner_y + int(10 * SCALE)), player_name, font=font_name, fill=theme["text_primary"], anchor="mt")
-
-    # Lower separator below name
-    name_bottom_y = name_banner_y + int(48 * SCALE)
-    draw.line([(rx1 + int(40 * SCALE), name_bottom_y), (rx2 - int(40 * SCALE), name_bottom_y)], fill=theme["divider"], width=int(1.5 * SCALE))
+    # 8. Metallic Frame Overlay (Borders, Specular Pins)
+    frame = draw_metallic_frame((WIDTH, HEIGHT), theme)
+    card = Image.alpha_composite(card, frame)
+    draw = ImageDraw.Draw(card)
 
     # ─────────────────────────────────────────────────────────────────────────
-    # 8. 6-Attribute FIFA Grid (PAC, SHO, PAS, DRI, DEF, PHY)
+    # 9. Top-Left Column: OVR Rating, Position Badge, Club Crest
     # ─────────────────────────────────────────────────────────────────────────
-    font_stat_val = load_card_font(23, bold=True)
+    font_ovr = load_card_font(52, bold=True)
+    font_pos = load_card_font(21, bold=True)
+
+    col_x = int(62 * SCALE)
+    ovr_y = int(52 * SCALE)
+
+    # OVR with subtle 3D drop shadow
+    ovr_str = str(ovr)
+    draw.text((col_x + int(2 * SCALE), ovr_y + int(2 * SCALE)), ovr_str, font=font_ovr, fill=(0, 0, 0, 180), anchor="mt")
+    draw.text((col_x, ovr_y), ovr_str, font=font_ovr, fill=theme["text_primary"], anchor="mt")
+
+    # Position Tag (with sleek frosted pill backing)
+    pos_y = ovr_y + int(56 * SCALE)
+    pos_w = int(50 * SCALE)
+    pos_h = int(26 * SCALE)
+    pos_rect = [(col_x - pos_w // 2, pos_y), (col_x + pos_w // 2, pos_y + pos_h)]
+    draw.rounded_rectangle(pos_rect, radius=int(6 * SCALE), fill=theme["badge_bg"], outline=theme["border_mid"] + (160,), width=int(1 * SCALE))
+    draw.text((col_x, pos_y + int(3 * SCALE)), position, font=font_pos, fill=theme["text_secondary"], anchor="mt")
+
+    # Club Crest
+    crest_y = pos_y + int(38 * SCALE)
+    logo_fn = get_team_logo_filename(team_name)
+    if logo_fn:
+        logo_path = os.path.join(LOGOS_DIR, logo_fn)
+        if os.path.exists(logo_path):
+            try:
+                logo_img = Image.open(logo_path)
+                logo_img = clean_and_prepare_logo(logo_img)
+                logo_size = int(50 * SCALE)
+                logo_img.thumbnail((logo_size, logo_size), Image.Resampling.LANCZOS)
+                lx = col_x - (logo_img.width // 2)
+                ly = crest_y
+                card.paste(logo_img, (lx, ly), logo_img)
+            except Exception as e:
+                logger.warning(f"Error rendering crest: {e}")
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # 10. Player Name Ribbon
+    # ─────────────────────────────────────────────────────────────────────────
+    ribbon_w = int(360 * SCALE)
+    ribbon_h = int(42 * SCALE)
+    ribbon_x = (WIDTH - ribbon_w) // 2
+    ribbon_y = int(355 * SCALE)
+
+    # Frosted Ribbon Bar
+    draw.rounded_rectangle(
+        [(ribbon_x, ribbon_y), (ribbon_x + ribbon_w, ribbon_y + ribbon_h)],
+        radius=int(10 * SCALE),
+        fill=theme["ribbon_bg"],
+        outline=theme["border_outer"] + (180,),
+        width=int(1.5 * SCALE)
+    )
+
+    # Player Name Font scaling
+    name_size = 26
+    if len(player_name) > 13:
+        name_size = 21
+    if len(player_name) > 18:
+        name_size = 17
+
+    font_name = load_card_font(name_size, bold=True)
+    draw.text((WIDTH // 2, ribbon_y + int(7 * SCALE)), player_name, font=font_name, fill=theme["text_primary"], anchor="mt")
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # 11. 6-Attribute FIFA Grid (PAC, SHO, PAS | DRI, DEF, PHY)
+    # ─────────────────────────────────────────────────────────────────────────
+    font_stat_val = load_card_font(25, bold=True)
     font_stat_name = load_card_font(18, bold=True)
 
-    grid_y_start = name_bottom_y + int(20 * SCALE)
+    grid_y_start = ribbon_y + ribbon_h + int(16 * SCALE)
     row_height = int(38 * SCALE)
 
-    # Left Column (PAC, SHO, PAS) | Right Column (DRI, DEF, PHY)
-    left_col_x = int(88 * SCALE)
-    right_col_x = int(250 * SCALE)
+    left_col_val_x = plate_x + int(42 * SCALE)
+    left_col_lbl_x = plate_x + int(88 * SCALE)
+
+    right_col_val_x = plate_x + int(218 * SCALE)
+    right_col_lbl_x = plate_x + int(264 * SCALE)
+
+    # Center Vertical Separator
+    sep_x = WIDTH // 2
+    draw.line(
+        [(sep_x, grid_y_start - int(4 * SCALE)), (sep_x, grid_y_start + int(112 * SCALE))],
+        fill=theme["border_mid"] + (140,),
+        width=int(1.5 * SCALE)
+    )
 
     stats_matrix = [
-        # (left_val, left_label, right_val, right_label)
         (pac, "PAC", dri, "DRI"),
         (sho, "SHO", def_stat, "DEF"),
         (pas, "PAS", phy, "PHY"),
     ]
 
     for idx, (l_val, l_lbl, r_val, r_lbl) in enumerate(stats_matrix):
-        current_y = grid_y_start + idx * row_height
+        cur_y = grid_y_start + idx * row_height
 
-        # Left Stat
-        draw.text((left_col_x, current_y), f"{l_val:>2}", font=font_stat_val, fill=theme["stat_num"], anchor="lt")
-        draw.text((left_col_x + int(42 * SCALE), current_y + int(3 * SCALE)), l_lbl, font=font_stat_name, fill=theme["stat_lbl"], anchor="lt")
+        # Left stat
+        draw.text((left_col_val_x, cur_y), f"{l_val:>2}", font=font_stat_val, fill=theme["stat_val"], anchor="lt")
+        draw.text((left_col_lbl_x, cur_y + int(4 * SCALE)), l_lbl, font=font_stat_name, fill=theme["stat_lbl"], anchor="lt")
 
-        # Vertical separator line in center
-        sep_x = WIDTH // 2
-        draw.line([(sep_x, grid_y_start - int(5 * SCALE)), (sep_x, grid_y_start + int(105 * SCALE))], fill=theme["border_inner"] + (130,), width=int(1.5 * SCALE))
-
-        # Right Stat
-        draw.text((right_col_x, current_y), f"{r_val:>2}", font=font_stat_val, fill=theme["stat_num"], anchor="lt")
-        draw.text((right_col_x + int(42 * SCALE), current_y + int(3 * SCALE)), r_lbl, font=font_stat_name, fill=theme["stat_lbl"], anchor="lt")
+        # Right stat
+        draw.text((right_col_val_x, cur_y), f"{r_val:>2}", font=font_stat_val, fill=theme["stat_val"], anchor="lt")
+        draw.text((right_col_lbl_x, cur_y + int(4 * SCALE)), r_lbl, font=font_stat_name, fill=theme["stat_lbl"], anchor="lt")
 
     # ─────────────────────────────────────────────────────────────────────────
-    # 9. Bottom Footer Badge / Shield Crest
+    # 12. Bottom Tournament Footer Badge
     # ─────────────────────────────────────────────────────────────────────────
-    footer_y = HEIGHT - int(80 * SCALE)
-    font_footer = load_card_font(12, bold=True)
+    footer_w = int(280 * SCALE)
+    footer_h = int(24 * SCALE)
+    footer_x = (WIDTH - footer_w) // 2
+    footer_y = HEIGHT - int(82 * SCALE)
+
+    draw.rounded_rectangle(
+        [(footer_x, footer_y), (footer_x + footer_w, footer_y + footer_h)],
+        radius=int(6 * SCALE),
+        fill=theme["badge_bg"],
+        outline=theme["border_mid"] + (120,),
+        width=int(1 * SCALE)
+    )
+
+    font_footer = load_card_font(11, bold=True)
     badge_label = f"★ {theme['badge_text']} • КПЛ 2026 ★"
-    draw.text((WIDTH // 2, footer_y), badge_label, font=font_footer, fill=theme["text_secondary"], anchor="mt")
+    draw.text((WIDTH // 2, footer_y + int(4 * SCALE)), badge_label, font=font_footer, fill=theme["text_secondary"], anchor="mt")
 
-    # 10. Output buffer
+    # 13. Output PNG Buffer
     buf = io.BytesIO()
     card.save(buf, format="PNG", optimize=True)
     buf.seek(0)
