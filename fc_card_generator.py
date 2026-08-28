@@ -345,10 +345,10 @@ def generate_ea_fc_card(player_data: dict, theme_name: str = "gold_rare") -> io.
         b = int(top_b + (bot_b - top_b) * ratio)
         bg_draw.line([(0, y), (WIDTH, y)], fill=(r, g, b, 255))
 
-    # 3. Add Dynamic Radial Burst Glow behind player (depth & illumination)
-    spotlight_x = int(WIDTH * 0.54)
+    # 3. Add Dynamic Radial Burst Glow behind player (depth & illumination in true center)
+    spotlight_x = WIDTH // 2
     spotlight_y = int(HEIGHT * 0.25)
-    spotlight = draw_radial_spotlight((WIDTH, HEIGHT), (spotlight_x, spotlight_y), int(230 * SCALE), theme["spotlight"])
+    spotlight = draw_radial_spotlight((WIDTH, HEIGHT), (spotlight_x, spotlight_y), int(240 * SCALE), theme["spotlight"])
     bg_gradient = Image.alpha_composite(bg_gradient, spotlight)
 
     # 4. Add Carbon Weave & Crystal Facets
@@ -360,11 +360,10 @@ def generate_ea_fc_card(player_data: dict, theme_name: str = "gold_rare") -> io.
     card.paste(bg_gradient, (0, 0), shield_mask)
 
     # 6. Player Photo Rendering with Dynamic Drop Shadow & Smooth Base Fade
-    # Scaled up for majestic presence and centered across the card
-    photo_box_w = int(350 * SCALE)
+    # Centered directly in the middle of the card with enlarged scale
+    photo_box_w = int(380 * SCALE)
     photo_box_h = int(350 * SCALE)
-    photo_x = int(75 * SCALE)
-    photo_y = int(18 * SCALE)
+    photo_top_y = int(16 * SCALE)
 
     player_img = None
     try:
@@ -387,8 +386,9 @@ def generate_ea_fc_card(player_data: dict, theme_name: str = "gold_rare") -> io.
             shadow.paste(shadow_fill, (int(10 * SCALE), int(10 * SCALE)), shadow_mask)
             shadow = shadow.filter(ImageFilter.GaussianBlur(int(8 * SCALE)))
 
-            px = photo_x + (photo_box_w - pw) // 2
-            py = photo_y + (photo_box_h - ph)
+            # Exactly centered horizontally on the entire card width
+            px = (WIDTH - pw) // 2
+            py = photo_top_y + (photo_box_h - ph)
             card.paste(shadow, (px - int(4 * SCALE), py - int(4 * SCALE)), shadow)
 
             # Smooth vertical gradient alpha fade at the torso baseline
@@ -407,20 +407,20 @@ def generate_ea_fc_card(player_data: dict, theme_name: str = "gold_rare") -> io.
         except Exception as e:
             logger.warning(f"Error drawing player photo: {e}")
     else:
-        # High quality geometric athlete silhouette placeholder
-        sil_layer = Image.new("RGBA", (photo_box_w, photo_box_h), (0, 0, 0, 0))
+        # High quality geometric athlete silhouette placeholder in exact center
+        sil_layer = Image.new("RGBA", (WIDTH, photo_box_h), (0, 0, 0, 0))
         sil_draw = ImageDraw.Draw(sil_layer)
-        sc_x = photo_box_w // 2
-        head_r = int(42 * SCALE)
-        sil_draw.ellipse([(sc_x - head_r, int(22 * SCALE)), (sc_x + head_r, int(22 * SCALE) + 2 * head_r)], fill=theme["border_outer"] + (65,))
+        sc_x = WIDTH // 2
+        head_r = int(44 * SCALE)
+        sil_draw.ellipse([(sc_x - head_r, int(20 * SCALE)), (sc_x + head_r, int(20 * SCALE) + 2 * head_r)], fill=theme["border_outer"] + (65,))
         torso_poly = [
-            (sc_x - int(100 * SCALE), photo_box_h),
-            (sc_x - int(75 * SCALE), int(115 * SCALE)),
-            (sc_x + int(75 * SCALE), int(115 * SCALE)),
-            (sc_x + int(100 * SCALE), photo_box_h),
+            (sc_x - int(105 * SCALE), photo_box_h),
+            (sc_x - int(80 * SCALE), int(115 * SCALE)),
+            (sc_x + int(80 * SCALE), int(115 * SCALE)),
+            (sc_x + int(105 * SCALE), photo_box_h),
         ]
         sil_draw.polygon(torso_poly, fill=theme["border_outer"] + (55,))
-        card.paste(sil_layer, (photo_x, photo_y), sil_layer)
+        card.paste(sil_layer, (0, photo_top_y), sil_layer)
 
     # 7. Frosted Glass Stat Plate for bottom half
     plate_w = int(390 * SCALE)
