@@ -349,29 +349,36 @@ def render_master_static_card(player_data: dict, style_id: str = "toty_gold") ->
         draw.polygon(poly, outline=cfg["border_primary"], width=int(4.5 * SCALE))
         draw.polygon(poly, outline=cfg["border_secondary"] + (180,), width=int(1.5 * SCALE))
 
-    # 4. Large Player Cutout (Dominant & Centered)
-    photo_w = int(390 * SCALE)
-    photo_h = int(370 * SCALE)
+    # 4. Large & Heroic Player Cutout (Dominant 500px scale with 3D Rim Glow)
+    photo_w = int(480 * SCALE)
+    photo_h = int(440 * SCALE)
     player_img = _get_player_photo_image(player_name, team_name)
 
     if player_img:
         player_img.thumbnail((photo_w, photo_h), Image.Resampling.LANCZOS)
         pw, ph = player_img.size
 
-        # Soft shadow
-        shadow = Image.new("RGBA", (pw + int(24 * SCALE), ph + int(24 * SCALE)), (0, 0, 0, 0))
+        # 4a. Ambient Rim Glow behind player
+        glow = Image.new("RGBA", (pw + int(36 * SCALE), ph + int(36 * SCALE)), (0, 0, 0, 0))
         s_mask = player_img.split()[3] if "A" in player_img.getbands() else Image.new("L", (pw, ph), 255)
-        shadow.paste(Image.new("RGBA", (pw, ph), (0, 0, 0, 190)), (int(10 * SCALE), int(10 * SCALE)), s_mask)
-        shadow = shadow.filter(ImageFilter.GaussianBlur(int(9 * SCALE)))
+        glow.paste(Image.new("RGBA", (pw, ph), cfg["glow_rgb"] + (95,)), (int(18 * SCALE), int(18 * SCALE)), s_mask)
+        glow = glow.filter(ImageFilter.GaussianBlur(int(14 * SCALE)))
+
+        # 4b. Deep drop shadow
+        shadow = Image.new("RGBA", (pw + int(24 * SCALE), ph + int(24 * SCALE)), (0, 0, 0, 0))
+        shadow.paste(Image.new("RGBA", (pw, ph), (0, 0, 0, 210)), (int(10 * SCALE), int(10 * SCALE)), s_mask)
+        shadow = shadow.filter(ImageFilter.GaussianBlur(int(10 * SCALE)))
 
         px = (WIDTH - pw) // 2
-        py = inset + int(12 * SCALE) + (photo_h - ph)
+        py = inset + int(6 * SCALE) + max(0, int(ph * 0.05))
+
+        img.paste(glow, (px - int(18 * SCALE), py - int(18 * SCALE)), glow)
         img.paste(shadow, (px - int(4 * SCALE), py - int(4 * SCALE)), shadow)
 
         # Smooth baseline alpha fade
         fade = Image.new("L", (pw, ph), 255)
         f_draw = ImageDraw.Draw(fade)
-        f_start = int(ph * 0.72)
+        f_start = int(ph * 0.74)
         for y in range(f_start, ph):
             val = int(255 * (1.0 - ((y - f_start) / (ph - f_start)) ** 1.6))
             f_draw.line([(0, y), (pw, y)], fill=val)
@@ -702,16 +709,29 @@ def generate_animated_ea_fc_card(player_data: dict, anim_style: str = "toty_gold
         frame = Image.alpha_composite(frame, fx_layer)
         frames.append(frame.convert("RGB"))
 
+    # Master Color Palette generation (Eliminates dithering grain, color banding, and jitter)
+    sample_h = anim_h * min(4, len(frames))
+    sample_img = Image.new("RGB", (anim_w, sample_h))
+    step = len(frames) // min(4, len(frames))
+    for i in range(min(4, len(frames))):
+        sample_img.paste(frames[i * step], (0, i * anim_h))
+
+    global_palette = sample_img.quantize(colors=256, method=Image.Quantize.MAXCOVERAGE)
+    quantized_frames = [
+        f.quantize(palette=global_palette, dither=Image.Dither.NONE)
+        for f in frames
+    ]
+
     buf = io.BytesIO()
     buf.name = f"{style_id}.gif"
-    frames[0].save(
+    quantized_frames[0].save(
         buf,
         format="GIF",
         save_all=True,
-        append_images=frames[1:],
+        append_images=quantized_frames[1:],
         duration=frame_duration_ms,
         loop=0,
-        optimize=True
+        disposal=2
     )
     buf.seek(0)
     return buf
