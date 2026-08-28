@@ -1,9 +1,8 @@
 """
 sandbox/preview_fc_card.py
 
-Standalone offline sandbox script to test and preview EA FC card generation:
-- 3 Distinct Static Card Designs (PNG)
-- 3 Distinct Animated Dynamic Card Styles (GIF)
+Standalone offline preview runner to render and benchmark ALL 10 MOTION DESIGN STYLES.
+Generates high-res PNG and animated GIF for all 10 styles into sandbox/output/.
 """
 
 import os
@@ -13,13 +12,13 @@ import time
 # Add project root to sys.path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from fc_card_generator import generate_ea_fc_card, generate_animated_ea_fc_card
+from fc_card_generator import CARD_STYLES, generate_ea_fc_card, generate_animated_ea_fc_card
 
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 def run_tests():
-    print("🧪 Rendering Static & Animated Card Previews...")
+    print("🧪 RENDERING ALL 10 ULTIMATE MOTION DESIGN CARD STYLES...")
 
     test_player = {
         "player_name": "ROONY BARDGHJI",
@@ -39,38 +38,33 @@ def run_tests():
         }
     }
 
-    # 1. Static Designs
-    print("\n--- 🖼️ STATIC DESIGNS ---")
-    for name, theme in [
-        ("design_1_cyber.png", "design_1"),
-        ("design_2_fut_shield.png", "design_2"),
-        ("design_3_luxury_poster.png", "design_3"),
-    ]:
-        buf = generate_ea_fc_card(test_player, theme_name=theme)
-        out_path = os.path.join(OUTPUT_DIR, name)
-        with open(out_path, "wb") as f:
-            f.write(buf.getvalue())
-        print(f"✅ Generated Static [{theme}]: {out_path}")
+    total_t0 = time.time()
 
-    # 2. Animated Looping Cards (GIF)
-    print("\n--- 🎬 ANIMATED DYNAMIC CARDS ---")
-    anim_styles = [
-        ("anim_1_holo_shimmer.gif", "holo_shimmer", "1. Голографический блик (Holo Shimmer)"),
-        ("anim_2_golden_sparks.gif", "golden_sparks", "2. Парящие золотые искры (Golden Sparks)"),
-        ("anim_3_cyber_pulse.gif", "cyber_pulse", "3. Неоновый кибер-пульс (Cyber Pulse)"),
-    ]
+    for idx, (style_id, cfg) in enumerate(CARD_STYLES.items(), 1):
+        print(f"\n[{idx}/10] 🎨 Rendering Style: {cfg['title']} ({style_id})")
 
-    for filename, style_id, desc in anim_styles:
+        # 1. Static PNG
         t0 = time.time()
-        buf = generate_animated_ea_fc_card(test_player, anim_style=style_id)
-        elapsed = time.time() - t0
-        out_path = os.path.join(OUTPUT_DIR, filename)
-        with open(out_path, "wb") as f:
-            f.write(buf.getvalue())
-        sz_kb = len(buf.getvalue()) / 1024.0
-        print(f"✅ Generated Animated [{desc}]: {out_path} ({sz_kb:.1f} KB in {elapsed:.2f}s)")
+        buf_png = generate_ea_fc_card(test_player, theme_name=style_id)
+        t_png = time.time() - t0
+        png_path = os.path.join(OUTPUT_DIR, f"{idx:02d}_{style_id}_static.png")
+        with open(png_path, "wb") as f:
+            f.write(buf_png.getvalue())
+        sz_png = len(buf_png.getvalue()) / 1024.0
+        print(f"  └─ 🖼️ PNG: {sz_png:.1f} KB in {t_png:.2f}s -> {png_path}")
 
-    print("\n🎉 All static and animated preview cards rendered successfully!")
+        # 2. Animated GIF (20 FPS seamless loop)
+        t0 = time.time()
+        buf_gif = generate_animated_ea_fc_card(test_player, anim_style=style_id)
+        t_gif = time.time() - t0
+        gif_path = os.path.join(OUTPUT_DIR, f"{idx:02d}_{style_id}_animated.gif")
+        with open(gif_path, "wb") as f:
+            f.write(buf_gif.getvalue())
+        sz_gif = len(buf_gif.getvalue()) / 1024.0
+        print(f"  └─ 🎬 GIF: {sz_gif:.1f} KB in {t_gif:.2f}s -> {gif_path}")
+
+    total_elapsed = time.time() - total_t0
+    print(f"\n🎉 ALL 10 STYLES RENDERED SUCCESSFULLY IN {total_elapsed:.2f}s!")
 
 if __name__ == "__main__":
     run_tests()

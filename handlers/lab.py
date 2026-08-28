@@ -147,28 +147,48 @@ async def cb_lab_toggle_flag(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 @admin_only
 async def cb_lab_card_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Card test menu with 3 fundamentally distinct design concepts."""
+    """Card test menu with all 10 distinct design concepts."""
     query = update.callback_query
     if not query:
         return
     await query.answer()
 
     text = (
-        "🃏 <b>Сравнение 3 концептов дизайна карточек</b>\n\n"
-        "Выберите дизайн для генерации превью:\n\n"
-        "1. ⚡ <b>Концепт 1: Cyber Hybrid (Modern Broadcast)</b>\n"
-        "   • Неоново-бирюзовый/золотой кибер-стиль, вертикальный HUD-рейтинг, прогресс-бары стат.\n\n"
-        "2. 👑 <b>Концепт 2: EA FC 25 (Authentic FUT Shield)</b>\n"
-        "   • Классическая форма золотого щита FIFA 25, 3D фаски, центрированный игрок, классическая сетка 2x3.\n\n"
-        "3. 💎 <b>Концепт 3: Obsidian Luxury (VIP Editorial Poster)</b>\n"
-        "   • Премиальный черный оникс с двойной золотой окантовкой, эмблема [95 • CAM], 6 капсул 3x2.\n\n"
-        "Или выберите реального игрока из клуба лиги."
+        "🃏 <b>10 Топовых Концептов Дизайна Карточек (FC 25 / Esports)</b>\n\n"
+        "Выберите стиль для генерации статичной карточки (PNG):\n\n"
+        "1. 🌟 <b>TOTY Celestial Gold</b> — Божественное жидкое золото\n"
+        "2. 🌌 <b>Void Eclipse</b> — Черная дыра и гравитация\n"
+        "3. ⚡ <b>Cyberpunk 2077</b> — Лазерный кибер-HUD\n"
+        "4. 💎 <b>Liquid Hyper-Glass</b> — Сапфировое стекло\n"
+        "5. 🔥 <b>Inferno Magma</b> — Раскаленная лава и базальт\n"
+        "6. ❄️ <b>Glacial Frost</b> — Арктический лед и алмазы\n"
+        "7. 👁️ <b>Anime Sakuga</b> — Аура эгоиста Blue Lock\n"
+        "8. 👑 <b>Royal 24K Ingot</b> — Золотой банковский слиток\n"
+        "9. 🏎️ <b>Red Bull Aero Carbon</b> — Кованый карбон F1\n"
+        "10. ⭐ <b>UEFA Champions Night</b> — Звездный хром ЛЧ"
     )
     keyboard = [
-        [InlineKeyboardButton("⚡ 1. Cyber Broadcast (Неон HUD)", callback_data="lab_demo_card_design_1")],
-        [InlineKeyboardButton("👑 2. EA FC 25 (Золотой Щит)", callback_data="lab_demo_card_design_2")],
-        [InlineKeyboardButton("💎 3. Obsidian Luxury (VIP Люкс)", callback_data="lab_demo_card_design_3")],
-        [InlineKeyboardButton("🎬 Анимированные карточки (GIF)", callback_data="lab_anim_card_menu")],
+        [
+            InlineKeyboardButton("🌟 1. TOTY Gold", callback_data="lab_demo_card_toty_gold"),
+            InlineKeyboardButton("🌌 2. Void Eclipse", callback_data="lab_demo_card_void_eclipse"),
+        ],
+        [
+            InlineKeyboardButton("⚡ 3. Cyberpunk", callback_data="lab_demo_card_cyber_hud"),
+            InlineKeyboardButton("💎 4. Hyper-Glass", callback_data="lab_demo_card_hyper_glass"),
+        ],
+        [
+            InlineKeyboardButton("🔥 5. Inferno Magma", callback_data="lab_demo_card_inferno_magma"),
+            InlineKeyboardButton("❄️ 6. Glacial Frost", callback_data="lab_demo_card_glacial_frost"),
+        ],
+        [
+            InlineKeyboardButton("👁️ 7. Anime Sakuga", callback_data="lab_demo_card_anime_sakuga"),
+            InlineKeyboardButton("👑 8. Royal 24K", callback_data="lab_demo_card_royal_24k"),
+        ],
+        [
+            InlineKeyboardButton("🏎️ 9. Aero Carbon", callback_data="lab_demo_card_aero_carbon"),
+            InlineKeyboardButton("⭐ 10. UCL Night", callback_data="lab_demo_card_ucl_night"),
+        ],
+        [InlineKeyboardButton("🎬 ➔ ТЕСТ АНИМИРОВАННЫХ (GIF)", callback_data="lab_anim_card_menu")],
         [InlineKeyboardButton("🔍 Выбрать реального игрока из клуба", callback_data="lab_card_pick_club")],
         [InlineKeyboardButton("« Назад в лабораторию", callback_data="admin_lab_menu")],
     ]
@@ -177,30 +197,111 @@ async def cb_lab_card_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 @admin_only
 async def cb_lab_anim_card_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Animated card testing menu."""
+    """Animated card testing menu for all 10 styles."""
     query = update.callback_query
     if not query:
         return
     await query.answer()
 
     text = (
-        "🎬 <b>Тестирование Анимированных Карточек Игроков (GIF)</b>\n\n"
+        "🎬 <b>10 Топовых АНИМИРОВАННЫХ Карточек Игроков (GIF)</b>\n\n"
         "Выберите стиль динамической анимации:\n\n"
-        "1. 🌟 <b>Голографический блик (Holo Shimmer)</b>\n"
-        "   • Диагональный золотой луч света скользит по карточке EA FC Gold Shield с пульсирующим ореолом.\n\n"
-        "2. ✨ <b>Парящие золотые искры (Golden Sparks)</b>\n"
-        "   • Живой рой светящихся золотых частиц и искр, поднимающихся за игроком на Luxury Onyx.\n\n"
-        "3. ⚡ <b>Неоновый кибер-пульс (Cyber Pulse)</b>\n"
-        "   • Пульсирующие неоновые границы HUD и энергетические бегущие волны на Cyber Broadcast."
+        "1. 🌟 <b>TOTY Gold</b> — Скользящий жидкий луч света и аура\n"
+        "2. 🌌 <b>Void Eclipse</b> — Вращающийся диск и притяжение частиц\n"
+        "3. ⚡ <b>Cyberpunk</b> — Сканирующий лазерный луч и неоновый пульс\n"
+        "4. 💎 <b>Hyper-Glass</b> — Каустика и радужные призмы\n"
+        "5. 🔥 <b>Inferno Magma</b> — Пульс лавы и 35 горящих искр\n"
+        "6. ❄️ <b>Glacial Frost</b> — Кристаллизация и мерцающие алмазы\n"
+        "7. 👁️ <b>Anime Sakuga</b> — Потрескивающие молнии и огонь ауры\n"
+        "8. 👑 <b>Royal 24K</b> — Тяжелый золотой металлический блик\n"
+        "9. 🏎️ <b>Aero Carbon</b> — Ветровые струи аэродинамики F1\n"
+        "10. ⭐ <b>UEFA Night</b> — Лазерные созвездия звезд ЛЧ"
     )
     keyboard = [
-        [InlineKeyboardButton("🌟 1. Голографический блик (Holo)", callback_data="lab_demo_anim_holo_shimmer")],
-        [InlineKeyboardButton("✨ 2. Парящие искры (Sparks)", callback_data="lab_demo_anim_golden_sparks")],
-        [InlineKeyboardButton("⚡ 3. Неоновый кибер-пульс (Pulse)", callback_data="lab_demo_anim_cyber_pulse")],
-        [InlineKeyboardButton("« Назад к статичным карточкам", callback_data="lab_card_menu")],
+        [
+            InlineKeyboardButton("🌟 1. TOTY Gold", callback_data="lab_demo_anim_toty_gold"),
+            InlineKeyboardButton("🌌 2. Void Eclipse", callback_data="lab_demo_anim_void_eclipse"),
+        ],
+        [
+            InlineKeyboardButton("⚡ 3. Cyberpunk", callback_data="lab_demo_anim_cyber_hud"),
+            InlineKeyboardButton("💎 4. Hyper-Glass", callback_data="lab_demo_anim_hyper_glass"),
+        ],
+        [
+            InlineKeyboardButton("🔥 5. Inferno Magma", callback_data="lab_demo_anim_inferno_magma"),
+            InlineKeyboardButton("❄️ 6. Glacial Frost", callback_data="lab_demo_anim_glacial_frost"),
+        ],
+        [
+            InlineKeyboardButton("👁️ 7. Anime Sakuga", callback_data="lab_demo_anim_anime_sakuga"),
+            InlineKeyboardButton("👑 8. Royal 24K", callback_data="lab_demo_anim_royal_24k"),
+        ],
+        [
+            InlineKeyboardButton("🏎️ 9. Aero Carbon", callback_data="lab_demo_anim_aero_carbon"),
+            InlineKeyboardButton("⭐ 10. UCL Night", callback_data="lab_demo_anim_ucl_night"),
+        ],
+        [InlineKeyboardButton("🖼️ ➔ К статичным карточкам (PNG)", callback_data="lab_card_menu")],
         [InlineKeyboardButton("« В лабораторию", callback_data="admin_lab_menu")],
     ]
     await safe_edit_or_reply(query, context, text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+@admin_only
+async def cb_lab_demo_card(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Generate selected static card design and send directly to admin in DM."""
+    query = update.callback_query
+    if not query or not query.data:
+        return
+    await query.answer("Генерирую карточку...")
+
+    style_id = query.data.replace("lab_demo_card_", "")
+    user_id = query.from_user.id
+
+    test_player = {
+        "player_name": "ROONY BARDGHJI",
+        "team_name": "АЕК",
+        "position": "CAM",
+        "total_goals": 18,
+        "total_assists": 9,
+        "matches_played": 12,
+        "ovr": 95,
+        "custom_stats": {
+            "PAC": 96,
+            "SHO": 98,
+            "PAS": 99,
+            "DRI": 86,
+            "DEF": 80,
+            "PHY": 98
+        }
+    }
+
+    buf = await asyncio.to_thread(fc_card_generator.generate_ea_fc_card, test_player, style_id)
+    stats = fc_card_generator.calculate_fut_attributes(test_player)
+
+    cfg = fc_card_generator.CARD_STYLES.get(fc_card_generator._normalize_style_key(style_id), fc_card_generator.CARD_STYLES["toty_gold"])
+
+    caption = (
+        f"🎨 <b>Статичная карточка: {cfg['title']}</b>\n\n"
+        f"👤 <b>{html.escape(test_player['player_name'])}</b> ({html.escape(test_player['team_name'])})\n"
+        f"⭐ <b>OVR: {stats['ovr']}</b> | Позиция: <b>{stats['position']}</b>\n"
+        f"⚡ <b>PAC:</b> {stats['pac']} | 🎯 <b>SHO:</b> {stats['sho']} | 🅰️ <b>PAS:</b> {stats['pas']}\n"
+        f"🪄 <b>DRI:</b> {stats['dri']} | 🛡️ <b>DEF:</b> {stats['def']} | 💪 <b>PHY:</b> {stats['phy']}\n\n"
+        f"<i>Стиль: {cfg['desc']}</i>"
+    )
+
+    keyboard = [
+        [
+            InlineKeyboardButton("🎬 Анимировать (GIF)", callback_data=f"lab_demo_anim_{style_id}"),
+            InlineKeyboardButton("🔄 Выбрать другой стиль", callback_data="lab_card_menu"),
+        ],
+        [InlineKeyboardButton("« В лабораторию", callback_data="admin_lab_menu")]
+    ]
+
+    await context.bot.send_photo(
+        chat_id=user_id,
+        photo=buf,
+        caption=caption,
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
 
 
 @admin_only
@@ -235,102 +336,28 @@ async def cb_lab_demo_anim(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     buf = await asyncio.to_thread(fc_card_generator.generate_animated_ea_fc_card, test_player, anim_style)
     stats = fc_card_generator.calculate_fut_attributes(test_player)
 
-    anim_titles = {
-        "holo_shimmer": "🌟 ГОЛОГРАФИЧЕСКИЙ БЛИК (HOLO SHIMMER)",
-        "golden_sparks": "✨ ПАРЯЩИЕ ЗОЛОТЫЕ ИСКРЫ (GOLDEN SPARKS)",
-        "cyber_pulse": "⚡ НЕОНОВЫЙ КИБЕР-ПУЛЬС (CYBER PULSE)",
-    }
-    cur_title = anim_titles.get(anim_style, anim_style.upper())
+    cfg = fc_card_generator.CARD_STYLES.get(fc_card_generator._normalize_style_key(anim_style), fc_card_generator.CARD_STYLES["toty_gold"])
 
     caption = (
-        f"🎬 <b>Анимированная карточка: {cur_title}</b>\n\n"
+        f"🎬 <b>Анимированная карточка: {cfg['title']}</b>\n\n"
         f"👤 <b>{html.escape(test_player['player_name'])}</b> ({html.escape(test_player['team_name'])})\n"
         f"⭐ <b>OVR: {stats['ovr']}</b> | Позиция: <b>{stats['position']}</b>\n"
         f"⚡ <b>PAC:</b> {stats['pac']} | 🎯 <b>SHO:</b> {stats['sho']} | 🅰️ <b>PAS:</b> {stats['pas']}\n"
         f"🪄 <b>DRI:</b> {stats['dri']} | 🛡️ <b>DEF:</b> {stats['def']} | 💪 <b>PHY:</b> {stats['phy']}\n\n"
-        f"<i>Зацикленная плавная анимация в формате GIF / Telegram Animation.</i>"
+        f"<i>Анимация: {cfg['desc']}</i>"
     )
 
     keyboard = [
         [
-            InlineKeyboardButton("🌟 Блик", callback_data="lab_demo_anim_holo_shimmer"),
-            InlineKeyboardButton("✨ Искры", callback_data="lab_demo_anim_golden_sparks"),
-            InlineKeyboardButton("⚡ Неон", callback_data="lab_demo_anim_cyber_pulse"),
+            InlineKeyboardButton("🖼️ Статичная (PNG)", callback_data=f"lab_demo_card_{anim_style}"),
+            InlineKeyboardButton("🔄 Другая анимация", callback_data="lab_anim_card_menu"),
         ],
-        [InlineKeyboardButton("« К выбору анимации", callback_data="lab_anim_card_menu")],
         [InlineKeyboardButton("« В лабораторию", callback_data="admin_lab_menu")]
     ]
 
     await context.bot.send_animation(
         chat_id=user_id,
         animation=buf,
-        caption=caption,
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-
-
-@admin_only
-async def cb_lab_demo_card(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Generate selected design concept and send directly to admin in DM."""
-    query = update.callback_query
-    if not query or not query.data:
-        return
-    await query.answer("Генерирую тестовую карточку...")
-
-    theme_name = query.data.replace("lab_demo_card_", "")
-    user_id = query.from_user.id
-
-    test_player = {
-        "player_name": "ROONY BARDGHJI",
-        "team_name": "АЕК",
-        "position": "CAM",
-        "total_goals": 18,
-        "total_assists": 9,
-        "matches_played": 12,
-        "ovr": 95,
-        "custom_stats": {
-            "PAC": 96,
-            "SHO": 98,
-            "PAS": 99,
-            "DRI": 86,
-            "DEF": 80,
-            "PHY": 98
-        }
-    }
-
-    buf = await asyncio.to_thread(fc_card_generator.generate_ea_fc_card, test_player, theme_name)
-    stats = fc_card_generator.calculate_fut_attributes(test_player)
-
-    design_names = {
-        "design_1": "1. CYBER HYBRID (BROADCAST)",
-        "design_2": "2. AUTHENTIC EA FC 25 SHIELD",
-        "design_3": "3. OBSIDIAN LUXURY POSTER",
-    }
-    cur_title = design_names.get(theme_name, theme_name.upper())
-
-    caption = (
-        f"🧪 <b>Превью концепта: {cur_title}</b>\n\n"
-        f"👤 <b>{html.escape(test_player['player_name'])}</b> ({html.escape(test_player['team_name'])})\n"
-        f"⭐ <b>OVR: {stats['ovr']}</b> | Позиция: <b>{stats['position']}</b>\n"
-        f"⚡ <b>PAC:</b> {stats['pac']} | 🎯 <b>SHO:</b> {stats['sho']} | 🅰️ <b>PAS:</b> {stats['pas']}\n"
-        f"🪄 <b>DRI:</b> {stats['dri']} | 🛡️ <b>DEF:</b> {stats['def']} | 💪 <b>PHY:</b> {stats['phy']}\n\n"
-        f"<i>Нажмите кнопки ниже для сравнения с другими концептами:</i>"
-    )
-
-    keyboard = [
-        [
-            InlineKeyboardButton("⚡ Дизайн 1", callback_data="lab_demo_card_design_1"),
-            InlineKeyboardButton("👑 Дизайн 2", callback_data="lab_demo_card_design_2"),
-            InlineKeyboardButton("💎 Дизайн 3", callback_data="lab_demo_card_design_3"),
-        ],
-        [InlineKeyboardButton("« К выбору дизайна", callback_data="lab_card_menu")],
-        [InlineKeyboardButton("« В лабораторию", callback_data="admin_lab_menu")]
-    ]
-
-    await context.bot.send_photo(
-        chat_id=user_id,
-        photo=buf,
         caption=caption,
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(keyboard)

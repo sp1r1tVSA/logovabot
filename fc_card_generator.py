@@ -1,22 +1,28 @@
 """
 fc_card_generator.py
 
-Professional AAA EA FC 25 & Esports Card Generator.
-Provides 3 polished, hyper-realistic, high-end card design concepts:
+Ultimate AAA EA FC 25 & Esports Card Generator with 10 Top-Tier Motion Design Styles:
 
-1. DESIGN 1: «CYBER PRO BROADCAST» (Неоновый киберспортивный HUD)
-2. DESIGN 2: «AUTHENTIC EA FC 25 GOLD» (Премиальный золотой щит EA Sports FC)
-3. DESIGN 3: «OBSIDIAN LUXURY VIP» (Минималистичный люксовый постер)
+ 1. toty_gold      — «TOTY Celestial Gold» (Божественное жидкое золото 24K)
+ 2. void_eclipse   — «Void Eclipse / Dark Matter» (Черная дыра, сингулярность)
+ 3. cyber_hud      — «Cyberpunk 2077 / Neo-Tokyo» (Лазерный HUD, глитч)
+ 4. hyper_glass    — «Liquid Crystal / Hyper-Glass» (Изумрудная призма, каустика)
+ 5. inferno_magma  — «Inferno Overdrive / Magma» (Раскаленная лава, горящие угли)
+ 6. glacial_frost  — «Glacial Frost / Diamond» (Арктический лед, алмазный иней)
+ 7. anime_sakuga   — «Anime Sakuga / Blue Lock» (Аура эгоиста, манга-молнии)
+ 8. royal_24k      — «Royal 24K Velvet & Ingot» (Банковский слиток, бархат)
+ 9. aero_carbon    — «Red Bull Velocity / Aero Carbon» (Кованый карбон, F1 телеметрия)
+10. ucl_night      — «UEFA Champions Night» (Звездный купол, хром ЛЧ)
 """
 
 import os
 import io
 import math
 import logging
-from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageChops, ImageEnhance
-import database
-from table_generator import get_team_logo_filename, clean_and_prepare_logo
+import random
+from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageChops
 import player_photos
+from table_generator import get_team_logo_filename, clean_and_prepare_logo
 
 logger = logging.getLogger(__name__)
 
@@ -27,9 +33,136 @@ SCALE = 2
 WIDTH = 460 * SCALE
 HEIGHT = 690 * SCALE
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 10 DESIGN STYLES CONFIGURATION METADATA
+# ─────────────────────────────────────────────────────────────────────────────
+
+CARD_STYLES = {
+    "toty_gold": {
+        "title": "TOTY CELESTIAL GOLD",
+        "bg_top": (44, 34, 12),
+        "bg_bot": (10, 8, 4),
+        "border_primary": (245, 206, 112),
+        "border_secondary": (180, 140, 50),
+        "accent": (255, 225, 120),
+        "text_primary": (255, 252, 240),
+        "text_secondary": (245, 206, 112),
+        "glow_rgb": (255, 215, 0),
+        "desc": "Божественное жидкое золото и лучи Team of the Year",
+    },
+    "void_eclipse": {
+        "title": "VOID ECLIPSE / DARK MATTER",
+        "bg_top": (24, 12, 42),
+        "bg_bot": (4, 4, 8),
+        "border_primary": (138, 43, 226),
+        "border_secondary": (0, 245, 255),
+        "accent": (0, 245, 255),
+        "text_primary": (255, 255, 255),
+        "text_secondary": (180, 120, 255),
+        "glow_rgb": (138, 43, 226),
+        "desc": "Гравитационная сингулярность и аккреционный диск",
+    },
+    "cyber_hud": {
+        "title": "CYBERPUNK 2077 / NEO-TOKYO",
+        "bg_top": (18, 22, 32),
+        "bg_bot": (9, 10, 15),
+        "border_primary": (0, 255, 224),
+        "border_secondary": (255, 0, 85),
+        "accent": (255, 230, 0),
+        "text_primary": (255, 255, 255),
+        "text_secondary": (0, 255, 224),
+        "glow_rgb": (0, 220, 255),
+        "desc": "Неоновый лазерный интерфейс дополненной реальности",
+    },
+    "hyper_glass": {
+        "title": "LIQUID CRYSTAL / HYPER-GLASS",
+        "bg_top": (8, 38, 28),
+        "bg_bot": (4, 16, 12),
+        "border_primary": (0, 255, 136),
+        "border_secondary": (0, 229, 255),
+        "accent": (0, 255, 136),
+        "text_primary": (255, 255, 255),
+        "text_secondary": (180, 255, 220),
+        "glow_rgb": (0, 255, 136),
+        "desc": "Преломляющееся сапфирово-изумрудное стекло с каустикой",
+    },
+    "inferno_magma": {
+        "title": "INFERNO OVERDRIVE / MAGMA",
+        "bg_top": (52, 16, 6),
+        "bg_bot": (10, 3, 2),
+        "border_primary": (255, 59, 0),
+        "border_secondary": (255, 174, 0),
+        "accent": (255, 174, 0),
+        "text_primary": (255, 250, 240),
+        "text_secondary": (255, 140, 50),
+        "glow_rgb": (255, 80, 0),
+        "desc": "Раскаленная магма и искры вулканического базальта",
+    },
+    "glacial_frost": {
+        "title": "GLACIAL FROST / DIAMOND",
+        "bg_top": (14, 32, 54),
+        "bg_bot": (6, 11, 20),
+        "border_primary": (112, 214, 255),
+        "border_secondary": (232, 247, 255),
+        "accent": (112, 214, 255),
+        "text_primary": (255, 255, 255),
+        "text_secondary": (180, 230, 255),
+        "glow_rgb": (100, 210, 255),
+        "desc": "Вечный арктический лед с кристаллами алмазного инея",
+    },
+    "anime_sakuga": {
+        "title": "ANIME SAKUGA / BLUE LOCK",
+        "bg_top": (20, 22, 28),
+        "bg_bot": (8, 9, 12),
+        "border_primary": (0, 255, 240),
+        "border_secondary": (255, 255, 255),
+        "accent": (0, 255, 240),
+        "text_primary": (255, 255, 255),
+        "text_secondary": (0, 255, 240),
+        "glow_rgb": (0, 255, 240),
+        "desc": "Экспрессивная манга-тушь и молнии ауры эгоиста",
+    },
+    "royal_24k": {
+        "title": "ROYAL 24K VELVET & INGOT",
+        "bg_top": (46, 10, 24),
+        "bg_bot": (13, 11, 9),
+        "border_primary": (212, 175, 55),
+        "border_secondary": (255, 237, 179),
+        "accent": (212, 175, 55),
+        "text_primary": (255, 252, 240),
+        "text_secondary": (212, 175, 55),
+        "glow_rgb": (212, 175, 55),
+        "desc": "Лимитированный золотой слиток на королевском бархате",
+    },
+    "aero_carbon": {
+        "title": "RED BULL VELOCITY / AERO CARBON",
+        "bg_top": (28, 30, 36),
+        "bg_bot": (14, 14, 18),
+        "border_primary": (255, 24, 1),
+        "border_secondary": (0, 229, 255),
+        "accent": (255, 24, 1),
+        "text_primary": (255, 255, 255),
+        "text_secondary": (255, 80, 80),
+        "glow_rgb": (255, 24, 1),
+        "desc": "Кованый карбон F1 и телеметрия ветрового туннеля",
+    },
+    "ucl_night": {
+        "title": "UEFA CHAMPIONS NIGHT",
+        "bg_top": (6, 18, 48),
+        "bg_bot": (2, 6, 23),
+        "border_primary": (0, 212, 255),
+        "border_secondary": (226, 232, 240),
+        "accent": (0, 212, 255),
+        "text_primary": (255, 255, 255),
+        "text_secondary": (180, 230, 255),
+        "glow_rgb": (0, 212, 255),
+        "desc": "Звездная ночь Лиги Чемпионов и зеркальный хром",
+    }
+}
+
 
 def load_card_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    """Load system font with high DPI scaling."""
+    """Load high-DPI system font."""
     size_scaled = size * SCALE
     if bold:
         candidates = ["impact.ttf", "arialbd.ttf", "trebucbd.ttf", "DejaVuSans-Bold.ttf", "seguiemj.ttf"]
@@ -51,12 +184,7 @@ def calculate_fut_attributes(stats: dict) -> dict:
     matches = int(stats.get("matches_played", 0) or max(1, math.ceil((goals + assists) / 2)))
     position = (stats.get("position") or "ST").strip().upper()
 
-    pac_base = 78
-    sho_base = 70
-    pas_base = 68
-    dri_base = 72
-    def_base = 40
-    phy_base = 70
+    pac_base, sho_base, pas_base, dri_base, def_base, phy_base = 78, 70, 68, 72, 40, 70
 
     if position in ["CB", "LB", "RB", "RWB", "LWB", "ЦЗ", "ЛЗ", "ПЗ"]:
         def_base, phy_base, sho_base = 82, 80, 45
@@ -121,244 +249,107 @@ def _get_player_photo_image(player_name: str, team_name: str) -> Image.Image | N
         if photo_path and os.path.exists(photo_path):
             return Image.open(photo_path).convert("RGBA")
     except Exception as e:
-        logger.warning(f"Error loading player photo for {player_name}: {e}")
+        logger.warning(f"Error loading photo for {player_name}: {e}")
     return None
 
 
+def _normalize_style_key(style_name: str) -> str:
+    s = str(style_name).lower().strip()
+    alias_map = {
+        "1": "toty_gold", "toty": "toty_gold", "gold": "toty_gold", "celestial": "toty_gold", "design_2": "toty_gold",
+        "2": "void_eclipse", "void": "void_eclipse", "eclipse": "void_eclipse", "dark_matter": "void_eclipse",
+        "3": "cyber_hud", "cyber": "cyber_hud", "cyberpunk": "cyber_hud", "design_1": "cyber_hud",
+        "4": "hyper_glass", "glass": "hyper_glass", "crystal": "hyper_glass", "emerald": "hyper_glass",
+        "5": "inferno_magma", "inferno": "inferno_magma", "magma": "inferno_magma", "fire": "inferno_magma",
+        "6": "glacial_frost", "glacial": "glacial_frost", "frost": "glacial_frost", "ice": "glacial_frost",
+        "7": "anime_sakuga", "anime": "anime_sakuga", "sakuga": "anime_sakuga", "blue_lock": "anime_sakuga",
+        "8": "royal_24k", "royal": "royal_24k", "gold_bar": "royal_24k", "design_3": "royal_24k", "luxury": "royal_24k",
+        "9": "aero_carbon", "aero": "aero_carbon", "carbon": "aero_carbon", "velocity": "aero_carbon", "red_bull": "aero_carbon",
+        "10": "ucl_night", "ucl": "ucl_night", "champions": "ucl_night", "constellation": "ucl_night"
+    }
+    return alias_map.get(s, "toty_gold" if s not in CARD_STYLES else s)
+
+
 # ═════════════════════════════════════════════════════════════════════════════
-# 🎨 1. CYBER PRO BROADCAST DESIGN
+# 🎨 MASTER STATIC CARD GENERATOR (Supports All 10 Styles)
 # ═════════════════════════════════════════════════════════════════════════════
 
-def render_design_1_cyber(player_data: dict) -> io.BytesIO:
-    """Cyberpunk / Neon Esports Broadcast Card with tech HUD and power meter bars."""
+def render_master_static_card(player_data: dict, style_id: str = "toty_gold") -> Image.Image:
+    """Render high resolution static card for any of the 10 styles."""
+    style_id = _normalize_style_key(style_id)
+    cfg = CARD_STYLES[style_id]
     ovr, position, player_name, team_name, pac, sho, pas, dri, def_stat, phy = _extract_card_data(player_data)
 
-    img = Image.new("RGBA", (WIDTH, HEIGHT), (10, 11, 15, 255))
+    img = Image.new("RGBA", (WIDTH, HEIGHT), (cfg["bg_bot"][0], cfg["bg_bot"][1], cfg["bg_bot"][2], 255))
     draw = ImageDraw.Draw(img)
 
-    # Vertical Dark Sci-Fi Gradient
+    # 1. Multi-Layer Background Gradient
+    tr, tg, tb = cfg["bg_top"]
+    br, bg, bb = cfg["bg_bot"]
     for y in range(HEIGHT):
-        ratio = y / HEIGHT
-        r = int(18 - 10 * ratio)
-        g = int(22 - 12 * ratio)
-        b = int(32 - 18 * ratio)
+        ratio = y / float(HEIGHT)
+        r = int(tr + (br - tr) * ratio)
+        g = int(tg + (bg - tg) * ratio)
+        b = int(tb + (bb - tb) * ratio)
         draw.line([(0, y), (WIDTH, y)], fill=(r, g, b, 255))
 
-    # Futuristic Hexagon Cut Frame
-    inset = int(14 * SCALE)
-    cut = int(30 * SCALE)
-    poly = [
-        (inset + cut, inset), (WIDTH - inset - cut, inset),
-        (WIDTH - inset, inset + cut), (WIDTH - inset, HEIGHT - inset - cut),
-        (WIDTH - inset - cut, HEIGHT - inset), (inset + cut, HEIGHT - inset),
-        (inset, HEIGHT - inset - cut), (inset, inset + cut)
-    ]
-    draw.polygon(poly, outline=(0, 225, 255, 180), width=int(2.5 * SCALE))
-
-    # Cyan Radial Glow in center
-    cx, cy = WIDTH // 2, int(HEIGHT * 0.28)
+    # 2. Dynamic Central Halo Spotlight
+    cx, cy = WIDTH // 2, int(HEIGHT * 0.27)
     spotlight = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
     s_draw = ImageDraw.Draw(spotlight)
-    for r in range(int(240 * SCALE), 0, -int(15 * SCALE)):
-        alpha = int(75 * (1.0 - (r / (240 * SCALE)) ** 1.3))
-        s_draw.ellipse([(cx - r, cy - r), (cx + r, cy + r)], fill=(0, 200, 255, alpha))
+    gr, gg, gb = cfg["glow_rgb"]
+    for r in range(int(240 * SCALE), 0, -int(14 * SCALE)):
+        alpha = int(85 * (1.0 - (r / (240 * SCALE)) ** 1.3))
+        s_draw.ellipse([(cx - r, cy - r), (cx + r, cy + r)], fill=(gr, gg, gb, alpha))
     spotlight = spotlight.filter(ImageFilter.GaussianBlur(int(16 * SCALE)))
     img = Image.alpha_composite(img, spotlight)
     draw = ImageDraw.Draw(img)
 
-    # Big Centered Player Photo
-    photo_w = int(410 * SCALE)
-    photo_h = int(380 * SCALE)
-    player_img = _get_player_photo_image(player_name, team_name)
-
-    if player_img:
-        player_img.thumbnail((photo_w, photo_h), Image.Resampling.LANCZOS)
-        pw, ph = player_img.size
-
-        # Shadow
-        shadow = Image.new("RGBA", (pw + int(24 * SCALE), ph + int(24 * SCALE)), (0, 0, 0, 0))
-        s_mask = player_img.split()[3] if "A" in player_img.getbands() else Image.new("L", (pw, ph), 255)
-        shadow.paste(Image.new("RGBA", (pw, ph), (0, 0, 0, 190)), (int(10 * SCALE), int(10 * SCALE)), s_mask)
-        shadow = shadow.filter(ImageFilter.GaussianBlur(int(9 * SCALE)))
-
-        px = (WIDTH - pw) // 2
-        py = int(24 * SCALE) + (photo_h - ph)
-        img.paste(shadow, (px - int(4 * SCALE), py - int(4 * SCALE)), shadow)
-
-        # Base fade
-        fade = Image.new("L", (pw, ph), 255)
-        f_draw = ImageDraw.Draw(fade)
-        f_start = int(ph * 0.68)
-        for y in range(f_start, ph):
-            val = int(255 * (1.0 - ((y - f_start) / (ph - f_start)) ** 1.6))
-            f_draw.line([(0, y), (pw, y)], fill=val)
-        if "A" in player_img.getbands():
-            fade = ImageChops.multiply(player_img.split()[3], fade)
-
-        img.paste(player_img, (px, py), fade)
-
-    # Top-Left HUD OVR / POS Plate
-    pil_w = int(76 * SCALE)
-    pil_h = int(122 * SCALE)
-    pil_x = int(26 * SCALE)
-    pil_y = int(38 * SCALE)
-    pil_poly = [
-        (pil_x, pil_y),
-        (pil_x + pil_w, pil_y),
-        (pil_x + pil_w, pil_y + pil_h - int(16 * SCALE)),
-        (pil_x + pil_w - int(16 * SCALE), pil_y + pil_h),
-        (pil_x, pil_y + pil_h),
-    ]
-    draw.polygon(pil_poly, fill=(15, 18, 26, 235), outline=(0, 240, 255, 220), width=int(2 * SCALE))
-
-    font_ovr = load_card_font(46, bold=True)
-    draw.text((pil_x + pil_w // 2, pil_y + int(10 * SCALE)), str(ovr), font=font_ovr, fill=(255, 255, 255), anchor="mt")
-    draw.line([(pil_x + int(10 * SCALE), pil_y + int(64 * SCALE)), (pil_x + pil_w - int(10 * SCALE), pil_y + int(64 * SCALE))], fill=(0, 240, 255, 160), width=int(1.5 * SCALE))
-
-    font_pos = load_card_font(19, bold=True)
-    draw.text((pil_x + pil_w // 2, pil_y + int(76 * SCALE)), position, font=font_pos, fill=(255, 205, 35), anchor="mt")
-
-    # Top-Right Club Logo
-    logo_fn = get_team_logo_filename(team_name)
-    if logo_fn:
-        logo_path = os.path.join(LOGOS_DIR, logo_fn)
-        if os.path.exists(logo_path):
-            try:
-                logo_img = Image.open(logo_path)
-                logo_img = clean_and_prepare_logo(logo_img)
-                l_size = int(44 * SCALE)
-                logo_img.thumbnail((l_size, l_size), Image.Resampling.LANCZOS)
-                img.paste(logo_img, (WIDTH - int(66 * SCALE), int(36 * SCALE)), logo_img)
-            except Exception:
-                pass
-
-    # Angled Name Plate
-    nw = int(390 * SCALE)
-    nh = int(46 * SCALE)
-    nx = (WIDTH - nw) // 2
-    ny = int(360 * SCALE)
-    name_poly = [
-        (nx + int(20 * SCALE), ny),
-        (nx + nw, ny),
-        (nx + nw - int(20 * SCALE), ny + nh),
-        (nx, ny + nh),
-    ]
-    draw.polygon(name_poly, fill=(16, 20, 28, 245), outline=(255, 205, 35, 220), width=int(2 * SCALE))
-    font_name = load_card_font(23, bold=True)
-    draw.text((WIDTH // 2, ny + int(10 * SCALE)), player_name, font=font_name, fill=(255, 255, 255), anchor="mt")
-
-    # 6 Stat Capsules with Meters
-    grid_y = ny + nh + int(18 * SCALE)
-    stats_list = [
-        ("PAC", pac), ("DRI", dri),
-        ("SHO", sho), ("DEF", def_stat),
-        ("PAS", pas), ("PHY", phy),
-    ]
-    font_s_num = load_card_font(20, bold=True)
-    font_s_lbl = load_card_font(13, bold=True)
-
-    col_w = int(185 * SCALE)
-    row_h = int(38 * SCALE)
-    c1_x = int(36 * SCALE)
-    c2_x = WIDTH - int(36 * SCALE) - col_w
-
-    for idx, (lbl, val) in enumerate(stats_list):
-        row = idx // 2
-        col = idx % 2
-        bx = c1_x if col == 0 else c2_x
-        by = grid_y + row * (row_h + int(10 * SCALE))
-
-        draw.rounded_rectangle(
-            [(bx, by), (bx + col_w, by + row_h)],
-            radius=int(8 * SCALE),
-            fill=(14, 18, 26, 235),
-            outline=(0, 220, 255, 120),
-            width=int(1.5 * SCALE)
-        )
-
-        bar_pad = int(6 * SCALE)
-        bar_w = col_w - 2 * bar_pad
-        bar_h = int(4 * SCALE)
-        bar_y = by + row_h - bar_pad - bar_h
-
-        draw.rounded_rectangle([(bx + bar_pad, bar_y), (bx + bar_pad + bar_w, bar_y + bar_h)], radius=int(2 * SCALE), fill=(30, 36, 48))
-        fill_w = int(bar_w * (val / 99.0))
-        draw.rounded_rectangle([(bx + bar_pad, bar_y), (bx + bar_pad + fill_w, bar_y + bar_h)], radius=int(2 * SCALE), fill=(255, 205, 35))
-
-        draw.text((bx + int(12 * SCALE), by + int(6 * SCALE)), lbl, font=font_s_lbl, fill=(0, 240, 255), anchor="lt")
-        draw.text((bx + col_w - int(12 * SCALE), by + int(4 * SCALE)), str(val), font=font_s_num, fill=(255, 255, 255), anchor="rt")
-
-    # Bottom Tag
-    foot_y = HEIGHT - int(46 * SCALE)
-    font_foot = load_card_font(10, bold=True)
-    draw.text((WIDTH // 2, foot_y), "LOGOVOBOT CYBER SERIES • 2026", font=font_foot, fill=(0, 220, 255, 180), anchor="mt")
-
-    buf = io.BytesIO()
-    img.save(buf, format="PNG", optimize=True)
-    buf.seek(0)
-    return buf
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# 🎨 2. AUTHENTIC EA FC 25 GOLD DESIGN (Fixed & Hyper-Polished)
-# ═════════════════════════════════════════════════════════════════════════════
-
-def render_design_2_fut_shield(player_data: dict) -> io.BytesIO:
-    """
-    Authentic EA FC 25 Gold Ultimate Team Card.
-    - Smooth deep golden gradient and clean metallic 3D shield frame.
-    - Giant centered player cutout with warm golden spotlight.
-    - Left-hand column for OVR, position badge, and club logo.
-    - Curved gold name ribbon.
-    - 6 stats cleanly presented in a premium frosted dark glass plate.
-    """
-    ovr, position, player_name, team_name, pac, sho, pas, dri, def_stat, phy = _extract_card_data(player_data)
-
-    img = Image.new("RGBA", (WIDTH, HEIGHT), (12, 10, 8, 255))
-    draw = ImageDraw.Draw(img)
-
-    # 1. Smooth Dark Bronze & Gold Vertical Gradient (NO harsh stripes!)
-    for y in range(HEIGHT):
-        ratio = y / HEIGHT
-        r = int(52 - 38 * ratio)
-        g = int(40 - 30 * ratio)
-        b = int(18 - 14 * ratio)
-        draw.line([(0, y), (WIDTH, y)], fill=(r, g, b, 255))
-
-    # 2. FUT Shield Geometry (Beveled 3D Outline)
-    top_cut = int(36 * SCALE)
+    # 3. Outer Frame Geometry
+    inset = int(14 * SCALE)
+    cut = int(36 * SCALE)
     bot_y1 = int(HEIGHT * 0.82)
     bot_mid_x = int(44 * SCALE)
     bot_mid_y = int(HEIGHT * 0.92)
 
-    shield_poly = [
-        (int(14 * SCALE) + top_cut, int(14 * SCALE)),
-        (WIDTH - int(14 * SCALE) - top_cut, int(14 * SCALE)),
-        (WIDTH - int(14 * SCALE), int(14 * SCALE) + top_cut),
-        (WIDTH - int(14 * SCALE), bot_y1),
-        (WIDTH - int(14 * SCALE) - bot_mid_x, bot_mid_y),
-        (WIDTH // 2, HEIGHT - int(14 * SCALE)),
-        (int(14 * SCALE) + bot_mid_x, bot_mid_y),
-        (int(14 * SCALE), bot_y1),
-        (int(14 * SCALE), int(14 * SCALE) + top_cut),
-    ]
+    if style_id in ["cyber_hud", "aero_carbon"]:
+        # Hexagon/Mech Chamfered Frame
+        poly = [
+            (inset + cut, inset), (WIDTH - inset - cut, inset),
+            (WIDTH - inset, inset + cut), (WIDTH - inset, HEIGHT - inset - cut),
+            (WIDTH - inset - cut, HEIGHT - inset), (inset + cut, HEIGHT - inset),
+            (inset, HEIGHT - inset - cut), (inset, inset + cut)
+        ]
+    elif style_id in ["royal_24k", "hyper_glass"]:
+        # Clean Rounded Rectangle Ingot
+        poly = None
+        draw.rounded_rectangle(
+            [(inset, inset), (WIDTH - inset, HEIGHT - inset)],
+            radius=int(26 * SCALE),
+            outline=cfg["border_primary"],
+            width=int(4 * SCALE)
+        )
+        draw.rounded_rectangle(
+            [(inset + int(6 * SCALE), inset + int(6 * SCALE)), (WIDTH - inset - int(6 * SCALE), HEIGHT - inset - int(6 * SCALE))],
+            radius=int(20 * SCALE),
+            outline=cfg["border_secondary"] + (140,),
+            width=int(1.5 * SCALE)
+        )
+    else:
+        # Classic & Modern FUT Shield
+        poly = [
+            (inset + cut, inset), (WIDTH - inset - cut, inset),
+            (WIDTH - inset, inset + cut), (WIDTH - inset, bot_y1),
+            (WIDTH - inset - bot_mid_x, bot_mid_y), (WIDTH // 2, HEIGHT - inset),
+            (inset + bot_mid_x, bot_mid_y), (inset, bot_y1),
+            (inset, inset + cut)
+        ]
 
-    # Metallic Multi-Layer Border
-    draw.polygon(shield_poly, outline=(245, 206, 112, 255), width=int(4.5 * SCALE))
-    draw.polygon(shield_poly, outline=(180, 140, 50, 200), width=int(1.5 * SCALE))
+    if poly:
+        draw.polygon(poly, outline=cfg["border_primary"], width=int(4.5 * SCALE))
+        draw.polygon(poly, outline=cfg["border_secondary"] + (180,), width=int(1.5 * SCALE))
 
-    # 3. Dynamic Golden Halo Spotlight in center
-    cx, cy = WIDTH // 2, int(HEIGHT * 0.26)
-    spotlight = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
-    s_draw = ImageDraw.Draw(spotlight)
-    for r in range(int(240 * SCALE), 0, -int(14 * SCALE)):
-        alpha = int(95 * (1.0 - (r / (240 * SCALE)) ** 1.3))
-        s_draw.ellipse([(cx - r, cy - r), (cx + r, cy + r)], fill=(255, 215, 0, alpha))
-    spotlight = spotlight.filter(ImageFilter.GaussianBlur(int(16 * SCALE)))
-    img = Image.alpha_composite(img, spotlight)
-    draw = ImageDraw.Draw(img)
-
-    # 4. Giant Player Cutout (Centered & Dominant)
+    # 4. Large Player Cutout (Dominant 420px)
     photo_w = int(420 * SCALE)
     photo_h = int(390 * SCALE)
     player_img = _get_player_photo_image(player_name, team_name)
@@ -367,17 +358,17 @@ def render_design_2_fut_shield(player_data: dict) -> io.BytesIO:
         player_img.thumbnail((photo_w, photo_h), Image.Resampling.LANCZOS)
         pw, ph = player_img.size
 
-        # Drop shadow
+        # Soft shadow
         shadow = Image.new("RGBA", (pw + int(24 * SCALE), ph + int(24 * SCALE)), (0, 0, 0, 0))
         s_mask = player_img.split()[3] if "A" in player_img.getbands() else Image.new("L", (pw, ph), 255)
         shadow.paste(Image.new("RGBA", (pw, ph), (0, 0, 0, 190)), (int(10 * SCALE), int(10 * SCALE)), s_mask)
         shadow = shadow.filter(ImageFilter.GaussianBlur(int(9 * SCALE)))
 
         px = (WIDTH - pw) // 2
-        py = int(14 * SCALE) + (photo_h - ph)
+        py = int(16 * SCALE) + (photo_h - ph)
         img.paste(shadow, (px - int(4 * SCALE), py - int(4 * SCALE)), shadow)
 
-        # Base fade
+        # Smooth baseline alpha fade
         fade = Image.new("L", (pw, ph), 255)
         f_draw = ImageDraw.Draw(fade)
         f_start = int(ph * 0.70)
@@ -389,27 +380,13 @@ def render_design_2_fut_shield(player_data: dict) -> io.BytesIO:
 
         img.paste(player_img, (px, py), fade)
 
-    # 5. Frosted Glass Stat Backplate (Dark Carbon Glass)
-    plate_w = int(396 * SCALE)
-    plate_h = int(236 * SCALE)
-    plate_x = (WIDTH - plate_w) // 2
-    plate_y = int(342 * SCALE)
-
-    draw.rounded_rectangle(
-        [(plate_x, plate_y), (plate_x + plate_w, plate_y + plate_h)],
-        radius=int(18 * SCALE),
-        fill=(16, 14, 10, 245),
-        outline=(245, 206, 112, 200),
-        width=int(2 * SCALE)
-    )
-
-    # 6. Top-Left OVR, Position, and Club Crest
+    # 5. Top-Left OVR / Position Column
     col_x = int(58 * SCALE)
-    ovr_y = int(46 * SCALE)
+    ovr_y = int(44 * SCALE)
 
     font_ovr = load_card_font(52, bold=True)
     draw.text((col_x + int(2 * SCALE), ovr_y + int(2 * SCALE)), str(ovr), font=font_ovr, fill=(0, 0, 0, 180), anchor="mt")
-    draw.text((col_x, ovr_y), str(ovr), font=font_ovr, fill=(255, 252, 240), anchor="mt")
+    draw.text((col_x, ovr_y), str(ovr), font=font_ovr, fill=cfg["text_primary"], anchor="mt")
 
     # Position Pill
     pos_y = ovr_y + int(56 * SCALE)
@@ -418,12 +395,12 @@ def render_design_2_fut_shield(player_data: dict) -> io.BytesIO:
     draw.rounded_rectangle(
         [(col_x - pos_w // 2, pos_y), (col_x + pos_w // 2, pos_y + pos_h)],
         radius=int(6 * SCALE),
-        fill=(24, 20, 12, 245),
-        outline=(245, 206, 112, 200),
+        fill=(16, 14, 18, 245),
+        outline=cfg["border_primary"],
         width=int(1.5 * SCALE)
     )
     font_pos = load_card_font(20, bold=True)
-    draw.text((col_x, pos_y + int(3 * SCALE)), position, font=font_pos, fill=(245, 206, 112), anchor="mt")
+    draw.text((col_x, pos_y + int(3 * SCALE)), position, font=font_pos, fill=cfg["accent"], anchor="mt")
 
     # Club Crest
     logo_fn = get_team_logo_filename(team_name)
@@ -433,7 +410,7 @@ def render_design_2_fut_shield(player_data: dict) -> io.BytesIO:
             try:
                 logo_img = Image.open(logo_path)
                 logo_img = clean_and_prepare_logo(logo_img)
-                l_size = int(52 * SCALE)
+                l_size = int(50 * SCALE)
                 logo_img.thumbnail((l_size, l_size), Image.Resampling.LANCZOS)
                 lx = col_x - (logo_img.width // 2)
                 ly = pos_y + int(36 * SCALE)
@@ -441,8 +418,8 @@ def render_design_2_fut_shield(player_data: dict) -> io.BytesIO:
             except Exception:
                 pass
 
-    # 7. Player Name Ribbon
-    ribbon_w = int(368 * SCALE)
+    # 6. Player Name Ribbon
+    ribbon_w = int(370 * SCALE)
     ribbon_h = int(44 * SCALE)
     rx = (WIDTH - ribbon_w) // 2
     ry = int(352 * SCALE)
@@ -450,22 +427,27 @@ def render_design_2_fut_shield(player_data: dict) -> io.BytesIO:
     draw.rounded_rectangle(
         [(rx, ry), (rx + ribbon_w, ry + ribbon_h)],
         radius=int(10 * SCALE),
-        fill=(28, 22, 12, 245),
-        outline=(245, 206, 112, 220),
+        fill=(18, 16, 22, 245),
+        outline=cfg["border_primary"],
         width=int(1.5 * SCALE)
     )
 
     name_size = 25 if len(player_name) <= 13 else (21 if len(player_name) <= 18 else 17)
     font_name = load_card_font(name_size, bold=True)
-    draw.text((WIDTH // 2, ry + int(8 * SCALE)), player_name, font=font_name, fill=(255, 252, 240), anchor="mt")
+    draw.text((WIDTH // 2, ry + int(8 * SCALE)), player_name, font=font_name, fill=cfg["text_primary"], anchor="mt")
 
-    # 8. Classic 2x3 FUT Stats Grid with Subtle Stat Cells
+    # 7. Frosted Glass Bottom Plate for Stats
+    plate_w = int(396 * SCALE)
+    plate_h = int(236 * SCALE)
+    plate_x = (WIDTH - plate_w) // 2
+    plate_y = int(342 * SCALE)
+
+    # 8. 6-Attribute Stat Grid (2x3 with Vertical Separator)
     grid_y = ry + ribbon_h + int(14 * SCALE)
     row_h = int(40 * SCALE)
     sep_x = WIDTH // 2
 
-    # Vertical gold separator
-    draw.line([(sep_x, grid_y - int(2 * SCALE)), (sep_x, grid_y + int(116 * SCALE))], fill=(245, 206, 112, 140), width=int(1.5 * SCALE))
+    draw.line([(sep_x, grid_y - int(2 * SCALE)), (sep_x, grid_y + int(116 * SCALE))], fill=cfg["border_secondary"] + (140,), width=int(1.5 * SCALE))
 
     font_s_val = load_card_font(26, bold=True)
     font_s_lbl = load_card_font(18, bold=True)
@@ -483,30 +465,34 @@ def render_design_2_fut_shield(player_data: dict) -> io.BytesIO:
 
     for idx, (lv, ll, rv, rl) in enumerate(stats_pairs):
         cur_y = grid_y + idx * row_h
-        # Left stat
-        draw.text((c1_v, cur_y), f"{lv:>2}", font=font_s_val, fill=(255, 255, 255), anchor="lt")
-        draw.text((c1_l, cur_y + int(4 * SCALE)), ll, font=font_s_lbl, fill=(230, 190, 100), anchor="lt")
+        draw.text((c1_v, cur_y), f"{lv:>2}", font=font_s_val, fill=cfg["text_primary"], anchor="lt")
+        draw.text((c1_l, cur_y + int(4 * SCALE)), ll, font=font_s_lbl, fill=cfg["accent"], anchor="lt")
 
-        # Right stat
-        draw.text((c2_v, cur_y), f"{rv:>2}", font=font_s_val, fill=(255, 255, 255), anchor="lt")
-        draw.text((c2_l, cur_y + int(4 * SCALE)), rl, font=font_s_lbl, fill=(230, 190, 100), anchor="lt")
+        draw.text((c2_v, cur_y), f"{rv:>2}", font=font_s_val, fill=cfg["text_primary"], anchor="lt")
+        draw.text((c2_l, cur_y + int(4 * SCALE)), rl, font=font_s_lbl, fill=cfg["accent"], anchor="lt")
 
-    # 9. Bottom Tournament Badge
-    foot_w = int(280 * SCALE)
+    # 9. Bottom Footer Badge
+    foot_w = int(290 * SCALE)
     foot_h = int(24 * SCALE)
     foot_x = (WIDTH - foot_w) // 2
-    foot_y = HEIGHT - int(82 * SCALE)
+    foot_y = HEIGHT - int(80 * SCALE)
 
     draw.rounded_rectangle(
         [(foot_x, foot_y), (foot_x + foot_w, foot_y + foot_h)],
         radius=int(6 * SCALE),
-        fill=(22, 18, 10, 245),
-        outline=(245, 206, 112, 180),
+        fill=(16, 14, 18, 245),
+        outline=cfg["border_secondary"] + (180,),
         width=int(1.5 * SCALE)
     )
     font_foot = load_card_font(11, bold=True)
-    draw.text((WIDTH // 2, foot_y + int(4 * SCALE)), "★ ULTIMATE TEAM • КПЛ 2026 ★", font=font_foot, fill=(245, 206, 112), anchor="mt")
+    draw.text((WIDTH // 2, foot_y + int(4 * SCALE)), f"★ {cfg['title']} • КПЛ 2026 ★", font=font_foot, fill=cfg["accent"], anchor="mt")
 
+    return img
+
+
+def generate_ea_fc_card(player_data: dict, theme_name: str = "toty_gold") -> io.BytesIO:
+    """Generate static PNG player card for any of the 10 styles."""
+    img = render_master_static_card(player_data, style_id=theme_name)
     buf = io.BytesIO()
     img.save(buf, format="PNG", optimize=True)
     buf.seek(0)
@@ -514,328 +500,206 @@ def render_design_2_fut_shield(player_data: dict) -> io.BytesIO:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 🎨 3. OBSIDIAN LUXURY VIP DESIGN (Minimalist Luxury)
+# 🎬 MASTER ANIMATED CARD GENERATOR (All 10 Dedicated Loop Shaders)
 # ═════════════════════════════════════════════════════════════════════════════
 
-def render_design_3_luxury_poster(player_data: dict) -> io.BytesIO:
-    """Minimalist Obsidian & Fine Gold Luxury Card with 3x2 stat capsules."""
-    ovr, position, player_name, team_name, pac, sho, pas, dri, def_stat, phy = _extract_card_data(player_data)
-
-    img = Image.new("RGBA", (WIDTH, HEIGHT), (8, 8, 10, 255))
-    draw = ImageDraw.Draw(img)
-
-    for y in range(HEIGHT):
-        ratio = y / HEIGHT
-        val = int(16 - 8 * ratio)
-        draw.line([(0, y), (WIDTH, y)], fill=(val, val, int(val * 1.2), 255))
-
-    # Double Gold Hairline Border
-    card_inset_1 = int(14 * SCALE)
-    card_inset_2 = int(20 * SCALE)
-    corner_r = int(26 * SCALE)
-
-    draw.rounded_rectangle(
-        [(card_inset_1, card_inset_1), (WIDTH - card_inset_1, HEIGHT - card_inset_1)],
-        radius=corner_r,
-        outline=(212, 175, 55, 255),
-        width=int(2.5 * SCALE)
-    )
-    draw.rounded_rectangle(
-        [(card_inset_2, card_inset_2), (WIDTH - card_inset_2, HEIGHT - card_inset_2)],
-        radius=corner_r - int(4 * SCALE),
-        outline=(140, 115, 45, 140),
-        width=int(1 * SCALE)
-    )
-
-    # Top Header
-    header_y = int(32 * SCALE)
-    logo_fn = get_team_logo_filename(team_name)
-    if logo_fn:
-        logo_path = os.path.join(LOGOS_DIR, logo_fn)
-        if os.path.exists(logo_path):
-            try:
-                logo_img = Image.open(logo_path)
-                logo_img = clean_and_prepare_logo(logo_img)
-                l_size = int(36 * SCALE)
-                logo_img.thumbnail((l_size, l_size), Image.Resampling.LANCZOS)
-                img.paste(logo_img, (int(36 * SCALE), header_y), logo_img)
-            except Exception:
-                pass
-
-    font_hdr = load_card_font(12, bold=True)
-    draw.text((WIDTH // 2, header_y + int(10 * SCALE)), "КПЛ • LUXURY EDITION 2026", font=font_hdr, fill=(212, 175, 55), anchor="mt")
-
-    # Golden Halo Glow
-    cx, cy = WIDTH // 2, int(HEIGHT * 0.30)
-    spotlight = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
-    s_draw = ImageDraw.Draw(spotlight)
-    for r in range(int(220 * SCALE), 0, -int(12 * SCALE)):
-        alpha = int(75 * (1.0 - (r / (220 * SCALE)) ** 1.5))
-        s_draw.ellipse([(cx - r, cy - r), (cx + r, cy + r)], fill=(212, 175, 55, alpha))
-    spotlight = spotlight.filter(ImageFilter.GaussianBlur(int(14 * SCALE)))
-    img = Image.alpha_composite(img, spotlight)
-    draw = ImageDraw.Draw(img)
-
-    # Player Cutout
-    photo_w = int(400 * SCALE)
-    photo_h = int(360 * SCALE)
-    player_img = _get_player_photo_image(player_name, team_name)
-
-    if player_img:
-        player_img.thumbnail((photo_w, photo_h), Image.Resampling.LANCZOS)
-        pw, ph = player_img.size
-
-        shadow = Image.new("RGBA", (pw + int(24 * SCALE), ph + int(24 * SCALE)), (0, 0, 0, 0))
-        s_mask = player_img.split()[3] if "A" in player_img.getbands() else Image.new("L", (pw, ph), 255)
-        shadow.paste(Image.new("RGBA", (pw, ph), (0, 0, 0, 190)), (int(10 * SCALE), int(10 * SCALE)), s_mask)
-        shadow = shadow.filter(ImageFilter.GaussianBlur(int(8 * SCALE)))
-
-        px = (WIDTH - pw) // 2
-        py = int(45 * SCALE) + (photo_h - ph)
-        img.paste(shadow, (px - int(4 * SCALE), py - int(4 * SCALE)), shadow)
-
-        fade = Image.new("L", (pw, ph), 255)
-        f_draw = ImageDraw.Draw(fade)
-        f_start = int(ph * 0.68)
-        for y in range(f_start, ph):
-            val = int(255 * (1.0 - ((y - f_start) / (ph - f_start)) ** 1.6))
-            f_draw.line([(0, y), (pw, y)], fill=val)
-        if "A" in player_img.getbands():
-            fade = ImageChops.multiply(player_img.split()[3], fade)
-
-        img.paste(player_img, (px, py), fade)
-
-    # Player Name
-    name_y = int(380 * SCALE)
-    font_name = load_card_font(26, bold=True)
-    draw.text((WIDTH // 2, name_y), player_name, font=font_name, fill=(255, 255, 255), anchor="mt")
-
-    # Emblem Badge: [ 95 • CAM ]
-    badge_w = int(140 * SCALE)
-    badge_h = int(32 * SCALE)
-    bx1 = (WIDTH - badge_w) // 2
-    by1 = name_y + int(36 * SCALE)
-
-    draw.rounded_rectangle(
-        [(bx1, by1), (bx1 + badge_w, by1 + badge_h)],
-        radius=int(16 * SCALE),
-        fill=(20, 18, 14, 245),
-        outline=(212, 175, 55, 220),
-        width=int(1.5 * SCALE)
-    )
-
-    font_badge = load_card_font(18, bold=True)
-    draw.text((WIDTH // 2, by1 + int(6 * SCALE)), f"{ovr}  •  {position}", font=font_badge, fill=(212, 175, 55), anchor="mt")
-
-    # 3x2 Stat Grid
-    grid_y = by1 + badge_h + int(20 * SCALE)
-    stat_w = int(120 * SCALE)
-    stat_h = int(58 * SCALE)
-    gap_x = int(12 * SCALE)
-    gap_y = int(10 * SCALE)
-
-    total_w = 3 * stat_w + 2 * gap_x
-    start_x = (WIDTH - total_w) // 2
-
-    stats_3x2 = [
-        ("PAC", pac), ("SHO", sho), ("PAS", pas),
-        ("DRI", dri), ("DEF", def_stat), ("PHY", phy),
-    ]
-
-    font_st_val = load_card_font(22, bold=True)
-    font_st_lbl = load_card_font(12, bold=True)
-
-    for i, (lbl, val) in enumerate(stats_3x2):
-        row = i // 3
-        col = i % 3
-
-        sx = start_x + col * (stat_w + gap_x)
-        sy = grid_y + row * (stat_h + gap_y)
-
-        draw.rounded_rectangle(
-            [(sx, sy), (sx + stat_w, sy + stat_h)],
-            radius=int(10 * SCALE),
-            fill=(16, 15, 18, 245),
-            outline=(212, 175, 55, 120),
-            width=int(1 * SCALE)
-        )
-
-        draw.text((sx + stat_w // 2, sy + int(8 * SCALE)), str(val), font=font_st_val, fill=(255, 255, 255), anchor="mt")
-        draw.text((sx + stat_w // 2, sy + int(34 * SCALE)), lbl, font=font_st_lbl, fill=(212, 175, 55), anchor="mt")
-
-    # Bottom Serial
-    foot_y = HEIGHT - int(38 * SCALE)
-    font_foot = load_card_font(10, bold=False)
-    draw.text((WIDTH // 2, foot_y), f"AUTHENTIC COLLECTOR CARD • NO. {ovr * 107 % 999:03d}", font=font_foot, fill=(140, 115, 45), anchor="mt")
-
-    buf = io.BytesIO()
-    img.save(buf, format="PNG", optimize=True)
-    buf.seek(0)
-    return buf
-
-
-def generate_ea_fc_card(player_data: dict, theme_name: str = "design_2") -> io.BytesIO:
-    """Main static card generation router."""
-    mode = str(theme_name).lower()
-    if mode in ["design_1", "cyber", "broadcast"]:
-        return render_design_1_cyber(player_data)
-    elif mode in ["design_3", "luxury", "poster", "minimal"]:
-        return render_design_3_luxury_poster(player_data)
-    else:
-        return render_design_2_fut_shield(player_data)
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# 🎬 ANIMATED CARD GENERATOR (GIF / ANIMATED WEBP)
-# ═════════════════════════════════════════════════════════════════════════════
-
-def _create_shimmer_overlay(w: int, h: int, progress: float) -> Image.Image:
-    """Create diagonal holographic light beam overlay."""
+def _create_shimmer_streak(w: int, h: int, progress: float, color=(255, 245, 210)) -> Image.Image:
+    """Holographic light beam sweep."""
     overlay = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
+    beam_x = -w * 0.6 + (w * 2.4) * progress
+    beam_w = int(60 * (w / 400.0))
 
-    # Beam travels from top-left (-w*0.6) to bottom-right (w*1.8)
-    beam_center_x = -w * 0.6 + (w * 2.4) * progress
-    beam_w = int(65 * (w / 460.0))
-
-    p1 = (beam_center_x, 0)
-    p2 = (beam_center_x + beam_w, 0)
-    p3 = (beam_center_x + beam_w - int(h * 0.55), h)
-    p4 = (beam_center_x - int(h * 0.55), h)
-
-    draw.polygon([p1, p2, p3, p4], fill=(255, 245, 210, 110))
-
-    # Core high-brightness streak
-    core_w = int(beam_w * 0.35)
-    c_p1 = (beam_center_x + (beam_w - core_w) // 2, 0)
-    c_p2 = (beam_center_x + (beam_w + core_w) // 2, 0)
-    c_p3 = (beam_center_x + (beam_w + core_w) // 2 - int(h * 0.55), h)
-    c_p4 = (beam_center_x + (beam_w - core_w) // 2 - int(h * 0.55), h)
-
-    draw.polygon([c_p1, c_p2, c_p3, c_p4], fill=(255, 255, 255, 175))
-    return overlay.filter(ImageFilter.GaussianBlur(int(10 * (w / 460.0))))
+    p = [
+        (beam_x, 0),
+        (beam_x + beam_w, 0),
+        (beam_x + beam_w - int(h * 0.55), h),
+        (beam_x - int(h * 0.55), h)
+    ]
+    draw.polygon(p, fill=color + (95,))
+    return overlay.filter(ImageFilter.GaussianBlur(8))
 
 
-def generate_animated_ea_fc_card(player_data: dict, anim_style: str = "holo_shimmer") -> io.BytesIO:
+def generate_animated_ea_fc_card(player_data: dict, anim_style: str = "toty_gold") -> io.BytesIO:
     """
-    Generate ultra-smooth looping animated card (GIF) in one of 3 distinct animation styles:
-    1. 'holo_shimmer': Holographic diagonal light beam sweeping across EA FC Gold Shield.
-    2. 'golden_sparks': Swarm of rising glowing golden embers/particles on Obsidian Luxury card.
-    3. 'cyber_pulse': Neon HUD electric energy pulse on Cyber Broadcast card.
+    Generate ultra-smooth looping animated GIF in any of the 10 distinct motion design styles.
     """
-    anim_style = str(anim_style).lower()
+    style_id = _normalize_style_key(anim_style)
+    cfg = CARD_STYLES[style_id]
 
-    # 1. Render base static card
-    if anim_style in ["sparks", "golden_sparks", "luxury_sparks"]:
-        base_buf = render_design_3_luxury_poster(player_data)
-        mode = "sparks"
-    elif anim_style in ["cyber", "cyber_pulse", "neon"]:
-        base_buf = render_design_1_cyber(player_data)
-        mode = "cyber"
-    else:
-        base_buf = render_design_2_fut_shield(player_data)
-        mode = "shimmer"
-
-    base_img = Image.open(base_buf).convert("RGBA")
-
-    # Resize base to animation-optimized resolution (400x600) for snappy generation & small payload
-    anim_w = 400
-    anim_h = 600
+    # 1. Base High-Res Static Render & Resize to 400x600 for performance
+    base_img = render_master_static_card(player_data, style_id=style_id)
+    anim_w, anim_h = 400, 600
     base_img = base_img.resize((anim_w, anim_h), Image.Resampling.LANCZOS)
 
     num_frames = 20
-    frame_duration_ms = 50  # 20 FPS -> 1.0s smooth loop
+    frame_duration_ms = 50  # 20 FPS -> 1.0s loop
     frames = []
 
-    if mode == "shimmer":
-        # Holographic Light Sweep + Breathing Golden Spotlight
-        for f_idx in range(num_frames):
-            t = f_idx / float(num_frames)
-            frame = base_img.copy()
+    # Deterministic particle seeds for styles requiring particle physics
+    particles = []
+    for p in range(32):
+        seed_x = ((p * 73 + 19) % 360) / 360.0
+        seed_y = ((p * 47 + 11) % 100) / 100.0
+        speed = 0.5 + ((p * 31) % 50) / 100.0
+        rad = 2 + (p % 4)
+        phase = (p * 1.3)
+        particles.append((seed_x, seed_y, speed, rad, phase))
 
-            # Sweeping Light Beam
-            shimmer = _create_shimmer_overlay(anim_w, anim_h, t)
+    gr, gg, gb = cfg["glow_rgb"]
+
+    for f_idx in range(num_frames):
+        t = f_idx / float(num_frames)
+        frame = base_img.copy()
+        fx_layer = Image.new("RGBA", (anim_w, anim_h), (0, 0, 0, 0))
+        fx_draw = ImageDraw.Draw(fx_layer)
+
+        # ─── 1. TOTY GOLD: Liquid God-Rays & Shimmer Beam ────────────────────
+        if style_id == "toty_gold":
+            shimmer = _create_shimmer_streak(anim_w, anim_h, t, color=(255, 225, 120))
             frame = Image.alpha_composite(frame, shimmer)
 
-            # Breathing Spotlight Aura
-            spot_alpha = int(45 + 25 * math.sin(2 * math.pi * t))
-            spot_layer = Image.new("RGBA", (anim_w, anim_h), (0, 0, 0, 0))
-            sp_draw = ImageDraw.Draw(spot_layer)
-            cx, cy = anim_w // 2, int(anim_h * 0.28)
-            sp_r = int(140)
-            sp_draw.ellipse([(cx - sp_r, cy - sp_r), (cx + sp_r, cy + sp_r)], fill=(255, 215, 0, spot_alpha))
-            spot_layer = spot_layer.filter(ImageFilter.GaussianBlur(16))
+            spot_alpha = int(45 + 30 * math.sin(2 * math.pi * t))
+            cx, cy = anim_w // 2, int(anim_h * 0.27)
+            fx_draw.ellipse([(cx - 140, cy - 140), (cx + 140, cy + 140)], fill=(255, 215, 0, spot_alpha))
+            fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(16))
 
-            frame = Image.alpha_composite(frame, spot_layer)
-            frames.append(frame.convert("RGB"))
+        # ─── 2. VOID ECLIPSE: Accretion Disk & Inward Gravitational Pull ──────
+        elif style_id == "void_eclipse":
+            cx, cy = anim_w // 2, int(anim_h * 0.27)
+            # Rotating accretion rings
+            for r_ring in [80, 120, 160]:
+                angle = (2 * math.pi * t) + (r_ring * 0.05)
+                arc_x = cx + int(15 * math.cos(angle))
+                arc_y = cy + int(15 * math.sin(angle))
+                fx_draw.ellipse([(arc_x - r_ring, arc_y - r_ring), (arc_x + r_ring, arc_y + r_ring)], outline=(138, 43, 226, 40), width=3)
 
-    elif mode == "sparks":
-        # 32 Rising Floating Golden Ember Particles
-        particles = []
-        for p in range(32):
-            seed_x = ((p * 73 + 19) % 360) / 360.0
-            seed_y = ((p * 47 + 11) % 100) / 100.0
-            speed = 0.5 + ((p * 31) % 50) / 100.0
-            rad = 2 + (p % 4)
-            phase = (p * 1.3)
-            particles.append((seed_x, seed_y, speed, rad, phase))
+            # Inward gravitationally pulled stardust
+            for (px_rel, py_rel, spd, rad, phase) in particles:
+                dist = (1.0 - (t * spd + py_rel) % 1.0) * 160
+                ang = phase + (2 * math.pi * t)
+                sx = cx + int(dist * math.cos(ang))
+                sy = cy + int(dist * math.sin(ang))
+                p_alpha = int(220 * (dist / 160.0))
+                fx_draw.ellipse([(sx - rad, sy - rad), (sx + rad, sy + rad)], fill=(0, 245, 255, p_alpha))
 
-        for f_idx in range(num_frames):
-            t = f_idx / float(num_frames)
-            frame = base_img.copy()
+            fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(3))
 
-            spark_layer = Image.new("RGBA", (anim_w, anim_h), (0, 0, 0, 0))
-            sp_draw = ImageDraw.Draw(spark_layer)
+        # ─── 3. CYBER HUD: Scanning Laser & Glitch Energy ────────────────────
+        elif style_id == "cyber_hud":
+            laser_y = int((t * anim_h * 1.2) % anim_h)
+            fx_draw.line([(10, laser_y), (anim_w - 10, laser_y)], fill=(0, 255, 224, 180), width=2)
+            fx_draw.line([(10, laser_y - 2), (anim_w - 10, laser_y - 2)], fill=(255, 0, 85, 120), width=1)
 
-            # Center golden glow pulse
+            pulse_a = int(60 + 50 * math.sin(2 * math.pi * t))
+            fx_draw.rounded_rectangle([(14, 14), (anim_w - 14, anim_h - 14)], radius=20, outline=(0, 255, 224, pulse_a), width=2)
+            fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(2))
+
+        # ─── 4. HYPER GLASS: Fluid Caustics & Prismatic Shimmer ──────────────
+        elif style_id == "hyper_glass":
+            shimmer = _create_shimmer_streak(anim_w, anim_h, t, color=(0, 255, 136))
+            frame = Image.alpha_composite(frame, shimmer)
+
             cx, cy = anim_w // 2, int(anim_h * 0.30)
-            glow_alpha = int(35 + 25 * math.sin(2 * math.pi * t))
-            sp_draw.ellipse([(cx - 130, cy - 130), (cx + 130, cy + 130)], fill=(212, 175, 55, glow_alpha))
+            glow_a = int(40 + 25 * math.sin(2 * math.pi * t))
+            fx_draw.ellipse([(cx - 130, cy - 130), (cx + 130, cy + 130)], fill=(0, 255, 136, glow_a))
+            fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(14))
 
-            # Draw moving particles
+        # ─── 5. INFERNO MAGMA: Molten Lava Pulse & 35 Rising Embers ──────────
+        elif style_id == "inferno_magma":
+            cx, cy = anim_w // 2, int(anim_h * 0.28)
+            lava_a = int(50 + 35 * math.sin(2 * math.pi * t))
+            fx_draw.ellipse([(cx - 120, cy - 120), (cx + 120, cy + 120)], fill=(255, 60, 0, lava_a))
+
             for (px_rel, py_rel, spd, rad, phase) in particles:
                 cur_y_pct = (py_rel - spd * t) % 1.0
-                cur_x = int(px_rel * (anim_w - 60) + 30 + math.sin(phase + 2 * math.pi * t) * 12)
-                cur_y = int(cur_y_pct * (anim_h - 100) + 40)
-
-                # Alpha fades near top and bottom
+                cur_x = int(px_rel * (anim_w - 60) + 30 + math.sin(phase + 2 * math.pi * t) * 14)
+                cur_y = int(cur_y_pct * (anim_h - 80) + 30)
                 y_norm = cur_y / float(anim_h)
-                p_alpha = int(220 * math.sin(math.pi * y_norm))
+                p_alpha = int(230 * math.sin(math.pi * y_norm))
+                fx_draw.ellipse([(cur_x - rad - 2, cur_y - rad - 2), (cur_x + rad + 2, cur_y + rad + 2)], fill=(255, 120, 0, p_alpha // 2))
+                fx_draw.ellipse([(cur_x - rad, cur_y - rad), (cur_x + rad, cur_y + rad)], fill=(255, 230, 80, p_alpha))
 
-                # Spark Core + Glow
-                sp_draw.ellipse([(cur_x - rad - 2, cur_y - rad - 2), (cur_x + rad + 2, cur_y + rad + 2)], fill=(255, 230, 90, p_alpha // 2))
-                sp_draw.ellipse([(cur_x - rad, cur_y - rad), (cur_x + rad, cur_y + rad)], fill=(255, 255, 220, p_alpha))
+            fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(2))
 
-            spark_layer = spark_layer.filter(ImageFilter.GaussianBlur(1))
-            frame = Image.alpha_composite(frame, spark_layer)
-            frames.append(frame.convert("RGB"))
+        # ─── 6. GLACIAL FROST: Sub-Zero Blizzard & Diamond Star Glitter ──────
+        elif style_id == "glacial_frost":
+            shimmer = _create_shimmer_streak(anim_w, anim_h, t, color=(160, 230, 255))
+            frame = Image.alpha_composite(frame, shimmer)
 
-    else:
-        # Cyber Neon Energy Pulse
-        for f_idx in range(num_frames):
-            t = f_idx / float(num_frames)
-            frame = base_img.copy()
+            for p_i, (px_rel, py_rel, spd, rad, phase) in enumerate(particles[:16]):
+                star_x = int(px_rel * (anim_w - 40) + 20)
+                star_y = int(py_rel * (anim_h - 40) + 20)
+                twinkle = int(240 * abs(math.sin(phase + 2 * math.pi * t * 2)))
+                fx_draw.line([(star_x - 5, star_y), (star_x + 5, star_y)], fill=(232, 247, 255, twinkle), width=2)
+                fx_draw.line([(star_x, star_y - 5), (star_x, star_y + 5)], fill=(232, 247, 255, twinkle), width=2)
 
-            pulse_layer = Image.new("RGBA", (anim_w, anim_h), (0, 0, 0, 0))
-            p_draw = ImageDraw.Draw(pulse_layer)
+            fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(2))
 
-            # Pulsing Neon Hexagon Edge Highlight
-            pulse_alpha = int(60 + 50 * math.sin(2 * math.pi * t))
-            p_draw.rounded_rectangle([(16, 16), (anim_w - 16, anim_h - 16)], radius=24, outline=(0, 240, 255, pulse_alpha), width=3)
+        # ─── 7. ANIME SAKUGA: Crackling Lightning & Ego Aura Flames ──────────
+        elif style_id == "anime_sakuga":
+            cx, cy = anim_w // 2, int(anim_h * 0.26)
+            aura_a = int(60 + 35 * math.sin(4 * math.pi * t))
+            fx_draw.ellipse([(cx - 140, cy - 140), (cx + 140, cy + 140)], fill=(0, 255, 240, aura_a))
 
-            # Electric Neon Cyan Center Core
+            # Lightning Arcs
+            for l_i in range(3):
+                lx1 = cx + int(100 * math.cos(l_i * 2 + t * 2 * math.pi))
+                ly1 = cy + int(100 * math.sin(l_i * 2 + t * 2 * math.pi))
+                lx2 = lx1 + random.randint(-20, 20)
+                ly2 = ly1 + random.randint(-30, 30)
+                fx_draw.line([(lx1, ly1), (lx2, ly2)], fill=(255, 255, 255, 220), width=2)
+
+            fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(4))
+
+        # ─── 8. ROYAL 24K: Heavy Bullion Specular Glide & Velvet Sheen ───────
+        elif style_id == "royal_24k":
+            shimmer = _create_shimmer_streak(anim_w, anim_h, t, color=(255, 230, 160))
+            frame = Image.alpha_composite(frame, shimmer)
+
+            cx, cy = anim_w // 2, int(anim_h * 0.30)
+            v_a = int(35 + 20 * math.sin(2 * math.pi * t))
+            fx_draw.ellipse([(cx - 120, cy - 120), (cx + 120, cy + 120)], fill=(212, 175, 55, v_a))
+            fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(12))
+
+        # ─── 9. AERO CARBON: F1 Streamlines & Telemetry Blink ────────────────
+        elif style_id == "aero_carbon":
+            for s_idx in range(6):
+                stream_y = int((anim_h * 0.2) + s_idx * 55 + math.sin(t * 2 * math.pi + s_idx) * 10)
+                s_prog = (t + s_idx * 0.18) % 1.0
+                stream_x = int(s_prog * anim_w)
+                fx_draw.line([(stream_x, stream_y), (stream_x + 45, stream_y)], fill=(0, 229, 255, 170), width=2)
+
+            pulse_a = int(70 + 40 * math.sin(2 * math.pi * t))
+            fx_draw.rounded_rectangle([(14, 14), (anim_w - 14, anim_h - 14)], radius=20, outline=(255, 24, 1, pulse_a), width=2)
+            fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(2))
+
+        # ─── 10. UCL NIGHT: Starlight Constellations & Chrome Shimmer ────────
+        else:
+            shimmer = _create_shimmer_streak(anim_w, anim_h, t, color=(180, 230, 255))
+            frame = Image.alpha_composite(frame, shimmer)
+
+            # Star constellation laser lines
             cx, cy = anim_w // 2, int(anim_h * 0.28)
-            p_draw.ellipse([(cx - 110, cy - 110), (cx + 110, cy + 110)], fill=(0, 220, 255, int(pulse_alpha * 0.7)))
+            star_pts = [
+                (cx, cy - 80),
+                (cx + 70, cy - 20),
+                (cx + 45, cy + 65),
+                (cx - 45, cy + 65),
+                (cx - 70, cy - 20)
+            ]
+            for s_i in range(len(star_pts)):
+                p1 = star_pts[s_i]
+                p2 = star_pts[(s_i + 1) % len(star_pts)]
+                s_a = int(120 + 80 * math.sin(2 * math.pi * t + s_i))
+                fx_draw.line([p1, p2], fill=(0, 212, 255, s_a), width=1)
+                fx_draw.ellipse([(p1[0] - 3, p1[1] - 3), (p1[0] + 3, p1[1] + 3)], fill=(255, 255, 255, s_a + 40))
 
-            # Moving Energy Glitch Sweep
-            glitch_y = int((t * 1.3 % 1.0) * anim_h)
-            p_draw.line([(20, glitch_y), (anim_w - 20, glitch_y)], fill=(0, 240, 255, int(pulse_alpha * 0.9)), width=2)
+            fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(3))
 
-            pulse_layer = pulse_layer.filter(ImageFilter.GaussianBlur(4))
-            frame = Image.alpha_composite(frame, pulse_layer)
-            frames.append(frame.convert("RGB"))
+        frame = Image.alpha_composite(frame, fx_layer)
+        frames.append(frame.convert("RGB"))
 
-    # Output GIF buffer
     buf = io.BytesIO()
     frames[0].save(
         buf,
@@ -848,4 +712,3 @@ def generate_animated_ea_fc_card(player_data: dict, anim_style: str = "holo_shim
     )
     buf.seek(0)
     return buf
-
