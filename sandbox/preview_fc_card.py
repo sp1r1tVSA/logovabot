@@ -1,23 +1,25 @@
 """
 sandbox/preview_fc_card.py
 
-Standalone offline sandbox script to test and preview 3 distinct EA FC card designs.
-Renders all 3 designs into sandbox/output/ for visual comparison.
+Standalone offline sandbox script to test and preview EA FC card generation:
+- 3 Distinct Static Card Designs (PNG)
+- 3 Distinct Animated Dynamic Card Styles (GIF)
 """
 
 import os
 import sys
+import time
 
 # Add project root to sys.path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from fc_card_generator import generate_ea_fc_card
+from fc_card_generator import generate_ea_fc_card, generate_animated_ea_fc_card
 
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 def run_tests():
-    print("🧪 Rendering 3 Distinct Card Designs for Visual Review...")
+    print("🧪 Rendering Static & Animated Card Previews...")
 
     test_player = {
         "player_name": "ROONY BARDGHJI",
@@ -37,28 +39,38 @@ def run_tests():
         }
     }
 
-    # 1. Design 1: Cyber Hybrid / Modern Broadcast
-    buf_1 = generate_ea_fc_card(test_player, theme_name="design_1")
-    path_1 = os.path.join(OUTPUT_DIR, "design_1_cyber.png")
-    with open(path_1, "wb") as f:
-        f.write(buf_1.getvalue())
-    print(f"✅ Generated Design 1 [Cyber Broadcast]: {path_1}")
+    # 1. Static Designs
+    print("\n--- 🖼️ STATIC DESIGNS ---")
+    for name, theme in [
+        ("design_1_cyber.png", "design_1"),
+        ("design_2_fut_shield.png", "design_2"),
+        ("design_3_luxury_poster.png", "design_3"),
+    ]:
+        buf = generate_ea_fc_card(test_player, theme_name=theme)
+        out_path = os.path.join(OUTPUT_DIR, name)
+        with open(out_path, "wb") as f:
+            f.write(buf.getvalue())
+        print(f"✅ Generated Static [{theme}]: {out_path}")
 
-    # 2. Design 2: Authentic EA FC 25 FUT Shield
-    buf_2 = generate_ea_fc_card(test_player, theme_name="design_2")
-    path_2 = os.path.join(OUTPUT_DIR, "design_2_fut_shield.png")
-    with open(path_2, "wb") as f:
-        f.write(buf_2.getvalue())
-    print(f"✅ Generated Design 2 [EA FC FUT Shield]: {path_2}")
+    # 2. Animated Looping Cards (GIF)
+    print("\n--- 🎬 ANIMATED DYNAMIC CARDS ---")
+    anim_styles = [
+        ("anim_1_holo_shimmer.gif", "holo_shimmer", "1. Голографический блик (Holo Shimmer)"),
+        ("anim_2_golden_sparks.gif", "golden_sparks", "2. Парящие золотые искры (Golden Sparks)"),
+        ("anim_3_cyber_pulse.gif", "cyber_pulse", "3. Неоновый кибер-пульс (Cyber Pulse)"),
+    ]
 
-    # 3. Design 3: Obsidian Luxury VIP / Editorial Poster
-    buf_3 = generate_ea_fc_card(test_player, theme_name="design_3")
-    path_3 = os.path.join(OUTPUT_DIR, "design_3_luxury_poster.png")
-    with open(path_3, "wb") as f:
-        f.write(buf_3.getvalue())
-    print(f"✅ Generated Design 3 [Obsidian Luxury Poster]: {path_3}")
+    for filename, style_id, desc in anim_styles:
+        t0 = time.time()
+        buf = generate_animated_ea_fc_card(test_player, anim_style=style_id)
+        elapsed = time.time() - t0
+        out_path = os.path.join(OUTPUT_DIR, filename)
+        with open(out_path, "wb") as f:
+            f.write(buf.getvalue())
+        sz_kb = len(buf.getvalue()) / 1024.0
+        print(f"✅ Generated Animated [{desc}]: {out_path} ({sz_kb:.1f} KB in {elapsed:.2f}s)")
 
-    print("\n🎉 All 3 designs generated successfully in sandbox/output/!")
+    print("\n🎉 All static and animated preview cards rendered successfully!")
 
 if __name__ == "__main__":
     run_tests()

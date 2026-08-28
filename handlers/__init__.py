@@ -21,7 +21,9 @@ from handlers.lab import (
     cb_lab_flags_menu,
     cb_lab_toggle_flag,
     cb_lab_card_menu,
+    cb_lab_anim_card_menu,
     cb_lab_demo_card,
+    cb_lab_demo_anim,
     cb_lab_card_pick_club,
     cb_lab_card_pick_player,
     cb_lab_card_generate_player,
@@ -637,7 +639,9 @@ def _register_admin_handlers(app: Application) -> None:
     app.add_handler(CallbackQueryHandler(cb_lab_flags_menu, pattern="^lab_flags_menu$"))
     app.add_handler(CallbackQueryHandler(cb_lab_toggle_flag, pattern="^lab_toggle_flag_.*$"))
     app.add_handler(CallbackQueryHandler(cb_lab_card_menu, pattern="^lab_card_menu$"))
+    app.add_handler(CallbackQueryHandler(cb_lab_anim_card_menu, pattern="^lab_anim_card_menu$"))
     app.add_handler(CallbackQueryHandler(cb_lab_demo_card, pattern="^lab_demo_card_.*$"))
+    app.add_handler(CallbackQueryHandler(cb_lab_demo_anim, pattern="^lab_demo_anim_.*$"))
     app.add_handler(CallbackQueryHandler(cb_lab_card_pick_club, pattern="^lab_card_pick_club$"))
     app.add_handler(CallbackQueryHandler(cb_lab_card_pick_player, pattern="^lab_pick_player_.*$"))
     app.add_handler(CallbackQueryHandler(cb_lab_card_generate_player, pattern="^lab_gen_card_.*$"))

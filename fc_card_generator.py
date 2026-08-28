@@ -675,7 +675,7 @@ def render_design_3_luxury_poster(player_data: dict) -> io.BytesIO:
 
 
 def generate_ea_fc_card(player_data: dict, theme_name: str = "design_2") -> io.BytesIO:
-    """Main card generation router."""
+    """Main static card generation router."""
     mode = str(theme_name).lower()
     if mode in ["design_1", "cyber", "broadcast"]:
         return render_design_1_cyber(player_data)
@@ -683,3 +683,169 @@ def generate_ea_fc_card(player_data: dict, theme_name: str = "design_2") -> io.B
         return render_design_3_luxury_poster(player_data)
     else:
         return render_design_2_fut_shield(player_data)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 🎬 ANIMATED CARD GENERATOR (GIF / ANIMATED WEBP)
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _create_shimmer_overlay(w: int, h: int, progress: float) -> Image.Image:
+    """Create diagonal holographic light beam overlay."""
+    overlay = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+
+    # Beam travels from top-left (-w*0.6) to bottom-right (w*1.8)
+    beam_center_x = -w * 0.6 + (w * 2.4) * progress
+    beam_w = int(65 * (w / 460.0))
+
+    p1 = (beam_center_x, 0)
+    p2 = (beam_center_x + beam_w, 0)
+    p3 = (beam_center_x + beam_w - int(h * 0.55), h)
+    p4 = (beam_center_x - int(h * 0.55), h)
+
+    draw.polygon([p1, p2, p3, p4], fill=(255, 245, 210, 110))
+
+    # Core high-brightness streak
+    core_w = int(beam_w * 0.35)
+    c_p1 = (beam_center_x + (beam_w - core_w) // 2, 0)
+    c_p2 = (beam_center_x + (beam_w + core_w) // 2, 0)
+    c_p3 = (beam_center_x + (beam_w + core_w) // 2 - int(h * 0.55), h)
+    c_p4 = (beam_center_x + (beam_w - core_w) // 2 - int(h * 0.55), h)
+
+    draw.polygon([c_p1, c_p2, c_p3, c_p4], fill=(255, 255, 255, 175))
+    return overlay.filter(ImageFilter.GaussianBlur(int(10 * (w / 460.0))))
+
+
+def generate_animated_ea_fc_card(player_data: dict, anim_style: str = "holo_shimmer") -> io.BytesIO:
+    """
+    Generate ultra-smooth looping animated card (GIF) in one of 3 distinct animation styles:
+    1. 'holo_shimmer': Holographic diagonal light beam sweeping across EA FC Gold Shield.
+    2. 'golden_sparks': Swarm of rising glowing golden embers/particles on Obsidian Luxury card.
+    3. 'cyber_pulse': Neon HUD electric energy pulse on Cyber Broadcast card.
+    """
+    anim_style = str(anim_style).lower()
+
+    # 1. Render base static card
+    if anim_style in ["sparks", "golden_sparks", "luxury_sparks"]:
+        base_buf = render_design_3_luxury_poster(player_data)
+        mode = "sparks"
+    elif anim_style in ["cyber", "cyber_pulse", "neon"]:
+        base_buf = render_design_1_cyber(player_data)
+        mode = "cyber"
+    else:
+        base_buf = render_design_2_fut_shield(player_data)
+        mode = "shimmer"
+
+    base_img = Image.open(base_buf).convert("RGBA")
+
+    # Resize base to animation-optimized resolution (400x600) for snappy generation & small payload
+    anim_w = 400
+    anim_h = 600
+    base_img = base_img.resize((anim_w, anim_h), Image.Resampling.LANCZOS)
+
+    num_frames = 20
+    frame_duration_ms = 50  # 20 FPS -> 1.0s smooth loop
+    frames = []
+
+    if mode == "shimmer":
+        # Holographic Light Sweep + Breathing Golden Spotlight
+        for f_idx in range(num_frames):
+            t = f_idx / float(num_frames)
+            frame = base_img.copy()
+
+            # Sweeping Light Beam
+            shimmer = _create_shimmer_overlay(anim_w, anim_h, t)
+            frame = Image.alpha_composite(frame, shimmer)
+
+            # Breathing Spotlight Aura
+            spot_alpha = int(45 + 25 * math.sin(2 * math.pi * t))
+            spot_layer = Image.new("RGBA", (anim_w, anim_h), (0, 0, 0, 0))
+            sp_draw = ImageDraw.Draw(spot_layer)
+            cx, cy = anim_w // 2, int(anim_h * 0.28)
+            sp_r = int(140)
+            sp_draw.ellipse([(cx - sp_r, cy - sp_r), (cx + sp_r, cy + sp_r)], fill=(255, 215, 0, spot_alpha))
+            spot_layer = spot_layer.filter(ImageFilter.GaussianBlur(16))
+
+            frame = Image.alpha_composite(frame, spot_layer)
+            frames.append(frame.convert("RGB"))
+
+    elif mode == "sparks":
+        # 32 Rising Floating Golden Ember Particles
+        particles = []
+        for p in range(32):
+            seed_x = ((p * 73 + 19) % 360) / 360.0
+            seed_y = ((p * 47 + 11) % 100) / 100.0
+            speed = 0.5 + ((p * 31) % 50) / 100.0
+            rad = 2 + (p % 4)
+            phase = (p * 1.3)
+            particles.append((seed_x, seed_y, speed, rad, phase))
+
+        for f_idx in range(num_frames):
+            t = f_idx / float(num_frames)
+            frame = base_img.copy()
+
+            spark_layer = Image.new("RGBA", (anim_w, anim_h), (0, 0, 0, 0))
+            sp_draw = ImageDraw.Draw(spark_layer)
+
+            # Center golden glow pulse
+            cx, cy = anim_w // 2, int(anim_h * 0.30)
+            glow_alpha = int(35 + 25 * math.sin(2 * math.pi * t))
+            sp_draw.ellipse([(cx - 130, cy - 130), (cx + 130, cy + 130)], fill=(212, 175, 55, glow_alpha))
+
+            # Draw moving particles
+            for (px_rel, py_rel, spd, rad, phase) in particles:
+                cur_y_pct = (py_rel - spd * t) % 1.0
+                cur_x = int(px_rel * (anim_w - 60) + 30 + math.sin(phase + 2 * math.pi * t) * 12)
+                cur_y = int(cur_y_pct * (anim_h - 100) + 40)
+
+                # Alpha fades near top and bottom
+                y_norm = cur_y / float(anim_h)
+                p_alpha = int(220 * math.sin(math.pi * y_norm))
+
+                # Spark Core + Glow
+                sp_draw.ellipse([(cur_x - rad - 2, cur_y - rad - 2), (cur_x + rad + 2, cur_y + rad + 2)], fill=(255, 230, 90, p_alpha // 2))
+                sp_draw.ellipse([(cur_x - rad, cur_y - rad), (cur_x + rad, cur_y + rad)], fill=(255, 255, 220, p_alpha))
+
+            spark_layer = spark_layer.filter(ImageFilter.GaussianBlur(1))
+            frame = Image.alpha_composite(frame, spark_layer)
+            frames.append(frame.convert("RGB"))
+
+    else:
+        # Cyber Neon Energy Pulse
+        for f_idx in range(num_frames):
+            t = f_idx / float(num_frames)
+            frame = base_img.copy()
+
+            pulse_layer = Image.new("RGBA", (anim_w, anim_h), (0, 0, 0, 0))
+            p_draw = ImageDraw.Draw(pulse_layer)
+
+            # Pulsing Neon Hexagon Edge Highlight
+            pulse_alpha = int(60 + 50 * math.sin(2 * math.pi * t))
+            p_draw.rounded_rectangle([(16, 16), (anim_w - 16, anim_h - 16)], radius=24, outline=(0, 240, 255, pulse_alpha), width=3)
+
+            # Electric Neon Cyan Center Core
+            cx, cy = anim_w // 2, int(anim_h * 0.28)
+            p_draw.ellipse([(cx - 110, cy - 110), (cx + 110, cy + 110)], fill=(0, 220, 255, int(pulse_alpha * 0.7)))
+
+            # Moving Energy Glitch Sweep
+            glitch_y = int((t * 1.3 % 1.0) * anim_h)
+            p_draw.line([(20, glitch_y), (anim_w - 20, glitch_y)], fill=(0, 240, 255, int(pulse_alpha * 0.9)), width=2)
+
+            pulse_layer = pulse_layer.filter(ImageFilter.GaussianBlur(4))
+            frame = Image.alpha_composite(frame, pulse_layer)
+            frames.append(frame.convert("RGB"))
+
+    # Output GIF buffer
+    buf = io.BytesIO()
+    frames[0].save(
+        buf,
+        format="GIF",
+        save_all=True,
+        append_images=frames[1:],
+        duration=frame_duration_ms,
+        loop=0,
+        optimize=True
+    )
+    buf.seek(0)
+    return buf
+

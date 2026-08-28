@@ -168,10 +168,106 @@ async def cb_lab_card_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         [InlineKeyboardButton("⚡ 1. Cyber Broadcast (Неон HUD)", callback_data="lab_demo_card_design_1")],
         [InlineKeyboardButton("👑 2. EA FC 25 (Золотой Щит)", callback_data="lab_demo_card_design_2")],
         [InlineKeyboardButton("💎 3. Obsidian Luxury (VIP Люкс)", callback_data="lab_demo_card_design_3")],
+        [InlineKeyboardButton("🎬 Анимированные карточки (GIF)", callback_data="lab_anim_card_menu")],
         [InlineKeyboardButton("🔍 Выбрать реального игрока из клуба", callback_data="lab_card_pick_club")],
         [InlineKeyboardButton("« Назад в лабораторию", callback_data="admin_lab_menu")],
     ]
     await safe_edit_or_reply(query, context, text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+@admin_only
+async def cb_lab_anim_card_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Animated card testing menu."""
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+
+    text = (
+        "🎬 <b>Тестирование Анимированных Карточек Игроков (GIF)</b>\n\n"
+        "Выберите стиль динамической анимации:\n\n"
+        "1. 🌟 <b>Голографический блик (Holo Shimmer)</b>\n"
+        "   • Диагональный золотой луч света скользит по карточке EA FC Gold Shield с пульсирующим ореолом.\n\n"
+        "2. ✨ <b>Парящие золотые искры (Golden Sparks)</b>\n"
+        "   • Живой рой светящихся золотых частиц и искр, поднимающихся за игроком на Luxury Onyx.\n\n"
+        "3. ⚡ <b>Неоновый кибер-пульс (Cyber Pulse)</b>\n"
+        "   • Пульсирующие неоновые границы HUD и энергетические бегущие волны на Cyber Broadcast."
+    )
+    keyboard = [
+        [InlineKeyboardButton("🌟 1. Голографический блик (Holo)", callback_data="lab_demo_anim_holo_shimmer")],
+        [InlineKeyboardButton("✨ 2. Парящие искры (Sparks)", callback_data="lab_demo_anim_golden_sparks")],
+        [InlineKeyboardButton("⚡ 3. Неоновый кибер-пульс (Pulse)", callback_data="lab_demo_anim_cyber_pulse")],
+        [InlineKeyboardButton("« Назад к статичным карточкам", callback_data="lab_card_menu")],
+        [InlineKeyboardButton("« В лабораторию", callback_data="admin_lab_menu")],
+    ]
+    await safe_edit_or_reply(query, context, text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+@admin_only
+async def cb_lab_demo_anim(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Generate animated card and send directly via send_animation."""
+    query = update.callback_query
+    if not query or not query.data:
+        return
+    await query.answer("Рендерю анимированную карточку (GIF)...")
+
+    anim_style = query.data.replace("lab_demo_anim_", "")
+    user_id = query.from_user.id
+
+    test_player = {
+        "player_name": "ROONY BARDGHJI",
+        "team_name": "АЕК",
+        "position": "CAM",
+        "total_goals": 18,
+        "total_assists": 9,
+        "matches_played": 12,
+        "ovr": 95,
+        "custom_stats": {
+            "PAC": 96,
+            "SHO": 98,
+            "PAS": 99,
+            "DRI": 86,
+            "DEF": 80,
+            "PHY": 98
+        }
+    }
+
+    buf = await asyncio.to_thread(fc_card_generator.generate_animated_ea_fc_card, test_player, anim_style)
+    stats = fc_card_generator.calculate_fut_attributes(test_player)
+
+    anim_titles = {
+        "holo_shimmer": "🌟 ГОЛОГРАФИЧЕСКИЙ БЛИК (HOLO SHIMMER)",
+        "golden_sparks": "✨ ПАРЯЩИЕ ЗОЛОТЫЕ ИСКРЫ (GOLDEN SPARKS)",
+        "cyber_pulse": "⚡ НЕОНОВЫЙ КИБЕР-ПУЛЬС (CYBER PULSE)",
+    }
+    cur_title = anim_titles.get(anim_style, anim_style.upper())
+
+    caption = (
+        f"🎬 <b>Анимированная карточка: {cur_title}</b>\n\n"
+        f"👤 <b>{html.escape(test_player['player_name'])}</b> ({html.escape(test_player['team_name'])})\n"
+        f"⭐ <b>OVR: {stats['ovr']}</b> | Позиция: <b>{stats['position']}</b>\n"
+        f"⚡ <b>PAC:</b> {stats['pac']} | 🎯 <b>SHO:</b> {stats['sho']} | 🅰️ <b>PAS:</b> {stats['pas']}\n"
+        f"🪄 <b>DRI:</b> {stats['dri']} | 🛡️ <b>DEF:</b> {stats['def']} | 💪 <b>PHY:</b> {stats['phy']}\n\n"
+        f"<i>Зацикленная плавная анимация в формате GIF / Telegram Animation.</i>"
+    )
+
+    keyboard = [
+        [
+            InlineKeyboardButton("🌟 Блик", callback_data="lab_demo_anim_holo_shimmer"),
+            InlineKeyboardButton("✨ Искры", callback_data="lab_demo_anim_golden_sparks"),
+            InlineKeyboardButton("⚡ Неон", callback_data="lab_demo_anim_cyber_pulse"),
+        ],
+        [InlineKeyboardButton("« К выбору анимации", callback_data="lab_anim_card_menu")],
+        [InlineKeyboardButton("« В лабораторию", callback_data="admin_lab_menu")]
+    ]
+
+    await context.bot.send_animation(
+        chat_id=user_id,
+        animation=buf,
+        caption=caption,
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
 
 
 @admin_only
