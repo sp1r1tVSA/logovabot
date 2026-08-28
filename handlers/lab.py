@@ -147,22 +147,27 @@ async def cb_lab_toggle_flag(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 @admin_only
 async def cb_lab_card_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Card test menu with presets & team picker."""
+    """Card test menu with 3 fundamentally distinct design concepts."""
     query = update.callback_query
     if not query:
         return
     await query.answer()
 
     text = (
-        "🃏 <b>Тестирование карточек игроков EA FC</b>\n\n"
-        "Выберите вариант генерации карточки:\n"
-        "1. <b>Демо-карточки</b> — готовые образцы разных стилей (Gold Rare, TOTW, Icon).\n"
-        "2. <b>Реальный игрок из базы</b> — выбор клуба и футболиста с расчетом OVR по реальным голам и ассистам сезона."
+        "🃏 <b>Сравнение 3 концептов дизайна карточек</b>\n\n"
+        "Выберите дизайн для генерации превью:\n\n"
+        "1. ⚡ <b>Концепт 1: Cyber Hybrid (Modern Broadcast)</b>\n"
+        "   • Неоново-бирюзовый/золотой кибер-стиль, вертикальный HUD-рейтинг, прогресс-бары стат.\n\n"
+        "2. 👑 <b>Концепт 2: EA FC 25 (Authentic FUT Shield)</b>\n"
+        "   • Классическая форма золотого щита FIFA 25, 3D фаски, центрированный игрок, классическая сетка 2x3.\n\n"
+        "3. 💎 <b>Концепт 3: Obsidian Luxury (VIP Editorial Poster)</b>\n"
+        "   • Премиальный черный оникс с двойной золотой окантовкой, эмблема [95 • CAM], 6 капсул 3x2.\n\n"
+        "Или выберите реального игрока из клуба лиги."
     )
     keyboard = [
-        [InlineKeyboardButton("🌟 Демо: Золотая (Gold Rare)", callback_data="lab_demo_card_gold_rare")],
-        [InlineKeyboardButton("⚡ Демо: Информ (TOTW)", callback_data="lab_demo_card_totw")],
-        [InlineKeyboardButton("👑 Демо: Икона (Legend Icon)", callback_data="lab_demo_card_icon")],
+        [InlineKeyboardButton("⚡ 1. Cyber Broadcast (Неон HUD)", callback_data="lab_demo_card_design_1")],
+        [InlineKeyboardButton("👑 2. EA FC 25 (Золотой Щит)", callback_data="lab_demo_card_design_2")],
+        [InlineKeyboardButton("💎 3. Obsidian Luxury (VIP Люкс)", callback_data="lab_demo_card_design_3")],
         [InlineKeyboardButton("🔍 Выбрать реального игрока из клуба", callback_data="lab_card_pick_club")],
         [InlineKeyboardButton("« Назад в лабораторию", callback_data="admin_lab_menu")],
     ]
@@ -171,7 +176,7 @@ async def cb_lab_card_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 @admin_only
 async def cb_lab_demo_card(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Generate preset demo card and send directly to admin in DM."""
+    """Generate selected design concept and send directly to admin in DM."""
     query = update.callback_query
     if not query or not query.data:
         return
@@ -180,52 +185,50 @@ async def cb_lab_demo_card(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     theme_name = query.data.replace("lab_demo_card_", "")
     user_id = query.from_user.id
 
-    presets = {
-        "gold_rare": {
-            "player_name": "VINICIUS JR.",
-            "team_name": "Спортинг",
-            "position": "LW",
-            "total_goals": 14,
-            "total_assists": 8,
-            "matches_played": 10,
-            "ovr": 92,
-            "custom_stats": {"PAC": 96, "SHO": 87, "PAS": 83, "DRI": 93, "DEF": 36, "PHY": 78}
-        },
-        "totw": {
-            "player_name": "GYÖKERES",
-            "team_name": "Спортинг",
-            "position": "ST",
-            "total_goals": 21,
-            "total_assists": 6,
-            "matches_played": 12,
-            "ovr": 90,
-        },
-        "icon": {
-            "player_name": "MALDINI",
-            "team_name": "Бенфика",
-            "position": "CB",
-            "total_goals": 3,
-            "total_assists": 2,
-            "matches_played": 14,
-            "ovr": 94,
+    test_player = {
+        "player_name": "ROONY BARDGHJI",
+        "team_name": "АЕК",
+        "position": "CAM",
+        "total_goals": 18,
+        "total_assists": 9,
+        "matches_played": 12,
+        "ovr": 95,
+        "custom_stats": {
+            "PAC": 96,
+            "SHO": 98,
+            "PAS": 99,
+            "DRI": 86,
+            "DEF": 80,
+            "PHY": 98
         }
     }
 
-    data = presets.get(theme_name, presets["gold_rare"])
-    buf = await asyncio.to_thread(fc_card_generator.generate_ea_fc_card, data, theme_name)
+    buf = await asyncio.to_thread(fc_card_generator.generate_ea_fc_card, test_player, theme_name)
+    stats = fc_card_generator.calculate_fut_attributes(test_player)
 
-    stats = fc_card_generator.calculate_fut_attributes(data)
+    design_names = {
+        "design_1": "1. CYBER HYBRID (BROADCAST)",
+        "design_2": "2. AUTHENTIC EA FC 25 SHIELD",
+        "design_3": "3. OBSIDIAN LUXURY POSTER",
+    }
+    cur_title = design_names.get(theme_name, theme_name.upper())
+
     caption = (
-        f"🧪 <b>Тест карточки EA FC [{theme_name.upper()}]</b>\n\n"
-        f"👤 <b>{html.escape(data['player_name'])}</b> ({html.escape(data['team_name'])})\n"
+        f"🧪 <b>Превью концепта: {cur_title}</b>\n\n"
+        f"👤 <b>{html.escape(test_player['player_name'])}</b> ({html.escape(test_player['team_name'])})\n"
         f"⭐ <b>OVR: {stats['ovr']}</b> | Позиция: <b>{stats['position']}</b>\n"
         f"⚡ <b>PAC:</b> {stats['pac']} | 🎯 <b>SHO:</b> {stats['sho']} | 🅰️ <b>PAS:</b> {stats['pas']}\n"
         f"🪄 <b>DRI:</b> {stats['dri']} | 🛡️ <b>DEF:</b> {stats['def']} | 💪 <b>PHY:</b> {stats['phy']}\n\n"
-        f"<i>Сгенерировано в тестовой лаборатории админа.</i>"
+        f"<i>Нажмите кнопки ниже для сравнения с другими концептами:</i>"
     )
 
     keyboard = [
-        [InlineKeyboardButton("🔄 Другой стиль", callback_data="lab_card_menu")],
+        [
+            InlineKeyboardButton("⚡ Дизайн 1", callback_data="lab_demo_card_design_1"),
+            InlineKeyboardButton("👑 Дизайн 2", callback_data="lab_demo_card_design_2"),
+            InlineKeyboardButton("💎 Дизайн 3", callback_data="lab_demo_card_design_3"),
+        ],
+        [InlineKeyboardButton("« К выбору дизайна", callback_data="lab_card_menu")],
         [InlineKeyboardButton("« В лабораторию", callback_data="admin_lab_menu")]
     ]
 

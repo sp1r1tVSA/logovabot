@@ -1,8 +1,8 @@
 """
 sandbox/preview_fc_card.py
 
-Standalone offline sandbox script to test and preview EA FC player card generation.
-Saves rendered PNG cards directly into sandbox/output/ for rapid visual testing.
+Standalone offline sandbox script to test and preview 3 distinct EA FC card designs.
+Renders all 3 designs into sandbox/output/ for visual comparison.
 """
 
 import os
@@ -17,65 +17,48 @@ OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 def run_tests():
-    print("🧪 Running EA FC Card Sandbox Previews...")
+    print("🧪 Rendering 3 Distinct Card Designs for Visual Review...")
 
-    # 1. Test Gold Rare Card (Striker)
-    player_gold = {
-        "player_name": "VINICIUS JR.",
-        "team_name": "Спортинг",
-        "position": "LW",
-        "total_goals": 15,
-        "total_assists": 8,
-        "matches_played": 10,
-        "ovr": 92,
+    test_player = {
+        "player_name": "ROONY BARDGHJI",
+        "team_name": "АЕК",
+        "position": "CAM",
+        "total_goals": 18,
+        "total_assists": 9,
+        "matches_played": 12,
+        "ovr": 95,
         "custom_stats": {
             "PAC": 96,
-            "SHO": 87,
-            "PAS": 83,
-            "DRI": 93,
-            "DEF": 36,
-            "PHY": 78
+            "SHO": 98,
+            "PAS": 99,
+            "DRI": 86,
+            "DEF": 80,
+            "PHY": 98
         }
     }
-    buf_gold = generate_ea_fc_card(player_gold, theme_name="gold_rare")
-    gold_path = os.path.join(OUTPUT_DIR, "preview_gold_card.png")
-    with open(gold_path, "wb") as f:
-        f.write(buf_gold.getvalue())
-    print(f"✅ Generated Gold Rare Preview: {gold_path}")
 
-    # 2. Test TOTW Inform Card (Midfielder)
-    player_totw = {
-        "player_name": "GYÖKERES",
-        "team_name": "Спортинг",
-        "position": "ST",
-        "total_goals": 22,
-        "total_assists": 5,
-        "matches_played": 12,
-        "ovr": 90,
-    }
-    buf_totw = generate_ea_fc_card(player_totw, theme_name="totw")
-    totw_path = os.path.join(OUTPUT_DIR, "preview_totw_card.png")
-    with open(totw_path, "wb") as f:
-        f.write(buf_totw.getvalue())
-    print(f"✅ Generated TOTW Inform Preview: {totw_path}")
+    # 1. Design 1: Cyber Hybrid / Modern Broadcast
+    buf_1 = generate_ea_fc_card(test_player, theme_name="design_1")
+    path_1 = os.path.join(OUTPUT_DIR, "design_1_cyber.png")
+    with open(path_1, "wb") as f:
+        f.write(buf_1.getvalue())
+    print(f"✅ Generated Design 1 [Cyber Broadcast]: {path_1}")
 
-    # 3. Test Icon Card (Defender)
-    player_icon = {
-        "player_name": "MALINI",
-        "team_name": "Бенфика",
-        "position": "CB",
-        "total_goals": 3,
-        "total_assists": 2,
-        "matches_played": 14,
-        "ovr": 94,
-    }
-    buf_icon = generate_ea_fc_card(player_icon, theme_name="icon")
-    icon_path = os.path.join(OUTPUT_DIR, "preview_icon_card.png")
-    with open(icon_path, "wb") as f:
-        f.write(buf_icon.getvalue())
-    print(f"✅ Generated Icon Legend Preview: {icon_path}")
+    # 2. Design 2: Authentic EA FC 25 FUT Shield
+    buf_2 = generate_ea_fc_card(test_player, theme_name="design_2")
+    path_2 = os.path.join(OUTPUT_DIR, "design_2_fut_shield.png")
+    with open(path_2, "wb") as f:
+        f.write(buf_2.getvalue())
+    print(f"✅ Generated Design 2 [EA FC FUT Shield]: {path_2}")
 
-    print("\n🎉 All preview cards rendered successfully in sandbox/output/!")
+    # 3. Design 3: Obsidian Luxury VIP / Editorial Poster
+    buf_3 = generate_ea_fc_card(test_player, theme_name="design_3")
+    path_3 = os.path.join(OUTPUT_DIR, "design_3_luxury_poster.png")
+    with open(path_3, "wb") as f:
+        f.write(buf_3.getvalue())
+    print(f"✅ Generated Design 3 [Obsidian Luxury Poster]: {path_3}")
+
+    print("\n🎉 All 3 designs generated successfully in sandbox/output/!")
 
 if __name__ == "__main__":
     run_tests()
