@@ -101,16 +101,7 @@ async def show_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await update.message.reply_text(text, parse_mode="HTML", reply_markup=markup)
     elif query:
         await query.answer()
-        target_chat_id = query.message.chat_id if query.message else query.from_user.id
-        thread_id = query.message.message_thread_id if query.message and query.message.is_topic_message else None
-        try:
-            await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
-        except Exception:
-            try:
-                await query.message.delete()
-            except Exception:
-                pass
-            await context.bot.send_message(chat_id=target_chat_id, message_thread_id=thread_id, text=text, parse_mode="HTML", reply_markup=markup)
+        await safe_edit_or_reply(query, context, text, reply_markup=markup, parse_mode="HTML")
 
 @admin_only
 async def admin_toggle_chat_mode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

@@ -17,6 +17,7 @@ import database
 import config
 from config import CLUBS, ADMIN_IDS
 from handlers.base import admin_only, is_admin
+from handlers.cabinet import safe_edit_or_reply
 import fc_card_generator
 
 logger = logging.getLogger(__name__)
@@ -52,7 +53,7 @@ async def cmd_lab(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.message:
         await update.message.reply_text(text, parse_mode="HTML", reply_markup=markup)
     elif update.callback_query:
-        await update.callback_query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
+        await safe_edit_or_reply(update.callback_query, context, text, reply_markup=markup, parse_mode="HTML")
 
 
 @admin_only
@@ -63,7 +64,7 @@ async def cb_lab_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
     await query.answer()
     text, markup = _build_lab_main_menu()
-    await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
+    await safe_edit_or_reply(query, context, text, reply_markup=markup, parse_mode="HTML")
 
 
 def _build_lab_main_menu() -> tuple[str, InlineKeyboardMarkup]:
@@ -113,7 +114,7 @@ async def cb_lab_flags_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         keyboard.append([InlineKeyboardButton(btn_text, callback_data=f"lab_toggle_flag_{key}")])
 
     keyboard.append([InlineKeyboardButton("« Назад в лабораторию", callback_data="admin_lab_menu")])
-    await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+    await safe_edit_or_reply(query, context, text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
 
 
 @admin_only
@@ -165,7 +166,7 @@ async def cb_lab_card_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         [InlineKeyboardButton("🔍 Выбрать реального игрока из клуба", callback_data="lab_card_pick_club")],
         [InlineKeyboardButton("« Назад в лабораторию", callback_data="admin_lab_menu")],
     ]
-    await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+    await safe_edit_or_reply(query, context, text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
 
 
 @admin_only
@@ -257,7 +258,7 @@ async def cb_lab_card_pick_club(update: Update, context: ContextTypes.DEFAULT_TY
         keyboard.append(row)
 
     keyboard.append([InlineKeyboardButton("« Назад к карточкам", callback_data="lab_card_menu")])
-    await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+    await safe_edit_or_reply(query, context, text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
 
 
 @admin_only
@@ -274,7 +275,7 @@ async def cb_lab_card_pick_player(update: Update, context: ContextTypes.DEFAULT_
     if not squad:
         text = f"❌ В клубе <b>{html.escape(club)}</b> пока нет зарегистрированных игроков."
         keyboard = [[InlineKeyboardButton("« Выбрать другой клуб", callback_data="lab_card_pick_club")]]
-        await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+        await safe_edit_or_reply(query, context, text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
         return
 
     text = f"👥 <b>Состав {html.escape(club)}:</b>\nВыберите игрока для генерации EA FC карточки:"
@@ -283,7 +284,7 @@ async def cb_lab_card_pick_player(update: Update, context: ContextTypes.DEFAULT_
         keyboard.append([InlineKeyboardButton(p, callback_data=f"lab_gen_card_{club}|{p}")])
 
     keyboard.append([InlineKeyboardButton("« Назад к клубам", callback_data="lab_card_pick_club")])
-    await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+    await safe_edit_or_reply(query, context, text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
 
 
 @admin_only
