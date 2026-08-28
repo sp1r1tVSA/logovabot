@@ -21,10 +21,14 @@ import math
 import logging
 import random
 import tempfile
-import numpy as np
 from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageChops
 import player_photos
 from table_generator import get_team_logo_filename, clean_and_prepare_logo
+
+try:
+    import numpy as np
+except ImportError:
+    np = None
 
 try:
     import cv2
@@ -721,7 +725,7 @@ def generate_animated_ea_fc_card(player_data: dict, anim_style: str = "toty_gold
         frames.append(frame.convert("RGB"))
 
     # 1. Preferred Telegram Ultra-HD 1080p MP4 Video Encoder (TrueColor 24-bit, 0% banding, 0% noise)
-    if cv2 is not None:
+    if cv2 is not None and np is not None:
         try:
             with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
                 tmp_path = tmp.name
