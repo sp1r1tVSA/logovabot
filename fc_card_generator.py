@@ -361,30 +361,30 @@ def render_master_static_card(player_data: dict, style_id: str = "toty_gold") ->
         draw.polygon(poly, outline=cfg["border_primary"], width=int(4.5 * SCALE))
         draw.polygon(poly, outline=cfg["border_secondary"] + (180,), width=int(1.5 * SCALE))
 
-    # 4. Large & Razor-Sharp Player Cutout (Centered with Clean Drop Shadow)
-    photo_w = int(440 * SCALE)
-    photo_h = int(410 * SCALE)
+    # 4. Large & Razor-Sharp Player Cutout (Dominant Upper Half)
+    photo_w = int(460 * SCALE)
+    photo_h = int(420 * SCALE)
     player_img = _get_player_photo_image(player_name, team_name)
 
     if player_img:
         player_img.thumbnail((photo_w, photo_h), Image.Resampling.LANCZOS)
         pw, ph = player_img.size
 
-        # Clean soft drop shadow (No muddy halos)
+        # Clean soft drop shadow
         shadow = Image.new("RGBA", (pw + int(24 * SCALE), ph + int(24 * SCALE)), (0, 0, 0, 0))
         s_mask = player_img.split()[3] if "A" in player_img.getbands() else Image.new("L", (pw, ph), 255)
         shadow.paste(Image.new("RGBA", (pw, ph), (0, 0, 0, 195)), (int(8 * SCALE), int(8 * SCALE)), s_mask)
         shadow = shadow.filter(ImageFilter.GaussianBlur(int(8 * SCALE)))
 
         px = (WIDTH - pw) // 2
-        py = inset + int(12 * SCALE) + max(0, int((photo_h - ph) * 0.4))
+        py = inset + int(8 * SCALE)
 
         img.paste(shadow, (px - int(4 * SCALE), py - int(4 * SCALE)), shadow)
 
         # Smooth baseline alpha fade
         fade = Image.new("L", (pw, ph), 255)
         f_draw = ImageDraw.Draw(fade)
-        f_start = int(ph * 0.72)
+        f_start = int(ph * 0.70)
         for y in range(f_start, ph):
             val = int(255 * (1.0 - ((y - f_start) / (ph - f_start)) ** 1.6))
             f_draw.line([(0, y), (pw, y)], fill=val)
@@ -730,23 +730,34 @@ def generate_animated_ea_fc_card(player_data: dict, anim_style: str = "toty_gold
             with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
                 tmp_path = tmp.name
 
-            fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-            writer = cv2.VideoWriter(tmp_path, fourcc, fps, (anim_w, anim_h))
-            for f in frames:
-                arr = np.array(f)
-                bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
-                writer.write(bgr)
-            writer.release()
+            writer = None
+            for codec in ["mp4v", "avc1", "H264", "XVID"]:
+                try:
+                    fourcc = cv2.VideoWriter_fourcc(*codec)
+                    w = cv2.VideoWriter(tmp_path, fourcc, fps, (anim_w, anim_h))
+                    if w.isOpened():
+                        writer = w
+                        break
+                except Exception:
+                    continue
 
-            with open(tmp_path, "rb") as f_in:
-                buf = io.BytesIO(f_in.read())
-            buf.name = f"{style_id}.mp4"
-            try:
-                os.remove(tmp_path)
-            except Exception:
-                pass
-            buf.seek(0)
-            return buf
+            if writer is not None:
+                for f in frames:
+                    arr = np.array(f)
+                    bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+                    writer.write(bgr)
+                writer.release()
+
+                if os.path.exists(tmp_path) and os.path.getsize(tmp_path) > 1000:
+                    with open(tmp_path, "rb") as f_in:
+                        buf = io.BytesIO(f_in.read())
+                    buf.name = f"{style_id}.mp4"
+                    try:
+                        os.remove(tmp_path)
+                    except Exception:
+                        pass
+                    buf.seek(0)
+                    return buf
         except Exception as e:
             logger.warning(f"Failed to encode MP4 video with OpenCV: {e}")
 
