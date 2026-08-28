@@ -345,7 +345,7 @@ def render_master_static_card(player_data: dict, style_id: str = "toty_gold") ->
     shield_mask = Image.new("L", (WIDTH, HEIGHT), 0)
     ImageDraw.Draw(shield_mask).polygon(shield_poly, fill=255)
 
-    # 3. Rich Textured Shield Body (Crystalline / Obsidian / Gold Facets)
+    # 3. Clean Rich Obsidian & Metallic Shield Body
     tr, tg, tb = cfg["bg_top"]
     br, bg, bb = cfg["bg_bot"]
     shield_bg = Image.new("RGBA", (WIDTH, HEIGHT), (br, bg, bb, 255))
@@ -353,18 +353,10 @@ def render_master_static_card(player_data: dict, style_id: str = "toty_gold") ->
 
     for y in range(top_y, bot_y):
         t = (y - top_y) / float(bot_y - top_y)
-        r = int(tr + (br - tr) * t + math.sin(t * math.pi) * 12)
-        g = int(tg + (bg - tg) * t + math.sin(t * math.pi) * 10)
-        b = int(tb + (bb - tb) * t + math.sin(t * math.pi) * 16)
+        r = int(tr + (br - tr) * t)
+        g = int(tg + (bg - tg) * t)
+        b = int(tb + (bb - tb) * t)
         s_draw.line([(left_x, y), (right_x, y)], fill=(r, g, b, 255))
-
-    # Procedural geometric crystal shards
-    ar, ag, ab = cfg["accent"]
-    for i in range(16):
-        p1 = (left_x + ((i * 73) % (right_x - left_x)), top_y + ((i * 89) % (bot_y - top_y)))
-        p2 = (left_x + (((i + 1) * 89) % (right_x - left_x)), top_y + (((i + 2) * 109) % (bot_y - top_y)))
-        p3 = (left_x + (((i + 2) * 61) % (right_x - left_x)), top_y + (((i + 1) * 71) % (bot_y - top_y)))
-        s_draw.polygon([p1, p2, p3], fill=(ar, ag, ab, 16), outline=(ar, ag, ab, 32))
 
     img.paste(shield_bg, (0, 0), shield_mask)
 
@@ -376,7 +368,7 @@ def render_master_static_card(player_data: dict, style_id: str = "toty_gold") ->
     # 5. Large Heroic Player Cutout (Dominant Upper Half, Offset to Right)
     player_img = _get_player_photo_image(player_name, team_name)
     if player_img:
-        player_img.thumbnail((int(360 * SCALE), int(360 * SCALE)), Image.Resampling.LANCZOS)
+        player_img.thumbnail((int(400 * SCALE), int(400 * SCALE)), Image.Resampling.LANCZOS)
         pw, ph = player_img.size
 
         # Soft drop shadow
@@ -385,8 +377,8 @@ def render_master_static_card(player_data: dict, style_id: str = "toty_gold") ->
         shadow.paste(Image.new("RGBA", (pw, ph), (0, 0, 0, 195)), (10, 10), s_mask)
         shadow = shadow.filter(ImageFilter.GaussianBlur(10))
 
-        px = (WIDTH // 2) - (pw // 2) + int(48 * SCALE)
-        py = top_y + int(4 * SCALE)
+        px = (WIDTH // 2) - (pw // 2) + int(36 * SCALE)
+        py = top_y + int(2 * SCALE)
 
         img.paste(shadow, (px - 5, py - 5), shadow)
 
@@ -468,10 +460,10 @@ def render_master_static_card(player_data: dict, style_id: str = "toty_gold") ->
     for idx, (lv, ll, rv, rl) in enumerate(stats_pairs):
         cur_y = grid_y + idx * row_h
         draw.text((c1_v, cur_y), f"{lv}", font=font_s_val, fill=cfg["text_primary"], anchor="lt")
-        draw.text((c1_l, cur_y + int(4 * SCALE)), ll, font=font_s_lbl, fill=cfg["accent"], anchor="lt")
+        draw.text((c1_l, cur_y + int(4 * SCALE)), ll, font=font_s_lbl, fill=cfg["border_primary"], anchor="lt")
 
         draw.text((c2_v, cur_y), f"{rv}", font=font_s_val, fill=cfg["text_primary"], anchor="lt")
-        draw.text((c2_l, cur_y + int(4 * SCALE)), rl, font=font_s_lbl, fill=cfg["accent"], anchor="lt")
+        draw.text((c2_l, cur_y + int(4 * SCALE)), rl, font=font_s_lbl, fill=cfg["border_primary"], anchor="lt")
 
     # 9. Bottom Finial & Edition Badge
     foot_y = grid_y + int(120 * SCALE)
@@ -481,9 +473,7 @@ def render_master_static_card(player_data: dict, style_id: str = "toty_gold") ->
 
     draw.rounded_rectangle([(foot_x, foot_y), (foot_x + foot_w, foot_y + foot_h)], radius=int(6 * SCALE), fill=(12, 14, 20, 240), outline=cfg["border_secondary"] + (160,), width=int(1.5 * SCALE))
     font_foot = load_card_font(11, bold=True)
-    draw.text((WIDTH // 2, foot_y + int(4 * SCALE)), f"★ {cfg['title']} • КПЛ 2026 ★", font=font_foot, fill=cfg["accent"], anchor="mt")
-
-    return img
+    draw.text((WIDTH // 2, foot_y + int(4 * SCALE)), f"★ {cfg['title']} • КПЛ 2026 ★", font=font_foot, fill=cfg["border_primary"], anchor="mt")
 
     return img
 
@@ -683,28 +673,15 @@ def generate_animated_ea_fc_card(player_data: dict, anim_style: str = "toty_gold
             fx_draw.rounded_rectangle([(20, 20), (anim_w - 20, anim_h - 20)], radius=24, outline=(255, 24, 1, pulse_a), width=3)
             fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(2))
 
-        # ─── 10. UCL NIGHT: Starlight Constellations & Chrome Shimmer ────────
+        # ─── 10. UCL NIGHT: Midnight Cosmic Glow & Chrome Shimmer ───────────
         else:
             shimmer = _create_shimmer_streak(anim_w, anim_h, t, color=(180, 230, 255))
             frame = Image.alpha_composite(frame, shimmer)
 
-            # Star constellation laser lines
             cx, cy = anim_w // 2, int(anim_h * 0.28)
-            star_pts = [
-                (cx, cy - 110),
-                (cx + 95, cy - 30),
-                (cx + 60, cy + 90),
-                (cx - 60, cy + 90),
-                (cx - 95, cy - 30)
-            ]
-            for s_i in range(len(star_pts)):
-                p1 = star_pts[s_i]
-                p2 = star_pts[(s_i + 1) % len(star_pts)]
-                s_a = int(120 + 80 * math.sin(2 * math.pi * t + s_i))
-                fx_draw.line([p1, p2], fill=(0, 212, 255, s_a), width=2)
-                fx_draw.ellipse([(p1[0] - 4, p1[1] - 4), (p1[0] + 4, p1[1] + 4)], fill=(255, 255, 255, s_a + 40))
-
-            fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(3))
+            ucl_a = int(45 + 30 * math.sin(2 * math.pi * t))
+            fx_draw.ellipse([(cx - 180, cy - 180), (cx + 180, cy + 180)], fill=(0, 180, 255, ucl_a))
+            fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(16))
 
         frame = Image.alpha_composite(frame, fx_layer)
         frames.append(frame.convert("RGB"))
