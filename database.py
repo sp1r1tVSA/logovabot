@@ -1694,6 +1694,14 @@ def open_rounds_batch(start_round: int, end_round: int, deadline: str) -> None:
             (deadline, start_round, end_round)
         )
 
+    # 🎰 Auto-generate betting lines for opened rounds
+    for r_num in range(start_round, end_round + 1):
+        try:
+            from services.betting_engine import generate_round_markets
+            generate_round_markets(r_num)
+        except Exception:
+            pass
+
 def get_open_pending_matches() -> list[dict]:
     """Get all pending matches where the round is open and not extended."""
     with transaction() as conn:
@@ -2642,9 +2650,19 @@ def update_round_status(round_number: int, is_open: bool, deadline: str | None =
                 "UPDATE rounds SET is_open = ? WHERE round_number = ?",
                 (0, round_number)
             )
+            # 🎰 Close betting line when round is closed
+            cursor.execute("UPDATE bet_markets SET is_active = 0 WHERE tour = ?", (round_number,))
 
         if deadline is not None:
             cursor.execute("DELETE FROM round_reminders WHERE round_number = ?", (round_number,))
+
+    if is_open:
+        # 🎰 Auto-generate betting line when round is opened
+        try:
+            from services.betting_engine import generate_round_markets
+            generate_round_markets(round_number)
+        except Exception:
+            pass
 
 
 def get_all_rounds() -> list[int]:
@@ -4784,6 +4802,58 @@ def save_bet_market(
             (match_id, tour, team1_name, team2_name, odd_p1, odd_x, odd_p2, odd_tb25, odd_tm25, odd_btts_yes, odd_btts_no)
         )
         return cursor.lastrowid or match_id
+
+
+def get_open_betting_tours() -> list[dict]:
+    """
+    Retrieve all currently open tours that have unplayed matches
+    and where the round deadline has not expired.
+    """
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT 
+                r.round_number, r.deadline,
+                COUNT(m.id) as total_matches,
+                SUM(CASE WHEN m.status != 'completed' THEN 1 ELSE 0 END) as unplayed_matches
+            FROM rounds r
+            JOIN matches m ON r.round_number = m.round_number
+            WHERE r.is_open = 1
+            GROUP BY r.round_number, r.deadline
+            HAVING unplayed_matches > 0
+            ORDER BY r.round_number ASC
+        """)
+        rows = cursor.fetchall()
+        now = datetime.datetime.now()
+        open_tours = []
+        for row in rows:
+            r_num = row["round_number"]
+            dl_str = row["deadline"]
+            # Check if deadline passed
+            if dl_str:
+                try:
+                    dl_clean = str(dl_str).strip()
+                    if "T" in dl_clean:
+                        dl_dt = datetime.datetime.fromisoformat(dl_clean)
+                    elif len(dl_clean) == 16:
+                        dl_dt = datetime.datetime.strptime(dl_clean, "%Y-%m-%d %H:%M")
+                    elif len(dl_clean) >= 19:
+                        dl_dt = datetime.datetime.strptime(dl_clean[:19], "%Y-%m-%d %H:%M:%S")
+                    else:
+                        dl_dt = None
+                    if dl_dt and now > dl_dt:
+                        # Deadline passed: close the betting market for this tour
+                        cursor.execute("UPDATE bet_markets SET is_active = 0 WHERE tour = ?", (r_num,))
+                        continue
+                except Exception:
+                    pass
+            open_tours.append({
+                "round_number": r_num,
+                "deadline": dl_str,
+                "total_matches": row["total_matches"],
+                "unplayed_matches": row["unplayed_matches"]
+            })
+        return open_tours
 
 
 def get_active_bet_markets(tour: int | None = None) -> list[dict]:

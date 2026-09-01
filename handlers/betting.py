@@ -135,25 +135,72 @@ async def cb_bet_view_tours(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     query = update.callback_query
     await query.answer()
 
-    # Get active round
-    active_round = await asyncio.to_thread(database.get_active_round_number) or 1
-    
-    # Auto-generate markets for active round if empty
-    await asyncio.to_thread(generate_round_markets, active_round)
-    markets = await asyncio.to_thread(database.get_active_bet_markets, active_round)
+    open_tours = await asyncio.to_thread(database.get_open_betting_tours)
 
-    if not markets:
+    if not open_tours:
         text = (
-            f"📋 <b>Линия на Тур #{active_round}</b>\n\n"
-            f"<i>В данный момент все матчи тура завершены или линия формируется Темшиком.</i>"
+            "🔒 <b>Линия ставок закрыта</b>\n\n"
+            "<i>Все матчи текущих туров уже сыграны либо истёк дедлайн тура.</i>\n\n"
+            "Темшик откроет новую линию ставок сразу после объявления следующего тура/туров администрацией чемпионата! 🎰"
         )
         kb = [[InlineKeyboardButton("🔙 Главное Меню", callback_data="bet_menu_main")]]
         await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="HTML")
         return
 
-    text = f"📋 <b>Линия Logovo.bet • Тур #{active_round}</b>\n\nВыберите матч для ставки:\n"
+    if len(open_tours) == 1:
+        # Single open tour -> display match list directly
+        tour_num = open_tours[0]["round_number"]
+        await _render_tour_matches(query, tour_num, open_tours[0].get("deadline"))
+        return
+
+    # Multiple open tours -> display interactive tour picker
+    text = "📋 <b>Открытые Туры для Ставок</b>\n\nВыберите тур для просмотра линии коэффициентов:\n"
     kb = []
-    
+    for t in open_tours:
+        r_num = t["round_number"]
+        unplayed = t["unplayed_matches"]
+        dl = t.get("deadline")
+        dl_note = f"⏰ до {dl[:16]}" if dl else ""
+        btn_text = f"⚽ Тур #{r_num} ({unplayed} матчей) {dl_note}".strip()
+        kb.append([InlineKeyboardButton(btn_text, callback_data=f"bet_tour_{r_num}")])
+
+    kb.append([
+        InlineKeyboardButton("🎫 Мой Купон", callback_data="bet_view_slip"),
+        InlineKeyboardButton("🔙 Главное Меню", callback_data="bet_menu_main")
+    ])
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="HTML")
+
+
+async def cb_bet_pick_tour(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show matches for a specific picked tour."""
+    query = update.callback_query
+    await query.answer()
+    tour_num = int(query.data.replace("bet_tour_", ""))
+    r_info = await asyncio.to_thread(database.get_round_info, tour_num)
+    dl = r_info.get("deadline") if r_info else None
+    await _render_tour_matches(query, tour_num, dl)
+
+
+async def _render_tour_matches(query, tour_num: int, deadline: str | None = None) -> None:
+    """Render match buttons for a given tour."""
+    await asyncio.to_thread(generate_round_markets, tour_num)
+    markets = await asyncio.to_thread(database.get_active_bet_markets, tour_num)
+
+    if not markets:
+        text = (
+            f"📋 <b>Линия на Тур #{tour_num}</b>\n\n"
+            f"<i>Все матчи тура уже сыграны либо дедлайн истёк. Линия закрыта.</i>"
+        )
+        kb = [
+            [InlineKeyboardButton("📋 Все Туры", callback_data="bet_view_tours")],
+            [InlineKeyboardButton("🔙 Главное Меню", callback_data="bet_menu_main")]
+        ]
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="HTML")
+        return
+
+    dl_text = f"\n⏰ <b>Дедлайн тура:</b> <code>{deadline[:16]}</code>" if deadline else ""
+    text = f"📋 <b>Линия Logovo.bet • Тур #{tour_num}</b>{dl_text}\n\nВыберите матч для ставки:\n"
+    kb = []
     for m in markets:
         m_id = m.get("match_id")
         t1 = m.get("team1_name", "Команда 1")
@@ -163,9 +210,8 @@ async def cb_bet_view_tours(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     kb.append([
         InlineKeyboardButton("🎫 Перейти в купон", callback_data="bet_view_slip"),
-        InlineKeyboardButton("🔙 Меню", callback_data="bet_menu_main")
+        InlineKeyboardButton("🔙 Все Туры", callback_data="bet_view_tours")
     ])
-
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="HTML")
 
 
@@ -473,6 +519,7 @@ def register_betting_handlers(app) -> None:
 
     app.add_handler(CallbackQueryHandler(cmd_bet_hub, pattern="^bet_menu_main$"))
     app.add_handler(CallbackQueryHandler(cb_bet_view_tours, pattern="^bet_view_tours$"))
+    app.add_handler(CallbackQueryHandler(cb_bet_pick_tour, pattern="^bet_tour_\\d+$"))
     app.add_handler(CallbackQueryHandler(cb_bet_match_detail, pattern="^bet_match_\\d+$"))
     app.add_handler(CallbackQueryHandler(cb_bet_add_outcome, pattern="^bet_add_\\d+_.+$"))
     app.add_handler(CallbackQueryHandler(cb_bet_view_slip, pattern="^bet_view_slip$"))
