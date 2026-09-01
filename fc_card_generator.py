@@ -595,21 +595,70 @@ def generate_ea_fc_card(player_data: dict, theme_name: str = "toty_gold") -> io.
 # 🎬 MASTER ANIMATED CARD GENERATOR (All 10 Dedicated Loop Shaders)
 # ═════════════════════════════════════════════════════════════════════════════
 
-def _create_shimmer_streak(w: int, h: int, progress: float, color=(255, 245, 210)) -> Image.Image:
-    """Holographic light beam sweep."""
+def _create_shimmer_streak(w: int, h: int, progress: float, color=(255, 245, 210), alpha=65) -> Image.Image:
+    """Delicate holographic light beam sweep across card surface."""
     overlay = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
-    beam_x = -w * 0.6 + (w * 2.4) * progress
-    beam_w = int(60 * (w / 400.0))
+    beam_x = -w * 0.6 + (w * 2.2) * progress
+    beam_w = int(45 * (w / 400.0))
 
     p = [
         (beam_x, 0),
         (beam_x + beam_w, 0),
-        (beam_x + beam_w - int(h * 0.55), h),
-        (beam_x - int(h * 0.55), h)
+        (beam_x + beam_w - int(h * 0.50), h),
+        (beam_x - int(h * 0.50), h)
     ]
-    draw.polygon(p, fill=color + (95,))
-    return overlay.filter(ImageFilter.GaussianBlur(8))
+    draw.polygon(p, fill=color + (alpha,))
+    return overlay.filter(ImageFilter.GaussianBlur(6))
+
+
+def _draw_laser_perimeter_runner(fx_draw, pts: list[tuple[int, int]], progress: float, color: tuple[int, int, int], trail_len: float = 0.22):
+    """Draw a smooth high-tech laser comet travelling around the card's outer shield perimeter."""
+    # Compute total perimeter length
+    n = len(pts)
+    total_len = 0.0
+    seg_lens = []
+    for i in range(n):
+        p1 = pts[i]
+        p2 = pts[(i + 1) % n]
+        sl = math.hypot(p2[0] - p1[0], p2[1] - p1[1])
+        seg_lens.append(sl)
+        total_len += sl
+
+    if total_len <= 0:
+        return
+
+    def get_pt(d):
+        d = d % total_len
+        accum = 0.0
+        for i in range(n):
+            sl = seg_lens[i]
+            if accum + sl >= d:
+                st = (d - accum) / sl if sl > 0 else 0
+                p1 = pts[i]
+                p2 = pts[(i + 1) % n]
+                return (p1[0] + (p2[0] - p1[0]) * st, p1[1] + (p2[1] - p1[1]) * st)
+            accum += sl
+        return pts[0]
+
+    head_dist = (progress * total_len) % total_len
+    num_samples = 14
+    trail_dist = total_len * trail_len
+
+    for s in range(num_samples):
+        ratio = (s + 1) / float(num_samples)
+        d1 = head_dist - (1.0 - ratio) * trail_dist
+        d2 = head_dist - (1.0 - (s / float(num_samples))) * trail_dist
+        pt1 = get_pt(d1)
+        pt2 = get_pt(d2)
+        alpha = int(220 * (ratio ** 2))
+        width = 2 if ratio < 0.6 else 3
+        fx_draw.line([pt1, pt2], fill=color + (alpha,), width=width)
+
+    # Core spark at the head of the laser
+    head_pt = get_pt(head_dist)
+    hx, hy = int(head_pt[0]), int(head_pt[1])
+    fx_draw.ellipse([(hx - 3, hy - 3), (hx + 3, hy + 3)], fill=(255, 255, 255, 250))
 
 
 def render_animated_card_frames(player_data: dict, anim_style: str = "toty_gold") -> tuple[list[Image.Image], float, int, int]:
@@ -625,17 +674,42 @@ def render_animated_card_frames(player_data: dict, anim_style: str = "toty_gold"
     anim_w, anim_h = 480, 680
     base_img = base_img.resize((anim_w, anim_h), Image.Resampling.LANCZOS)
 
+    # 2. Scaled shield perimeter polygon for laser border runner
+    scale_x = anim_w / float(WIDTH)
+    scale_y = anim_h / float(HEIGHT)
+    inset = int(28 * SCALE)
+    cut_top = int(42 * SCALE)
+    top_y = int(34 * SCALE)
+    bot_y = HEIGHT - int(34 * SCALE)
+    left_x = inset
+    right_x = WIDTH - inset
+    mid_y = int(HEIGHT * 0.70)
+    bot_mid_y = int(HEIGHT * 0.86)
+
+    shield_poly_raw = [
+        (left_x + cut_top, top_y),
+        (right_x - cut_top, top_y),
+        (right_x, top_y + cut_top),
+        (right_x, mid_y),
+        (right_x - int(42 * SCALE), bot_mid_y),
+        (WIDTH // 2, bot_y),
+        (left_x + int(42 * SCALE), bot_mid_y),
+        (left_x, mid_y),
+        (left_x, top_y + cut_top)
+    ]
+    shield_pts = [(int(x * scale_x), int(y * scale_y)) for (x, y) in shield_poly_raw]
+
     num_frames = 24
     fps = 24.0
     frames = []
 
     # Deterministic particle seeds for styles requiring particle physics
     particles = []
-    for p in range(32):
+    for p in range(28):
         seed_x = ((p * 73 + 19) % 360) / 360.0
         seed_y = ((p * 47 + 11) % 100) / 100.0
-        speed = 0.5 + ((p * 31) % 50) / 100.0
-        rad = 2 + (p % 4)
+        speed = 0.4 + ((p * 31) % 40) / 100.0
+        rad = 1 + (p % 3)
         phase = (p * 1.3)
         particles.append((seed_x, seed_y, speed, rad, phase))
 
@@ -647,181 +721,146 @@ def render_animated_card_frames(player_data: dict, anim_style: str = "toty_gold"
         fx_layer = Image.new("RGBA", (anim_w, anim_h), (0, 0, 0, 0))
         fx_draw = ImageDraw.Draw(fx_layer)
 
-        # ─── 0. KPL STANDARD (OVR <= 85): Steel Titanium Sheen & Ruby Accent ───
+        # ─── 0. KPL STANDARD (OVR <= 85): Clean Steel Sheen & Ruby Perimeter Laser ───
         if style_id == "kpl_standard":
-            shimmer = _create_shimmer_streak(anim_w, anim_h, t, color=(210, 220, 235))
+            shimmer = _create_shimmer_streak(anim_w, anim_h, t, color=(220, 228, 240), alpha=50)
             frame = Image.alpha_composite(frame, shimmer)
-            cx, cy = anim_w // 2, int(anim_h * 0.28)
-            spot_alpha = int(35 + 20 * math.sin(2 * math.pi * t))
-            fx_draw.ellipse([(cx - 180, cy - 180), (cx + 180, cy + 180)], fill=(180, 190, 210, spot_alpha))
-            ruby_a = int(40 + 35 * math.sin(2 * math.pi * t + 0.5))
-            fx_draw.rounded_rectangle([(18, 18), (anim_w - 18, anim_h - 18)], radius=22, outline=(239, 68, 68, ruby_a), width=2)
-            fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(6))
+            _draw_laser_perimeter_runner(fx_draw, shield_pts, t, color=(239, 68, 68), trail_len=0.18)
+            fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(1))
 
-        # ─── 0. KPL STAR (OVR 86-92): Midnight Sapphire & Laser Cyan Glitter ───
+        # ─── 0. KPL STAR (OVR 86-92): Prismatic Cyan Sheen, Laser Tracer & Stardust ───
         elif style_id == "kpl_star":
-            shimmer = _create_shimmer_streak(anim_w, anim_h, t, color=(0, 230, 255))
+            shimmer = _create_shimmer_streak(anim_w, anim_h, t, color=(0, 230, 255), alpha=55)
             frame = Image.alpha_composite(frame, shimmer)
-            cx, cy = anim_w // 2, int(anim_h * 0.28)
-            sapphire_a = int(45 + 30 * math.sin(2 * math.pi * t))
-            fx_draw.ellipse([(cx - 190, cy - 190), (cx + 190, cy + 190)], fill=(0, 200, 255, sapphire_a))
-            for (px_rel, py_rel, spd, rad, phase) in particles[:16]:
-                cur_t = (t * spd + py_rel) % 1.0
-                star_a = int(240 * math.sin(math.pi * cur_t))
-                star_x = int(px_rel * (anim_w - 70) + 35)
-                star_y = int(py_rel * (anim_h - 140) + 60)
-                s_len = int(rad * 3.5)
-                fx_draw.line([(star_x - s_len, star_y), (star_x + s_len, star_y)], fill=(255, 255, 255, star_a), width=2)
-                fx_draw.line([(star_x, star_y - s_len), (star_x, star_y + s_len)], fill=(0, 230, 255, star_a), width=2)
-            laser_a = int(60 + 40 * math.sin(2 * math.pi * t))
-            fx_draw.rounded_rectangle([(18, 18), (anim_w - 18, anim_h - 18)], radius=22, outline=(0, 230, 255, laser_a), width=2)
-            fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(3))
-
-        # ─── 0. KPL PRIME MVP (OVR 93+): 24K Gold & Crimson Rising Embers ─────
-        elif style_id in ["kpl_prime", "toty_gold"]:
-            shimmer = _create_shimmer_streak(anim_w, anim_h, t, color=(255, 225, 120))
-            frame = Image.alpha_composite(frame, shimmer)
-            cx, cy = anim_w // 2, int(anim_h * 0.28)
-            gold_a = int(55 + 35 * math.sin(2 * math.pi * t))
-            fx_draw.ellipse([(cx - 200, cy - 200), (cx + 200, cy + 200)], fill=(255, 215, 0, gold_a))
-            for (px_rel, py_rel, spd, rad, phase) in particles:
+            _draw_laser_perimeter_runner(fx_draw, shield_pts, t, color=(0, 230, 255), trail_len=0.22)
+            # Subtle floating micro-stars
+            for (px_rel, py_rel, spd, rad, phase) in particles[:12]:
                 cur_y_pct = (py_rel - spd * t) % 1.0
-                cur_x = int(px_rel * (anim_w - 80) + 40 + math.sin(phase + 2 * math.pi * t) * 16)
-                cur_y = int(cur_y_pct * (anim_h - 120) + 40)
-                y_norm = cur_y / float(anim_h)
-                p_alpha = int(230 * math.sin(math.pi * y_norm))
+                star_x = int(px_rel * (anim_w - 60) + 30 + math.sin(phase + 2 * math.pi * t) * 8)
+                star_y = int(cur_y_pct * (anim_h - 100) + 40)
+                star_a = int(220 * math.sin(math.pi * cur_y_pct))
+                s_len = int(rad * 2.5)
+                fx_draw.line([(star_x - s_len, star_y), (star_x + s_len, star_y)], fill=(255, 255, 255, star_a), width=1)
+                fx_draw.line([(star_x, star_y - s_len), (star_x, star_y + s_len)], fill=(0, 230, 255, star_a), width=1)
+            fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(1))
+
+        # ─── 0. KPL PRIME MVP (OVR 93+): 24K Gold Specular Foil, Gold Border Laser & Micro Embers ─────
+        elif style_id in ["kpl_prime", "toty_gold"]:
+            shimmer = _create_shimmer_streak(anim_w, anim_h, t, color=(255, 225, 120), alpha=60)
+            frame = Image.alpha_composite(frame, shimmer)
+            # High-tech gold laser runner along shield borders
+            _draw_laser_perimeter_runner(fx_draw, shield_pts, t, color=(255, 215, 0), trail_len=0.25)
+            # Subtle micro embers rising gracefully (no giant circles)
+            for (px_rel, py_rel, spd, rad, phase) in particles[:16]:
+                cur_y_pct = (py_rel - spd * t) % 1.0
+                cur_x = int(px_rel * (anim_w - 70) + 35 + math.sin(phase + 2 * math.pi * t) * 10)
+                cur_y = int(cur_y_pct * (anim_h - 100) + 40)
+                p_alpha = int(210 * math.sin(math.pi * cur_y_pct))
                 is_gold = (rad % 2 == 0)
                 p_col = (255, 215, 0, p_alpha) if is_gold else (239, 68, 68, p_alpha)
-                fx_draw.ellipse([(cur_x - rad * 2, cur_y - rad * 2), (cur_x + rad * 2, cur_y + rad * 2)], fill=p_col)
-            gold_border_a = int(70 + 45 * math.sin(2 * math.pi * t))
-            fx_draw.rounded_rectangle([(18, 18), (anim_w - 18, anim_h - 18)], radius=22, outline=(255, 215, 0, gold_border_a), width=3)
-            fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(3))
+                fx_draw.ellipse([(cur_x - rad, cur_y - rad), (cur_x + rad, cur_y + rad)], fill=p_col)
+            fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(1))
 
-        # ─── 2. VOID ECLIPSE: Accretion Disk & Inward Gravitational Pull ──────
+        # ─── 2. VOID ECLIPSE: Accretion Disk & Subtle Gravitational Stardust ───
         elif style_id == "void_eclipse":
+            _draw_laser_perimeter_runner(fx_draw, shield_pts, t, color=(138, 43, 226), trail_len=0.20)
             cx, cy = anim_w // 2, int(anim_h * 0.27)
-            for r_ring in [120, 180, 240]:
-                angle = (2 * math.pi * t) + (r_ring * 0.05)
-                arc_x = cx + int(20 * math.cos(angle))
-                arc_y = cy + int(20 * math.sin(angle))
-                fx_draw.ellipse([(arc_x - r_ring, arc_y - r_ring), (arc_x + r_ring, arc_y + r_ring)], outline=(138, 43, 226, 40), width=4)
-
-            for (px_rel, py_rel, spd, rad, phase) in particles:
-                dist = (1.0 - (t * spd + py_rel) % 1.0) * 240
+            for (px_rel, py_rel, spd, rad, phase) in particles[:14]:
+                dist = (1.0 - (t * spd + py_rel) % 1.0) * 200
                 ang = phase + (2 * math.pi * t)
                 sx = cx + int(dist * math.cos(ang))
                 sy = cy + int(dist * math.sin(ang))
-                p_alpha = int(220 * (dist / 240.0))
-                fx_draw.ellipse([(sx - rad * 2, sy - rad * 2), (sx + rad * 2, sy + rad * 2)], fill=(0, 245, 255, p_alpha))
+                p_alpha = int(200 * (dist / 200.0))
+                fx_draw.ellipse([(sx - rad, sy - rad), (sx + rad, sy + rad)], fill=(0, 245, 255, p_alpha))
+            fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(1))
 
-            fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(3))
-
-        # ─── 3. CYBER HUD: Scanning Laser & Glitch Energy ────────────────────
+        # ─── 3. CYBER HUD: Scanning Laser & Tech Corner Accents ───────────────
         elif style_id == "cyber_hud":
             laser_y = int((t * anim_h * 1.2) % anim_h)
-            fx_draw.line([(16, laser_y), (anim_w - 16, laser_y)], fill=(0, 255, 224, 180), width=3)
-            fx_draw.line([(16, laser_y - 3), (anim_w - 16, laser_y - 3)], fill=(255, 0, 85, 120), width=2)
-
-            pulse_a = int(60 + 50 * math.sin(2 * math.pi * t))
-            fx_draw.rounded_rectangle([(20, 20), (anim_w - 20, anim_h - 20)], radius=24, outline=(0, 255, 224, pulse_a), width=3)
-            fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(2))
+            fx_draw.line([(16, laser_y), (anim_w - 16, laser_y)], fill=(0, 255, 224, 160), width=2)
+            fx_draw.line([(16, laser_y - 2), (anim_w - 16, laser_y - 2)], fill=(255, 0, 85, 100), width=1)
+            _draw_laser_perimeter_runner(fx_draw, shield_pts, t, color=(0, 255, 224), trail_len=0.18)
+            fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(1))
 
         # ─── 4. HYPER GLASS: Fluid Caustics & Prismatic Shimmer ──────────────
         elif style_id == "hyper_glass":
-            shimmer = _create_shimmer_streak(anim_w, anim_h, t, color=(0, 255, 136))
+            shimmer = _create_shimmer_streak(anim_w, anim_h, t, color=(0, 255, 136), alpha=55)
             frame = Image.alpha_composite(frame, shimmer)
+            _draw_laser_perimeter_runner(fx_draw, shield_pts, t, color=(0, 255, 136), trail_len=0.20)
+            fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(1))
 
-            cx, cy = anim_w // 2, int(anim_h * 0.30)
-            glow_a = int(40 + 25 * math.sin(2 * math.pi * t))
-            fx_draw.ellipse([(cx - 190, cy - 190), (cx + 190, cy + 190)], fill=(0, 255, 136, glow_a))
-            fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(18))
-
-        # ─── 5. INFERNO MAGMA: Molten Lava Pulse & 35 Rising Embers ──────────
+        # ─── 5. INFERNO MAGMA: Molten Border Tracer & Rising Sparks ──────────
         elif style_id == "inferno_magma":
-            cx, cy = anim_w // 2, int(anim_h * 0.28)
-            lava_a = int(50 + 35 * math.sin(2 * math.pi * t))
-            fx_draw.ellipse([(cx - 180, cy - 180), (cx + 180, cy + 180)], fill=(255, 60, 0, lava_a))
-
-            for (px_rel, py_rel, spd, rad, phase) in particles:
+            _draw_laser_perimeter_runner(fx_draw, shield_pts, t, color=(255, 80, 0), trail_len=0.24)
+            for (px_rel, py_rel, spd, rad, phase) in particles[:16]:
                 cur_y_pct = (py_rel - spd * t) % 1.0
-                cur_x = int(px_rel * (anim_w - 80) + 40 + math.sin(phase + 2 * math.pi * t) * 18)
-                cur_y = int(cur_y_pct * (anim_h - 120) + 40)
-                y_norm = cur_y / float(anim_h)
-                p_alpha = int(230 * math.sin(math.pi * y_norm))
-                fx_draw.ellipse([(cur_x - rad * 2 - 2, cur_y - rad * 2 - 2), (cur_x + rad * 2 + 2, cur_y + rad * 2 + 2)], fill=(255, 120, 0, p_alpha // 2))
-                fx_draw.ellipse([(cur_x - rad * 2, cur_y - rad * 2), (cur_x + rad * 2, cur_y + rad * 2)], fill=(255, 230, 80, p_alpha))
+                cur_x = int(px_rel * (anim_w - 60) + 30 + math.sin(phase + 2 * math.pi * t) * 12)
+                cur_y = int(cur_y_pct * (anim_h - 100) + 40)
+                p_alpha = int(220 * math.sin(math.pi * cur_y_pct))
+                fx_draw.ellipse([(cur_x - rad, cur_y - rad), (cur_x + rad, cur_y + rad)], fill=(255, 200, 50, p_alpha))
+            fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(1))
 
-            fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(2))
-
-        # ─── 6. GLACIAL FROST: Sub-Zero Blizzard & Diamond Star Glitter ──────
+        # ─── 6. GLACIAL FROST: Sub-Zero Diamond Star Glitter ─────────────────
         elif style_id == "glacial_frost":
-            shimmer = _create_shimmer_streak(anim_w, anim_h, t, color=(160, 230, 255))
+            shimmer = _create_shimmer_streak(anim_w, anim_h, t, color=(160, 230, 255), alpha=50)
             frame = Image.alpha_composite(frame, shimmer)
-
-            cx, cy = anim_w // 2, int(anim_h * 0.28)
-            frost_a = int(45 + 30 * math.sin(2 * math.pi * t))
-            fx_draw.ellipse([(cx - 190, cy - 190), (cx + 190, cy + 190)], fill=(112, 214, 255, frost_a))
-
-            for (px_rel, py_rel, spd, rad, phase) in particles[:18]:
+            _draw_laser_perimeter_runner(fx_draw, shield_pts, t, color=(112, 214, 255), trail_len=0.20)
+            for (px_rel, py_rel, spd, rad, phase) in particles[:12]:
                 cur_t = (t * spd + py_rel) % 1.0
-                star_a = int(240 * math.sin(math.pi * cur_t))
-                star_x = int(px_rel * (anim_w - 70) + 35)
-                star_y = int(py_rel * (anim_h - 140) + 60)
-                s_len = int(rad * 4)
-                fx_draw.line([(star_x - s_len, star_y), (star_x + s_len, star_y)], fill=(255, 255, 255, star_a), width=2)
-                fx_draw.line([(star_x, star_y - s_len), (star_x, star_y + s_len)], fill=(255, 255, 255, star_a), width=2)
+                star_a = int(230 * math.sin(math.pi * cur_t))
+                star_x = int(px_rel * (anim_w - 60) + 30)
+                star_y = int(py_rel * (anim_h - 120) + 50)
+                s_len = int(rad * 3)
+                fx_draw.line([(star_x - s_len, star_y), (star_x + s_len, star_y)], fill=(255, 255, 255, star_a), width=1)
+                fx_draw.line([(star_x, star_y - s_len), (star_x, star_y + s_len)], fill=(180, 235, 255, star_a), width=1)
+            fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(1))
 
-            fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(2))
-
-        # ─── 7. ANIME SAKUGA: Blue Lock Ego Flame & Lightning Arcs ───────────
+        # ─── 7. ANIME SAKUGA: Lightning Laser Runner & Speed Sparks ──────────
         elif style_id == "anime_sakuga":
-            cx, cy = anim_w // 2, int(anim_h * 0.28)
-            flame_a = int(55 + 35 * math.sin(2 * math.pi * t))
-            fx_draw.ellipse([(cx - 180, cy - 200), (cx + 180, cy + 180)], fill=(0, 255, 240, flame_a))
-
-            if f_idx % 3 == 0:
-                l_points = [(cx - 120, cy - 60)]
-                for step_i in range(5):
+            _draw_laser_perimeter_runner(fx_draw, shield_pts, t, color=(0, 255, 240), trail_len=0.25)
+            if f_idx % 4 == 0:
+                cx, cy = anim_w // 2, int(anim_h * 0.28)
+                l_points = [(cx - 90, cy - 40)]
+                for step_i in range(4):
                     prev_x, prev_y = l_points[-1]
-                    next_x = prev_x + random.randint(30, 70)
-                    next_y = prev_y + random.randint(-35, 35)
+                    next_x = prev_x + random.randint(25, 50)
+                    next_y = prev_y + random.randint(-25, 25)
                     l_points.append((next_x, next_y))
                 for pt_idx in range(len(l_points) - 1):
-                    fx_draw.line([l_points[pt_idx], l_points[pt_idx + 1]], fill=(255, 255, 255, 220), width=3)
+                    fx_draw.line([l_points[pt_idx], l_points[pt_idx + 1]], fill=(255, 255, 255, 180), width=2)
+            fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(1))
 
-            fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(3))
-
-        # ─── 8. ROYAL 24K: Velvet Sheen & Bullion Specular Glide ─────────────
+        # ─── 8. ROYAL 24K: Clean Velvet Gold Sheen & Border Glide ────────────
         elif style_id == "royal_24k":
-            shimmer = _create_shimmer_streak(anim_w, anim_h, t, color=(255, 237, 179))
+            shimmer = _create_shimmer_streak(anim_w, anim_h, t, color=(255, 237, 179), alpha=55)
             frame = Image.alpha_composite(frame, shimmer)
+            _draw_laser_perimeter_runner(fx_draw, shield_pts, t, color=(212, 175, 55), trail_len=0.20)
+            fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(1))
 
-            cx, cy = anim_w // 2, int(anim_h * 0.30)
-            v_a = int(35 + 20 * math.sin(2 * math.pi * t))
-            fx_draw.ellipse([(cx - 180, cy - 180), (cx + 180, cy + 180)], fill=(212, 175, 55, v_a))
-            fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(4))
-
-        # ─── 9. AERO CARBON: F1 Streamlines & Telemetry Blink ────────────────
+        # ─── 9. AERO CARBON: F1 Telemetry Laser & Speed Streamlines ──────────
         elif style_id == "aero_carbon":
-            for s_idx in range(6):
-                stream_y = int((anim_h * 0.2) + s_idx * 75 + math.sin(t * 2 * math.pi + s_idx) * 15)
-                s_prog = (t + s_idx * 0.18) % 1.0
+            _draw_laser_perimeter_runner(fx_draw, shield_pts, t, color=(255, 24, 1), trail_len=0.22)
+            for s_idx in range(4):
+                stream_y = int((anim_h * 0.25) + s_idx * 90 + math.sin(t * 2 * math.pi + s_idx) * 10)
+                s_prog = (t + s_idx * 0.22) % 1.0
                 stream_x = int(s_prog * anim_w)
-                fx_draw.line([(stream_x, stream_y), (stream_x + 65, stream_y)], fill=(0, 229, 255, 170), width=3)
+                fx_draw.line([(stream_x, stream_y), (stream_x + 50, stream_y)], fill=(0, 229, 255, 140), width=2)
+            fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(1))
 
-            pulse_a = int(70 + 40 * math.sin(2 * math.pi * t))
-            fx_draw.rounded_rectangle([(20, 20), (anim_w - 20, anim_h - 20)], radius=24, outline=(255, 24, 1, pulse_a), width=3)
-            fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(2))
-
-        # ─── 10. UCL NIGHT: Midnight Cosmic Glow & Chrome Shimmer ───────────
+        # ─── 10. UCL NIGHT: Cosmic Cyan Laser & Constellation Stardust ───────
         else:
-            shimmer = _create_shimmer_streak(anim_w, anim_h, t, color=(180, 230, 255))
+            shimmer = _create_shimmer_streak(anim_w, anim_h, t, color=(180, 230, 255), alpha=55)
             frame = Image.alpha_composite(frame, shimmer)
-
-            cx, cy = anim_w // 2, int(anim_h * 0.28)
-            ucl_a = int(45 + 30 * math.sin(2 * math.pi * t))
-            fx_draw.ellipse([(cx - 180, cy - 180), (cx + 180, cy + 180)], fill=(0, 180, 255, ucl_a))
-            fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(16))
+            _draw_laser_perimeter_runner(fx_draw, shield_pts, t, color=(0, 212, 255), trail_len=0.22)
+            for (px_rel, py_rel, spd, rad, phase) in particles[:12]:
+                cur_t = (t * spd + py_rel) % 1.0
+                star_a = int(220 * math.sin(math.pi * cur_t))
+                star_x = int(px_rel * (anim_w - 60) + 30)
+                star_y = int(py_rel * (anim_h - 120) + 50)
+                s_len = int(rad * 2.5)
+                fx_draw.line([(star_x - s_len, star_y), (star_x + s_len, star_y)], fill=(255, 255, 255, star_a), width=1)
+                fx_draw.line([(star_x, star_y - s_len), (star_x, star_y + s_len)], fill=(0, 212, 255, star_a), width=1)
+            fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(1))
 
         frame = Image.alpha_composite(frame, fx_layer)
         frames.append(frame.convert("RGB"))
