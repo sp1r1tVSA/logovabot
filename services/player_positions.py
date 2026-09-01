@@ -199,6 +199,7 @@ KNOWN_PLAYER_POSITIONS: dict[str, str] = {
     "jonathan tah": "CB", "tah": "CB", "джонатан та": "CB",
 
     # Full-Backs (LB / RB / LWB / RWB)
+    "gerard martin": "LB", "gerard martín": "LB", "жерар мартин": "LB",
     "alphonso davies": "LB", "davies": "LB", "альфонсо дэвис": "LB", "дэвис": "LB",
     "theo hernandez": "LB", "hernandez": "LB", "тео эрнандес": "LB", "эрнандес": "LB",
     "alejandro grimaldo": "LB", "grimaldo": "LB", "алехандро гримальдо": "LB", "гримальдо": "LB",

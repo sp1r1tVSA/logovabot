@@ -108,33 +108,6 @@ def get_photo_path(player_name: str, disambiguator: str | None = None) -> str | 
     return None
 
 
-def _get_thesportsdb_url(player_name: str) -> str | None:
-    clean_name = _normalize_name(player_name)
-    search_terms = [clean_name]
-    if "-" in clean_name:
-        search_terms.append(clean_name.replace("-", " "))
-    parts = clean_name.split()
-    if len(parts) > 2:
-        search_terms.append(f"{parts[0]} {parts[-1]}")
-
-    for term in search_terms:
-        encoded = urllib.parse.quote(term)
-        url = f"https://www.thesportsdb.com/api/v1/json/3/searchplayers.php?p={encoded}"
-        req = urllib.request.Request(url, headers=STD_HEADERS)
-        try:
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-                players = data.get("player")
-                if players and len(players) > 0:
-                    p = players[0]
-                    img = p.get("strCutout") or p.get("strRender") or p.get("strThumb")
-                    if img:
-                        return img
-        except Exception as e:
-            logger.debug(f"[TheSportsDB] Error for '{term}': {e}")
-    return None
-
-
 def _get_fotmob_url(player_name: str) -> str | None:
     clean_name = _normalize_name(player_name)
     search_terms = [clean_name]
@@ -157,12 +130,49 @@ def _get_fotmob_url(player_name: str) -> str | None:
                 squad = data.get("squadMemberSuggest", [])
                 if squad and len(squad) > 0:
                     options = squad[0].get("options", [])
-                    if options:
-                        player_id = options[0].get("payload", {}).get("id")
+                    for opt in options:
+                        payload = opt.get("payload", {})
+                        if payload.get("isCoach"):
+                            continue
+                        player_id = payload.get("id")
                         if player_id:
                             return f"https://images.fotmob.com/image_resources/playerimages/{player_id}.png"
         except Exception as e:
             logger.debug(f"[FotMob] Error for '{term}': {e}")
+    return None
+
+
+def _get_thesportsdb_url(player_name: str) -> str | None:
+    clean_name = _normalize_name(player_name).lower().strip()
+    search_terms = [clean_name]
+    if "-" in clean_name:
+        search_terms.append(clean_name.replace("-", " "))
+    parts = clean_name.split()
+    if len(parts) > 2:
+        search_terms.append(f"{parts[0]} {parts[-1]}")
+
+    for term in search_terms:
+        encoded = urllib.parse.quote(term)
+        url = f"https://www.thesportsdb.com/api/v1/json/3/searchplayers.php?p={encoded}"
+        req = urllib.request.Request(url, headers=STD_HEADERS)
+        try:
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                players = data.get("player")
+                if players:
+                    for p in players:
+                        pos = str(p.get("strPosition") or "").lower()
+                        if "manager" in pos or "coach" in pos:
+                            continue
+                        found_name = _normalize_name(p.get("strPlayer") or "").lower()
+                        # Strict name matching
+                        if clean_name not in found_name and found_name not in clean_name:
+                            continue
+                        img = p.get("strCutout") or p.get("strRender") or p.get("strThumb")
+                        if img:
+                            return img
+        except Exception as e:
+            logger.debug(f"[TheSportsDB] Error for '{term}': {e}")
     return None
 
 
@@ -218,8 +228,8 @@ def fetch_and_cache(player_name: str, team: str | None = None) -> str | None:
             return existing
 
         providers = [
-            ("TheSportsDB", _get_thesportsdb_url, STD_HEADERS),
             ("FotMob", _get_fotmob_url, FOTMOB_HEADERS),
+            ("TheSportsDB", _get_thesportsdb_url, STD_HEADERS),
             ("Wikipedia", _get_wikipedia_url, WIKI_HEADERS),
         ]
 
