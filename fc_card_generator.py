@@ -309,8 +309,8 @@ def render_master_static_card(player_data: dict, style_id: str = "toty_gold") ->
     img = Image.new("RGBA", (WIDTH, HEIGHT), (6, 8, 14, 255))
     draw = ImageDraw.Draw(img)
 
-    # 1. Outer Stadium Atmospheric Ambient Spotlight
-    cx, cy = int(WIDTH * 0.58), int(HEIGHT * 0.28)
+    # 1. Outer Stadium Atmospheric Ambient Spotlight (Centered on Player)
+    cx, cy = WIDTH // 2, int(HEIGHT * 0.28)
     glow = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
     g_draw = ImageDraw.Draw(glow)
     gr, gg, gb = cfg["glow_rgb"]
@@ -365,7 +365,7 @@ def render_master_static_card(player_data: dict, style_id: str = "toty_gold") ->
     draw.polygon(shield_poly, outline=cfg["border_primary"], width=int(5 * SCALE))
     draw.polygon(shield_poly, outline=cfg["border_secondary"] + (190,), width=int(2 * SCALE))
 
-    # 5. Heroic Large Player Cutout (Dominant Upper Half, Offset to Right)
+    # 5. Heroic Large Player Cutout (Perfect Horizontal Center)
     player_img = _get_player_photo_image(player_name, team_name)
     if player_img:
         # 1. Trim transparent borders to get actual player bounds
@@ -373,13 +373,13 @@ def render_master_static_card(player_data: dict, style_id: str = "toty_gold") ->
         if bbox:
             player_img = player_img.crop(bbox)
 
-        # 2. Proportional resize to heroic scale (height ~740px in 2x master resolution)
-        target_h = int(370 * SCALE)
+        # 2. Proportional resize to heroic scale (height ~720px in 2x master resolution)
+        target_h = int(360 * SCALE)
         orig_w, orig_h = player_img.size
         aspect = orig_w / float(orig_h) if orig_h > 0 else 1.0
         ph = target_h
         pw = int(ph * aspect)
-        max_pw = int(290 * SCALE)
+        max_pw = int(320 * SCALE)
         if pw > max_pw:
             pw = max_pw
             ph = int(pw / aspect)
@@ -392,15 +392,16 @@ def render_master_static_card(player_data: dict, style_id: str = "toty_gold") ->
         shadow.paste(Image.new("RGBA", (pw, ph), (0, 0, 0, 220)), (14, 14), s_mask)
         shadow = shadow.filter(ImageFilter.GaussianBlur(14))
 
-        px = (WIDTH // 2) - (pw // 2) + int(52 * SCALE)
-        py = top_y + int(6 * SCALE)
+        # Centered horizontally on the card
+        px = (WIDTH - pw) // 2
+        py = top_y + int(10 * SCALE)
 
         img.paste(shadow, (px - 7, py - 7), shadow)
 
         # Baseline fade into name plaque
         fade = Image.new("L", (pw, ph), 255)
         f_draw = ImageDraw.Draw(fade)
-        f_start = int(ph * 0.72)
+        f_start = int(ph * 0.70)
         for y in range(f_start, ph):
             val = int(255 * (1.0 - ((y - f_start) / (ph - f_start)) ** 1.6))
             f_draw.line([(0, y), (pw, y)], fill=val)
@@ -410,7 +411,7 @@ def render_master_static_card(player_data: dict, style_id: str = "toty_gold") ->
         img.paste(player_img, (px, py), fade)
 
     # 6. Authentic Left HUD (OVR, Position, Divider, Club Logo)
-    col_x = left_x + int(56 * SCALE)
+    col_x = left_x + int(52 * SCALE)
     ovr_y = top_y + int(24 * SCALE)
 
     font_ovr = load_card_font(56, bold=True)
@@ -433,7 +434,7 @@ def render_master_static_card(player_data: dict, style_id: str = "toty_gold") ->
             try:
                 logo_img = Image.open(logo_path)
                 logo_img = clean_and_prepare_logo(logo_img)
-                l_size = int(54 * SCALE)
+                l_size = int(52 * SCALE)
                 logo_img.thumbnail((l_size, l_size), Image.Resampling.LANCZOS)
                 lx = col_x - (logo_img.width // 2)
                 ly = sep_y + int(16 * SCALE)
@@ -442,7 +443,7 @@ def render_master_static_card(player_data: dict, style_id: str = "toty_gold") ->
                 pass
 
     # 7. Player Name Ribbon (Embossed Metallic Plaque)
-    ry = int(HEIGHT * 0.528)
+    ry = int(HEIGHT * 0.515)
     rw = right_x - left_x - int(24 * SCALE)
     rh = int(48 * SCALE)
     rx = (WIDTH - rw) // 2
@@ -455,12 +456,12 @@ def render_master_static_card(player_data: dict, style_id: str = "toty_gold") ->
     draw.text((WIDTH // 2, ry + (rh // 2)), player_name, font=font_name, fill=cfg["text_primary"], anchor="mm")
 
     # 8. 6-Attribute Stat Grid (2 Columns, 3 Rows with Vertical Separator)
-    grid_y = ry + rh + int(24 * SCALE)
-    row_h = int(46 * SCALE)
+    grid_y = ry + rh + int(18 * SCALE)
+    row_h = int(44 * SCALE)
     sep_x = WIDTH // 2
 
     # Glowing vertical divider line
-    draw.line([(sep_x, grid_y + int(4 * SCALE)), (sep_x, grid_y + int(136 * SCALE))], fill=cfg["border_primary"] + (140,), width=int(2 * SCALE))
+    draw.line([(sep_x, grid_y + int(4 * SCALE)), (sep_x, grid_y + int(130 * SCALE))], fill=cfg["border_primary"] + (140,), width=int(2 * SCALE))
 
     font_s_val = load_card_font(30, bold=True)
     font_s_lbl = load_card_font(21, bold=True)
@@ -490,14 +491,14 @@ def render_master_static_card(player_data: dict, style_id: str = "toty_gold") ->
         draw.text((c2_num_x, cur_y), str(rv), font=font_s_val, fill=cfg["text_primary"], anchor="rt")
         draw.text((c2_lbl_x, cur_y + int(3 * SCALE)), rl, font=font_s_lbl, fill=cfg["border_primary"], anchor="lt")
 
-    # 9. Bottom Finial & Edition Badge (Auto-fit to guarantee zero overflow)
-    foot_y = grid_y + int(148 * SCALE)
+    # 9. Bottom Finial & Edition Badge (Positioned safely above tapering shield walls)
+    foot_y = grid_y + int(140 * SCALE)
     title_short = cfg['title'].split(' / ')[0].strip()
     foot_text = f"★ {title_short} • КПЛ 2026 ★"
 
-    # Find optimal font size and adapt badge width to text
-    max_text_w = int(280 * SCALE)
-    font_sz = 13
+    # Clamp font and width to always maintain comfortable padding from shield borders
+    max_text_w = int(220 * SCALE)
+    font_sz = 12
     font_foot = load_card_font(font_sz, bold=True)
     bbox = draw.textbbox((0, 0), foot_text, font=font_foot)
     text_w = bbox[2] - bbox[0]
@@ -508,13 +509,13 @@ def render_master_static_card(player_data: dict, style_id: str = "toty_gold") ->
         bbox = draw.textbbox((0, 0), foot_text, font=font_foot)
         text_w = bbox[2] - bbox[0]
 
-    foot_w = min(int(320 * SCALE), text_w + int(24 * SCALE))
-    foot_h = int(26 * SCALE)
+    foot_w = min(int(260 * SCALE), text_w + int(24 * SCALE))
+    foot_h = int(24 * SCALE)
     foot_x = (WIDTH - foot_w) // 2
 
     draw.rounded_rectangle(
         [(foot_x, foot_y), (foot_x + foot_w, foot_y + foot_h)],
-        radius=int(8 * SCALE),
+        radius=int(7 * SCALE),
         fill=(10, 12, 18, 240),
         outline=cfg["border_secondary"] + (180,),
         width=int(1.5 * SCALE)
