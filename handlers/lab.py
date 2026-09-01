@@ -19,6 +19,7 @@ from config import CLUBS, ADMIN_IDS
 from handlers.base import admin_only, is_admin
 from handlers.cabinet import safe_edit_or_reply
 import fc_card_generator
+from media_utils import send_high_quality_animation
 
 logger = logging.getLogger(__name__)
 
@@ -334,7 +335,7 @@ async def cb_lab_demo_anim(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         }
     }
 
-    buf = await asyncio.to_thread(fc_card_generator.generate_animated_ea_fc_card, test_player, anim_style)
+    frames, fps, anim_w, anim_h = await asyncio.to_thread(fc_card_generator.render_animated_card_frames, test_player, anim_style)
     stats = fc_card_generator.calculate_fut_attributes(test_player)
 
     cfg = fc_card_generator.CARD_STYLES.get(fc_card_generator._normalize_style_key(anim_style), fc_card_generator.CARD_STYLES["toty_gold"])
@@ -356,14 +357,14 @@ async def cb_lab_demo_anim(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         [InlineKeyboardButton("« В лабораторию", callback_data="admin_lab_menu")]
     ]
 
-    anim_filename = getattr(buf, "name", f"{anim_style}.mp4")
-    await context.bot.send_animation(
+    await send_high_quality_animation(
+        bot=context.bot,
         chat_id=user_id,
-        animation=buf,
-        filename=anim_filename,
+        animation_input=frames,
         caption=caption,
         parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(keyboard)
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        filename=f"{anim_style}.mp4"
     )
 
 

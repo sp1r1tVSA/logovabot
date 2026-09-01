@@ -134,7 +134,7 @@ def generate_player_card(stats: dict) -> io.BytesIO:
     photo_y = y + (HEADER_H - PHOTO_D) // 2
 
     # ── Player portrait ────────────────────────────────────────────────
-    photo_path = player_photos.get_photo_path(player_name, team_name)
+    photo_path = player_photos.get_player_photo(player_name, team_name)
 
     mask = Image.new("L", (PHOTO_D, PHOTO_D), 0)
     mask_draw = ImageDraw.Draw(mask)

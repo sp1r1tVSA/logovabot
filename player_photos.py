@@ -1,11 +1,11 @@
 """
 player_photos.py
 
-Fetches and caches player portrait photos using 4 free providers:
+Fetches and caches player portrait photos using hybrid free providers:
 1. TheSportsDB API (Cutouts / Transparent PNG)
 2. FotMob Search API (Massive Database)
-3. SofaScore Search API 
-4. Transfermarkt API (Ultimate Fallback)
+3. Wikipedia / Wikimedia Commons API (High-res portraits)
+4. Transfermarkt / SofaScore (Fallbacks)
 """
 
 import os
@@ -23,21 +23,33 @@ logger = logging.getLogger(__name__)
 BASE_DIR   = os.path.dirname(__file__)
 PHOTOS_DIR = os.path.join(BASE_DIR, "assets", "players")
 
-# Индивидуальные маскировочные заголовки для обхода Cloudflare и CORS
+# Latin ligatures and special character replacement
+TRANSLIT_LATIN = {
+    'ø': 'o', 'Ø': 'O',
+    'æ': 'ae', 'Æ': 'AE',
+    'œ': 'oe', 'Œ': 'OE',
+    'ß': 'ss',
+    'ł': 'l', 'Ł': 'L',
+    'đ': 'd', 'Đ': 'D',
+    'ð': 'd', 'Ð': 'D',
+    'þ': 'th', 'Þ': 'TH',
+    'ı': 'i', 'İ': 'I',
+}
+
+# Individual headers for API providers
 FOTMOB_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
     "Accept": "application/json, text/plain, */*",
     "Referer": "https://www.fotmob.com/"
 }
 
-SOFASCORE_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "Origin": "https://www.sofascore.com",
-    "Referer": "https://www.sofascore.com/"
+WIKI_HEADERS = {
+    "User-Agent": "Logovobot/1.0 (https://t.me/logovobot; contact@logovo.bot)",
+    "Accept": "application/json"
 }
 
 TM_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
     "Accept": "application/json, text/javascript, */*; q=0.01",
     "X-Requested-With": "XMLHttpRequest",
     "Referer": "https://www.transfermarkt.com/"
@@ -55,7 +67,9 @@ def _ensure_photos_dir() -> None:
 
 
 def _normalize_name(name: str) -> str:
-    """Убирает акценты/диакритику из имени."""
+    """Убирает акценты/диакритику и нормализует спецсимволы латиницы."""
+    for k, v in TRANSLIT_LATIN.items():
+        name = name.replace(k, v)
     nfkd_form = unicodedata.normalize('NFKD', name)
     return "".join([c for c in nfkd_form if not unicodedata.combining(c)]).strip()
 
@@ -76,15 +90,18 @@ def get_cached_photo_path(player_name: str, disambiguator: str | None = None) ->
 
 def is_cached(player_name: str, disambiguator: str | None = None) -> bool:
     path = get_cached_photo_path(player_name, disambiguator)
-    return os.path.isfile(path) and os.path.getsize(path) > 0
+    if os.path.isfile(path) and os.path.getsize(path) > 0:
+        return True
+    path_no_dis = get_cached_photo_path(player_name, None)
+    return os.path.isfile(path_no_dis) and os.path.getsize(path_no_dis) > 0
 
 
 def get_photo_path(player_name: str, disambiguator: str | None = None) -> str | None:
+    """Check if photo exists on disk without network request."""
     if disambiguator:
         path = get_cached_photo_path(player_name, disambiguator)
         if os.path.isfile(path) and os.path.getsize(path) > 0:
             return path
-    # Check without disambiguator
     path = get_cached_photo_path(player_name, None)
     if os.path.isfile(path) and os.path.getsize(path) > 0:
         return path
@@ -93,79 +110,78 @@ def get_photo_path(player_name: str, disambiguator: str | None = None) -> str | 
 
 def _get_thesportsdb_url(player_name: str) -> str | None:
     clean_name = _normalize_name(player_name)
-    encoded = urllib.parse.quote(clean_name)
-    url = f"https://www.thesportsdb.com/api/v1/json/3/searchplayers.php?p={encoded}"
-    req = urllib.request.Request(url, headers=STD_HEADERS)
-    try:
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            players = data.get("player")
-            if players and len(players) > 0:
-                p = players[0]
-                return p.get("strCutout") or p.get("strRender") or p.get("strThumb")
-    except Exception as e:
-        logger.debug(f"[TheSportsDB] Error for '{player_name}': {e}")
+    search_terms = [clean_name]
+    if "-" in clean_name:
+        search_terms.append(clean_name.replace("-", " "))
+    parts = clean_name.split()
+    if len(parts) > 2:
+        search_terms.append(f"{parts[0]} {parts[-1]}")
+
+    for term in search_terms:
+        encoded = urllib.parse.quote(term)
+        url = f"https://www.thesportsdb.com/api/v1/json/3/searchplayers.php?p={encoded}"
+        req = urllib.request.Request(url, headers=STD_HEADERS)
+        try:
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                players = data.get("player")
+                if players and len(players) > 0:
+                    p = players[0]
+                    img = p.get("strCutout") or p.get("strRender") or p.get("strThumb")
+                    if img:
+                        return img
+        except Exception as e:
+            logger.debug(f"[TheSportsDB] Error for '{term}': {e}")
     return None
 
 
 def _get_fotmob_url(player_name: str) -> str | None:
     clean_name = _normalize_name(player_name)
-    encoded = urllib.parse.quote(clean_name)
-    url = f"https://www.fotmob.com/api/searchData?term={encoded}"
-    req = urllib.request.Request(url, headers=FOTMOB_HEADERS)
-    try:
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            players = data.get("player", []) or data.get("players", [])
-            if not players and isinstance(data, dict):
-                for key, val in data.items():
-                    if isinstance(val, list) and len(val) > 0 and isinstance(val[0], dict):
-                        if "id" in val[0] and ("name" in val[0] or "p" in val[0]):
-                            players = val
-                            break
+    search_terms = [clean_name]
+    if "-" in clean_name:
+        search_terms.append(clean_name.replace("-", " "))
+        search_terms.append(clean_name.split("-")[-1].strip())
+    parts = clean_name.split()
+    if len(parts) > 2:
+        search_terms.append(f"{parts[0]} {parts[-1]}")
+    if len(parts) >= 2 and parts[-1] not in search_terms:
+        search_terms.append(parts[-1])
 
-            if players:
-                player_id = players[0].get("id")
-                if player_id:
-                    return f"https://images.fotmob.com/image_resources/playerimages/{player_id}.png"
-    except Exception as e:
-        logger.debug(f"[FotMob] Error for '{player_name}': {e}")
+    for term in search_terms:
+        encoded = urllib.parse.quote(term)
+        url = f"https://apigw.fotmob.com/searchapi/suggest?term={encoded}"
+        req = urllib.request.Request(url, headers=FOTMOB_HEADERS)
+        try:
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                squad = data.get("squadMemberSuggest", [])
+                if squad and len(squad) > 0:
+                    options = squad[0].get("options", [])
+                    if options:
+                        player_id = options[0].get("payload", {}).get("id")
+                        if player_id:
+                            return f"https://images.fotmob.com/image_resources/playerimages/{player_id}.png"
+        except Exception as e:
+            logger.debug(f"[FotMob] Error for '{term}': {e}")
     return None
 
 
-def _get_sofascore_url(player_name: str) -> str | None:
+def _get_wikipedia_url(player_name: str) -> str | None:
     clean_name = _normalize_name(player_name)
-    encoded = urllib.parse.quote(clean_name)
-    url = f"https://api.sofascore.com/api/v1/search/all?q={encoded}"
-    req = urllib.request.Request(url, headers=SOFASCORE_HEADERS)
-    try:
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            results = data.get("results", [])
-            for res in results:
-                if res.get("type") == "player":
-                    p_id = res.get("entity", {}).get("id")
-                    if p_id:
-                        return f"https://api.sofascore.app/api/v1/player/{p_id}/image"
-    except Exception as e:
-        logger.debug(f"[SofaScore] Error for '{player_name}': {e}")
-    return None
-
-
-def _get_transfermarkt_url(player_name: str) -> str | None:
-    clean_name = _normalize_name(player_name)
-    encoded = urllib.parse.quote(clean_name)
-    url = f"https://www.transfermarkt.com/quickselect/autosuggest?query={encoded}"
-    req = urllib.request.Request(url, headers=TM_HEADERS)
-    try:
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            for item in data:
-                img = item.get("image", "")
-                if img and "default" not in img.lower():
-                    return img.replace("/small/", "/medium/")
-    except Exception as e:
-        logger.debug(f"[Transfermarkt] Error for '{player_name}': {e}")
+    search_terms = [player_name, clean_name]
+    for term in search_terms:
+        encoded = urllib.parse.quote(term)
+        url = f"https://en.wikipedia.org/w/api.php?action=query&titles={encoded}&prop=pageimages&format=json&pithumbsize=300"
+        req = urllib.request.Request(url, headers=WIKI_HEADERS)
+        try:
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                pages = data.get("query", {}).get("pages", {})
+                for _, pdata in pages.items():
+                    if "thumbnail" in pdata:
+                        return pdata["thumbnail"]["source"]
+        except Exception as e:
+            logger.debug(f"[Wikipedia] Error for '{term}': {e}")
     return None
 
 
@@ -186,24 +202,25 @@ def _download_photo(url: str, dest_path: str, headers: dict | None = None) -> bo
         return False
 
 
-
 def fetch_and_cache(player_name: str, team: str | None = None) -> str | None:
     """Fetch photo for player_name and cache it locally."""
     _ensure_photos_dir()
     cached = get_cached_photo_path(player_name, team)
     
-    if is_cached(player_name, team):
-        return cached
+    existing = get_photo_path(player_name, team)
+    if existing:
+        return existing
 
     with _photos_lock:
-        # Задержка 0.5 сек защищает от банов при массовой загрузке
-        time.sleep(0.5)
+        # Double check inside lock
+        existing = get_photo_path(player_name, team)
+        if existing:
+            return existing
 
         providers = [
             ("TheSportsDB", _get_thesportsdb_url, STD_HEADERS),
             ("FotMob", _get_fotmob_url, FOTMOB_HEADERS),
-            ("SofaScore", _get_sofascore_url, SOFASCORE_HEADERS),
-            ("Transfermarkt", _get_transfermarkt_url, TM_HEADERS)
+            ("Wikipedia", _get_wikipedia_url, WIKI_HEADERS),
         ]
 
         for provider_name, get_url_func, p_headers in providers:
@@ -220,7 +237,10 @@ def fetch_and_cache(player_name: str, team: str | None = None) -> str | None:
 
 
 def get_player_photo(player_name: str, team: str | None = None) -> str | None:
-    """Convenience alias to fetch and return cached photo path."""
+    """Convenience alias to fetch and return cached photo path on demand."""
+    cached = get_photo_path(player_name, team)
+    if cached:
+        return cached
     return fetch_and_cache(player_name, team)
 
 

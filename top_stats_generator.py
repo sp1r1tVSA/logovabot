@@ -180,7 +180,7 @@ def generate_top_stats_image(mode: str = "goals", limit: int = 10, tournament_ty
             photo_x = rank_x + rank_w + 16 * SCALE
             photo_y = row_y0 + (ROW_H - PHOTO_D) // 2
 
-            photo_path = player_photos.get_photo_path(player_name, team_name)
+            photo_path = player_photos.get_player_photo(player_name, team_name)
 
             mask = Image.new("L", (PHOTO_D, PHOTO_D), 0)
             mask_draw = ImageDraw.Draw(mask)

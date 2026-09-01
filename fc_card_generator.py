@@ -510,9 +510,10 @@ def _create_shimmer_streak(w: int, h: int, progress: float, color=(255, 245, 210
     return overlay.filter(ImageFilter.GaussianBlur(8))
 
 
-def generate_animated_ea_fc_card(player_data: dict, anim_style: str = "toty_gold") -> io.BytesIO:
+def render_animated_card_frames(player_data: dict, anim_style: str = "toty_gold") -> tuple[list[Image.Image], float, int, int]:
     """
-    Generate ultra-smooth looping animated GIF in any of the 10 distinct motion design styles.
+    Render raw high-resolution frames of the animated FUT card without palette loss.
+    Returns: (frames, fps, anim_w, anim_h)
     """
     style_id = _normalize_style_key(anim_style)
     cfg = CARD_STYLES[style_id]
@@ -524,7 +525,6 @@ def generate_animated_ea_fc_card(player_data: dict, anim_style: str = "toty_gold
 
     num_frames = 24
     fps = 24.0
-    frame_duration_ms = int(1000.0 / fps)
     frames = []
 
     # Deterministic particle seeds for styles requiring particle physics
@@ -558,14 +558,12 @@ def generate_animated_ea_fc_card(player_data: dict, anim_style: str = "toty_gold
         # ─── 2. VOID ECLIPSE: Accretion Disk & Inward Gravitational Pull ──────
         elif style_id == "void_eclipse":
             cx, cy = anim_w // 2, int(anim_h * 0.27)
-            # Rotating accretion rings
             for r_ring in [120, 180, 240]:
                 angle = (2 * math.pi * t) + (r_ring * 0.05)
                 arc_x = cx + int(20 * math.cos(angle))
                 arc_y = cy + int(20 * math.sin(angle))
                 fx_draw.ellipse([(arc_x - r_ring, arc_y - r_ring), (arc_x + r_ring, arc_y + r_ring)], outline=(138, 43, 226, 40), width=4)
 
-            # Inward gravitationally pulled stardust
             for (px_rel, py_rel, spd, rad, phase) in particles:
                 dist = (1.0 - (t * spd + py_rel) % 1.0) * 240
                 ang = phase + (2 * math.pi * t)
@@ -686,59 +684,33 @@ def generate_animated_ea_fc_card(player_data: dict, anim_style: str = "toty_gold
         frame = Image.alpha_composite(frame, fx_layer)
         frames.append(frame.convert("RGB"))
 
-    # 1. Preferred Telegram Ultra-HD 1080p MP4 Video Encoder (TrueColor 24-bit, 0% banding, 0% noise)
-    if cv2 is not None and np is not None:
-        try:
-            with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
-                tmp_path = tmp.name
+    return frames, fps, anim_w, anim_h
 
-            writer = None
-            for codec in ["mp4v", "avc1", "H264", "XVID"]:
-                try:
-                    fourcc = cv2.VideoWriter_fourcc(*codec)
-                    w = cv2.VideoWriter(tmp_path, fourcc, fps, (anim_w, anim_h))
-                    if w.isOpened():
-                        writer = w
-                        break
-                except Exception:
-                    continue
 
-            if writer is not None:
-                for f in frames:
-                    arr = np.array(f)
-                    bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
-                    writer.write(bgr)
-                writer.release()
+def generate_animated_ea_fc_card(player_data: dict, anim_style: str = "toty_gold") -> io.BytesIO:
+    """
+    Generate high-definition animated card directly as H.264 MP4 without palette loss.
+    """
+    from services.animation_sender import convert_to_high_quality_mp4
 
-                if os.path.exists(tmp_path) and os.path.getsize(tmp_path) > 1000:
-                    with open(tmp_path, "rb") as f_in:
-                        buf = io.BytesIO(f_in.read())
-                    buf.name = f"{style_id}.mp4"
-                    try:
-                        os.remove(tmp_path)
-                    except Exception:
-                        pass
-                    buf.seek(0)
-                    return buf
-        except Exception as e:
-            logger.warning(f"Failed to encode MP4 video with OpenCV: {e}")
+    style_id = _normalize_style_key(anim_style)
+    frames, fps, anim_w, anim_h = render_animated_card_frames(player_data, anim_style=style_id)
 
-    # 2. High-DPI GIF Fallback with Floyd-Steinberg Dithering
-    quantized_frames = [
-        f.convert("P", palette=Image.Palette.ADAPTIVE, colors=256, dither=Image.Dither.FLOYDSTEINBERG)
-        for f in frames
-    ]
-
-    buf = io.BytesIO()
-    buf.name = f"{style_id}.gif"
-    quantized_frames[0].save(
-        buf,
-        format="GIF",
-        save_all=True,
-        append_images=quantized_frames[1:],
-        duration=frame_duration_ms,
-        loop=0,
-        optimize=True
+    mp4_path, meta, is_temp = convert_to_high_quality_mp4(
+        input_source=frames,
+        fps=fps,
+        initial_crf=16
     )
-    buf.seek(0)
-    return buf
+
+    try:
+        with open(mp4_path, "rb") as f_in:
+            buf = io.BytesIO(f_in.read())
+        buf.name = f"{style_id}.mp4"
+        buf.seek(0)
+        return buf
+    finally:
+        if is_temp and os.path.exists(mp4_path):
+            try:
+                os.remove(mp4_path)
+            except Exception:
+                pass

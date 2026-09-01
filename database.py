@@ -268,10 +268,59 @@ def init_db() -> None:
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+
+        # High-performance Telegram file_id deduplication & media caching
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS telegram_media_cache (
+                file_hash TEXT PRIMARY KEY,
+                file_id TEXT NOT NULL,
+                media_type TEXT NOT NULL DEFAULT 'animation',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_media_cache_type ON telegram_media_cache(media_type)")
+
         # Standardize and migrate canonical team names across all tables
         migrate_team_names_canonical(cursor)
 
         logger.info("Database tables initialized successfully.")
+
+
+def get_cached_telegram_media(file_hash: str, media_type: str = "animation") -> str | None:
+    """Retrieve cached Telegram file_id by media SHA-256 hash."""
+    if not file_hash:
+        return None
+    try:
+        with transaction() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT file_id FROM telegram_media_cache WHERE file_hash = ? AND media_type = ?",
+                (file_hash, media_type)
+            )
+            row = cursor.fetchone()
+            return row["file_id"] if row else None
+    except Exception as e:
+        logger.warning(f"Error fetching cached telegram media for hash {file_hash[:8]}: {e}")
+        return None
+
+
+def save_cached_telegram_media(file_hash: str, file_id: str, media_type: str = "animation") -> None:
+    """Save or update Telegram file_id for given media SHA-256 hash."""
+    if not file_hash or not file_id:
+        return
+    try:
+        with transaction() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO telegram_media_cache (file_hash, file_id, media_type)
+                VALUES (?, ?, ?)
+                ON CONFLICT(file_hash) DO UPDATE SET file_id = excluded.file_id, media_type = excluded.media_type
+                """,
+                (file_hash, file_id, media_type)
+            )
+    except Exception as e:
+        logger.warning(f"Error saving cached telegram media for hash {file_hash[:8]}: {e}")
 
 
 def migrate_team_names_canonical(cursor: sqlite3.Cursor) -> None:
