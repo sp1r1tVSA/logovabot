@@ -507,6 +507,9 @@ async def cb_draft_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 await handle_debt_played_rewards(
                     context, m_id, g.get('round_number', 0), g.get('player1_id'), g.get('player2_id')
                 )
+            except Exception as e:
+                logger.warning(f"Failed to handle debt rewards in draft confirm: {e}")
+
             # 🎰 Settle Logovo.bet predictions and bets
             try:
                 payouts = await asyncio.to_thread(
