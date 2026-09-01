@@ -148,48 +148,38 @@ async def cb_lab_toggle_flag(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 @admin_only
 async def cb_lab_card_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Card test menu with all 10 distinct design concepts."""
+    """Card test menu featuring 3 official KPL League formats & specialized themes."""
     query = update.callback_query
     if not query:
         return
     await query.answer()
 
     text = (
-        "🃏 <b>10 Топовых Концептов Дизайна Карточек (FC 25 / Esports)</b>\n\n"
-        "Выберите стиль для генерации статичной карточки (PNG):\n\n"
-        "1. 🌟 <b>TOTY Celestial Gold</b> — Божественное жидкое золото\n"
-        "2. 🌌 <b>Void Eclipse</b> — Черная дыра и гравитация\n"
-        "3. ⚡ <b>Cyberpunk 2077</b> — Лазерный кибер-HUD\n"
-        "4. 💎 <b>Liquid Hyper-Glass</b> — Сапфировое стекло\n"
-        "5. 🔥 <b>Inferno Magma</b> — Раскаленная лава и базальт\n"
-        "6. ❄️ <b>Glacial Frost</b> — Арктический лед и алмазы\n"
-        "7. 👁️ <b>Anime Sakuga</b> — Аура эгоиста Blue Lock\n"
-        "8. 👑 <b>Royal 24K Ingot</b> — Золотой банковский слиток\n"
-        "9. 🏎️ <b>Red Bull Aero Carbon</b> — Кованый карбон F1\n"
-        "10. ⭐ <b>UEFA Champions Night</b> — Звездный хром ЛЧ"
+        "🏆 <b>Официальные Форматы Карточек Лиги КПЛ 2026</b>\n\n"
+        "Градация дизайна под турниры КПЛ по рейтингу OVR:\n\n"
+        "🥉 1. <b>КПЛ Standard (OVR ≤ 85)</b> — Графитовый титан и рубиновый кант КПЛ\n"
+        "🥈 2. <b>КПЛ Star Edition (OVR 86–92)</b> — Сапфирово-рубиновый неон\n"
+        "🥇 3. <b>КПЛ Prime MVP (OVR 93+)</b> — 24K Золото и базальтовое пламя КПЛ\n\n"
+        "<i>Дополнительные концепт-стили:</i>"
     )
     keyboard = [
         [
-            InlineKeyboardButton("🌟 1. TOTY Gold", callback_data="lab_demo_card_toty_gold"),
-            InlineKeyboardButton("🌌 2. Void Eclipse", callback_data="lab_demo_card_void_eclipse"),
+            InlineKeyboardButton("🥉 1. КПЛ Standard (≤85)", callback_data="lab_demo_card_kpl_standard"),
+            InlineKeyboardButton("🥈 2. КПЛ Star (86-92)", callback_data="lab_demo_card_kpl_star"),
         ],
         [
-            InlineKeyboardButton("⚡ 3. Cyberpunk", callback_data="lab_demo_card_cyber_hud"),
-            InlineKeyboardButton("💎 4. Hyper-Glass", callback_data="lab_demo_card_hyper_glass"),
+            InlineKeyboardButton("🥇 3. КПЛ Prime (93+)", callback_data="lab_demo_card_kpl_prime"),
+            InlineKeyboardButton("⭐ 4. UCL Night", callback_data="lab_demo_card_ucl_night"),
         ],
         [
             InlineKeyboardButton("🔥 5. Inferno Magma", callback_data="lab_demo_card_inferno_magma"),
-            InlineKeyboardButton("❄️ 6. Glacial Frost", callback_data="lab_demo_card_glacial_frost"),
+            InlineKeyboardButton("⚡ 6. Cyberpunk", callback_data="lab_demo_card_cyber_hud"),
         ],
         [
-            InlineKeyboardButton("👁️ 7. Anime Sakuga", callback_data="lab_demo_card_anime_sakuga"),
-            InlineKeyboardButton("👑 8. Royal 24K", callback_data="lab_demo_card_royal_24k"),
+            InlineKeyboardButton("💎 7. Hyper-Glass", callback_data="lab_demo_card_hyper_glass"),
+            InlineKeyboardButton("🌌 8. Void Eclipse", callback_data="lab_demo_card_void_eclipse"),
         ],
-        [
-            InlineKeyboardButton("🏎️ 9. Aero Carbon", callback_data="lab_demo_card_aero_carbon"),
-            InlineKeyboardButton("⭐ 10. UCL Night", callback_data="lab_demo_card_ucl_night"),
-        ],
-        [InlineKeyboardButton("🎬 ➔ ТЕСТ АНИМИРОВАННЫХ (GIF)", callback_data="lab_anim_card_menu")],
+        [InlineKeyboardButton("🎬 ➔ ТЕСТ АНИМИРОВАННЫХ (GIF/MP4)", callback_data="lab_anim_card_menu")],
         [InlineKeyboardButton("🔍 Выбрать реального игрока из клуба", callback_data="lab_card_pick_club")],
         [InlineKeyboardButton("« Назад в лабораторию", callback_data="admin_lab_menu")],
     ]
@@ -198,47 +188,35 @@ async def cb_lab_card_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 @admin_only
 async def cb_lab_anim_card_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Animated card testing menu for all 10 styles."""
+    """Animated card testing menu featuring KPL formats and specialized loop shaders."""
     query = update.callback_query
     if not query:
         return
     await query.answer()
 
     text = (
-        "🎬 <b>10 Топовых АНИМИРОВАННЫХ Карточек Игроков (GIF)</b>\n\n"
-        "Выберите стиль динамической анимации:\n\n"
-        "1. 🌟 <b>TOTY Gold</b> — Скользящий жидкий луч света и аура\n"
-        "2. 🌌 <b>Void Eclipse</b> — Вращающийся диск и притяжение частиц\n"
-        "3. ⚡ <b>Cyberpunk</b> — Сканирующий лазерный луч и неоновый пульс\n"
-        "4. 💎 <b>Hyper-Glass</b> — Каустика и радужные призмы\n"
-        "5. 🔥 <b>Inferno Magma</b> — Пульс лавы и 35 горящих искр\n"
-        "6. ❄️ <b>Glacial Frost</b> — Кристаллизация и мерцающие алмазы\n"
-        "7. 👁️ <b>Anime Sakuga</b> — Потрескивающие молнии и огонь ауры\n"
-        "8. 👑 <b>Royal 24K</b> — Тяжелый золотой металлический блик\n"
-        "9. 🏎️ <b>Aero Carbon</b> — Ветровые струи аэродинамики F1\n"
-        "10. ⭐ <b>UEFA Night</b> — Лазерные созвездия звезд ЛЧ"
+        "🎬 <b>Анимированные Карточки Лиги КПЛ 2026 (MP4/GIF)</b>\n\n"
+        "Выберите формат динамической анимации:\n\n"
+        "🥉 1. <b>КПЛ Standard</b> — Стальной титановый блеск и пульс рубинового канта\n"
+        "🥈 2. <b>КПЛ Star</b> — Сапфировый лазерный луч и мерцание звезд\n"
+        "🥇 3. <b>КПЛ Prime MVP</b> — Золотой световой поток и восходящие искры КПЛ\n"
+        "⭐ 4. <b>UCL Night</b> — Лазерные созвездия звезд ЛЧ\n"
+        "🔥 5. <b>Inferno Magma</b> — Раскаленная магма и летящие угли"
     )
     keyboard = [
         [
-            InlineKeyboardButton("🌟 1. TOTY Gold", callback_data="lab_demo_anim_toty_gold"),
-            InlineKeyboardButton("🌌 2. Void Eclipse", callback_data="lab_demo_anim_void_eclipse"),
+            InlineKeyboardButton("🥉 1. КПЛ Standard", callback_data="lab_demo_anim_kpl_standard"),
+            InlineKeyboardButton("🥈 2. КПЛ Star", callback_data="lab_demo_anim_kpl_star"),
         ],
         [
-            InlineKeyboardButton("⚡ 3. Cyberpunk", callback_data="lab_demo_anim_cyber_hud"),
-            InlineKeyboardButton("💎 4. Hyper-Glass", callback_data="lab_demo_anim_hyper_glass"),
+            InlineKeyboardButton("🥇 3. КПЛ Prime", callback_data="lab_demo_anim_kpl_prime"),
+            InlineKeyboardButton("⭐ 4. UCL Night", callback_data="lab_demo_anim_ucl_night"),
         ],
         [
             InlineKeyboardButton("🔥 5. Inferno Magma", callback_data="lab_demo_anim_inferno_magma"),
-            InlineKeyboardButton("❄️ 6. Glacial Frost", callback_data="lab_demo_anim_glacial_frost"),
+            InlineKeyboardButton("⚡ 6. Cyberpunk", callback_data="lab_demo_anim_cyber_hud"),
         ],
-        [
-            InlineKeyboardButton("👁️ 7. Anime Sakuga", callback_data="lab_demo_anim_anime_sakuga"),
-            InlineKeyboardButton("👑 8. Royal 24K", callback_data="lab_demo_anim_royal_24k"),
-        ],
-        [
-            InlineKeyboardButton("🏎️ 9. Aero Carbon", callback_data="lab_demo_anim_aero_carbon"),
-            InlineKeyboardButton("⭐ 10. UCL Night", callback_data="lab_demo_anim_ucl_night"),
-        ],
+        [InlineKeyboardButton("🖼️ ➔ Тест статичных карточек", callback_data="lab_card_menu")],
         [InlineKeyboardButton("🖼️ ➔ К статичным карточкам (PNG)", callback_data="lab_card_menu")],
         [InlineKeyboardButton("« В лабораторию", callback_data="admin_lab_menu")],
     ]
@@ -438,14 +416,6 @@ async def cb_lab_card_generate_player(update: Update, context: ContextTypes.DEFA
     goals = db_stats.get("total_goals", 0)
     assists = db_stats.get("total_assists", 0)
 
-    # Determine card theme based on performance
-    if (goals + assists) >= 15:
-        theme_name = "totw"
-    elif (goals + assists) >= 8:
-        theme_name = "gold_rare"
-    else:
-        theme_name = "gold_rare"
-
     card_data = {
         "player_name": player_name,
         "team_name": club,
@@ -455,13 +425,16 @@ async def cb_lab_card_generate_player(update: Update, context: ContextTypes.DEFA
         "matches_played": max(1, goals + assists),
     }
 
-    buf = await asyncio.to_thread(fc_card_generator.generate_ea_fc_card, card_data, theme_name)
     fut_stats = fc_card_generator.calculate_fut_attributes(card_data)
+    theme_name = fc_card_generator.get_kpl_tier_by_ovr(fut_stats["ovr"])
+    cfg = fc_card_generator.CARD_STYLES.get(theme_name, fc_card_generator.CARD_STYLES["kpl_prime"])
+
+    buf = await asyncio.to_thread(fc_card_generator.generate_ea_fc_card, card_data, theme_name)
 
     caption = (
-        f"🃏 <b>EA FC Карточка игрока</b>\n\n"
+        f"🏆 <b>Карточка Лиги КПЛ 2026: {cfg['title']}</b>\n\n"
         f"👤 <b>{html.escape(player_name)}</b> · {html.escape(club)}\n"
-        f"⭐ <b>OVR: {fut_stats['ovr']}</b> ({theme_name.upper()})\n"
+        f"⭐ <b>OVR: {fut_stats['ovr']}</b> ({cfg['desc']})\n"
         f"⚽ Голов: <b>{goals}</b> | 🅰️ Ассистов: <b>{assists}</b> | 🔥 Очков: <b>{goals + assists}</b>\n\n"
         f"⚡ <b>PAC:</b> {fut_stats['pac']} | 🎯 <b>SHO:</b> {fut_stats['sho']} | 🅰️ <b>PAS:</b> {fut_stats['pas']}\n"
         f"🪄 <b>DRI:</b> {fut_stats['dri']} | 🛡️ <b>DEF:</b> {fut_stats['def']} | 💪 <b>PHY:</b> {fut_stats['phy']}\n\n"
@@ -470,7 +443,7 @@ async def cb_lab_card_generate_player(update: Update, context: ContextTypes.DEFA
 
     keyboard = [
         [
-            InlineKeyboardButton("🎬 Анимировать (TOTY)", callback_data=f"lab_p_anim_{club}|{player_name}|toty_gold"),
+            InlineKeyboardButton(f"🎬 Анимировать ({cfg['title']})", callback_data=f"lab_p_anim_{club}|{player_name}|{theme_name}"),
             InlineKeyboardButton("✨ Выбрать стиль анимации", callback_data=f"lab_p_styles_{club}|{player_name}"),
         ],
         [InlineKeyboardButton("👥 Другой игрок", callback_data=f"lab_pick_player_{club}")],

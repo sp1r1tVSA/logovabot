@@ -49,6 +49,42 @@ HEIGHT = 690 * SCALE
 # ─────────────────────────────────────────────────────────────────────────────
 
 CARD_STYLES = {
+    "kpl_standard": {
+        "title": "КПЛ STANDARD",
+        "bg_top": (16, 18, 26),             # Titanium Graphite
+        "bg_bot": (8, 9, 14),               # Deep Matte Obsidian
+        "border_primary": (210, 215, 225),  # Steel Silver
+        "border_secondary": (239, 68, 68),  # KPL Ruby Red Accent
+        "accent": (239, 68, 68),
+        "text_primary": (255, 255, 255),
+        "text_secondary": (210, 215, 225),
+        "glow_rgb": (180, 190, 210),
+        "desc": "Графитовый титан и рубиновый кант КПЛ (Рейтинг до 85)",
+    },
+    "kpl_star": {
+        "title": "КПЛ STAR EDITION",
+        "bg_top": (10, 18, 38),             # Midnight Sapphire
+        "bg_bot": (5, 8, 18),               # Deep Indigo
+        "border_primary": (0, 230, 255),    # Electric Laser Cyan
+        "border_secondary": (239, 68, 68),  # KPL Ruby Red Neon
+        "accent": (0, 230, 255),
+        "text_primary": (255, 255, 255),
+        "text_secondary": (0, 230, 255),
+        "glow_rgb": (0, 200, 255),
+        "desc": "Сапфирово-рубиновый неон КПЛ (Рейтинг 86-92)",
+    },
+    "kpl_prime": {
+        "title": "КПЛ PRIME MVP",
+        "bg_top": (26, 14, 18),             # Royal Obsidian & Crimson
+        "bg_bot": (8, 5, 8),                # Deep Flame Void
+        "border_primary": (255, 215, 0),    # 24K Polished Gold
+        "border_secondary": (239, 68, 68),  # KPL Ruby Red Flame
+        "accent": (255, 220, 90),
+        "text_primary": (255, 255, 255),
+        "text_secondary": (255, 215, 0),
+        "glow_rgb": (255, 190, 0),
+        "desc": "24K Золото и базальтовое пламя КПЛ (Рейтинг 93+)",
+    },
     "toty_gold": {
         "title": "EA FC 24 SPECIAL ITEM",
         "bg_top": (8, 14, 28),             # Dark Navy Obsidian
@@ -279,21 +315,39 @@ def _get_player_photo_image(player_name: str, team_name: str) -> Image.Image | N
     return None
 
 
+def get_kpl_tier_by_ovr(ovr: int | float | str) -> str:
+    """Return the official KPL card tier style key based on OVR rating bracket."""
+    try:
+        ovr_val = int(ovr)
+    except (ValueError, TypeError):
+        ovr_val = 80
+    if ovr_val >= 93:
+        return "kpl_prime"
+    elif ovr_val >= 86:
+        return "kpl_star"
+    else:
+        return "kpl_standard"
+
+
 def _normalize_style_key(style_name: str) -> str:
     s = str(style_name).lower().strip()
     alias_map = {
-        "1": "toty_gold", "toty": "toty_gold", "gold": "toty_gold", "celestial": "toty_gold", "design_2": "toty_gold",
-        "2": "void_eclipse", "void": "void_eclipse", "eclipse": "void_eclipse", "dark_matter": "void_eclipse",
-        "3": "cyber_hud", "cyber": "cyber_hud", "cyberpunk": "cyber_hud", "design_1": "cyber_hud",
-        "4": "hyper_glass", "glass": "hyper_glass", "crystal": "hyper_glass", "emerald": "hyper_glass",
-        "5": "inferno_magma", "inferno": "inferno_magma", "magma": "inferno_magma", "fire": "inferno_magma",
-        "6": "glacial_frost", "glacial": "glacial_frost", "frost": "glacial_frost", "ice": "glacial_frost",
-        "7": "anime_sakuga", "anime": "anime_sakuga", "sakuga": "anime_sakuga", "blue_lock": "anime_sakuga",
-        "8": "royal_24k", "royal": "royal_24k", "gold_bar": "royal_24k", "design_3": "royal_24k", "luxury": "royal_24k",
-        "9": "aero_carbon", "aero": "aero_carbon", "carbon": "aero_carbon", "velocity": "aero_carbon", "red_bull": "aero_carbon",
-        "10": "ucl_night", "ucl": "ucl_night", "champions": "ucl_night", "constellation": "ucl_night"
+        # KPL League Official Formats
+        "standard": "kpl_standard", "kpl_standard": "kpl_standard", "base": "kpl_standard", "tier1": "kpl_standard", "bronze": "kpl_standard", "silver": "kpl_standard",
+        "star": "kpl_star", "kpl_star": "kpl_star", "tier2": "kpl_star", "rare": "kpl_star", "elite": "kpl_star", "inform": "kpl_star", "totw": "kpl_star",
+        "prime": "kpl_prime", "kpl_prime": "kpl_prime", "tier3": "kpl_prime", "mvp": "kpl_prime", "legend": "kpl_prime", "toty": "kpl_prime", "toty_gold": "kpl_prime",
+        # Legacy & Specialized Themes
+        "void": "void_eclipse", "void_eclipse": "void_eclipse", "eclipse": "void_eclipse", "dark_matter": "void_eclipse",
+        "cyber": "cyber_hud", "cyber_hud": "cyber_hud", "cyberpunk": "cyber_hud",
+        "glass": "hyper_glass", "hyper_glass": "hyper_glass", "crystal": "hyper_glass", "emerald": "hyper_glass",
+        "inferno": "inferno_magma", "inferno_magma": "inferno_magma", "magma": "inferno_magma", "fire": "inferno_magma",
+        "frost": "glacial_frost", "glacial_frost": "glacial_frost", "ice": "glacial_frost",
+        "anime": "anime_sakuga", "anime_sakuga": "anime_sakuga", "sakuga": "anime_sakuga", "blue_lock": "anime_sakuga",
+        "royal": "royal_24k", "royal_24k": "royal_24k", "gold_bar": "royal_24k", "luxury": "royal_24k",
+        "aero": "aero_carbon", "aero_carbon": "aero_carbon", "carbon": "aero_carbon", "velocity": "aero_carbon",
+        "ucl": "ucl_night", "ucl_night": "ucl_night", "champions": "ucl_night"
     }
-    return alias_map.get(s, "toty_gold" if s not in CARD_STYLES else s)
+    return alias_map.get(s, s if s in CARD_STYLES else "kpl_prime")
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -593,15 +647,55 @@ def render_animated_card_frames(player_data: dict, anim_style: str = "toty_gold"
         fx_layer = Image.new("RGBA", (anim_w, anim_h), (0, 0, 0, 0))
         fx_draw = ImageDraw.Draw(fx_layer)
 
-        # ─── 1. TOTY GOLD: Liquid God-Rays & Shimmer Beam ────────────────────
-        if style_id == "toty_gold":
+        # ─── 0. KPL STANDARD (OVR <= 85): Steel Titanium Sheen & Ruby Accent ───
+        if style_id == "kpl_standard":
+            shimmer = _create_shimmer_streak(anim_w, anim_h, t, color=(210, 220, 235))
+            frame = Image.alpha_composite(frame, shimmer)
+            cx, cy = anim_w // 2, int(anim_h * 0.28)
+            spot_alpha = int(35 + 20 * math.sin(2 * math.pi * t))
+            fx_draw.ellipse([(cx - 180, cy - 180), (cx + 180, cy + 180)], fill=(180, 190, 210, spot_alpha))
+            ruby_a = int(40 + 35 * math.sin(2 * math.pi * t + 0.5))
+            fx_draw.rounded_rectangle([(18, 18), (anim_w - 18, anim_h - 18)], radius=22, outline=(239, 68, 68, ruby_a), width=2)
+            fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(6))
+
+        # ─── 0. KPL STAR (OVR 86-92): Midnight Sapphire & Laser Cyan Glitter ───
+        elif style_id == "kpl_star":
+            shimmer = _create_shimmer_streak(anim_w, anim_h, t, color=(0, 230, 255))
+            frame = Image.alpha_composite(frame, shimmer)
+            cx, cy = anim_w // 2, int(anim_h * 0.28)
+            sapphire_a = int(45 + 30 * math.sin(2 * math.pi * t))
+            fx_draw.ellipse([(cx - 190, cy - 190), (cx + 190, cy + 190)], fill=(0, 200, 255, sapphire_a))
+            for (px_rel, py_rel, spd, rad, phase) in particles[:16]:
+                cur_t = (t * spd + py_rel) % 1.0
+                star_a = int(240 * math.sin(math.pi * cur_t))
+                star_x = int(px_rel * (anim_w - 70) + 35)
+                star_y = int(py_rel * (anim_h - 140) + 60)
+                s_len = int(rad * 3.5)
+                fx_draw.line([(star_x - s_len, star_y), (star_x + s_len, star_y)], fill=(255, 255, 255, star_a), width=2)
+                fx_draw.line([(star_x, star_y - s_len), (star_x, star_y + s_len)], fill=(0, 230, 255, star_a), width=2)
+            laser_a = int(60 + 40 * math.sin(2 * math.pi * t))
+            fx_draw.rounded_rectangle([(18, 18), (anim_w - 18, anim_h - 18)], radius=22, outline=(0, 230, 255, laser_a), width=2)
+            fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(3))
+
+        # ─── 0. KPL PRIME MVP (OVR 93+): 24K Gold & Crimson Rising Embers ─────
+        elif style_id in ["kpl_prime", "toty_gold"]:
             shimmer = _create_shimmer_streak(anim_w, anim_h, t, color=(255, 225, 120))
             frame = Image.alpha_composite(frame, shimmer)
-
-            spot_alpha = int(45 + 30 * math.sin(2 * math.pi * t))
-            cx, cy = anim_w // 2, int(anim_h * 0.27)
-            fx_draw.ellipse([(cx - 200, cy - 200), (cx + 200, cy + 200)], fill=(255, 215, 0, spot_alpha))
-            fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(20))
+            cx, cy = anim_w // 2, int(anim_h * 0.28)
+            gold_a = int(55 + 35 * math.sin(2 * math.pi * t))
+            fx_draw.ellipse([(cx - 200, cy - 200), (cx + 200, cy + 200)], fill=(255, 215, 0, gold_a))
+            for (px_rel, py_rel, spd, rad, phase) in particles:
+                cur_y_pct = (py_rel - spd * t) % 1.0
+                cur_x = int(px_rel * (anim_w - 80) + 40 + math.sin(phase + 2 * math.pi * t) * 16)
+                cur_y = int(cur_y_pct * (anim_h - 120) + 40)
+                y_norm = cur_y / float(anim_h)
+                p_alpha = int(230 * math.sin(math.pi * y_norm))
+                is_gold = (rad % 2 == 0)
+                p_col = (255, 215, 0, p_alpha) if is_gold else (239, 68, 68, p_alpha)
+                fx_draw.ellipse([(cur_x - rad * 2, cur_y - rad * 2), (cur_x + rad * 2, cur_y + rad * 2)], fill=p_col)
+            gold_border_a = int(70 + 45 * math.sin(2 * math.pi * t))
+            fx_draw.rounded_rectangle([(18, 18), (anim_w - 18, anim_h - 18)], radius=22, outline=(255, 215, 0, gold_border_a), width=3)
+            fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(3))
 
         # ─── 2. VOID ECLIPSE: Accretion Disk & Inward Gravitational Pull ──────
         elif style_id == "void_eclipse":
