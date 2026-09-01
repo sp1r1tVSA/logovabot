@@ -17,7 +17,15 @@ class StateStore {
       activeView: 'lobby',
       myBets: [],
       leaderboard: [],
-      myRank: null
+      myRank: null,
+      progression: { level: 1, current_xp: 0, total_xp_earned: 0, equipped_title: 'Новичок' },
+      streak: { streak: 1, best_streak: 1, streak_shield_count: 1 },
+      quests: [],
+      achievements: [],
+      duels: [],
+      profile: null,
+      unclaimedQuestsCount: 0,
+      unclaimedAchievementsCount: 0
     };
     this.listeners = new Set();
   }
@@ -43,6 +51,30 @@ class StateStore {
     this.notify();
   }
 
+  setProgression(progression, streak, quests, unclaimedQuests, unclaimedAch) {
+    if (progression) this.state.progression = progression;
+    if (streak) this.state.streak = streak;
+    if (quests) this.state.quests = quests;
+    this.state.unclaimedQuestsCount = unclaimedQuests || 0;
+    this.state.unclaimedAchievementsCount = unclaimedAch || 0;
+    this.notify();
+  }
+
+  setAchievements(achievements) {
+    this.state.achievements = achievements || [];
+    this.notify();
+  }
+
+  setDuels(duels) {
+    this.state.duels = duels || [];
+    this.notify();
+  }
+
+  setProfile(profile) {
+    this.state.profile = profile;
+    this.notify();
+  }
+
   setTours(tours) {
     this.state.tours = tours || [];
     if (this.state.tours.length > 0 && !this.state.selectedTour) {
@@ -61,73 +93,81 @@ class StateStore {
     this.notify();
   }
 
-  setStakeAmount(amount) {
-    const bal = this.state.user?.balance || 0;
-    this.state.stakeAmount = Math.max(10, Math.min(amount, bal));
+  setMyBets(bets) {
+    this.state.myBets = bets || [];
     this.notify();
   }
 
-  toggleSelection(match, outcome, odd) {
-    tgBridge.hapticImpact('medium');
-    const existingIdx = this.state.slip.findIndex(s => s.match_id === match.match_id);
+  setLeaderboard(leaderboard, myRank) {
+    this.state.leaderboard = leaderboard || [];
+    this.state.myRank = myRank;
+    this.notify();
+  }
 
-    if (existingIdx >= 0) {
-      if (this.state.slip[existingIdx].outcome === outcome) {
-        // Toggle OFF
-        this.state.slip.splice(existingIdx, 1);
+  // --- Bet Slip Operations ---
+  toggleSelection(match, outcome, odd) {
+    const existingIndex = this.state.slip.findIndex(s => s.match_id === match.match_id);
+
+    if (existingIndex >= 0) {
+      const currentSelection = this.state.slip[existingIndex];
+      if (currentSelection.outcome === outcome) {
+        // Deselect
+        this.state.slip.splice(existingIndex, 1);
+        tgBridge.hapticImpact('light');
       } else {
-        // Replace outcome for the same match
-        this.state.slip[existingIdx] = {
+        // Switch outcome in same match
+        this.state.slip[existingIndex] = {
           match_id: match.match_id,
           outcome,
-          odd,
+          odd: parseFloat(odd),
           team1_name: match.team1_name,
           team2_name: match.team2_name,
           tour: match.tour
         };
+        tgBridge.hapticImpact('medium');
       }
     } else {
       // Add new selection
       this.state.slip.push({
         match_id: match.match_id,
         outcome,
-        odd,
+        odd: parseFloat(odd),
         team1_name: match.team1_name,
         team2_name: match.team2_name,
         tour: match.tour
       });
+      tgBridge.hapticImpact('medium');
     }
 
     this.notify();
   }
 
   removeSelection(matchId) {
-    tgBridge.hapticImpact('light');
     this.state.slip = this.state.slip.filter(s => s.match_id !== matchId);
+    tgBridge.hapticImpact('light');
     this.notify();
   }
 
   clearSlip() {
-    tgBridge.hapticImpact('light');
     this.state.slip = [];
     this.notify();
   }
 
+  setStakeAmount(amount) {
+    this.state.stakeAmount = Math.max(10, parseInt(amount) || 10);
+    this.notify();
+  }
+
+  // --- Computed Getters ---
   getTotalOdd() {
     if (this.state.slip.length === 0) return 1.0;
-    if (this.state.slip.length === 1) return this.state.slip[0].odd;
-    
-    // Express multiplication
-    let total = 1.0;
-    for (const item of this.state.slip) {
-      total *= item.odd;
-    }
-    return Math.min(100.0, Math.round(total * 100) / 100);
+    const prod = this.state.slip.reduce((acc, s) => acc * s.odd, 1.0);
+    return Math.round(prod * 100) / 100;
   }
 
   getPotentialWin() {
-    const totalOdd = this.getTotalOdd();
-    return Math.floor(this.state.stakeAmount * totalOdd);
+    const odd = this.getTotalOdd();
+    return Math.round(this.state.stakeAmount * odd);
   }
 }
 

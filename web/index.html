@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-  <title>LOGOVO.BET — Спортивные Прогнозы</title>
+  <title>LOGOVO.BET — Киберспортивные Прогнозы</title>
   <!-- Telegram WebApp SDK -->
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <!-- Styles -->
@@ -15,10 +15,16 @@
   <!-- App Header -->
   <header class="app-header">
     <div class="brand-block">
-      <span style="font-size: 1.4rem;">🐺</span>
+      <span class="brand-logo-icon">🐺</span>
       <span class="brand-title">LOGOVO.BET</span>
     </div>
     <div class="header-right">
+      <!-- Level Badge Pill -->
+      <div class="level-pill" id="header-level-btn" title="Ваш уровень и опыт">
+        <span class="level-badge-icon">🎯</span>
+        <span class="level-number" id="user-level-val">Lvl 1</span>
+      </div>
+      <!-- Coin Balance Pill -->
       <div class="balance-pill" id="header-balance-btn">
         <span class="balance-icon">🪙</span>
         <span class="balance-amount" id="user-balance-val">1 000 🪙</span>
@@ -46,7 +52,41 @@
       </div>
     </section>
 
-    <!-- 2. Predictions History View -->
+    <!-- 2. Quests & 7-Day Streaks View -->
+    <section id="view-quests" class="view-section">
+      <!-- 7-Day Streak Calendar Card -->
+      <div class="streak-card" id="streak-calendar-container"></div>
+
+      <div style="font-size: 1.1rem; font-weight: 800; margin: 16px 0 10px; color: #fff; display: flex; align-items: center; justify-content: space-between;">
+        <span>🎯 Ежедневные Задания</span>
+        <span id="quests-count-label" style="font-size: 0.8rem; color: var(--text-secondary); font-weight: 600;">0/3</span>
+      </div>
+      <div id="quests-list-container">
+        <div style="text-align: center; padding: 30px; color: var(--text-muted);">Загрузка заданий...</div>
+      </div>
+    </section>
+
+    <!-- 3. PvP Duels Arena View -->
+    <section id="view-duels" class="view-section">
+      <div class="duels-header-banner">
+        <div class="duels-banner-info">
+          <div style="font-size: 1.2rem; font-weight: 900; color: #fff;">⚔️ Арена Дуэлей 1v1</div>
+          <div style="font-size: 0.82rem; color: var(--text-secondary);">Брось вызов другу и забери банк!</div>
+        </div>
+        <button class="btn-create-duel" id="btn-open-create-duel">
+          + Создать вызов
+        </button>
+      </div>
+
+      <div style="font-size: 1rem; font-weight: 800; margin: 16px 0 10px; color: #fff;">
+        🔥 Открытые Вызовы
+      </div>
+      <div id="duels-list-container">
+        <div style="text-align: center; padding: 30px; color: var(--text-muted);">Загрузка дуэлей...</div>
+      </div>
+    </section>
+
+    <!-- 4. Predictions History View -->
     <section id="view-history" class="view-section">
       <div style="font-size: 1.1rem; font-weight: 800; margin-bottom: 14px; color: #fff;">
         📜 История Прогнозов
@@ -58,17 +98,26 @@
       </div>
     </section>
 
-    <!-- 3. Leaderboard View -->
-    <section id="view-leaderboard" class="view-section">
-      <div style="font-size: 1.1rem; font-weight: 800; margin-bottom: 14px; color: #fff; text-align: center;">
-        🏆 Топ Капперов Лиги
-      </div>
-      
-      <!-- Top 3 Podium -->
-      <div class="podium-container" id="leaderboard-podium"></div>
+    <!-- 5. Profile & Achievements View -->
+    <section id="view-profile" class="view-section">
+      <!-- Esports Gamer Card -->
+      <div class="gamer-profile-card" id="profile-card-container"></div>
 
-      <!-- Full Rankings List -->
-      <div id="leaderboard-list"></div>
+      <!-- Achievements Showcase -->
+      <div style="font-size: 1.1rem; font-weight: 800; margin: 20px 0 10px; color: #fff; display: flex; align-items: center; justify-content: space-between;">
+        <span>🏆 Достижения и Награды</span>
+        <span id="achievements-count-label" style="font-size: 0.8rem; color: var(--text-gold); font-weight: 700;">0/22</span>
+      </div>
+      <div class="achievements-grid" id="achievements-grid-container">
+        <div style="text-align: center; padding: 30px; color: var(--text-muted); grid-column: 1/-1;">Загрузка наград...</div>
+      </div>
+
+      <!-- Global Leaderboard Button -->
+      <div style="margin-top: 24px;">
+        <button class="btn-open-leaderboard" id="btn-toggle-leaderboard-modal">
+          🥇 Открыть Зал Славы Лиги
+        </button>
+      </div>
     </section>
 
   </main>
@@ -133,17 +182,63 @@
       <span class="nav-icon">⚽</span>
       <span>Линия</span>
     </button>
+    <button class="nav-item" data-view="quests">
+      <span class="nav-icon">🎯</span>
+      <span>Квесты</span>
+      <span class="nav-badge" id="quests-badge" style="display: none;">!</span>
+    </button>
+    <button class="nav-item" data-view="duels">
+      <span class="nav-icon">⚔️</span>
+      <span>Дуэли</span>
+    </button>
     <button class="nav-item" data-view="history">
       <span class="nav-icon">📜</span>
       <span>Ставки</span>
     </button>
-    <button class="nav-item" data-view="leaderboard">
-      <span class="nav-icon">🏆</span>
-      <span>Топ</span>
+    <button class="nav-item" data-view="profile">
+      <span class="nav-icon">🐺</span>
+      <span>Профиль</span>
+      <span class="nav-badge" id="achievements-badge" style="display: none;">!</span>
     </button>
   </nav>
 
-  <!-- Success Modal -->
+  <!-- Leaderboard Modal -->
+  <div class="modal-overlay" id="leaderboard-modal">
+    <div class="modal-content" style="max-height: 85vh; overflow-y: auto; text-align: left;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
+        <div style="font-size: 1.2rem; font-weight: 900; color: #fff;">🏆 Зал Славы Лиги</div>
+        <button class="btn-modal-close" style="background: transparent; color: var(--text-muted); font-size: 1.2rem; border: none; cursor: pointer;">✕</button>
+      </div>
+      <!-- Top 3 Podium -->
+      <div class="podium-container" id="leaderboard-podium"></div>
+      <!-- Full Rankings List -->
+      <div id="leaderboard-list"></div>
+    </div>
+  </div>
+
+  <!-- Create Duel Modal -->
+  <div class="modal-overlay" id="create-duel-modal">
+    <div class="modal-content" style="text-align: left;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
+        <div style="font-size: 1.2rem; font-weight: 900; color: #fff;">⚔️ Создать Дуэль 1v1</div>
+        <button class="btn-modal-close" style="background: transparent; color: var(--text-muted); font-size: 1.2rem; border: none; cursor: pointer;">✕</button>
+      </div>
+      <p style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 12px;">
+        Выберите ставку и спрогнозируйте исходы матчей текущего тура. Оппонент сделает свои прогнозы. Победитель забирает банк!
+      </p>
+      <div style="font-size: 0.82rem; font-weight: 700; color: var(--text-muted); margin-bottom: 6px;">Сумма ставки (🪙):</div>
+      <input type="number" id="duel-stake-input" value="500" min="50" step="50"
+             style="width: 100%; background: var(--bg-tertiary); border: 1px solid var(--border-subtle); color: #fff; padding: 10px 14px; border-radius: var(--radius-sm); font-size: 1rem; font-weight: 700; outline: none; margin-bottom: 14px;">
+      
+      <div id="duel-matches-selector" style="max-height: 220px; overflow-y: auto; margin-bottom: 14px;"></div>
+
+      <button class="btn-submit-bet" id="btn-confirm-create-duel">
+        Бросить вызов
+      </button>
+    </div>
+  </div>
+
+  <!-- General Success Modal -->
   <div class="modal-overlay" id="general-success-modal">
     <div class="modal-content">
       <div class="modal-icon">🎉</div>

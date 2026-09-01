@@ -361,6 +361,97 @@ def init_db() -> None:
         """)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_coin_tx_user ON coin_transactions(user_id, created_at)")
 
+        # ─── Logovo.bet: Gamification, Progression, Quests & Social Tables ───
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS user_progression (
+                user_id INTEGER PRIMARY KEY,
+                level INTEGER NOT NULL DEFAULT 1,
+                current_xp INTEGER NOT NULL DEFAULT 0,
+                total_xp_earned INTEGER NOT NULL DEFAULT 0,
+                current_streak INTEGER NOT NULL DEFAULT 0,
+                best_streak INTEGER NOT NULL DEFAULT 0,
+                last_active_date TEXT,
+                streak_shields INTEGER NOT NULL DEFAULT 1,
+                equipped_frame TEXT NOT NULL DEFAULT 'default',
+                equipped_title TEXT NOT NULL DEFAULT 'Новичок',
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_progression_level ON user_progression(level DESC, current_xp DESC)")
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS achievements_catalog (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                description TEXT NOT NULL,
+                category TEXT NOT NULL,
+                rarity TEXT NOT NULL,
+                reward_xp INTEGER NOT NULL DEFAULT 100,
+                reward_coins INTEGER NOT NULL DEFAULT 250,
+                badge_icon TEXT NOT NULL
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS user_achievements (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                achievement_id TEXT NOT NULL,
+                is_claimed BOOLEAN NOT NULL DEFAULT 0,
+                unlocked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(user_id, achievement_id),
+                FOREIGN KEY (achievement_id) REFERENCES achievements_catalog(id)
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_achievements_uid ON user_achievements(user_id)")
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS quests_catalog (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                description TEXT,
+                quest_type TEXT NOT NULL,
+                target_count INTEGER NOT NULL,
+                reward_xp INTEGER NOT NULL,
+                reward_coins INTEGER NOT NULL,
+                period TEXT NOT NULL DEFAULT 'daily'
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS user_quests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                quest_id TEXT NOT NULL,
+                progress INTEGER NOT NULL DEFAULT 0,
+                is_completed BOOLEAN NOT NULL DEFAULT 0,
+                is_claimed BOOLEAN NOT NULL DEFAULT 0,
+                assigned_date TEXT NOT NULL,
+                FOREIGN KEY (quest_id) REFERENCES quests_catalog(id)
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_quests_user ON user_quests(user_id, assigned_date)")
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS pvp_duels (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                creator_id INTEGER NOT NULL,
+                opponent_id INTEGER,
+                stake_amount INTEGER NOT NULL,
+                round_number INTEGER NOT NULL,
+                match_ids_json TEXT NOT NULL DEFAULT '[]',
+                creator_picks_json TEXT NOT NULL DEFAULT '{}',
+                opponent_picks_json TEXT NOT NULL DEFAULT '{}',
+                status TEXT NOT NULL DEFAULT 'open',
+                creator_score INTEGER NOT NULL DEFAULT 0,
+                opponent_score INTEGER NOT NULL DEFAULT 0,
+                winner_id INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                expires_at TIMESTAMP
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_pvp_duels_status ON pvp_duels(status, created_at DESC)")
+
         # Standardize and migrate canonical team names across all tables
         migrate_team_names_canonical(cursor)
 
@@ -370,6 +461,9 @@ def init_db() -> None:
         if "position" not in squad_cols:
             cursor.execute("ALTER TABLE squad_players ADD COLUMN position TEXT")
             logger.info("Migrated squad_players table: added 'position' column.")
+
+        # Seed initial catalog data
+        seed_gamification_catalog(cursor)
 
         logger.info("Database tables initialized successfully.")
 
@@ -5146,6 +5240,15 @@ def settle_match_bets(match_id: int, score1: int, score2: int) -> list[dict]:
                     "INSERT INTO coin_transactions (user_id, amount, transaction_type, reference_id) VALUES (?, ?, 'bet_won', ?)",
                     (u_id, payout, b_id)
                 )
+
+                # Gamification hooks on win
+                try:
+                    add_user_xp(u_id, 100)
+                    evaluate_quest_progress(u_id, "win_bets", 1)
+                    evaluate_betting_achievements(u_id, dict(bet_row))
+                except Exception as e:
+                    logger.warning(f"Error in gamification hook on win: {e}")
+
                 payout_notifications.append({
                     "user_id": u_id,
                     "bet_id": b_id,
@@ -5180,4 +5283,540 @@ def settle_all_pending_finished_matches() -> list[dict]:
             res = settle_match_bets(m["id"], m["player1_score"], m["player2_score"])
             all_payouts.extend(res)
         return all_payouts
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 🎮 LOGOVO.BET — GAMIFICATION, PROGRESSION, QUESTS & SOCIAL REPOSITORY
+# ═════════════════════════════════════════════════════════════════════════════
+
+def seed_gamification_catalog(cursor) -> None:
+    """Seed standard 20+ achievements and default quests catalog."""
+    achievements = [
+        ("ACH_FIRST_BET", "🐺 Первый шаг", "Сделать свой первый прогноз", "general", "common", 100, 250, "🎯"),
+        ("ACH_FIRST_WIN", "🏆 Первая кровь", "Выиграть свой первый прогноз", "general", "common", 150, 300, "⚔️"),
+        ("ACH_STREAK_3", "🔥 В ударе", "Оформить серию из 3 побед подряд", "streaks", "common", 250, 500, "🔥"),
+        ("ACH_STREAK_5", "🎯 Снайпер", "Оформить серию из 5 побед подряд", "streaks", "rare", 600, 1200, "🎯"),
+        ("ACH_STREAK_10", "👑 Непобедимый", "Оформить серию из 10 побед подряд", "streaks", "legendary", 2500, 5000, "👑"),
+        ("ACH_EXPRESS_3", "🚂 Экспресс-старт", "Собрать экспресс из 3+ событий", "parlays", "common", 200, 400, "🚂"),
+        ("ACH_EXPRESS_ODD_5", "💥 Множитель x5", "Выиграть экспресс с коэффициентом 5.0+", "parlays", "rare", 500, 1000, "💥"),
+        ("ACH_EXPRESS_ODD_15", "🚀 Ракета x15", "Выиграть экспресс с коэффициентом 15.0+", "parlays", "epic", 1500, 3000, "🚀"),
+        ("ACH_EXPRESS_ODD_50", "🌌 Космос x50", "Выиграть экспресс с коэффициентом 50.0+", "parlays", "legendary", 5000, 10000, "🌌"),
+        ("ACH_UNDERDOG", "🐺 Гроза Фаворитов", "Выиграть ординар с коэффициентом 3.5+", "odds", "rare", 400, 800, "⚡"),
+        ("ACH_TOTAL_10_BETS", "📊 Любитель", "Сделать 10 любых прогнозов", "volume", "common", 300, 500, "📊"),
+        ("ACH_TOTAL_50_BETS", "🏅 Регуляр", "Сделать 50 любых прогнозов", "volume", "rare", 1000, 2000, "🏅"),
+        ("ACH_TOTAL_100_BETS", "💯 Центурион", "Сделать 100 любых прогнозов", "volume", "epic", 2500, 5000, "💯"),
+        ("ACH_COIN_MILLIONAIRE", "💰 Мешок Монет", "Накопить 25 000 🪙 на балансе", "wealth", "epic", 2000, 2500, "💰"),
+        ("ACH_COIN_TYCOON", "🏦 Олигарх Логова", "Накопить 100 000 🪙 на балансе", "wealth", "legendary", 5000, 10000, "🏦"),
+        ("ACH_LOGIN_3", "📅 Разминка", "Заходить в игру 3 дня подряд", "loyalty", "common", 200, 400, "📅"),
+        ("ACH_LOGIN_7", "🔥 Неделя в строю", "Заходить в игру 7 дней подряд", "loyalty", "rare", 800, 1500, "🔥"),
+        ("ACH_LOGIN_30", "🐺 Вожак Стаи", "Заходить в игру 30 дней подряд", "loyalty", "legendary", 4000, 10000, "🐺"),
+        ("ACH_DUEL_FIRST", "⚔️ Дуэлянт", "Сыграть 1 дуэль против друга", "social", "common", 250, 500, "⚔️"),
+        ("ACH_DUEL_5_WINS", "🛡 Чемпион Арены", "Выиграть 5 дуэлей против других игроков", "social", "rare", 1000, 2000, "🛡"),
+        ("ACH_TB_SPECIALIST", "⚽ Голевой Маньяк", "Выиграть 5 прогнозов на Тотал Больше 2.5", "markets", "rare", 500, 1000, "⚽"),
+        ("ACH_BTTS_MASTER", "🤝 Обе Забьют", "Выиграть 5 прогнозов на Обе Забьют", "markets", "rare", 500, 1000, "🤝")
+    ]
+    for ach in achievements:
+        cursor.execute("""
+            INSERT INTO achievements_catalog (id, name, description, category, rarity, reward_xp, reward_coins, badge_icon)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                name = excluded.name,
+                description = excluded.description,
+                category = excluded.category,
+                rarity = excluded.rarity,
+                reward_xp = excluded.reward_xp,
+                reward_coins = excluded.reward_coins,
+                badge_icon = excluded.badge_icon
+        """, ach)
+
+    quests = [
+        ("QUEST_PLACE_2_BETS", "Сделать 2 прогноза", "Оформите любые 2 ставки в текущем туре", "place_bets", 2, 80, 200, "daily"),
+        ("QUEST_WIN_1_BET", "Выиграть 1 прогноз", "Угадайте исход любого матча", "win_bets", 1, 100, 250, "daily"),
+        ("QUEST_MAKE_EXPRESS", "Собрать 1 экспресс", "Оформите купон минимум из 2 событий", "express_count", 1, 120, 300, "daily"),
+        ("QUEST_WEEKLY_10_BETS", "10 прогнозов за неделю", "Сделайте 10 прогнозов в течение недели", "place_bets", 10, 500, 1500, "weekly"),
+        ("QUEST_WEEKLY_WIN_5", "5 побед за неделю", "Выиграйте 5 прогнозов за текущую неделю", "win_bets", 5, 800, 2500, "weekly"),
+    ]
+    for q in quests:
+        cursor.execute("""
+            INSERT INTO quests_catalog (id, title, description, quest_type, target_count, reward_xp, reward_coins, period)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                title = excluded.title,
+                description = excluded.description,
+                quest_type = excluded.quest_type,
+                target_count = excluded.target_count,
+                reward_xp = excluded.reward_xp,
+                reward_coins = excluded.reward_coins,
+                period = excluded.period
+        """, q)
+
+
+def get_or_create_progression(user_id: int) -> dict:
+    """Fetch user's XP, level, streak and cosmetic profile or create a fresh one."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM user_progression WHERE user_id = ?", (user_id,))
+        row = cursor.fetchone()
+        if row:
+            return dict(row)
+
+        cursor.execute("""
+            INSERT INTO user_progression (user_id, level, current_xp, total_xp_earned, current_streak, best_streak, streak_shields, equipped_frame, equipped_title)
+            VALUES (?, 1, 0, 0, 1, 1, 1, 'default', 'Новичок')
+        """, (user_id,))
+        cursor.execute("SELECT * FROM user_progression WHERE user_id = ?", (user_id,))
+        return dict(cursor.fetchone())
+
+
+def add_user_xp(user_id: int, xp_amount: int) -> dict:
+    """
+    Safely credit XP to user, calculate level ups, and award coin milestones.
+    Returns {level, current_xp, total_xp, leveled_up, reward_coins, new_title}.
+    """
+    if xp_amount <= 0:
+        p = get_or_create_progression(user_id)
+        return {"level": p["level"], "current_xp": p["current_xp"], "total_xp": p["total_xp_earned"], "leveled_up": False, "reward_coins": 0}
+
+    import math
+    with transaction() as conn:
+        cursor = conn.cursor()
+        get_or_create_wallet(user_id)
+        p = get_or_create_progression(user_id)
+        cur_level = p["level"]
+        new_total_xp = p["total_xp_earned"] + xp_amount
+        
+        # Level formula: Level = 1 + floor(sqrt(total_xp / 150))
+        calculated_level = max(1, 1 + int(math.sqrt(new_total_xp / 150)))
+        
+        leveled_up = calculated_level > cur_level
+        reward_coins = 0
+        
+        title = p["equipped_title"]
+        if calculated_level >= 50:
+            title = "Легенда Логова 👑"
+        elif calculated_level >= 35:
+            title = "Элитный Аналитик ⚡"
+        elif calculated_level >= 20:
+            title = "Мастер Экспрессов 🚂"
+        elif calculated_level >= 10:
+            title = "Опытный Каппер 🎯"
+        elif calculated_level >= 5:
+            title = "Тактик 🐾"
+
+        if leveled_up:
+            reward_coins = (calculated_level - cur_level) * 500
+            cursor.execute("""
+                UPDATE user_wallets 
+                SET balance = balance + ?, updated_at = CURRENT_TIMESTAMP
+                WHERE user_id = ?
+            """, (reward_coins, user_id))
+            cursor.execute("""
+                INSERT INTO coin_transactions (user_id, amount, transaction_type, reference_id)
+                VALUES (?, ?, 'level_up_reward', ?)
+            """, (user_id, reward_coins, calculated_level))
+
+        # XP required for next level
+        xp_for_current_lvl = int(((calculated_level - 1) ** 2) * 150)
+        xp_for_next_lvl = int((calculated_level ** 2) * 150)
+        lvl_progress_xp = new_total_xp - xp_for_current_lvl
+
+        cursor.execute("""
+            UPDATE user_progression
+            SET level = ?, current_xp = ?, total_xp_earned = ?, equipped_title = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE user_id = ?
+        """, (calculated_level, lvl_progress_xp, new_total_xp, title, user_id))
+
+        return {
+            "level": calculated_level,
+            "current_xp": lvl_progress_xp,
+            "next_level_xp": xp_for_next_lvl - xp_for_current_lvl,
+            "total_xp": new_total_xp,
+            "leveled_up": leveled_up,
+            "reward_coins": reward_coins,
+            "title": title
+        }
+
+
+def check_and_update_login_streak(user_id: int) -> dict:
+    """
+    Evaluate 7-day login streak for user.
+    Handles streak increment, resets, and streak shield protection.
+    """
+    with transaction() as conn:
+        cursor = conn.cursor()
+        p = get_or_create_progression(user_id)
+        today_str = datetime.date.today().isoformat()
+        last_active = p.get("last_active_date")
+
+        if last_active == today_str:
+            return {
+                "streak": p["current_streak"],
+                "best_streak": p["best_streak"],
+                "shield_used": False,
+                "streak_shield_count": p["streak_shields"]
+            }
+
+        cur_streak = p["current_streak"]
+        shield_used = False
+        shields = p["streak_shields"]
+
+        if last_active:
+            try:
+                last_dt = datetime.date.fromisoformat(last_active)
+                delta_days = (datetime.date.today() - last_dt).days
+                if delta_days == 1:
+                    cur_streak += 1
+                elif delta_days == 2 and shields > 0:
+                    # Shield consumed to save streak
+                    shields -= 1
+                    shield_used = True
+                    cur_streak += 1
+                else:
+                    cur_streak = 1
+            except Exception:
+                cur_streak = 1
+        else:
+            cur_streak = 1
+
+        best = max(cur_streak, p["best_streak"])
+        cursor.execute("""
+            UPDATE user_progression
+            SET current_streak = ?, best_streak = ?, last_active_date = ?, streak_shields = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE user_id = ?
+        """, (cur_streak, best, today_str, shields, user_id))
+
+        # Trigger login achievements
+        if cur_streak >= 3:
+            unlock_achievement(user_id, "ACH_LOGIN_3")
+        if cur_streak >= 7:
+            unlock_achievement(user_id, "ACH_LOGIN_7")
+        if cur_streak >= 30:
+            unlock_achievement(user_id, "ACH_LOGIN_30")
+
+        return {
+            "streak": cur_streak,
+            "best_streak": best,
+            "shield_used": shield_used,
+            "streak_shield_count": shields
+        }
+
+
+def get_user_quests(user_id: int) -> list[dict]:
+    """Ensure today's daily quests and active weekly quests exist, then return list."""
+    today_str = datetime.date.today().isoformat()
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT uq.*, qc.title, qc.description, qc.quest_type, qc.target_count, qc.reward_xp, qc.reward_coins, qc.period
+            FROM user_quests uq
+            JOIN quests_catalog qc ON uq.quest_id = qc.id
+            WHERE uq.user_id = ? AND uq.assigned_date = ?
+        """, (user_id, today_str))
+        rows = cursor.fetchall()
+
+        if not rows:
+            # Assign standard daily quests for today
+            cursor.execute("SELECT id FROM quests_catalog WHERE period = 'daily'")
+            daily_ids = [r["id"] for r in cursor.fetchall()]
+            for q_id in daily_ids:
+                cursor.execute("""
+                    INSERT INTO user_quests (user_id, quest_id, progress, is_completed, is_claimed, assigned_date)
+                    VALUES (?, ?, 0, 0, 0, ?)
+                """, (user_id, q_id, today_str))
+
+            cursor.execute("""
+                SELECT uq.*, qc.title, qc.description, qc.quest_type, qc.target_count, qc.reward_xp, qc.reward_coins, qc.period
+                FROM user_quests uq
+                JOIN quests_catalog qc ON uq.quest_id = qc.id
+                WHERE uq.user_id = ? AND uq.assigned_date = ?
+            """, (user_id, today_str))
+            rows = cursor.fetchall()
+
+        return [dict(r) for r in rows]
+
+
+def evaluate_quest_progress(user_id: int, quest_type: str, increment: int = 1) -> None:
+    """Increment progress for active matching daily/weekly quests."""
+    today_str = datetime.date.today().isoformat()
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT uq.id, uq.progress, qc.target_count
+            FROM user_quests uq
+            JOIN quests_catalog qc ON uq.quest_id = qc.id
+            WHERE uq.user_id = ? AND uq.assigned_date = ? AND qc.quest_type = ? AND uq.is_completed = 0
+        """, (user_id, today_str, quest_type))
+        matching = cursor.fetchall()
+
+        for q in matching:
+            new_prog = q["progress"] + increment
+            is_done = 1 if new_prog >= q["target_count"] else 0
+            cursor.execute("""
+                UPDATE user_quests
+                SET progress = ?, is_completed = ?
+                WHERE id = ?
+            """, (new_prog, is_done, q["id"]))
+
+
+def claim_quest_reward(user_id: int, user_quest_id: int) -> tuple[bool, str, dict]:
+    """Claim XP and coin rewards for a completed quest."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT uq.*, qc.reward_xp, qc.reward_coins, qc.title
+            FROM user_quests uq
+            JOIN quests_catalog qc ON uq.quest_id = qc.id
+            WHERE uq.id = ? AND uq.user_id = ?
+        """, (user_quest_id, user_id))
+        q = cursor.fetchone()
+
+        if not q:
+            return False, "Задание не найдено.", {}
+        if not q["is_completed"]:
+            return False, "Задание ещё не завершено.", {}
+        if q["is_claimed"]:
+            return False, "Награда за это задание уже получена.", {}
+
+        # Mark claimed
+        cursor.execute("UPDATE user_quests SET is_claimed = 1 WHERE id = ?", (user_quest_id,))
+
+        # Award XP & Coins
+        xp_res = add_user_xp(user_id, q["reward_xp"])
+        add_coins(user_id, q["reward_coins"], tx_type="quest_reward", ref_id=user_quest_id)
+
+        return True, f"🎉 Награда получена: +{q['reward_coins']} 🪙 и +{q['reward_xp']} XP!", {
+            "coins": q["reward_coins"],
+            "xp": q["reward_xp"],
+            "progression": xp_res
+        }
+
+
+def unlock_achievement(user_id: int, achievement_id: str) -> bool:
+    """Unlock an achievement for user if not already unlocked."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM user_achievements WHERE user_id = ? AND achievement_id = ?", (user_id, achievement_id))
+        if cursor.fetchone():
+            return False
+
+        cursor.execute("""
+            INSERT OR IGNORE INTO user_achievements (user_id, achievement_id, is_claimed, unlocked_at)
+            VALUES (?, ?, 0, CURRENT_TIMESTAMP)
+        """, (user_id, achievement_id))
+        return True
+
+
+def get_user_achievements(user_id: int) -> list[dict]:
+    """Return list of all catalog achievements with user unlocked status."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT ac.*, 
+                   CASE WHEN ua.id IS NOT NULL THEN 1 ELSE 0 END as is_unlocked,
+                   COALESCE(ua.is_claimed, 0) as is_claimed,
+                   ua.unlocked_at
+            FROM achievements_catalog ac
+            LEFT JOIN user_achievements ua ON ac.id = ua.achievement_id AND ua.user_id = ?
+            ORDER BY is_unlocked DESC, ac.reward_xp DESC
+        """, (user_id,))
+        return [dict(r) for r in cursor.fetchall()]
+
+
+def claim_achievement_reward(user_id: int, achievement_id: str) -> tuple[bool, str, dict]:
+    """Claim reward for an unlocked achievement."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT ua.id, ua.is_claimed, ac.reward_xp, ac.reward_coins, ac.name
+            FROM user_achievements ua
+            JOIN achievements_catalog ac ON ua.achievement_id = ac.id
+            WHERE ua.user_id = ? AND ua.achievement_id = ?
+        """, (user_id, achievement_id))
+        row = cursor.fetchone()
+
+        if not row:
+            return False, "Достижение ещё не разблокировано.", {}
+        if row["is_claimed"]:
+            return False, "Награда за достижение уже получена.", {}
+
+        cursor.execute("UPDATE user_achievements SET is_claimed = 1 WHERE user_id = ? AND achievement_id = ?", (user_id, achievement_id))
+        xp_res = add_user_xp(user_id, row["reward_xp"])
+        add_coins(user_id, row["reward_coins"], tx_type="achievement_reward")
+
+        return True, f"🏆 Достижение получено: +{row['reward_coins']} 🪙 и +{row['reward_xp']} XP!", {
+            "coins": row["reward_coins"],
+            "xp": row["reward_xp"],
+            "progression": xp_res
+        }
+
+
+def evaluate_betting_achievements(user_id: int, bet_payload: dict | None = None) -> None:
+    """Scan and trigger achievements on bet placement or win."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        wallet = get_or_create_wallet(user_id)
+        prog = get_or_create_progression(user_id)
+
+        # Volume
+        cnt = wallet["bets_count"]
+        if cnt >= 1:
+            unlock_achievement(user_id, "ACH_FIRST_BET")
+        if cnt >= 10:
+            unlock_achievement(user_id, "ACH_TOTAL_10_BETS")
+        if cnt >= 50:
+            unlock_achievement(user_id, "ACH_TOTAL_50_BETS")
+        if cnt >= 100:
+            unlock_achievement(user_id, "ACH_TOTAL_100_BETS")
+
+        # Wealth
+        bal = wallet["balance"]
+        if bal >= 25000:
+            unlock_achievement(user_id, "ACH_COIN_MILLIONAIRE")
+        if bal >= 100000:
+            unlock_achievement(user_id, "ACH_COIN_TYCOON")
+
+        # Wins & Streaks
+        won_cnt = wallet["bets_won"]
+        if won_cnt >= 1:
+            unlock_achievement(user_id, "ACH_FIRST_WIN")
+
+        # Parlay / Odd achievements from payload
+        if bet_payload:
+            b_type = bet_payload.get("bet_type")
+            odd = float(bet_payload.get("total_odd", 1.0))
+            if b_type == "express":
+                unlock_achievement(user_id, "ACH_EXPRESS_3")
+                if odd >= 5.0:
+                    unlock_achievement(user_id, "ACH_EXPRESS_ODD_5")
+                if odd >= 15.0:
+                    unlock_achievement(user_id, "ACH_EXPRESS_ODD_15")
+                if odd >= 50.0:
+                    unlock_achievement(user_id, "ACH_EXPRESS_ODD_50")
+            elif b_type == "single" and odd >= 3.5:
+                unlock_achievement(user_id, "ACH_UNDERDOG")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ⚔️ PVP DUELS (1v1 PREDICTOR ARENA)
+# ═════════════════════════════════════════════════════════════════════════════
+
+def create_pvp_duel(creator_id: int, stake_amount: int, round_number: int, match_ids: list[int], picks: dict) -> tuple[bool, int | str]:
+    """Create a new 1v1 PvP duel challenge."""
+    import json
+    if stake_amount <= 0:
+        return False, "Сумма ставки на дуэль должна быть положительной."
+
+    with transaction() as conn:
+        cursor = conn.cursor()
+        wallet = get_or_create_wallet(creator_id)
+        if wallet["balance"] < stake_amount:
+            return False, f"Недостаточно монет (Баланс: {wallet['balance']} 🪙)."
+
+        # Deduct stake from creator
+        deduct_coins(creator_id, stake_amount, tx_type="duel_stake_escrow")
+
+        cursor.execute("""
+            INSERT INTO pvp_duels (creator_id, stake_amount, round_number, match_ids_json, creator_picks_json, status)
+            VALUES (?, ?, ?, ?, ?, 'open')
+        """, (creator_id, stake_amount, round_number, json.dumps(match_ids), json.dumps(picks)))
+
+        duel_id = cursor.lastrowid
+        unlock_achievement(creator_id, "ACH_DUEL_FIRST")
+        return True, duel_id
+
+
+def get_pvp_duels(user_id: int | None = None, limit: int = 15) -> list[dict]:
+    """Get active and open PvP duels."""
+    import json
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT d.*, 
+                   u1.username as creator_username, u1.team_name as creator_team,
+                   u2.username as opponent_username, u2.team_name as opponent_team
+            FROM pvp_duels d
+            LEFT JOIN users u1 ON d.creator_id = u1.telegram_id
+            LEFT JOIN users u2 ON d.opponent_id = u2.telegram_id
+            WHERE d.status IN ('open', 'active')
+            ORDER BY d.id DESC
+            LIMIT ?
+        """, (limit,))
+        rows = [dict(r) for r in cursor.fetchall()]
+        for r in rows:
+            try:
+                r["match_ids"] = json.loads(r["match_ids_json"])
+                r["creator_picks"] = json.loads(r["creator_picks_json"])
+                r["opponent_picks"] = json.loads(r["opponent_picks_json"])
+            except Exception:
+                r["match_ids"] = []
+                r["creator_picks"] = {}
+                r["opponent_picks"] = {}
+        return rows
+
+
+def accept_pvp_duel(duel_id: int, opponent_id: int, picks: dict) -> tuple[bool, str]:
+    """Accept an open PvP duel."""
+    import json
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM pvp_duels WHERE id = ? AND status = 'open'", (duel_id,))
+        duel = cursor.fetchone()
+
+        if not duel:
+            return False, "Дуэль не найдена или уже принята."
+        if duel["creator_id"] == opponent_id:
+            return False, "Вы не можете принять собственный вызов."
+
+        stake = duel["stake_amount"]
+        wallet = get_or_create_wallet(opponent_id)
+        if wallet["balance"] < stake:
+            return False, f"Недостаточно монет для принятия дуэли (Нужно: {stake} 🪙)."
+
+        deduct_coins(opponent_id, stake, tx_type="duel_stake_escrow", ref_id=duel_id)
+
+        cursor.execute("""
+            UPDATE pvp_duels
+            SET opponent_id = ?, opponent_picks_json = ?, status = 'active'
+            WHERE id = ?
+        """, (opponent_id, json.dumps(picks), duel_id))
+
+        unlock_achievement(opponent_id, "ACH_DUEL_FIRST")
+        return True, "⚔️ Вызов принят! Дуэль началась."
+
+
+def get_public_gamer_profile(user_id: int) -> dict:
+    """Assemble public esports gamer card with radar stats, badges and achievements."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM users WHERE telegram_id = ?", (user_id,))
+        user_row = cursor.fetchone()
+        
+        wallet = get_or_create_wallet(user_id)
+        prog = get_or_create_progression(user_id)
+        achievements = get_user_achievements(user_id)
+        unlocked_ach = [a for a in achievements if a["is_unlocked"]]
+
+        win_rate = round((wallet["bets_won"] / max(1, wallet["bets_count"])) * 100, 1)
+
+        return {
+            "user_id": user_id,
+            "username": user_row["username"] if user_row else f"Каппер #{user_id}",
+            "team_name": user_row["team_name"] if user_row else "Свободный игрок",
+            "level": prog["level"],
+            "current_xp": prog["current_xp"],
+            "total_xp": prog["total_xp_earned"],
+            "title": prog["equipped_title"],
+            "frame": prog["equipped_frame"],
+            "streak": prog["current_streak"],
+            "best_streak": prog["best_streak"],
+            "balance": wallet["balance"],
+            "total_wagered": wallet["total_wagered"],
+            "total_won": wallet["total_won"],
+            "bets_count": wallet["bets_count"],
+            "bets_won": wallet["bets_won"],
+            "win_rate": win_rate,
+            "unlocked_achievements_count": len(unlocked_ach),
+            "achievements": unlocked_ach[:6]
+        }
+
 

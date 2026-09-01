@@ -13,6 +13,16 @@ from aiohttp import web
 from api.routes_wallet import handle_bootstrap, handle_claim_bonus, handle_leaderboard
 from api.routes_markets import handle_get_tours
 from api.routes_predictions import handle_place_prediction, handle_get_predictions
+from api.routes_gamification import (
+    handle_get_progression,
+    handle_claim_quest,
+    handle_get_achievements,
+    handle_claim_achievement,
+    handle_get_duels,
+    handle_create_duel,
+    handle_accept_duel,
+    handle_get_profile
+)
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +64,16 @@ def create_app() -> web.Application:
     app.router.add_get("/api/markets/tours", handle_get_tours)
     app.router.add_post("/api/predictions", handle_place_prediction)
     app.router.add_get("/api/predictions", handle_get_predictions)
+
+    # Gamification, Quests, Achievements & Duels
+    app.router.add_get("/api/progression", handle_get_progression)
+    app.router.add_post("/api/quests/claim", handle_claim_quest)
+    app.router.add_get("/api/achievements", handle_get_achievements)
+    app.router.add_post("/api/achievements/claim", handle_claim_achievement)
+    app.router.add_get("/api/duels", handle_get_duels)
+    app.router.add_post("/api/duels/create", handle_create_duel)
+    app.router.add_post("/api/duels/accept", handle_accept_duel)
+    app.router.add_get("/api/profile/{user_id}", handle_get_profile)
 
     # Static SPA Frontend
     app.router.add_get("/", handle_index)

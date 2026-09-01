@@ -63,6 +63,16 @@ async def handle_place_prediction(request: web.Request) -> web.Response:
     user_balance = database.get_wallet_balance(user_id)
     bet_type = "single" if len(selections) == 1 else "express"
 
+    # Gamification hooks
+    try:
+        database.add_user_xp(user_id, 30 if bet_type == "single" else 60)
+        database.evaluate_quest_progress(user_id, "place_bets", 1)
+        if bet_type == "express":
+            database.evaluate_quest_progress(user_id, "express_count", 1)
+        database.evaluate_betting_achievements(user_id)
+    except Exception as e:
+        logger.warning(f"Error in gamification hook on bet placement: {e}")
+
     return web.json_response({
         "status": "ok",
         "bet_id": bet_id,

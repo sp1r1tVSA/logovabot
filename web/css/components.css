@@ -687,3 +687,457 @@
   cursor: pointer;
   box-shadow: var(--shadow-gold);
 }
+
+/* ─── 7. Level & XP Pill (Header) ─── */
+.level-pill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: linear-gradient(135deg, rgba(0, 210, 255, 0.15) 0%, rgba(0, 210, 255, 0.05) 100%);
+  border: 1px solid rgba(0, 210, 255, 0.4);
+  padding: 6px 12px;
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  box-shadow: 0 0 12px rgba(0, 210, 255, 0.2);
+  transition: var(--transition-fast);
+}
+.level-pill:active {
+  transform: scale(0.95);
+}
+
+.level-badge-icon {
+  font-size: 1rem;
+}
+
+.level-number {
+  font-family: 'Outfit', sans-serif;
+  font-size: 0.92rem;
+  font-weight: 800;
+  color: var(--accent-cyan);
+}
+
+/* ─── 8. 7-Day Login Streak Card ─── */
+.streak-card {
+  background: linear-gradient(135deg, rgba(245, 176, 39, 0.18) 0%, rgba(19, 24, 36, 0.95) 100%);
+  border: 1px solid var(--border-active);
+  border-radius: var(--radius-md);
+  padding: 16px;
+  margin-bottom: 16px;
+  box-shadow: var(--shadow-card);
+}
+
+.streak-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.streak-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.streak-flame-icon {
+  font-size: 1.6rem;
+  animation: flameFlicker 1.8s infinite alternate;
+}
+
+@keyframes flameFlicker {
+  0% { transform: scale(1) rotate(-3deg); filter: drop-shadow(0 0 8px rgba(245, 176, 39, 0.6)); }
+  100% { transform: scale(1.15) rotate(3deg); filter: drop-shadow(0 0 16px rgba(245, 176, 39, 0.9)); }
+}
+
+.streak-days-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 6px;
+}
+
+.streak-day-item {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xs);
+  padding: 8px 4px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+.streak-day-item.active {
+  background: rgba(245, 176, 39, 0.2);
+  border-color: var(--accent-gold);
+  color: #fff;
+}
+.streak-day-item.current {
+  border-color: var(--accent-gold);
+  box-shadow: 0 0 12px var(--accent-gold-glow);
+  transform: scale(1.05);
+}
+
+.streak-day-reward {
+  font-family: 'Outfit', sans-serif;
+  font-size: 0.76rem;
+  font-weight: 800;
+  color: var(--accent-gold);
+}
+
+/* ─── 9. Quests Cards ─── */
+.quest-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 14px 16px;
+  margin-bottom: 10px;
+  box-shadow: var(--shadow-card);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.quest-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.quest-title {
+  font-family: 'Outfit', sans-serif;
+  font-size: 0.95rem;
+  font-weight: 800;
+  color: #fff;
+}
+
+.quest-desc {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
+
+.quest-rewards-badge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: 'Outfit', sans-serif;
+  font-size: 0.82rem;
+  font-weight: 800;
+  color: var(--accent-gold);
+  background: rgba(245, 176, 39, 0.1);
+  padding: 4px 8px;
+  border-radius: var(--radius-xs);
+  white-space: nowrap;
+}
+
+.quest-progress-bar-wrap {
+  width: 100%;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 4px;
+  overflow: hidden;
+  margin-top: 4px;
+}
+
+.quest-progress-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent-gold) 0%, #00d2ff 100%);
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+.quest-bottom {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 4px;
+}
+
+.quest-count-label {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  font-weight: 700;
+}
+
+.btn-claim-quest {
+  background: linear-gradient(135deg, var(--accent-gold) 0%, var(--accent-gold-hover) 100%);
+  color: #000;
+  font-family: 'Outfit', sans-serif;
+  font-size: 0.85rem;
+  font-weight: 900;
+  border: none;
+  padding: 6px 14px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  box-shadow: var(--shadow-gold);
+  animation: pulseGold 2s infinite alternate;
+}
+.btn-claim-quest:active {
+  transform: scale(0.94);
+}
+
+@keyframes pulseGold {
+  0% { box-shadow: 0 0 8px rgba(245, 176, 39, 0.4); }
+  100% { box-shadow: 0 0 18px rgba(245, 176, 39, 0.8); }
+}
+
+/* ─── 10. Esports Gamer Profile Card ─── */
+.gamer-profile-card {
+  background: linear-gradient(180deg, rgba(26, 34, 48, 0.9) 0%, var(--bg-card) 100%);
+  border: 1px solid var(--border-active);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+  box-shadow: 0 10px 36px rgba(0, 0, 0, 0.5);
+  margin-bottom: 16px;
+}
+
+.gamer-header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 16px;
+}
+
+.gamer-avatar-wrap {
+  position: relative;
+  width: 64px;
+  height: 64px;
+  background: linear-gradient(135deg, rgba(245, 176, 39, 0.3) 0%, rgba(0, 210, 255, 0.2) 100%);
+  border: 2px solid var(--accent-gold);
+  border-radius: var(--radius-full);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 2rem;
+  box-shadow: 0 0 16px var(--accent-gold-glow);
+}
+
+.gamer-info {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.gamer-username {
+  font-family: 'Outfit', sans-serif;
+  font-size: 1.25rem;
+  font-weight: 900;
+  color: #fff;
+}
+
+.gamer-title-badge {
+  font-size: 0.78rem;
+  font-weight: 800;
+  color: var(--accent-gold);
+  background: rgba(245, 176, 39, 0.12);
+  border: 1px solid rgba(245, 176, 39, 0.25);
+  padding: 2px 8px;
+  border-radius: var(--radius-xs);
+  display: inline-block;
+  width: fit-content;
+}
+
+.gamer-xp-bar-wrap {
+  width: 100%;
+  height: 8px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  overflow: hidden;
+  margin: 10px 0 6px;
+}
+
+.gamer-xp-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #00d2ff 0%, var(--accent-gold) 100%);
+  border-radius: 6px;
+}
+
+.gamer-stats-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 8px;
+  margin-top: 14px;
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 14px;
+}
+
+.gamer-stat-item {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 10px 6px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.gamer-stat-val {
+  font-family: 'Outfit', sans-serif;
+  font-size: 1.1rem;
+  font-weight: 800;
+  color: #fff;
+}
+
+.gamer-stat-lbl {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+/* ─── 11. Achievements Showcase ─── */
+.achievements-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+}
+
+.achievement-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  position: relative;
+  overflow: hidden;
+  opacity: 0.55;
+  filter: grayscale(0.6);
+  transition: var(--transition-fast);
+}
+
+.achievement-card.unlocked {
+  opacity: 1;
+  filter: grayscale(0);
+  border-color: rgba(245, 176, 39, 0.4);
+  background: linear-gradient(135deg, rgba(245, 176, 39, 0.1) 0%, var(--bg-card) 100%);
+}
+
+.achievement-card.rarity-rare.unlocked {
+  border-color: rgba(0, 210, 255, 0.5);
+  box-shadow: 0 0 14px rgba(0, 210, 255, 0.15);
+}
+.achievement-card.rarity-epic.unlocked {
+  border-color: rgba(168, 85, 247, 0.6);
+  box-shadow: 0 0 16px rgba(168, 85, 247, 0.2);
+}
+.achievement-card.rarity-legendary.unlocked {
+  border-color: var(--accent-gold);
+  box-shadow: 0 0 20px rgba(245, 176, 39, 0.35);
+}
+
+.ach-icon-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ach-icon {
+  font-size: 1.5rem;
+}
+
+.ach-name {
+  font-family: 'Outfit', sans-serif;
+  font-size: 0.88rem;
+  font-weight: 800;
+  color: #fff;
+  line-height: 1.2;
+}
+
+.ach-desc {
+  font-size: 0.74rem;
+  color: var(--text-secondary);
+  line-height: 1.3;
+}
+
+.btn-claim-achievement {
+  background: var(--accent-gold);
+  color: #000;
+  font-family: 'Outfit', sans-serif;
+  font-size: 0.78rem;
+  font-weight: 800;
+  border: none;
+  padding: 5px;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  margin-top: 4px;
+}
+
+/* ─── 12. PvP Duels Arena ─── */
+.duels-header-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: linear-gradient(135deg, rgba(239, 68, 68, 0.2) 0%, rgba(19, 24, 36, 0.95) 100%);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  padding: 16px;
+  border-radius: var(--radius-md);
+  margin-bottom: 16px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+}
+
+.btn-create-duel {
+  background: linear-gradient(135deg, var(--color-danger) 0%, #dc2626 100%);
+  color: #fff;
+  font-family: 'Outfit', sans-serif;
+  font-size: 0.85rem;
+  font-weight: 800;
+  border: none;
+  padding: 9px 14px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  box-shadow: 0 0 14px rgba(239, 68, 68, 0.4);
+  white-space: nowrap;
+}
+.btn-create-duel:active {
+  transform: scale(0.94);
+}
+
+.duel-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 14px;
+  margin-bottom: 10px;
+  box-shadow: var(--shadow-card);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.duel-players {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.btn-accept-duel {
+  background: var(--accent-gold);
+  color: #000;
+  font-family: 'Outfit', sans-serif;
+  font-size: 0.85rem;
+  font-weight: 800;
+  border: none;
+  padding: 8px 16px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  box-shadow: var(--shadow-gold);
+}
+
+.btn-open-leaderboard {
+  width: 100%;
+  background: var(--bg-card);
+  border: 1px solid var(--border-active);
+  color: var(--accent-gold);
+  font-family: 'Outfit', sans-serif;
+  font-size: 0.95rem;
+  font-weight: 800;
+  padding: 14px;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+}
+
