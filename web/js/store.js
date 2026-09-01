@@ -18,6 +18,7 @@ class StateStore {
       stakeAmount: 100,
       activeView: 'lobby', // 'lobby' | 'match_center' | 'tournaments' | 'history' | 'profile'
       selectedMatchId: null,
+      matchCenterSubTab: 'markets', // 'markets' | 'stats' | 'insights'
       matchDetail: null,
       matchStats: null,
       matchH2H: null,
@@ -118,6 +119,12 @@ class StateStore {
     if (insights) this.state.matchInsights = insights;
     if (live) this.state.matchLive = live;
     if (markets) this.state.matchMarkets = markets;
+    this.state.matchCenterSubTab = 'markets';
+    this.notify();
+  }
+
+  setMatchCenterSubTab(tab) {
+    this.state.matchCenterSubTab = tab || 'markets';
     this.notify();
   }
 

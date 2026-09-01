@@ -125,6 +125,7 @@
 }
 
 /* ─── 3. Match Card ─── */
+/* ─── 3. Match Card ─── */
 .match-card {
   background: var(--bg-card);
   border: 1px solid var(--border-subtle);
@@ -137,39 +138,58 @@
   transition: transform 0.2s ease, border-color 0.2s ease;
 }
 
-.match-header {
+.match-card:hover {
+  border-color: rgba(245, 176, 39, 0.3);
+}
+
+.match-card-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  font-size: 0.76rem;
-  color: var(--text-muted);
   margin-bottom: 12px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
 }
 
-.match-teams {
-  display: grid;
-  grid-template-columns: 1fr auto 1fr;
+.match-tour-tag {
+  font-family: 'Outfit', sans-serif;
+  font-size: 0.76rem;
+  font-weight: 800;
+  color: var(--accent-gold);
+  background: rgba(245, 176, 39, 0.12);
+  border: 1px solid rgba(245, 176, 39, 0.25);
+  padding: 3px 8px;
+  border-radius: var(--radius-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.match-teams-row {
+  display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 10px;
   margin-bottom: 14px;
 }
 
-.team-block {
+.team-block-side {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex: 1;
 }
-.team-block.away {
+
+.team-block-side.left {
   justify-content: flex-end;
   text-align: right;
 }
 
+.team-block-side.right {
+  justify-content: flex-start;
+  text-align: left;
+}
+
 .team-name {
   font-family: 'Outfit', sans-serif;
-  font-size: 0.98rem;
+  font-size: 0.95rem;
   font-weight: 800;
   color: #fff;
   white-space: nowrap;
@@ -178,65 +198,74 @@
   letter-spacing: -0.01em;
 }
 
-.vs-badge {
+.match-vs-divider {
   font-family: 'Outfit', sans-serif;
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   font-weight: 900;
   color: var(--accent-gold);
-  background: rgba(245, 176, 39, 0.12);
+  background: rgba(245, 176, 39, 0.1);
   border: 1px solid rgba(245, 176, 39, 0.25);
   padding: 3px 8px;
   border-radius: var(--radius-xs);
-  box-shadow: 0 0 10px rgba(245, 176, 39, 0.1);
+  flex-shrink: 0;
 }
 
-/* Odds Grid */
-.odds-grid-main {
+/* Odds Grid & Buttons */
+.odds-grid-3col, .odds-grid-main {
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-columns: repeat(3, 1fr);
   gap: 8px;
-  margin-bottom: 8px;
+  margin-bottom: 10px;
 }
 
-.odd-btn {
+.odds-grid-2col {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.odds-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.odd-btn, .odds-btn {
   background: var(--bg-tertiary);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
-  padding: 10px 6px;
+  padding: 8px 6px;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 3px;
+  justify-content: center;
+  gap: 2px;
   cursor: pointer;
-  transition: var(--transition-fast);
+  transition: all 0.18s ease;
+  user-select: none;
   position: relative;
   overflow: hidden;
 }
 
-.odd-btn:active {
-  transform: scale(0.94);
+.odd-btn:active, .odds-btn:active {
+  transform: scale(0.95);
 }
 
-.odd-btn.selected {
+.odd-btn.selected, .odds-btn.selected {
   background: linear-gradient(135deg, var(--accent-gold) 0%, #ffc83b 100%) !important;
   border-color: var(--accent-gold) !important;
-  box-shadow: 0 0 18px var(--accent-gold-glow);
-  animation: oddPop 0.22s cubic-bezier(0.34, 1.56, 0.64, 1);
+  box-shadow: 0 0 16px var(--accent-gold-glow);
 }
 
-@keyframes oddPop {
-  0% { transform: scale(0.92); }
-  50% { transform: scale(1.05); }
-  100% { transform: scale(1); }
-}
-
-.odd-btn.selected .odd-label,
-.odd-btn.selected .odd-val {
+.odd-btn.selected .odd-label, .odd-btn.selected .odd-val,
+.odds-btn.selected .odds-btn-label, .odds-btn.selected .odds-btn-val {
   color: #000 !important;
   font-weight: 900 !important;
 }
 
-.odd-label {
+.odd-label, .odds-btn-label {
   font-size: 0.72rem;
   color: var(--text-muted);
   font-weight: 700;
@@ -244,46 +273,49 @@
   letter-spacing: 0.02em;
 }
 
-.odd-val {
+.odd-val, .odds-btn-val {
   font-family: 'Outfit', sans-serif;
-  font-size: 1.05rem;
+  font-size: 1.02rem;
   font-weight: 800;
   color: var(--accent-gold);
   font-variant-numeric: tabular-nums;
-  letter-spacing: -0.01em;
 }
 
-/* Extra Markets Accordion */
-.extra-markets-toggle {
-  width: 100%;
-  background: rgba(255, 255, 255, 0.02);
+/* Match Action Buttons Row */
+.match-card-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.btn-match-action {
+  background: var(--bg-tertiary);
   border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-xs);
+  border-radius: var(--radius-sm);
   color: var(--text-secondary);
-  font-size: 0.76rem;
+  font-family: 'Outfit', sans-serif;
+  font-size: 0.78rem;
   font-weight: 700;
-  padding: 7px;
+  padding: 8px 10px;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
   cursor: pointer;
-  transition: var(--transition-fast);
-}
-.extra-markets-toggle:active {
-  background: rgba(255, 255, 255, 0.06);
+  transition: all 0.2s ease;
 }
 
-.extra-markets-panel {
-  display: none;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-  padding-top: 10px;
-  margin-top: 6px;
-  animation: expandPanel 0.25s ease-out;
+.btn-match-action:hover, .btn-match-action:active {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(245, 176, 39, 0.4);
+  color: #fff;
 }
-.extra-markets-panel.open {
-  display: grid;
+
+.btn-match-action.accent {
+  background: rgba(245, 176, 39, 0.08);
+  border-color: rgba(245, 176, 39, 0.25);
+  color: var(--accent-gold);
 }
 
 @keyframes expandPanel {
@@ -1322,9 +1354,10 @@
   border-radius: var(--radius-sm);
   padding: 3px;
   margin-bottom: 14px;
+  gap: 3px;
 }
 
-.mc-tab-btn {
+.mc-tab-btn, .mc-subtab-btn {
   flex: 1;
   background: transparent;
   border: none;
@@ -1335,11 +1368,33 @@
   padding: 8px 4px;
   border-radius: 7px;
   cursor: pointer;
-  transition: var(--transition-fast);
+  transition: all 0.2s ease;
+  text-align: center;
 }
-.mc-tab-btn.active {
+.mc-tab-btn.active, .mc-subtab-btn.active {
   background: var(--accent-gold);
   color: #000;
+  font-weight: 800;
+  box-shadow: 0 2px 8px rgba(245, 176, 39, 0.3);
+}
+
+.market-group-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  margin-bottom: 10px;
+}
+
+.market-group-title {
+  font-family: 'Outfit', sans-serif;
+  font-size: 0.85rem;
+  font-weight: 800;
+  color: #fff;
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 /* Insight Cards */

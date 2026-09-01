@@ -161,7 +161,7 @@ async def cb_bet_view_tours(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         unplayed = t["unplayed_matches"]
         dl = t.get("deadline")
         dl_note = f"⏰ до {dl[:16]}" if dl else ""
-        btn_text = f"⚽ Тур #{r_num} ({unplayed} матчей) {dl_note}".strip()
+        btn_text = f"⚽ Тур {r_num} ({unplayed} матчей) {dl_note}".strip()
         kb.append([InlineKeyboardButton(btn_text, callback_data=f"bet_tour_{r_num}")])
 
     kb.append([
@@ -188,7 +188,7 @@ async def _render_tour_matches(query, tour_num: int, deadline: str | None = None
 
     if not markets:
         text = (
-            f"📋 <b>Линия на Тур #{tour_num}</b>\n\n"
+            f"📋 <b>Линия на Тур {tour_num}</b>\n\n"
             f"<i>Все матчи тура уже сыграны либо дедлайн истёк. Линия закрыта.</i>"
         )
         kb = [
@@ -199,7 +199,7 @@ async def _render_tour_matches(query, tour_num: int, deadline: str | None = None
         return
 
     dl_text = f"\n⏰ <b>Дедлайн тура:</b> <code>{deadline[:16]}</code>" if deadline else ""
-    text = f"📋 <b>Линия Logovo.bet • Тур #{tour_num}</b>{dl_text}\n\nВыберите матч для ставки:\n"
+    text = f"📋 <b>Линия Logovo.bet • Тур {tour_num}</b>{dl_text}\n\nВыберите матч для ставки:\n"
     kb = []
     for m in markets:
         m_id = m.get("match_id")
@@ -235,7 +235,7 @@ async def cb_bet_match_detail(update: Update, context: ContextTypes.DEFAULT_TYPE
     tour = market["tour"]
 
     text = (
-        f"⚽ <b>{t1} vs {t2}</b> (Тур #{tour})\n"
+        f"⚽ <b>{t1} vs {t2}</b> (Тур {tour})\n"
         f"<i>Коэффициенты от ИИ «Темшик»</i>\n\n"
         f"<b>🏆 Основные исходы:</b>\n"
         f"• <b>П1 ({t1}):</b> <code>{market['odd_p1']:.2f}</code>\n"

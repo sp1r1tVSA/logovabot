@@ -22,7 +22,7 @@ class AppController {
       UIRenderer.renderBonusBanner(state.bonus);
       UIRenderer.renderTourTabs(state.tours, state.selectedTour);
       UIRenderer.renderMatches(state.tours, state.selectedTour, state.marketCategoryFilter, state.searchQuery);
-      UIRenderer.renderMatchCenter(state.matchDetail, state.matchStats, state.matchH2H, state.matchInsights, state.matchLive);
+      UIRenderer.renderMatchCenter(state.matchDetail, state.matchStats, state.matchH2H, state.matchInsights, state.matchLive, state.matchMarkets, state.matchCenterSubTab);
       UIRenderer.renderTournaments(state.standings, state.results, state.topScorers, this.currentTournamentTab);
       UIRenderer.renderPredictionsHistory(state.myBets, state.myBetsFilter);
       UIRenderer.renderSavedCoupons(state.savedCoupons);
@@ -210,9 +210,9 @@ class AppController {
       });
     }
 
-    // 6. Quick Odds Buttons on Match Cards
+    // 6. Quick Odds Buttons on Match Cards & Match Center
     document.addEventListener('click', (e) => {
-      const oddsBtn = e.target.closest('.odds-btn');
+      const oddsBtn = e.target.closest('.odd-btn, .odds-btn');
       if (oddsBtn) {
         const mId = parseInt(oddsBtn.dataset.matchId);
         const outcome = oddsBtn.dataset.outcome;
@@ -221,14 +221,17 @@ class AppController {
         const selId = oddsBtn.dataset.selectionId ? parseInt(oddsBtn.dataset.selectionId) : null;
         const selName = oddsBtn.dataset.selectionName || null;
 
-        // Find match object
+        // Find match object in tours or active match detail
         let targetMatch = null;
         for (const t of store.state.tours) {
-          const found = (t.matches || []).find(m => m.match_id === mId);
+          const found = (t.matches || []).find(m => m.match_id === mId || m.id === mId);
           if (found) {
             targetMatch = found;
             break;
           }
+        }
+        if (!targetMatch && store.state.matchDetail && (store.state.matchDetail.id === mId || store.state.matchDetail.match_id === mId)) {
+          targetMatch = store.state.matchDetail;
         }
         if (!targetMatch) {
           targetMatch = { match_id: mId, team1_name: 'Хозяева', team2_name: 'Гости', tour: 1 };
@@ -239,6 +242,16 @@ class AppController {
           selection_id: selId,
           selection_name: selName
         });
+        tgBridge.hapticImpact('light');
+      }
+    });
+
+    // 7. Match Center Sub-Tabs Switching
+    document.addEventListener('click', (e) => {
+      const btn = e.target.closest('.mc-subtab-btn');
+      if (btn && btn.dataset.subtab) {
+        store.setMatchCenterSubTab(btn.dataset.subtab);
+        tgBridge.hapticImpact('light');
       }
     });
 

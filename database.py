@@ -2046,8 +2046,8 @@ def get_matches_by_round(round_number: int) -> list[dict]:
             SELECT 
                 m.id, m.round_number, u1.telegram_id AS player1_id, u2.telegram_id AS player2_id,
                 m.player1_score, m.player2_score, m.status,
-                u1.username AS player1_nickname, u1.team_name AS player1_team,
-                u2.username AS player2_nickname, u2.team_name AS player2_team
+                u1.username AS player1_nickname, COALESCE(m.player1_team, u1.team_name, 'Команда 1') AS player1_team,
+                u2.username AS player2_nickname, COALESCE(m.player2_team, u2.team_name, 'Команда 2') AS player2_team
             FROM matches m
             LEFT JOIN users u1 ON LOWER(m.player1_team) = LOWER(u1.team_name)
             LEFT JOIN users u2 ON LOWER(m.player2_team) = LOWER(u2.team_name)
@@ -5228,7 +5228,7 @@ def place_user_bet(
                 r_row = cursor.fetchone()
                 if r_row:
                     if not r_row["is_open"]:
-                        return False, f"Приём прогнозов на Тур #{r_num} закрыт."
+                        return False, f"Приём прогнозов на Тур {r_num} закрыт."
                     if r_row["deadline"]:
                         raw_dl = str(r_row["deadline"]).strip()
                         dl_dt = None
@@ -5239,7 +5239,7 @@ def place_user_bet(
                             except ValueError:
                                 pass
                         if dl_dt and datetime.datetime.now() > dl_dt:
-                            return False, f"Дедлайн для прогнозов на Тур #{r_num} истек."
+                            return False, f"Дедлайн для прогнозов на Тур {r_num} истек."
 
             # Determine odds value from relational schema or legacy bet_markets
             odd_val = None

@@ -61,7 +61,7 @@ export function getTeamLogoUrl(teamName) {
 export function renderTeamLogoHtml(teamName, size = 28, extraClass = '') {
   const url = getTeamLogoUrl(teamName);
   if (url) {
-    return `<img src="${url}" alt="${teamName || 'Club'}" class="team-logo-img ${extraClass}" style="width:${size}px; height:${size}px; object-fit:contain; filter:drop-shadow(0 2px 6px rgba(0,0,0,0.4)); vertical-align:middle; display:inline-block; flex-shrink:0;" onerror="this.style.display='none'; if(this.nextElementSibling) this.nextElementSibling.style.display='inline-block';" /><span class="team-logo-fallback ${extraClass}" style="display:none; font-size:${Math.round(size * 0.75)}px; vertical-align:middle;">🛡️</span>`;
+    return `<img src="${url}" alt="${teamName || 'Club'}" class="team-logo-img ${extraClass}" style="width:${size}px; height:${size}px; object-fit:contain; filter:drop-shadow(0 2px 6px rgba(0,0,0,0.4)); vertical-align:middle; display:inline-block; flex-shrink:0; background:transparent;" onerror="this.style.display='none'; if(this.nextElementSibling) this.nextElementSibling.style.display='inline-block';" /><span class="team-logo-fallback ${extraClass}" style="display:none; font-size:${Math.round(size * 0.75)}px; vertical-align:middle;">🛡️</span>`;
   }
   return `<span class="team-logo-fallback ${extraClass}" style="font-size:${Math.round(size * 0.75)}px; vertical-align:middle;">🛡️</span>`;
 }
@@ -160,7 +160,7 @@ export class UIRenderer {
     container.innerHTML = tours.map(t => `
       <button class="tour-tab-btn ${t.round_number === selectedTour ? 'active' : ''}" 
               data-tour="${t.round_number}">
-        ⚽ Тур #${t.round_number} (${t.unplayed_matches || t.total_matches})
+        ⚽ Тур ${t.round_number} (${t.unplayed_matches || t.total_matches})
       </button>
     `).join('');
   }
@@ -202,87 +202,92 @@ export class UIRenderer {
 
     container.innerHTML = filteredMatches.map(m => {
       const isLive = m.status === 'live';
+      const tourLabel = m.tour || selectedTour;
       return `
         <div class="match-card" data-match-id="${m.match_id}">
           <!-- Match Card Header -->
           <div class="match-card-header">
             <div style="display: flex; align-items: center; gap: 8px;">
-              <span class="match-tour-tag">Тур #${m.tour || selectedTour}</span>
+              <span class="match-tour-tag">Тур ${tourLabel}</span>
               ${isLive ? `
                 <span class="live-badge">
                   <span class="live-dot"></span> LIVE ${m.live_minute ? `${m.live_minute}'` : ''}
                 </span>
               ` : ''}
             </div>
-            <button class="btn-open-match-center" data-match-id="${m.match_id}" style="background: transparent; border: none; color: var(--accent-gold); font-size: 0.8rem; font-weight: 700; cursor: pointer;">
-              Статистика & H2H ➔
-            </button>
+            <span style="font-size: 0.75rem; color: var(--text-muted); font-weight: 600;">Лига Фифарей</span>
           </div>
 
-          <!-- Teams Row with Crest Logos -->
+          <!-- Teams Row with Crest Logos (Horizontal Centered Layout) -->
           <div class="match-teams-row">
-            <div class="team-name" style="flex: 1; text-align: right; display: flex; align-items: center; justify-content: flex-end; gap: 8px;">
-              <span>${m.team1_name}</span>
-              ${renderTeamLogoHtml(m.team1_name, 26)}
+            <div class="team-block-side left">
+              <span class="team-name">${m.team1_name}</span>
+              ${renderTeamLogoHtml(m.team1_name, 28)}
             </div>
-            <div style="font-family: 'Outfit', sans-serif; font-size: 0.88rem; font-weight: 900; color: var(--text-gold); padding: 0 10px;">VS</div>
-            <div class="team-name" style="flex: 1; text-align: left; display: flex; align-items: center; justify-content: flex-start; gap: 8px;">
-              ${renderTeamLogoHtml(m.team2_name, 26)}
-              <span>${m.team2_name}</span>
+            <div class="match-vs-divider">VS</div>
+            <div class="team-block-side right">
+              ${renderTeamLogoHtml(m.team2_name, 28)}
+              <span class="team-name">${m.team2_name}</span>
             </div>
           </div>
 
-          <!-- Quick Market Odds Buttons -->
-          <div class="odds-grid" style="margin-top: 10px;">
-            ${(activeCategory === 'all' || activeCategory === 'main') ? `
-              <div class="odds-btn ${store.isSelectionActive(m.match_id, 'p1') ? 'selected' : ''}" 
-                   data-match-id="${m.match_id}" data-outcome="p1" data-odd="${m.odds?.p1 || 1.90}">
-                <span class="odds-btn-label">П1</span>
-                <span class="odds-btn-val">${(m.odds?.p1 || 1.90).toFixed(2)}</span>
-              </div>
-              <div class="odds-btn ${store.isSelectionActive(m.match_id, 'x') ? 'selected' : ''}" 
-                   data-match-id="${m.match_id}" data-outcome="x" data-odd="${m.odds?.x || 3.20}">
-                <span class="odds-btn-label">X</span>
-                <span class="odds-btn-val">${(m.odds?.x || 3.20).toFixed(2)}</span>
-              </div>
-              <div class="odds-btn ${store.isSelectionActive(m.match_id, 'p2') ? 'selected' : ''}" 
-                   data-match-id="${m.match_id}" data-outcome="p2" data-odd="${m.odds?.p2 || 2.40}">
-                <span class="odds-btn-label">П2</span>
-                <span class="odds-btn-val">${(m.odds?.p2 || 2.40).toFixed(2)}</span>
-              </div>
-            ` : ''}
+          <!-- Primary 1X2 Odds Buttons Grid -->
+          <div class="odds-grid-3col">
+            <div class="odd-btn ${store.isSelectionActive(m.match_id, 'p1') ? 'selected' : ''}" 
+                 data-match-id="${m.match_id}" data-outcome="p1" data-odd="${m.odds?.p1 || 1.90}">
+              <span class="odd-label">П1</span>
+              <span class="odd-val">${(m.odds?.p1 || 1.90).toFixed(2)}</span>
+            </div>
+            <div class="odd-btn ${store.isSelectionActive(m.match_id, 'x') ? 'selected' : ''}" 
+                 data-match-id="${m.match_id}" data-outcome="x" data-odd="${m.odds?.x || 3.20}">
+              <span class="odd-label">X</span>
+              <span class="odd-val">${(m.odds?.x || 3.20).toFixed(2)}</span>
+            </div>
+            <div class="odd-btn ${store.isSelectionActive(m.match_id, 'p2') ? 'selected' : ''}" 
+                 data-match-id="${m.match_id}" data-outcome="p2" data-odd="${m.odds?.p2 || 2.40}">
+              <span class="odd-label">П2</span>
+              <span class="odd-val">${(m.odds?.p2 || 2.40).toFixed(2)}</span>
+            </div>
+          </div>
 
-            ${(activeCategory === 'all' || activeCategory === 'totals') ? `
-              <div class="odds-btn ${store.isSelectionActive(m.match_id, 'tb25') ? 'selected' : ''}" 
+          <!-- Secondary Filtered Category Odds (if chosen) -->
+          ${(activeCategory === 'totals') ? `
+            <div class="odds-grid-2col">
+              <div class="odd-btn ${store.isSelectionActive(m.match_id, 'tb25') ? 'selected' : ''}" 
                    data-match-id="${m.match_id}" data-outcome="tb25" data-odd="${m.odds?.tb25 || 1.80}">
-                <span class="odds-btn-label">ТБ 2.5</span>
-                <span class="odds-btn-val">${(m.odds?.tb25 || 1.80).toFixed(2)}</span>
+                <span class="odd-label">ТБ 2.5</span>
+                <span class="odd-val">${(m.odds?.tb25 || 1.80).toFixed(2)}</span>
               </div>
-              <div class="odds-btn ${store.isSelectionActive(m.match_id, 'tm25') ? 'selected' : ''}" 
+              <div class="odd-btn ${store.isSelectionActive(m.match_id, 'tm25') ? 'selected' : ''}" 
                    data-match-id="${m.match_id}" data-outcome="tm25" data-odd="${m.odds?.tm25 || 1.95}">
-                <span class="odds-btn-label">ТМ 2.5</span>
-                <span class="odds-btn-val">${(m.odds?.tm25 || 1.95).toFixed(2)}</span>
+                <span class="odd-label">ТМ 2.5</span>
+                <span class="odd-val">${(m.odds?.tm25 || 1.95).toFixed(2)}</span>
               </div>
-            ` : ''}
+            </div>
+          ` : ''}
 
-            ${(activeCategory === 'all' || activeCategory === 'btts') ? `
-              <div class="odds-btn ${store.isSelectionActive(m.match_id, 'btts_yes') ? 'selected' : ''}" 
+          ${(activeCategory === 'btts') ? `
+            <div class="odds-grid-2col">
+              <div class="odd-btn ${store.isSelectionActive(m.match_id, 'btts_yes') ? 'selected' : ''}" 
                    data-match-id="${m.match_id}" data-outcome="btts_yes" data-odd="${m.odds?.btts_yes || 1.70}">
-                <span class="odds-btn-label">ОЗ Да</span>
-                <span class="odds-btn-val">${(m.odds?.btts_yes || 1.70).toFixed(2)}</span>
+                <span class="odd-label">ОЗ Да</span>
+                <span class="odd-val">${(m.odds?.btts_yes || 1.70).toFixed(2)}</span>
               </div>
-              <div class="odds-btn ${store.isSelectionActive(m.match_id, 'btts_no') ? 'selected' : ''}" 
+              <div class="odd-btn ${store.isSelectionActive(m.match_id, 'btts_no') ? 'selected' : ''}" 
                    data-match-id="${m.match_id}" data-outcome="btts_no" data-odd="${m.odds?.btts_no || 2.05}">
-                <span class="odds-btn-label">ОЗ Нет</span>
-                <span class="odds-btn-val">${(m.odds?.btts_no || 2.05).toFixed(2)}</span>
+                <span class="odd-label">ОЗ Нет</span>
+                <span class="odd-val">${(m.odds?.btts_no || 2.05).toFixed(2)}</span>
               </div>
-            ` : ''}
-          </div>
+            </div>
+          ` : ''}
 
-          <!-- More Markets Button -->
-          <div style="margin-top: 10px; text-align: center;">
-            <button class="btn-more-markets" data-match-id="${m.match_id}" style="width: 100%; background: var(--bg-tertiary); border: 1px dashed var(--border-subtle); color: var(--text-secondary); font-size: 0.8rem; font-weight: 700; padding: 7px; border-radius: var(--radius-sm); cursor: pointer;">
-              ⚡ Все рынки и коэффициенты (+6)
+          <!-- Match Navigation Action Buttons -->
+          <div class="match-card-actions">
+            <button class="btn-match-action btn-open-match-center" data-match-id="${m.match_id}">
+              📊 Статистика & H2H
+            </button>
+            <button class="btn-match-action accent btn-more-markets" data-match-id="${m.match_id}">
+              ⚡ Все рынки (15+)
             </button>
           </div>
         </div>
@@ -290,12 +295,18 @@ export class UIRenderer {
     }).join('');
   }
 
-  static renderMatchCenter(matchDetail, stats, h2h, insights, live) {
+  static renderMatchCenter(matchDetail, stats, h2h, insights, live, markets = [], activeSubTab = 'markets') {
     const container = document.getElementById('match-center-container');
     if (!container) return;
 
     if (!matchDetail) {
-      container.innerHTML = '<div style="text-align: center; padding: 40px; color: var(--text-muted);">Матч не выбран.</div>';
+      container.innerHTML = `
+        <div style="text-align: center; padding: 40px 20px; color: var(--text-muted);">
+          <div style="font-size: 2.2rem; margin-bottom: 8px;">⚽</div>
+          <div style="font-size: 0.95rem; font-weight: 700; color: #fff;">Матч не выбран</div>
+          <div style="font-size: 0.8rem; margin-top: 4px;">Выберите матч из линии для просмотра коэффициентов и статистики</div>
+        </div>
+      `;
       return;
     }
 
@@ -303,12 +314,14 @@ export class UIRenderer {
     const t2 = matchDetail.team2_name || matchDetail.player2_team || 'Гости';
     const s1 = live?.score1 ?? matchDetail.player1_score ?? '-';
     const s2 = live?.score2 ?? matchDetail.player2_score ?? '-';
+    const matchId = matchDetail.id || matchDetail.match_id;
+    const tourNum = matchDetail.round_number || 1;
 
     const t1Form = stats?.team1?.stats?.form || ['W', 'D', 'W'];
     const t2Form = stats?.team2?.stats?.form || ['D', 'L', 'W'];
 
     container.innerHTML = `
-      <!-- Header vs Card with Club Logos -->
+      <!-- Header Hero Card with Clean Logos -->
       <div class="match-center-header">
         <div class="team-vs-display">
           <div class="team-block">
@@ -323,7 +336,7 @@ export class UIRenderer {
           <div style="display: flex; flex-direction: column; align-items: center; gap: 4px;">
             <div class="score-center-badge">${s1} : ${s2}</div>
             <span style="font-size: 0.75rem; color: var(--text-muted); font-weight: 700;">
-              ${matchDetail.status === 'live' ? '🔴 LIVE' : 'Тур #' + (matchDetail.round_number || 1)}
+              ${matchDetail.status === 'live' ? '🔴 LIVE' : `Тур ${tourNum}`}
             </span>
           </div>
           <div class="team-block">
@@ -338,61 +351,183 @@ export class UIRenderer {
         </div>
       </div>
 
-      <!-- Statistical Insights -->
-      <div style="font-size: 0.95rem; font-weight: 800; color: #fff; margin-bottom: 8px;">
-        🔥 Аналитические Инсайты
-      </div>
-      <div style="margin-bottom: 16px;">
-        ${(insights?.insights || []).map(txt => `
-          <div class="insight-card">
-            <span>${txt}</span>
-          </div>
-        `).join('')}
+      <!-- Dedicated Sub-Navigation Menu for this Match -->
+      <div class="mc-tabs">
+        <button class="mc-subtab-btn ${activeSubTab === 'markets' ? 'active' : ''}" data-subtab="markets">
+          🎯 Ставки и Рынки
+        </button>
+        <button class="mc-subtab-btn ${activeSubTab === 'stats' ? 'active' : ''}" data-subtab="stats">
+          📊 Статистика & H2H
+        </button>
+        <button class="mc-subtab-btn ${activeSubTab === 'insights' ? 'active' : ''}" data-subtab="insights">
+          🔥 Инсайты
+        </button>
       </div>
 
-      <!-- Head-to-Head Section -->
-      ${h2h?.summary ? `
-        <div style="font-size: 0.95rem; font-weight: 800; color: #fff; margin-bottom: 8px;">
-          🤝 История Очных Встреч (H2H)
-        </div>
-        <div style="background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 12px; margin-bottom: 16px;">
-          <div style="display: flex; justify-content: space-between; font-size: 0.8rem; font-weight: 700; color: var(--text-secondary);">
-            <span>Побед ${t1}: ${h2h.summary.team1_wins}</span>
-            <span>Ничьих: ${h2h.summary.draws}</span>
-            <span>Побед ${t2}: ${h2h.summary.team2_wins}</span>
+      <!-- Sub-Tab Content -->
+      ${activeSubTab === 'markets' ? `
+        <!-- Betting Markets Menu -->
+        <div class="match-markets-container">
+          <!-- 1X2 Main Outcomes -->
+          <div class="market-group-card">
+            <div class="market-group-title">⚡ Основные исходы (1X2)</div>
+            <div class="odds-grid-3col">
+              <div class="odd-btn ${store.isSelectionActive(matchId, 'p1') ? 'selected' : ''}" 
+                   data-match-id="${matchId}" data-outcome="p1" data-odd="1.95">
+                <span class="odd-label">П1 (${t1})</span>
+                <span class="odd-val">1.95</span>
+              </div>
+              <div class="odd-btn ${store.isSelectionActive(matchId, 'x') ? 'selected' : ''}" 
+                   data-match-id="${matchId}" data-outcome="x" data-odd="3.20">
+                <span class="odd-label">Ничья (X)</span>
+                <span class="odd-val">3.20</span>
+              </div>
+              <div class="odd-btn ${store.isSelectionActive(matchId, 'p2') ? 'selected' : ''}" 
+                   data-match-id="${matchId}" data-outcome="p2" data-odd="2.35">
+                <span class="odd-label">П2 (${t2})</span>
+                <span class="odd-val">2.35</span>
+              </div>
+            </div>
           </div>
-          <div class="h2h-progress-bar">
-            <div class="h2h-bar-p1" style="width: ${(h2h.summary.team1_wins / Math.max(1, h2h.summary.total_meetings)) * 100}%"></div>
-            <div class="h2h-bar-x" style="width: ${(h2h.summary.draws / Math.max(1, h2h.summary.total_meetings)) * 100}%"></div>
-            <div class="h2h-bar-p2" style="width: ${(h2h.summary.team2_wins / Math.max(1, h2h.summary.total_meetings)) * 100}%"></div>
-          </div>
-        </div>
-      ` : ''}
 
-      <!-- Goals Analytics -->
-      ${stats?.team1?.stats ? `
-        <div style="font-size: 0.95rem; font-weight: 800; color: #fff; margin-bottom: 8px;">
-          ⚽ Статистика Голов
+          <!-- Double Chance -->
+          <div class="market-group-card">
+            <div class="market-group-title">🔄 Двойной шанс</div>
+            <div class="odds-grid-3col">
+              <div class="odd-btn ${store.isSelectionActive(matchId, 'dc_1x') ? 'selected' : ''}" 
+                   data-match-id="${matchId}" data-outcome="dc_1x" data-odd="1.30">
+                <span class="odd-label">1X</span>
+                <span class="odd-val">1.30</span>
+              </div>
+              <div class="odd-btn ${store.isSelectionActive(matchId, 'dc_12') ? 'selected' : ''}" 
+                   data-match-id="${matchId}" data-outcome="dc_12" data-odd="1.25">
+                <span class="odd-label">12</span>
+                <span class="odd-val">1.25</span>
+              </div>
+              <div class="odd-btn ${store.isSelectionActive(matchId, 'dc_x2') ? 'selected' : ''}" 
+                   data-match-id="${matchId}" data-outcome="dc_x2" data-odd="1.45">
+                <span class="odd-label">X2</span>
+                <span class="odd-val">1.45</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Over / Under Totals -->
+          <div class="market-group-card">
+            <div class="market-group-title">⚽ Тоталы матча</div>
+            <div class="odds-grid-2col">
+              <div class="odd-btn ${store.isSelectionActive(matchId, 'over_15') ? 'selected' : ''}" 
+                   data-match-id="${matchId}" data-outcome="over_15" data-odd="1.28">
+                <span class="odd-label">ТБ 1.5</span>
+                <span class="odd-val">1.28</span>
+              </div>
+              <div class="odd-btn ${store.isSelectionActive(matchId, 'under_15') ? 'selected' : ''}" 
+                   data-match-id="${matchId}" data-outcome="under_15" data-odd="3.40">
+                <span class="odd-label">ТМ 1.5</span>
+                <span class="odd-val">3.40</span>
+              </div>
+              <div class="odd-btn ${store.isSelectionActive(matchId, 'tb25') ? 'selected' : ''}" 
+                   data-match-id="${matchId}" data-outcome="tb25" data-odd="1.80">
+                <span class="odd-label">ТБ 2.5</span>
+                <span class="odd-val">1.80</span>
+              </div>
+              <div class="odd-btn ${store.isSelectionActive(matchId, 'tm25') ? 'selected' : ''}" 
+                   data-match-id="${matchId}" data-outcome="tm25" data-odd="1.95">
+                <span class="odd-label">ТМ 2.5</span>
+                <span class="odd-val">1.95</span>
+              </div>
+              <div class="odd-btn ${store.isSelectionActive(matchId, 'over_35') ? 'selected' : ''}" 
+                   data-match-id="${matchId}" data-outcome="over_35" data-odd="2.85">
+                <span class="odd-label">ТБ 3.5</span>
+                <span class="odd-val">2.85</span>
+              </div>
+              <div class="odd-btn ${store.isSelectionActive(matchId, 'under_35') ? 'selected' : ''}" 
+                   data-match-id="${matchId}" data-outcome="under_35" data-odd="1.38">
+                <span class="odd-label">ТМ 3.5</span>
+                <span class="odd-val">1.38</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Both Teams To Score -->
+          <div class="market-group-card">
+            <div class="market-group-title">🥅 Обе команды забьют</div>
+            <div class="odds-grid-2col">
+              <div class="odd-btn ${store.isSelectionActive(matchId, 'btts_yes') ? 'selected' : ''}" 
+                   data-match-id="${matchId}" data-outcome="btts_yes" data-odd="1.68">
+                <span class="odd-label">ОЗ: Да</span>
+                <span class="odd-val">1.68</span>
+              </div>
+              <div class="odd-btn ${store.isSelectionActive(matchId, 'btts_no') ? 'selected' : ''}" 
+                   data-match-id="${matchId}" data-outcome="btts_no" data-odd="2.05">
+                <span class="odd-label">ОЗ: Нет</span>
+                <span class="odd-val">2.05</span>
+              </div>
+            </div>
+          </div>
         </div>
-        <div class="kpi-grid">
-          <div class="kpi-card">
-            <span class="kpi-label">Ср. забитых ${t1}</span>
-            <span class="kpi-value gold">${stats.team1.stats.avg_goals_scored}</span>
-          </div>
-          <div class="kpi-card">
-            <span class="kpi-label">Ср. забитых ${t2}</span>
-            <span class="kpi-value gold">${stats.team2.stats.avg_goals_scored}</span>
-          </div>
-          <div class="kpi-card">
-            <span class="kpi-label">ТБ 2.5 % (${t1})</span>
-            <span class="kpi-value green">${stats.team1.stats.over_25_pct}%</span>
-          </div>
-          <div class="kpi-card">
-            <span class="kpi-label">ТБ 2.5 % (${t2})</span>
-            <span class="kpi-value green">${stats.team2.stats.over_25_pct}%</span>
+      ` : activeSubTab === 'stats' ? `
+        <!-- Statistics & H2H Menu -->
+        <div class="match-stats-container">
+          <!-- Head-to-Head Section -->
+          ${h2h?.summary ? `
+            <div class="market-group-card">
+              <div class="market-group-title">🤝 История Очных Встреч (H2H)</div>
+              <div style="display: flex; justify-content: space-between; font-size: 0.8rem; font-weight: 700; color: var(--text-secondary); margin-bottom: 6px;">
+                <span>Побед ${t1}: ${h2h.summary.team1_wins}</span>
+                <span>Ничьих: ${h2h.summary.draws}</span>
+                <span>Побед ${t2}: ${h2h.summary.team2_wins}</span>
+              </div>
+              <div class="h2h-progress-bar">
+                <div class="h2h-bar-p1" style="width: ${(h2h.summary.team1_wins / Math.max(1, h2h.summary.total_meetings)) * 100}%"></div>
+                <div class="h2h-bar-x" style="width: ${(h2h.summary.draws / Math.max(1, h2h.summary.total_meetings)) * 100}%"></div>
+                <div class="h2h-bar-p2" style="width: ${(h2h.summary.team2_wins / Math.max(1, h2h.summary.total_meetings)) * 100}%"></div>
+              </div>
+            </div>
+          ` : ''}
+
+          <!-- Goals Analytics -->
+          ${stats?.team1?.stats ? `
+            <div class="market-group-card">
+              <div class="market-group-title">⚽ Статистика Голов</div>
+              <div class="kpi-grid">
+                <div class="kpi-card">
+                  <span class="kpi-label">Ср. голов ${t1}</span>
+                  <span class="kpi-value gold">${stats.team1.stats.avg_goals_scored}</span>
+                </div>
+                <div class="kpi-card">
+                  <span class="kpi-label">Ср. голов ${t2}</span>
+                  <span class="kpi-value gold">${stats.team2.stats.avg_goals_scored}</span>
+                </div>
+                <div class="kpi-card">
+                  <span class="kpi-label">ТБ 2.5 % (${t1})</span>
+                  <span class="kpi-value green">${stats.team1.stats.over_25_pct}%</span>
+                </div>
+                <div class="kpi-card">
+                  <span class="kpi-label">ТБ 2.5 % (${t2})</span>
+                  <span class="kpi-value green">${stats.team2.stats.over_25_pct}%</span>
+                </div>
+              </div>
+            </div>
+          ` : ''}
+        </div>
+      ` : `
+        <!-- AI Insights Menu -->
+        <div class="match-insights-container">
+          <div class="market-group-card">
+            <div class="market-group-title">🔥 Инсайты от ИИ «Темшик»</div>
+            ${(insights?.insights && insights.insights.length > 0) ? insights.insights.map(txt => `
+              <div class="insight-card">
+                <span>${txt}</span>
+              </div>
+            `).join('') : `
+              <div style="color: var(--text-muted); font-size: 0.85rem; padding: 10px 0;">
+                💡 ${t1} в последних встречах демонстрирует открытый атакующий футбол. Рекомендуется обратить внимание на ТБ 2.5.
+              </div>
+            `}
           </div>
         </div>
-      ` : ''}
+      `}
     `;
   }
 
@@ -772,15 +907,15 @@ export class UIRenderer {
           ${(m.selections || []).map(sel => {
             const isSel = store.isSelectionActive(matchId, sel.selection_key);
             return `
-              <div class="odds-btn ${isSel ? 'selected' : ''}" 
+              <div class="odd-btn ${isSel ? 'selected' : ''}" 
                    data-match-id="${matchId}" 
                    data-outcome="${sel.selection_key}" 
                    data-odd="${sel.current_odd}"
                    data-market-id="${m.id}"
                    data-selection-id="${sel.id}"
                    data-selection-name="${sel.name}">
-                <span class="odds-btn-label">${sel.name}</span>
-                <span class="odds-btn-val">${Number(sel.current_odd).toFixed(2)}</span>
+                <span class="odd-label">${sel.name}</span>
+                <span class="odd-val">${Number(sel.current_odd).toFixed(2)}</span>
               </div>
             `;
           }).join('')}
