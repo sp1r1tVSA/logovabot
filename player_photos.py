@@ -262,3 +262,18 @@ def fetch_all_players(players: list[str] | list[tuple[str, str]]) -> dict[str, s
         key = f"{name} ({team})" if team else name
         results[key] = fetch_and_cache(name, team)
     return results
+
+
+if __name__ == "__main__":
+    import sys
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+    if len(sys.argv) > 1:
+        p_name = sys.argv[1]
+        t_name = sys.argv[2] if len(sys.argv) > 2 else None
+        res = fetch_and_cache(p_name, t_name)
+        if res:
+            print(f"✅ Photo downloaded to: {res}")
+        else:
+            print(f"❌ Failed to fetch photo for '{p_name}'")
+    else:
+        print("Usage: python player_photos.py <Player Name> [Team Name]")
