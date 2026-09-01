@@ -117,7 +117,12 @@ class AppController {
     document.getElementById('slip-bar-collapsed')?.addEventListener('click', () => {
       tgBridge.hapticImpact('light');
       const drawer = document.getElementById('slip-drawer');
-      drawer?.classList.toggle('expanded');
+      if (drawer) {
+        drawer.classList.toggle('expanded');
+        const isExp = drawer.classList.contains('expanded');
+        const label = document.getElementById('slip-toggle-label');
+        if (label) label.textContent = isExp ? 'Свернуть' : 'Открыть';
+      }
     });
 
     // Remove item from slip
@@ -132,6 +137,8 @@ class AppController {
     // Clear slip
     document.getElementById('btn-clear-slip')?.addEventListener('click', () => {
       store.clearSlip();
+      const drawer = document.getElementById('slip-drawer');
+      drawer?.classList.remove('expanded');
     });
 
     // Stake chips
