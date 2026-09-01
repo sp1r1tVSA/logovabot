@@ -469,6 +469,10 @@ async def cb_lab_card_generate_player(update: Update, context: ContextTypes.DEFA
     )
 
     keyboard = [
+        [
+            InlineKeyboardButton("🎬 Анимировать (TOTY)", callback_data=f"lab_p_anim_{club}|{player_name}|toty_gold"),
+            InlineKeyboardButton("✨ Выбрать стиль анимации", callback_data=f"lab_p_styles_{club}|{player_name}"),
+        ],
         [InlineKeyboardButton("👥 Другой игрок", callback_data=f"lab_pick_player_{club}")],
         [InlineKeyboardButton("🏛 Выбрать клуб", callback_data="lab_card_pick_club")],
         [InlineKeyboardButton("« В лабораторию", callback_data="admin_lab_menu")]
@@ -484,8 +488,112 @@ async def cb_lab_card_generate_player(update: Update, context: ContextTypes.DEFA
 
 
 @admin_only
+async def cb_lab_player_anim_styles(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show list of 10 animation styles for a specific chosen squad player."""
+    query = update.callback_query
+    if not query or not query.data:
+        return
+    await query.answer()
+
+    payload = query.data.replace("lab_p_styles_", "")
+    club, player_name = payload.split("|", 1) if "|" in payload else ("—", payload)
+
+    text = f"🎬 <b>Выберите стиль анимации</b> для игрока <b>{html.escape(player_name)}</b> ({html.escape(club)}):"
+
+    keyboard = [
+        [
+            InlineKeyboardButton("🌟 1. TOTY Gold", callback_data=f"lab_p_anim_{club}|{player_name}|toty_gold"),
+            InlineKeyboardButton("🌌 2. Void Eclipse", callback_data=f"lab_p_anim_{club}|{player_name}|void_eclipse"),
+        ],
+        [
+            InlineKeyboardButton("⚡ 3. Cyberpunk", callback_data=f"lab_p_anim_{club}|{player_name}|cyber_hud"),
+            InlineKeyboardButton("💎 4. Hyper-Glass", callback_data=f"lab_p_anim_{club}|{player_name}|hyper_glass"),
+        ],
+        [
+            InlineKeyboardButton("🔥 5. Inferno Magma", callback_data=f"lab_p_anim_{club}|{player_name}|inferno_magma"),
+            InlineKeyboardButton("❄️ 6. Glacial Frost", callback_data=f"lab_p_anim_{club}|{player_name}|glacial_frost"),
+        ],
+        [
+            InlineKeyboardButton("⚽ 7. Anime Sakuga", callback_data=f"lab_p_anim_{club}|{player_name}|anime_sakuga"),
+            InlineKeyboardButton("👑 8. Royal 24K", callback_data=f"lab_p_anim_{club}|{player_name}|royal_24k"),
+        ],
+        [
+            InlineKeyboardButton("🏎️ 9. Aero Carbon", callback_data=f"lab_p_anim_{club}|{player_name}|aero_carbon"),
+            InlineKeyboardButton("🌌 10. UCL Night", callback_data=f"lab_p_anim_{club}|{player_name}|ucl_night"),
+        ],
+        [InlineKeyboardButton(f"« Назад к {player_name}", callback_data=f"lab_gen_card_{club}|{player_name}")]
+    ]
+
+    await safe_edit_or_reply(query, context, text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+
+
+@admin_only
+async def cb_lab_player_anim(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Generate and dispatch high-quality animation for a specific squad player."""
+    query = update.callback_query
+    if not query or not query.data:
+        return
+    await query.answer("Рендерю высококачественную анимацию игрока...")
+
+    payload = query.data.replace("lab_p_anim_", "")
+    parts = payload.split("|")
+    club = parts[0] if len(parts) > 0 else "—"
+    player_name = parts[1] if len(parts) > 1 else "Игрок"
+    style_id = parts[2] if len(parts) > 2 else "toty_gold"
+
+    user_id = query.from_user.id
+
+    db_stats = await asyncio.to_thread(database.get_player_card_stats, player_name, club)
+    goals = db_stats.get("total_goals", 0)
+    assists = db_stats.get("total_assists", 0)
+
+    card_data = {
+        "player_name": player_name,
+        "team_name": club,
+        "position": "ST" if goals >= assists else "CAM",
+        "total_goals": goals,
+        "total_assists": assists,
+        "matches_played": max(1, goals + assists),
+    }
+
+    frames, fps, anim_w, anim_h = await asyncio.to_thread(
+        fc_card_generator.render_animated_card_frames, card_data, style_id
+    )
+    fut_stats = fc_card_generator.calculate_fut_attributes(card_data)
+    cfg = fc_card_generator.CARD_STYLES.get(fc_card_generator._normalize_style_key(style_id), fc_card_generator.CARD_STYLES["toty_gold"])
+
+    caption = (
+        f"🎬 <b>Анимированная карточка: {cfg['title']}</b>\n\n"
+        f"👤 <b>{html.escape(player_name)}</b> ({html.escape(club)})\n"
+        f"⭐ <b>OVR: {fut_stats['ovr']}</b> | Позиция: <b>{fut_stats['position']}</b>\n"
+        f"⚡ <b>PAC:</b> {fut_stats['pac']} | 🎯 <b>SHO:</b> {fut_stats['sho']} | 🅰️ <b>PAS:</b> {fut_stats['pas']}\n"
+        f"🪄 <b>DRI:</b> {fut_stats['dri']} | 🛡️ <b>DEF:</b> {fut_stats['def']} | 💪 <b>PHY:</b> {fut_stats['phy']}\n\n"
+        f"<i>Анимация: {cfg['desc']}</i>"
+    )
+
+    keyboard = [
+        [
+            InlineKeyboardButton("🖼️ Статичная", callback_data=f"lab_gen_card_{club}|{player_name}"),
+            InlineKeyboardButton("🔄 Другой стиль", callback_data=f"lab_p_styles_{club}|{player_name}"),
+        ],
+        [InlineKeyboardButton("👥 Другой игрок", callback_data=f"lab_pick_player_{club}")],
+        [InlineKeyboardButton("« В лабораторию", callback_data="admin_lab_menu")]
+    ]
+
+    await send_high_quality_animation(
+        bot=context.bot,
+        chat_id=user_id,
+        animation_input=frames,
+        caption=caption,
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        filename=f"{player_name}_{style_id}.mp4"
+    )
+
+
+@admin_only
 async def cmd_test_card(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Quick command: /test_card [Player Name] [Team Name (optional)]"""
+    """Quick command: /test_card [Player Name] [Team Name (optional)] [Style (optional)]"""
     user = update.effective_user
     if not user or not is_admin(user.id):
         if update.message:
@@ -495,14 +603,19 @@ async def cmd_test_card(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     args = context.args or []
     if not args:
         await update.message.reply_text(
-            "ℹ️ <b>Использование команды:</b>\n<code>/test_card [Имя Фамилия] [Клуб (опционально)]</code>\n\n"
-            "Пример: <code>/test_card Винисиус Спортинг</code>",
+            "ℹ️ <b>Использование команды:</b>\n"
+            "<code>/test_card [Имя Фамилия] [Клуб (опционально)] [Стиль (опционально)]</code>\n\n"
+            "Примеры:\n"
+            "• <code>/test_card Винисиус Спортинг toty</code>\n"
+            "• <code>/test_card Gyokeres Спортинг inferno</code>\n"
+            "• <code>/test_card Pedri Барселона ucl</code>",
             parse_mode="HTML"
         )
         return
 
     player_name = args[0]
     team_name = args[1] if len(args) > 1 else "Спортинг"
+    style_id = args[2] if len(args) > 2 else "toty_gold"
 
     status_msg = await update.message.reply_text("⏳ Генерирую карточку игрока...")
 
@@ -510,13 +623,13 @@ async def cmd_test_card(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "player_name": player_name,
         "team_name": team_name,
         "position": "ST",
-        "total_goals": 10,
-        "total_assists": 5,
-        "matches_played": 8,
+        "total_goals": 15,
+        "total_assists": 8,
+        "matches_played": 12,
     }
 
     try:
-        buf = await asyncio.to_thread(fc_card_generator.generate_ea_fc_card, card_data, "gold_rare")
+        buf = await asyncio.to_thread(fc_card_generator.generate_ea_fc_card, card_data, style_id)
         fut_stats = fc_card_generator.calculate_fut_attributes(card_data)
 
         caption = (
@@ -531,3 +644,71 @@ async def cmd_test_card(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     except Exception as e:
         logger.exception(f"Error in /test_card: {e}")
         await status_msg.edit_text(f"❌ Ошибка генерации карточки: {e}")
+
+
+@admin_only
+async def cmd_test_anim(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Quick command: /test_anim [Player Name] [Team Name (optional)] [Style (optional)]"""
+    user = update.effective_user
+    if not user or not is_admin(user.id):
+        if update.message:
+            await update.message.reply_text("⛔ Доступ запрещён.")
+        return
+
+    args = context.args or []
+    if not args:
+        await update.message.reply_text(
+            "ℹ️ <b>Использование команды:</b>\n"
+            "<code>/test_anim [Имя Фамилия] [Клуб (опционально)] [Стиль (опционально)]</code>\n\n"
+            "Доступные стили: <code>toty, void, cyber, glass, inferno, frost, anime, royal, aero, ucl</code>\n\n"
+            "Примеры:\n"
+            "• <code>/test_anim Винисиус Спортинг toty</code>\n"
+            "• <code>/test_anim Gyokeres Спортинг inferno</code>\n"
+            "• <code>/test_anim Rodrygo Бенфика ucl</code>",
+            parse_mode="HTML"
+        )
+        return
+
+    player_name = args[0]
+    team_name = args[1] if len(args) > 1 else "Спортинг"
+    style_id = args[2] if len(args) > 2 else "toty_gold"
+
+    status_msg = await update.message.reply_text("⏳ Рендерю анимацию через FFmpeg...")
+
+    card_data = {
+        "player_name": player_name,
+        "team_name": team_name,
+        "position": "ST",
+        "total_goals": 18,
+        "total_assists": 9,
+        "matches_played": 14,
+    }
+
+    try:
+        frames, fps, anim_w, anim_h = await asyncio.to_thread(
+            fc_card_generator.render_animated_card_frames, card_data, style_id
+        )
+        fut_stats = fc_card_generator.calculate_fut_attributes(card_data)
+        cfg = fc_card_generator.CARD_STYLES.get(fc_card_generator._normalize_style_key(style_id), fc_card_generator.CARD_STYLES["toty_gold"])
+
+        caption = (
+            f"🎬 <b>Анимированная карточка: {cfg['title']}</b>\n\n"
+            f"👤 <b>{html.escape(player_name.upper())}</b> ({html.escape(team_name)})\n"
+            f"⭐ <b>OVR: {fut_stats['ovr']}</b> | Позиция: <b>{fut_stats['position']}</b>\n"
+            f"⚡ <b>PAC:</b> {fut_stats['pac']} | 🎯 <b>SHO:</b> {fut_stats['sho']} | 🅰️ <b>PAS:</b> {fut_stats['pas']}\n"
+            f"🪄 <b>DRI:</b> {fut_stats['dri']} | 🛡️ <b>DEF:</b> {fut_stats['def']} | 💪 <b>PHY:</b> {fut_stats['phy']}\n\n"
+            f"<i>Анимация: {cfg['desc']}</i>"
+        )
+
+        await send_high_quality_animation(
+            bot=context.bot,
+            chat_id=user.id,
+            animation_input=frames,
+            caption=caption,
+            parse_mode="HTML",
+            filename=f"{player_name}_{style_id}.mp4"
+        )
+        await status_msg.delete()
+    except Exception as e:
+        logger.exception(f"Error in /test_anim: {e}")
+        await status_msg.edit_text(f"❌ Ошибка генерации анимации: {e}")

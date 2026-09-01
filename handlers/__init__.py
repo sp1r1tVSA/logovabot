@@ -17,6 +17,7 @@ from handlers.chat import handle_ai_chat
 from handlers.lab import (
     cmd_lab,
     cmd_test_card,
+    cmd_test_anim,
     cb_lab_main_menu,
     cb_lab_flags_menu,
     cb_lab_toggle_flag,
@@ -27,6 +28,8 @@ from handlers.lab import (
     cb_lab_card_pick_club,
     cb_lab_card_pick_player,
     cb_lab_card_generate_player,
+    cb_lab_player_anim_styles,
+    cb_lab_player_anim,
 )
 
 # Import base handlers
@@ -635,6 +638,7 @@ def _register_admin_handlers(app: Application) -> None:
     # 🧪 Admin Sandbox & Feature Flags Lab
     app.add_handler(CommandHandler("lab", cmd_lab))
     app.add_handler(CommandHandler("test_card", cmd_test_card))
+    app.add_handler(CommandHandler("test_anim", cmd_test_anim))
     app.add_handler(CallbackQueryHandler(cb_lab_main_menu, pattern="^admin_lab_menu$"))
     app.add_handler(CallbackQueryHandler(cb_lab_flags_menu, pattern="^lab_flags_menu$"))
     app.add_handler(CallbackQueryHandler(cb_lab_toggle_flag, pattern="^lab_toggle_flag_.*$"))
@@ -645,6 +649,8 @@ def _register_admin_handlers(app: Application) -> None:
     app.add_handler(CallbackQueryHandler(cb_lab_card_pick_club, pattern="^lab_card_pick_club$"))
     app.add_handler(CallbackQueryHandler(cb_lab_card_pick_player, pattern="^lab_pick_player_.*$"))
     app.add_handler(CallbackQueryHandler(cb_lab_card_generate_player, pattern="^lab_gen_card_.*$"))
+    app.add_handler(CallbackQueryHandler(cb_lab_player_anim_styles, pattern="^lab_p_styles_.*$"))
+    app.add_handler(CallbackQueryHandler(cb_lab_player_anim, pattern="^lab_p_anim_.*$"))
 
 def register_all_handlers(application: Application) -> None:
     """Register all command, message, and callback handlers to the application."""
