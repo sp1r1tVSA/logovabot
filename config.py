@@ -71,4 +71,7 @@ CLUBS = [
 
 MAX_MATCH_GOALS = 50
 
-
+# Telegram Mini App Configuration
+WEBAPP_URL = os.getenv("WEBAPP_URL", "http://localhost:8080").strip()
+API_PORT = int(os.getenv("API_PORT", "8080"))
+API_HOST = os.getenv("API_HOST", "0.0.0.0").strip()

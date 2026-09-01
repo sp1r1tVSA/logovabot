@@ -1,0 +1,575 @@
+/* ==========================================================================
+   LOGOVO.BET — UI Components (Cards, Bet Slip Drawer, Modals, Odds, Chips)
+   ========================================================================== */
+
+/* ─── 1. Banners & Quick Cards ─── */
+.bonus-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: linear-gradient(135deg, rgba(245, 176, 39, 0.2) 0%, rgba(18, 22, 31, 0.9) 100%);
+  border: 1px solid var(--border-active);
+  padding: 14px 16px;
+  border-radius: var(--radius-md);
+  margin-bottom: 16px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+}
+
+.bonus-banner-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.bonus-banner-icon {
+  font-size: 1.8rem;
+  animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.08); }
+  100% { transform: scale(1); }
+}
+
+.bonus-banner-title {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: #fff;
+}
+
+.bonus-banner-subtitle {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
+
+.btn-bonus-claim {
+  background: var(--accent-gold);
+  color: #000;
+  font-size: 0.85rem;
+  font-weight: 700;
+  border: none;
+  padding: 8px 14px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  box-shadow: var(--shadow-gold);
+  transition: var(--transition-fast);
+}
+.btn-bonus-claim:active {
+  transform: scale(0.95);
+}
+
+/* ─── 2. Tour Selector Tabs ─── */
+.tour-tabs {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 8px;
+  margin-bottom: 14px;
+}
+
+.tour-tab-btn {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  font-weight: 600;
+  padding: 8px 16px;
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: var(--transition-fast);
+}
+
+.tour-tab-btn.active {
+  background: var(--accent-gold);
+  color: #000;
+  border-color: var(--accent-gold);
+  font-weight: 700;
+  box-shadow: var(--shadow-gold);
+}
+
+/* ─── 3. Match Card ─── */
+.match-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 14px;
+  margin-bottom: 12px;
+  box-shadow: var(--shadow-card);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  transition: var(--transition-fast);
+}
+
+.match-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-bottom: 10px;
+  font-weight: 600;
+}
+
+.match-teams {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.team-block {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.team-block.away {
+  justify-content: flex-end;
+  text-align: right;
+}
+
+.team-logo {
+  width: 24px;
+  height: 24px;
+  object-fit: contain;
+}
+
+.team-name {
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.vs-badge {
+  font-size: 0.72rem;
+  font-weight: 800;
+  color: var(--accent-gold);
+  background: rgba(245, 176, 39, 0.1);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+/* Odds Grid */
+.odds-grid-main {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.odd-btn {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 8px 6px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  cursor: pointer;
+  transition: var(--transition-fast);
+}
+
+.odd-btn:active {
+  transform: scale(0.96);
+}
+
+.odd-btn.selected {
+  background: var(--accent-gold) !important;
+  border-color: var(--accent-gold) !important;
+  box-shadow: var(--shadow-gold);
+}
+
+.odd-btn.selected .odd-label,
+.odd-btn.selected .odd-val {
+  color: #000 !important;
+  font-weight: 800;
+}
+
+.odd-label {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.odd-val {
+  font-size: 0.95rem;
+  font-weight: 800;
+  color: var(--accent-gold);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Extra Markets Accordion */
+.extra-markets-toggle {
+  width: 100%;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  cursor: pointer;
+}
+
+.extra-markets-panel {
+  display: none;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-subtle);
+  margin-top: 6px;
+}
+.extra-markets-panel.open {
+  display: grid;
+}
+
+/* ─── 4. Floating Bet Slip Drawer ─── */
+.slip-drawer {
+  position: fixed;
+  bottom: calc(64px + env(safe-area-inset-bottom, 12px));
+  left: 0;
+  right: 0;
+  max-width: 600px;
+  margin: 0 auto;
+  z-index: 45;
+  background: var(--bg-drawer);
+  border: 1px solid var(--border-active);
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  transform: translateY(calc(100% - 56px));
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  display: none;
+}
+
+.slip-drawer.has-items {
+  display: block;
+}
+
+.slip-drawer.expanded {
+  transform: translateY(0);
+}
+
+.slip-bar-collapsed {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  cursor: pointer;
+  height: 56px;
+}
+
+.slip-bar-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.slip-bar-badge {
+  background: var(--accent-gold);
+  color: #000;
+  font-weight: 800;
+  font-size: 0.75rem;
+  padding: 3px 8px;
+  border-radius: var(--radius-full);
+}
+
+.slip-bar-odd {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: #fff;
+}
+
+.slip-bar-arrow {
+  color: var(--accent-gold);
+  font-size: 1rem;
+  transition: var(--transition-fast);
+}
+.slip-drawer.expanded .slip-bar-arrow {
+  transform: rotate(180deg);
+}
+
+/* Slip Expanded Body */
+.slip-body {
+  padding: 14px 16px 20px;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.slip-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  margin-bottom: 8px;
+}
+
+.slip-item-left {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.slip-item-match {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.slip-item-pick {
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: #fff;
+}
+
+.slip-item-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.slip-item-odd {
+  font-size: 0.95rem;
+  font-weight: 800;
+  color: var(--accent-gold);
+}
+
+.btn-remove-item {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 1.1rem;
+  cursor: pointer;
+  padding: 4px;
+}
+.btn-remove-item:active {
+  color: var(--color-danger);
+}
+
+/* Stake Selector Chips */
+.stake-chips {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 6px;
+  margin: 12px 0;
+}
+
+.stake-chip {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  font-weight: 700;
+  padding: 8px 4px;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  text-align: center;
+  transition: var(--transition-fast);
+}
+
+.stake-chip.active {
+  background: var(--accent-gold-light);
+  border-color: var(--accent-gold);
+  color: var(--accent-gold);
+}
+
+.slip-forecast {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 0;
+  border-top: 1px solid var(--border-subtle);
+  margin-top: 8px;
+  font-size: 0.88rem;
+}
+
+.forecast-val {
+  font-size: 1.15rem;
+  font-weight: 800;
+  color: var(--accent-gold);
+}
+
+.btn-submit-bet {
+  width: 100%;
+  background: linear-gradient(135deg, var(--accent-gold) 0%, var(--accent-gold-hover) 100%);
+  color: #000;
+  font-size: 1rem;
+  font-weight: 800;
+  border: none;
+  padding: 14px;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  box-shadow: var(--shadow-gold);
+  transition: var(--transition-fast);
+  margin-top: 10px;
+}
+.btn-submit-bet:active {
+  transform: scale(0.98);
+}
+
+/* ─── 5. Leaderboard View ─── */
+.podium-container {
+  display: grid;
+  grid-template-columns: 1fr 1.15fr 1fr;
+  align-items: flex-end;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+
+.podium-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 12px 8px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+.podium-card.first {
+  border-color: var(--accent-gold);
+  background: linear-gradient(180deg, rgba(245, 176, 39, 0.15) 0%, var(--bg-card) 100%);
+  padding-bottom: 20px;
+}
+
+.podium-medal {
+  font-size: 1.8rem;
+}
+.podium-card.first .podium-medal {
+  font-size: 2.2rem;
+}
+
+.podium-name {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.podium-bal {
+  font-size: 0.85rem;
+  font-weight: 800;
+  color: var(--accent-gold);
+}
+
+.leader-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  margin-bottom: 8px;
+}
+
+.leader-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.leader-rank {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  min-width: 20px;
+}
+
+.leader-name {
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: #fff;
+}
+
+.leader-stats {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.leader-bal {
+  font-size: 0.95rem;
+  font-weight: 800;
+  color: var(--accent-gold);
+}
+
+/* ─── 6. Modals ─── */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: rgba(0, 0, 0, 0.8);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+.modal-overlay.open {
+  display: flex;
+}
+
+.modal-content {
+  background: var(--bg-card);
+  border: 1px solid var(--border-active);
+  border-radius: var(--radius-lg);
+  padding: 24px;
+  max-width: 420px;
+  width: 100%;
+  text-align: center;
+  box-shadow: var(--shadow-card);
+  animation: modalPop 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes modalPop {
+  from { opacity: 0; transform: scale(0.9); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.modal-icon {
+  font-size: 3rem;
+  margin-bottom: 12px;
+}
+
+.modal-title {
+  font-size: 1.25rem;
+  font-weight: 800;
+  margin-bottom: 8px;
+  color: #fff;
+}
+
+.modal-desc {
+  font-size: 0.88rem;
+  color: var(--text-secondary);
+  margin-bottom: 20px;
+  line-height: 1.4;
+}
+
+.btn-modal-close {
+  width: 100%;
+  background: var(--accent-gold);
+  color: #000;
+  font-size: 0.95rem;
+  font-weight: 700;
+  border: none;
+  padding: 12px;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+}

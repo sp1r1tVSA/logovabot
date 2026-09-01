@@ -77,9 +77,18 @@ def _build_lab_main_menu() -> tuple[str, InlineKeyboardMarkup]:
         "и не видны обычным пользователям.\n\n"
         "Выберите раздел для тестирования:"
     )
+    from telegram import WebAppInfo
+    import config
+
+    bet_btn = (
+        InlineKeyboardButton("🎰 Logovo.bet (Mini App)", web_app=WebAppInfo(url=config.WEBAPP_URL))
+        if config.WEBAPP_URL.startswith("https://")
+        else InlineKeyboardButton("🎰 Logovo.bet (Тест Букмекерки)", callback_data="bet_menu_main")
+    )
+
     keyboard = [
         [InlineKeyboardButton("🃏 Тестировать Карточки EA FC", callback_data="lab_card_menu")],
-        [InlineKeyboardButton("🎰 Logovo.bet (Тест Букмекерки)", callback_data="bet_menu_main")],
+        [bet_btn],
         [InlineKeyboardButton("🚩 Управление Feature Flags", callback_data="lab_flags_menu")],
         [InlineKeyboardButton("📊 Тест формулы OVR (Калькулятор)", callback_data="lab_ovr_calc_demo")],
         [InlineKeyboardButton("« Назад в Админ-панель", callback_data="admin_main_menu")],

@@ -17,6 +17,25 @@ async def post_init(application: Application) -> None:
         BotCommand("start", "Открыть главное меню")
     ])
 
+    # 🎰 Start Logovo.bet Telegram Mini App API server
+    try:
+        from api.server import start_api_server_background
+        import config
+        await start_api_server_background(host=config.API_HOST, port=config.API_PORT)
+    except Exception as e:
+        logger.warning(f"Failed to start Logovo.bet Mini App server: {e}")
+
+    # 📱 Configure Telegram WebApp Menu Button if HTTPS URL is set
+    try:
+        from telegram import MenuButtonWebApp, WebAppInfo
+        import config
+        if config.WEBAPP_URL and config.WEBAPP_URL.startswith("https://"):
+            await application.bot.set_chat_menu_button(
+                menu_button=MenuButtonWebApp(text="🎰 Logovo.bet", web_app=WebAppInfo(url=config.WEBAPP_URL))
+            )
+    except Exception as e:
+        logger.warning(f"Could not set WebApp menu button: {e}")
+
 def register_jobs(application: Application) -> None:
     """Register periodic background jobs."""
     # Check round deadlines & send reminders every 30 minutes
