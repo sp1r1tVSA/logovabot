@@ -306,38 +306,38 @@ def render_master_static_card(player_data: dict, style_id: str = "toty_gold") ->
     cfg = CARD_STYLES[style_id]
     ovr, position, player_name, team_name, pac, sho, pas, dri, def_stat, phy = _extract_card_data(player_data)
 
-    img = Image.new("RGBA", (WIDTH, HEIGHT), (8, 10, 15, 255))
+    img = Image.new("RGBA", (WIDTH, HEIGHT), (6, 8, 14, 255))
     draw = ImageDraw.Draw(img)
 
     # 1. Outer Stadium Atmospheric Ambient Spotlight
-    cx, cy = WIDTH // 2, int(HEIGHT * 0.32)
+    cx, cy = int(WIDTH * 0.58), int(HEIGHT * 0.28)
     glow = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
     g_draw = ImageDraw.Draw(glow)
     gr, gg, gb = cfg["glow_rgb"]
-    for r in range(240, 0, -4):
-        a = int(65 * (1.0 - (r / 240.0) ** 1.5))
+    for r in range(280, 0, -5):
+        a = int(75 * (1.0 - (r / 280.0) ** 1.4))
         g_draw.ellipse([(cx - r * SCALE, cy - r * SCALE), (cx + r * SCALE, cy + r * SCALE)], fill=(gr, gg, gb, a))
-    glow = glow.filter(ImageFilter.GaussianBlur(25))
+    glow = glow.filter(ImageFilter.GaussianBlur(30))
     img.paste(glow, (0, 0), glow)
 
     # 2. FUT Shield Geometry
-    inset = int(24 * SCALE)
-    cut_top = int(38 * SCALE)
-    top_y = int(32 * SCALE)
-    bot_y = HEIGHT - int(32 * SCALE)
+    inset = int(28 * SCALE)
+    cut_top = int(42 * SCALE)
+    top_y = int(34 * SCALE)
+    bot_y = HEIGHT - int(34 * SCALE)
     left_x = inset
     right_x = WIDTH - inset
-    mid_y = int(HEIGHT * 0.71)
-    bot_mid_y = int(HEIGHT * 0.87)
+    mid_y = int(HEIGHT * 0.70)
+    bot_mid_y = int(HEIGHT * 0.86)
 
     shield_poly = [
         (left_x + cut_top, top_y),
         (right_x - cut_top, top_y),
         (right_x, top_y + cut_top),
         (right_x, mid_y),
-        (right_x - int(38 * SCALE), bot_mid_y),
+        (right_x - int(42 * SCALE), bot_mid_y),
         (WIDTH // 2, bot_y),
-        (left_x + int(38 * SCALE), bot_mid_y),
+        (left_x + int(42 * SCALE), bot_mid_y),
         (left_x, mid_y),
         (left_x, top_y + cut_top)
     ]
@@ -365,27 +365,42 @@ def render_master_static_card(player_data: dict, style_id: str = "toty_gold") ->
     draw.polygon(shield_poly, outline=cfg["border_primary"], width=int(5 * SCALE))
     draw.polygon(shield_poly, outline=cfg["border_secondary"] + (190,), width=int(2 * SCALE))
 
-    # 5. Large Heroic Player Cutout (Dominant Upper Half, Offset to Right)
+    # 5. Heroic Large Player Cutout (Dominant Upper Half, Offset to Right)
     player_img = _get_player_photo_image(player_name, team_name)
     if player_img:
-        player_img.thumbnail((int(400 * SCALE), int(400 * SCALE)), Image.Resampling.LANCZOS)
-        pw, ph = player_img.size
+        # 1. Trim transparent borders to get actual player bounds
+        bbox = player_img.getbbox()
+        if bbox:
+            player_img = player_img.crop(bbox)
 
-        # Soft drop shadow
-        shadow = Image.new("RGBA", (pw + 30, ph + 30), (0, 0, 0, 0))
+        # 2. Proportional resize to heroic scale (height ~740px in 2x master resolution)
+        target_h = int(370 * SCALE)
+        orig_w, orig_h = player_img.size
+        aspect = orig_w / float(orig_h) if orig_h > 0 else 1.0
+        ph = target_h
+        pw = int(ph * aspect)
+        max_pw = int(290 * SCALE)
+        if pw > max_pw:
+            pw = max_pw
+            ph = int(pw / aspect)
+
+        player_img = player_img.resize((pw, ph), Image.Resampling.LANCZOS)
+
+        # Soft 3D drop shadow
+        shadow = Image.new("RGBA", (pw + 40, ph + 40), (0, 0, 0, 0))
         s_mask = player_img.split()[3] if "A" in player_img.getbands() else Image.new("L", (pw, ph), 255)
-        shadow.paste(Image.new("RGBA", (pw, ph), (0, 0, 0, 195)), (10, 10), s_mask)
-        shadow = shadow.filter(ImageFilter.GaussianBlur(10))
+        shadow.paste(Image.new("RGBA", (pw, ph), (0, 0, 0, 220)), (14, 14), s_mask)
+        shadow = shadow.filter(ImageFilter.GaussianBlur(14))
 
-        px = (WIDTH // 2) - (pw // 2) + int(36 * SCALE)
-        py = top_y + int(2 * SCALE)
+        px = (WIDTH // 2) - (pw // 2) + int(52 * SCALE)
+        py = top_y + int(6 * SCALE)
 
-        img.paste(shadow, (px - 5, py - 5), shadow)
+        img.paste(shadow, (px - 7, py - 7), shadow)
 
         # Baseline fade into name plaque
         fade = Image.new("L", (pw, ph), 255)
         f_draw = ImageDraw.Draw(fade)
-        f_start = int(ph * 0.70)
+        f_start = int(ph * 0.72)
         for y in range(f_start, ph):
             val = int(255 * (1.0 - ((y - f_start) / (ph - f_start)) ** 1.6))
             f_draw.line([(0, y), (pw, y)], fill=val)
@@ -395,20 +410,20 @@ def render_master_static_card(player_data: dict, style_id: str = "toty_gold") ->
         img.paste(player_img, (px, py), fade)
 
     # 6. Authentic Left HUD (OVR, Position, Divider, Club Logo)
-    col_x = left_x + int(48 * SCALE)
+    col_x = left_x + int(56 * SCALE)
     ovr_y = top_y + int(24 * SCALE)
 
-    font_ovr = load_card_font(52, bold=True)
-    draw.text((col_x + int(2 * SCALE), ovr_y + int(2 * SCALE)), str(ovr), font=font_ovr, fill=(0, 0, 0, 200), anchor="mt")
+    font_ovr = load_card_font(56, bold=True)
+    draw.text((col_x + int(2 * SCALE), ovr_y + int(2 * SCALE)), str(ovr), font=font_ovr, fill=(0, 0, 0, 220), anchor="mt")
     draw.text((col_x, ovr_y), str(ovr), font=font_ovr, fill=cfg["border_primary"], anchor="mt")
 
-    pos_y = ovr_y + int(56 * SCALE)
-    font_pos = load_card_font(22, bold=True)
+    pos_y = ovr_y + int(60 * SCALE)
+    font_pos = load_card_font(24, bold=True)
     draw.text((col_x, pos_y), position, font=font_pos, fill=cfg["text_primary"], anchor="mt")
 
     # Separator bar
-    sep_y = pos_y + int(28 * SCALE)
-    draw.line([(col_x - int(18 * SCALE), sep_y), (col_x + int(18 * SCALE), sep_y)], fill=cfg["border_primary"] + (200,), width=int(2 * SCALE))
+    sep_y = pos_y + int(32 * SCALE)
+    draw.line([(col_x - int(24 * SCALE), sep_y), (col_x + int(24 * SCALE), sep_y)], fill=cfg["border_primary"] + (220,), width=int(2.5 * SCALE))
 
     # Club Crest Logo
     logo_fn = get_team_logo_filename(team_name)
@@ -418,33 +433,37 @@ def render_master_static_card(player_data: dict, style_id: str = "toty_gold") ->
             try:
                 logo_img = Image.open(logo_path)
                 logo_img = clean_and_prepare_logo(logo_img)
-                l_size = int(46 * SCALE)
+                l_size = int(54 * SCALE)
                 logo_img.thumbnail((l_size, l_size), Image.Resampling.LANCZOS)
                 lx = col_x - (logo_img.width // 2)
-                ly = sep_y + int(12 * SCALE)
+                ly = sep_y + int(16 * SCALE)
                 img.paste(logo_img, (lx, ly), logo_img)
             except Exception:
                 pass
 
     # 7. Player Name Ribbon (Embossed Metallic Plaque)
-    ry = int(HEIGHT * 0.54)
+    ry = int(HEIGHT * 0.528)
     rw = right_x - left_x - int(24 * SCALE)
-    rh = int(44 * SCALE)
+    rh = int(48 * SCALE)
     rx = (WIDTH - rw) // 2
 
-    draw.rounded_rectangle([(rx, ry), (rx + rw, ry + rh)], radius=int(8 * SCALE), fill=(16, 18, 26, 245), outline=cfg["border_primary"], width=int(2 * SCALE))
-    font_name = load_card_font(24 if len(player_name) <= 14 else (20 if len(player_name) <= 18 else 16), bold=True)
-    draw.text((WIDTH // 2, ry + int(7 * SCALE)), player_name, font=font_name, fill=cfg["text_primary"], anchor="mt")
+    # Draw gradient plaque background
+    draw.rounded_rectangle([(rx, ry), (rx + rw, ry + rh)], radius=int(10 * SCALE), fill=(14, 18, 28, 245), outline=cfg["border_primary"], width=int(2.5 * SCALE))
+    
+    font_size_name = 25 if len(player_name) <= 13 else (21 if len(player_name) <= 17 else 17)
+    font_name = load_card_font(font_size_name, bold=True)
+    draw.text((WIDTH // 2, ry + (rh // 2)), player_name, font=font_name, fill=cfg["text_primary"], anchor="mm")
 
-    # 8. 6-Attribute Stat Grid (2x3 with Vertical Separator)
-    grid_y = ry + rh + int(14 * SCALE)
-    row_h = int(38 * SCALE)
+    # 8. 6-Attribute Stat Grid (2 Columns, 3 Rows with Vertical Separator)
+    grid_y = ry + rh + int(24 * SCALE)
+    row_h = int(46 * SCALE)
     sep_x = WIDTH // 2
 
-    draw.line([(sep_x, grid_y), (sep_x, grid_y + int(114 * SCALE))], fill=cfg["border_primary"] + (100,), width=int(1.5 * SCALE))
+    # Glowing vertical divider line
+    draw.line([(sep_x, grid_y + int(4 * SCALE)), (sep_x, grid_y + int(136 * SCALE))], fill=cfg["border_primary"] + (140,), width=int(2 * SCALE))
 
-    font_s_val = load_card_font(28, bold=True)
-    font_s_lbl = load_card_font(18, bold=True)
+    font_s_val = load_card_font(30, bold=True)
+    font_s_lbl = load_card_font(21, bold=True)
 
     stats_pairs = [
         (pac, "PAC", dri, "DRI"),
@@ -452,28 +471,46 @@ def render_master_static_card(player_data: dict, style_id: str = "toty_gold") ->
         (pas, "PAS", phy, "PHY"),
     ]
 
-    c1_v = left_x + int(55 * SCALE)
-    c1_l = left_x + int(115 * SCALE)
-    c2_v = sep_x + int(45 * SCALE)
-    c2_l = sep_x + int(105 * SCALE)
+    # Left Column: Value right-aligned before label, Label left-aligned
+    c1_num_x = sep_x - int(76 * SCALE)
+    c1_lbl_x = sep_x - int(58 * SCALE)
+
+    # Right Column: Value right-aligned before label, Label left-aligned
+    c2_num_x = sep_x + int(64 * SCALE)
+    c2_lbl_x = sep_x + int(82 * SCALE)
 
     for idx, (lv, ll, rv, rl) in enumerate(stats_pairs):
         cur_y = grid_y + idx * row_h
-        draw.text((c1_v, cur_y), f"{lv}", font=font_s_val, fill=cfg["text_primary"], anchor="lt")
-        draw.text((c1_l, cur_y + int(4 * SCALE)), ll, font=font_s_lbl, fill=cfg["border_primary"], anchor="lt")
+        
+        # Left Side Stat (e.g. 96 PAC)
+        draw.text((c1_num_x, cur_y), str(lv), font=font_s_val, fill=cfg["text_primary"], anchor="rt")
+        draw.text((c1_lbl_x, cur_y + int(3 * SCALE)), ll, font=font_s_lbl, fill=cfg["border_primary"], anchor="lt")
 
-        draw.text((c2_v, cur_y), f"{rv}", font=font_s_val, fill=cfg["text_primary"], anchor="lt")
-        draw.text((c2_l, cur_y + int(4 * SCALE)), rl, font=font_s_lbl, fill=cfg["border_primary"], anchor="lt")
+        # Right Side Stat (e.g. 86 DRI)
+        draw.text((c2_num_x, cur_y), str(rv), font=font_s_val, fill=cfg["text_primary"], anchor="rt")
+        draw.text((c2_lbl_x, cur_y + int(3 * SCALE)), rl, font=font_s_lbl, fill=cfg["border_primary"], anchor="lt")
 
     # 9. Bottom Finial & Edition Badge
-    foot_y = grid_y + int(120 * SCALE)
-    foot_w = int(240 * SCALE)
-    foot_h = int(22 * SCALE)
+    foot_y = grid_y + int(148 * SCALE)
+    foot_w = int(300 * SCALE)
+    foot_h = int(26 * SCALE)
     foot_x = (WIDTH - foot_w) // 2
 
-    draw.rounded_rectangle([(foot_x, foot_y), (foot_x + foot_w, foot_y + foot_h)], radius=int(6 * SCALE), fill=(12, 14, 20, 240), outline=cfg["border_secondary"] + (160,), width=int(1.5 * SCALE))
-    font_foot = load_card_font(11, bold=True)
-    draw.text((WIDTH // 2, foot_y + int(4 * SCALE)), f"★ {cfg['title']} • КПЛ 2026 ★", font=font_foot, fill=cfg["border_primary"], anchor="mt")
+    # Clean display title (avoid verbose slash descriptions in small footer)
+    title_short = cfg['title'].split(' / ')[0].strip()
+    foot_text = f"★ {title_short} • КПЛ 2026 ★"
+
+    draw.rounded_rectangle(
+        [(foot_x, foot_y), (foot_x + foot_w, foot_y + foot_h)],
+        radius=int(8 * SCALE),
+        fill=(10, 12, 18, 240),
+        outline=cfg["border_secondary"] + (180,),
+        width=int(1.5 * SCALE)
+    )
+
+    font_sz = 11 if len(foot_text) > 28 else (12 if len(foot_text) > 22 else 13)
+    font_foot = load_card_font(font_sz, bold=True)
+    draw.text((WIDTH // 2, foot_y + (foot_h // 2)), foot_text, font=font_foot, fill=cfg["border_primary"], anchor="mm")
 
     return img
 
