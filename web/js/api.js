@@ -8,9 +8,27 @@ import { tgBridge } from './tg.js';
 class ApiClient {
   constructor() {
     this.baseUrl = window.location.origin;
+    this.inFlight = new Map();
+    this.cache = new Map();
   }
 
   async request(endpoint, options = {}) {
+    const isGet = !options.method || options.method.toUpperCase() === 'GET';
+    const cacheKey = endpoint;
+
+    // Return cached response if valid within 5s
+    if (isGet && this.cache.has(cacheKey)) {
+      const entry = this.cache.get(cacheKey);
+      if (Date.now() - entry.timestamp < 5000) {
+        return entry.data;
+      }
+    }
+
+    // Deduplicate in-flight concurrent requests
+    if (isGet && this.inFlight.has(cacheKey)) {
+      return this.inFlight.get(cacheKey);
+    }
+
     const initData = tgBridge.getInitData();
     const headers = {
       'Content-Type': 'application/json',
@@ -18,20 +36,35 @@ class ApiClient {
       ...(options.headers || {})
     };
 
-    try {
-      const res = await fetch(`${this.baseUrl}${endpoint}`, {
-        ...options,
-        headers
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.message || data.error || 'Ошибка запроса к серверу');
+    const promise = (async () => {
+      try {
+        const res = await fetch(`${this.baseUrl}${endpoint}`, {
+          ...options,
+          headers
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.message || data.error || 'Ошибка запроса к серверу');
+        }
+        if (isGet) {
+          this.cache.set(cacheKey, { data, timestamp: Date.now() });
+        }
+        return data;
+      } catch (err) {
+        console.error(`API Error [${endpoint}]:`, err);
+        throw err;
+      } finally {
+        if (isGet) {
+          this.inFlight.delete(cacheKey);
+        }
       }
-      return data;
-    } catch (err) {
-      console.error(`API Error [${endpoint}]:`, err);
-      throw err;
+    })();
+
+    if (isGet) {
+      this.inFlight.set(cacheKey, promise);
     }
+
+    return promise;
   }
 
   // 1. Bootstrap & Wallet
