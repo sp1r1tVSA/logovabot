@@ -1141,3 +1141,312 @@
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
 }
 
+/* ─── 13. Category Filter Pills & Search ─── */
+.category-pills {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 10px;
+  margin-bottom: 12px;
+  -webkit-overflow-scrolling: touch;
+}
+
+.category-pill {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font-family: 'Outfit', sans-serif;
+  font-size: 0.8rem;
+  font-weight: 700;
+  padding: 6px 12px;
+  border-radius: var(--radius-full);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: var(--transition-fast);
+}
+.category-pill.active {
+  background: rgba(245, 176, 39, 0.18);
+  border-color: var(--accent-gold);
+  color: var(--accent-gold);
+}
+
+.search-box-container {
+  margin-bottom: 14px;
+  position: relative;
+}
+
+.match-search-input {
+  width: 100%;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: #fff;
+  padding: 10px 14px 10px 38px;
+  font-size: 0.9rem;
+  outline: none;
+  transition: var(--transition-fast);
+}
+.match-search-input:focus {
+  border-color: var(--accent-gold);
+  box-shadow: 0 0 12px var(--accent-gold-glow);
+}
+.search-icon {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-muted);
+  font-size: 0.95rem;
+}
+
+/* ─── 14. Live Match Indicator ─── */
+.live-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: rgba(239, 68, 68, 0.2);
+  border: 1px solid var(--color-danger);
+  color: #ef4444;
+  font-size: 0.72rem;
+  font-weight: 800;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.live-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: #ef4444;
+  box-shadow: 0 0 8px #ef4444;
+  animation: pulseDot 1.4s infinite;
+}
+
+@keyframes pulseDot {
+  0% { transform: scale(0.9); opacity: 1; }
+  50% { transform: scale(1.4); opacity: 0.4; }
+  100% { transform: scale(0.9); opacity: 1; }
+}
+
+/* ─── 15. Match Center & Analytics View ─── */
+.match-center-header {
+  background: linear-gradient(180deg, rgba(24, 32, 48, 0.9) 0%, rgba(13, 17, 26, 0.95) 100%);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 16px;
+  margin-bottom: 16px;
+  box-shadow: var(--shadow-card);
+}
+
+.team-vs-display {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.team-block {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+}
+
+.team-crest {
+  font-size: 2.2rem;
+  filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.5));
+}
+
+.team-name-lg {
+  font-family: 'Outfit', sans-serif;
+  font-size: 1rem;
+  font-weight: 800;
+  color: #fff;
+  text-align: center;
+}
+
+.score-center-badge {
+  font-family: 'Outfit', sans-serif;
+  font-size: 1.8rem;
+  font-weight: 900;
+  color: var(--accent-gold);
+  background: rgba(0, 0, 0, 0.4);
+  padding: 6px 18px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-active);
+  letter-spacing: 0.06em;
+}
+
+.form-badges-row {
+  display: flex;
+  gap: 4px;
+}
+
+.form-dot {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  font-size: 0.65rem;
+  font-weight: 800;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+}
+.form-dot.w { background: var(--color-success); }
+.form-dot.d { background: var(--color-warning); }
+.form-dot.l { background: var(--color-danger); }
+
+/* Sub-tabs for Match Center */
+.mc-tabs {
+  display: flex;
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-sm);
+  padding: 3px;
+  margin-bottom: 14px;
+}
+
+.mc-tab-btn {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  font-family: 'Outfit', sans-serif;
+  font-size: 0.82rem;
+  font-weight: 700;
+  padding: 8px 4px;
+  border-radius: 7px;
+  cursor: pointer;
+  transition: var(--transition-fast);
+}
+.mc-tab-btn.active {
+  background: var(--accent-gold);
+  color: #000;
+}
+
+/* Insight Cards */
+.insight-card {
+  background: rgba(245, 176, 39, 0.08);
+  border: 1px solid rgba(245, 176, 39, 0.25);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  margin-bottom: 8px;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 0.85rem;
+  color: #fff;
+  line-height: 1.4;
+}
+
+/* H2H Bar */
+.h2h-progress-bar {
+  display: flex;
+  height: 8px;
+  border-radius: var(--radius-full);
+  overflow: hidden;
+  margin: 8px 0;
+}
+.h2h-bar-p1 { background: var(--accent-gold); }
+.h2h-bar-x { background: #64748b; }
+.h2h-bar-p2 { background: var(--accent-cyan); }
+
+/* ─── 16. Standings Table ─── */
+.standings-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+.standings-table th {
+  color: var(--text-muted);
+  font-weight: 700;
+  text-align: center;
+  padding: 8px 6px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.standings-table th:first-child {
+  text-align: left;
+}
+.standings-table td {
+  padding: 10px 6px;
+  text-align: center;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+.standings-table td:first-child {
+  text-align: left;
+  font-weight: 700;
+  color: #fff;
+}
+.standings-pos-pill {
+  display: inline-block;
+  width: 22px;
+  height: 22px;
+  line-height: 22px;
+  border-radius: 50%;
+  font-size: 0.75rem;
+  font-weight: 800;
+  margin-right: 6px;
+  text-align: center;
+}
+.standings-pos-pill.top { background: rgba(245, 176, 39, 0.2); color: var(--accent-gold); }
+.standings-pos-pill.mid { background: rgba(255, 255, 255, 0.06); color: var(--text-secondary); }
+
+/* ─── 17. User KPI Analytics Grid ─── */
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.kpi-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+}
+.kpi-label {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.kpi-value {
+  font-family: 'Outfit', sans-serif;
+  font-size: 1.25rem;
+  font-weight: 900;
+  color: #fff;
+}
+.kpi-value.green { color: var(--color-success); }
+.kpi-value.gold { color: var(--accent-gold); }
+.kpi-value.red { color: var(--color-danger); }
+
+/* ─── 18. Saved Draft Coupons ─── */
+.saved-coupon-card {
+  background: var(--bg-card);
+  border: 1px dashed var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  margin-bottom: 10px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.btn-restore-coupon {
+  background: rgba(245, 176, 39, 0.15);
+  border: 1px solid var(--accent-gold);
+  color: var(--accent-gold);
+  font-family: 'Outfit', sans-serif;
+  font-size: 0.78rem;
+  font-weight: 700;
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+

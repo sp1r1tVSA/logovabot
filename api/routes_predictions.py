@@ -1,7 +1,7 @@
 """
 api/routes_predictions.py
 
-REST API handlers for bet slip placement and prediction history.
+REST API handlers for bet slip placement, prediction history, details, and repeat predictions.
 """
 
 import json
@@ -20,9 +20,10 @@ async def handle_place_prediction(request: web.Request) -> web.Response:
     Body:
     {
         "amount": 250,
+        "idempotency_key": "uuid-or-timestamp",
         "selections": [
             { "match_id": 101, "outcome": "p1", "odd": 2.10 },
-            { "match_id": 102, "outcome": "tb25", "odd": 1.75 }
+            { "match_id": 102, "outcome": "over_2.5", "odd": 1.75 }
         ]
     }
     """
@@ -47,14 +48,20 @@ async def handle_place_prediction(request: web.Request) -> web.Response:
 
     amount = int(data.get("amount", 0))
     selections = data.get("selections", [])
+    idempotency_key = data.get("idempotency_key")
 
-    if amount <= 0:
-        return web.json_response({"status": "error", "message": "Сумма ставки должна быть больше 0."}, status=400)
+    if amount < 10:
+        return web.json_response({"status": "error", "message": "Минимальная сумма ставки — 10 🪙."}, status=400)
 
     if not selections or not isinstance(selections, list):
         return web.json_response({"status": "error", "message": "Купон не содержит выбранных исходов."}, status=400)
 
-    success, result = database.place_user_bet(user_id, amount, selections)
+    success, result = database.place_user_bet(
+        user_id=user_id,
+        amount=amount,
+        selections=selections,
+        idempotency_key=idempotency_key
+    )
 
     if not success:
         return web.json_response({"status": "error", "message": str(result)}, status=400)
@@ -63,12 +70,9 @@ async def handle_place_prediction(request: web.Request) -> web.Response:
     user_balance = database.get_wallet_balance(user_id)
     bet_type = "single" if len(selections) == 1 else "express"
 
-    # Gamification hooks
+    # Progression and achievements hooks
     try:
         database.add_user_xp(user_id, 30 if bet_type == "single" else 60)
-        database.evaluate_quest_progress(user_id, "place_bets", 1)
-        if bet_type == "express":
-            database.evaluate_quest_progress(user_id, "express_count", 1)
         database.evaluate_betting_achievements(user_id)
     except Exception as e:
         logger.warning(f"Error in gamification hook on bet placement: {e}")
@@ -85,7 +89,7 @@ async def handle_place_prediction(request: web.Request) -> web.Response:
 
 async def handle_get_predictions(request: web.Request) -> web.Response:
     """
-    GET /api/predictions
+    GET /api/predictions?status=pending|won|lost|all&limit=30
     Retrieve user's bet history.
     """
     init_data = request.headers.get("X-Telegram-Init-Data", "")
@@ -107,9 +111,96 @@ async def handle_get_predictions(request: web.Request) -> web.Response:
     except Exception as e:
         logger.warning(f"Error auto-settling in get_predictions: {e}")
 
-    bets = database.get_user_bets(user_id, limit=30)
+    status_filter = request.query.get("status")
+    limit = min(50, int(request.query.get("limit", 30)))
+
+    bets = database.get_user_bets(user_id, status=status_filter, limit=limit)
 
     return web.json_response({
         "status": "ok",
         "bets": bets
+    })
+
+
+async def handle_get_prediction_detail(request: web.Request) -> web.Response:
+    """
+    GET /api/predictions/{id}
+    Returns detailed view of a prediction with its items.
+    """
+    init_data = request.headers.get("X-Telegram-Init-Data", "")
+    user_info = get_authenticated_user(init_data)
+
+    if not user_info or "id" not in user_info:
+        return web.json_response({"status": "error", "error": "unauthorized"}, status=401)
+
+    user_id = user_info["id"]
+    try:
+        bet_id = int(request.match_info["id"])
+    except (KeyError, ValueError):
+        return web.json_response({"status": "error", "message": "Некорректный ID."}, status=400)
+
+    bets = database.get_user_bets(user_id, limit=100)
+    matching = next((b for b in bets if b["id"] == bet_id), None)
+
+    if not matching:
+        return web.json_response({"status": "error", "message": "Прогноз не найден."}, status=404)
+
+    return web.json_response({
+        "status": "ok",
+        "prediction": matching
+    })
+
+
+async def handle_repeat_prediction(request: web.Request) -> web.Response:
+    """
+    POST /api/predictions/{id}/repeat
+    Validates legs from a previous bet and returns fresh coupon data.
+    """
+    init_data = request.headers.get("X-Telegram-Init-Data", "")
+    user_info = get_authenticated_user(init_data)
+
+    if not user_info or "id" not in user_info:
+        return web.json_response({"status": "error", "error": "unauthorized"}, status=401)
+
+    user_id = user_info["id"]
+    try:
+        bet_id = int(request.match_info["id"])
+    except (KeyError, ValueError):
+        return web.json_response({"status": "error", "message": "Некорректный ID."}, status=400)
+
+    bets = database.get_user_bets(user_id, limit=100)
+    matching = next((b for b in bets if b["id"] == bet_id), None)
+
+    if not matching:
+        return web.json_response({"status": "error", "message": "Исходный прогноз не найден."}, status=404)
+
+    cloned_selections = []
+    for item in matching.get("items", []):
+        m_id = item["match_id"]
+        out_type = item["outcome_type"]
+        # Check if match is upcoming
+        with database.transaction() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT status FROM matches WHERE id = ?", (m_id,))
+            m_row = cursor.fetchone()
+            if m_row and m_row["status"] in ("scheduled", "live"):
+                cloned_selections.append({
+                    "match_id": m_id,
+                    "outcome": out_type,
+                    "odd": item["odd"],
+                    "team1_name": item.get("team1_name"),
+                    "team2_name": item.get("team2_name")
+                })
+
+    if not cloned_selections:
+        return web.json_response({
+            "status": "error",
+            "message": "Матчи из этого прогноза уже завершены или недоступны."
+        }, status=400)
+
+    return web.json_response({
+        "status": "ok",
+        "amount": matching["amount"],
+        "selections": cloned_selections,
+        "message": f"Скопировано {len(cloned_selections)} событий в купон."
     })

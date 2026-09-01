@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-  <title>LOGOVO.BET — Киберспортивные Прогнозы</title>
+  <title>LOGOVO.BET — Киберспортивный Центр Прогнозов</title>
   <!-- Telegram WebApp SDK -->
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <!-- Styles -->
@@ -35,13 +35,27 @@
   <!-- Views Container -->
   <main class="views-container">
     
-    <!-- 1. Lobby & Matches View (Default Active) -->
+    <!-- 1. Lobby & Match Line View (Default Active) -->
     <section id="view-lobby" class="view-section active">
       <!-- Daily Bonus Banner -->
       <div id="bonus-banner-container"></div>
 
-      <!-- Tours Tabs -->
+      <!-- Tours Selector Tabs -->
       <div class="tour-tabs" id="tour-tabs-container"></div>
+
+      <!-- Category Filter Pills -->
+      <div class="category-pills" id="category-pills-container">
+        <button class="category-pill active" data-cat="all">🔥 Все рынки</button>
+        <button class="category-pill" data-cat="main">🏆 1X2</button>
+        <button class="category-pill" data-cat="totals">⚽ Тоталы</button>
+        <button class="category-pill" data-cat="btts">🤝 Обе забьют</button>
+      </div>
+
+      <!-- Search Input -->
+      <div class="search-box-container">
+        <span class="search-icon">🔍</span>
+        <input type="text" id="match-search-input" class="match-search-input" placeholder="Поиск матча или команды...">
+      </div>
 
       <!-- Match Cards List -->
       <div id="matches-list-container">
@@ -52,45 +66,59 @@
       </div>
     </section>
 
-    <!-- 2. Quests & 7-Day Streaks View -->
-    <section id="view-quests" class="view-section">
-      <!-- 7-Day Streak Calendar Card -->
-      <div class="streak-card" id="streak-calendar-container"></div>
-
-      <div style="font-size: 1.1rem; font-weight: 800; margin: 16px 0 10px; color: #fff; display: flex; align-items: center; justify-content: space-between;">
-        <span>🎯 Ежедневные Задания</span>
-        <span id="quests-count-label" style="font-size: 0.8rem; color: var(--text-secondary); font-weight: 600;">0/3</span>
+    <!-- 2. Match Center & Analytics View -->
+    <section id="view-match_center" class="view-section">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+        <span style="font-size: 1.1rem; font-weight: 800; color: #fff;">📊 Матч-Центр & H2H</span>
+        <span id="mc-selected-tour-label" style="font-size: 0.8rem; color: var(--accent-gold); font-weight: 700;">Тур #1</span>
       </div>
-      <div id="quests-list-container">
-        <div style="text-align: center; padding: 30px; color: var(--text-muted);">Загрузка заданий...</div>
-      </div>
-    </section>
 
-    <!-- 3. PvP Duels Arena View -->
-    <section id="view-duels" class="view-section">
-      <div class="duels-header-banner">
-        <div class="duels-banner-info">
-          <div style="font-size: 1.2rem; font-weight: 900; color: #fff;">⚔️ Арена Дуэлей 1v1</div>
-          <div style="font-size: 0.82rem; color: var(--text-secondary);">Брось вызов другу и забери банк!</div>
+      <!-- Match Center Container -->
+      <div id="match-center-container">
+        <div style="text-align: center; padding: 40px 20px; color: var(--text-muted);">
+          Выберите матч в линии для просмотра детальной аналитики.
         </div>
-        <button class="btn-create-duel" id="btn-open-create-duel">
-          + Создать вызов
-        </button>
-      </div>
-
-      <div style="font-size: 1rem; font-weight: 800; margin: 16px 0 10px; color: #fff;">
-        🔥 Открытые Вызовы
-      </div>
-      <div id="duels-list-container">
-        <div style="text-align: center; padding: 30px; color: var(--text-muted);">Загрузка дуэлей...</div>
       </div>
     </section>
 
-    <!-- 4. Predictions History View -->
-    <section id="view-history" class="view-section">
-      <div style="font-size: 1.1rem; font-weight: 800; margin-bottom: 14px; color: #fff;">
-        📜 История Прогнозов
+    <!-- 3. Tournament Hub & Standings View -->
+    <section id="view-tournaments" class="view-section">
+      <div style="font-size: 1.1rem; font-weight: 800; margin-bottom: 12px; color: #fff;">
+        🏆 Турнирный Центр
       </div>
+
+      <!-- Sub-tabs: Standings / Results / Top Scorers -->
+      <div class="mc-tabs" style="margin-bottom: 14px;">
+        <button class="mc-tab-btn active" id="btn-tab-standings">Таблица</button>
+        <button class="mc-tab-btn" id="btn-tab-results">Результаты</button>
+        <button class="mc-tab-btn" id="btn-tab-scorers">Бомбардиры</button>
+      </div>
+
+      <div id="tournaments-content-container">
+        <div style="text-align: center; padding: 40px 20px; color: var(--text-muted);">
+          Загрузка турнирных данных...
+        </div>
+      </div>
+    </section>
+
+    <!-- 4. Predictions History & Saved Slips View -->
+    <section id="view-history" class="view-section">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+        <span style="font-size: 1.1rem; font-weight: 800; color: #fff;">📜 История Прогнозов</span>
+      </div>
+
+      <!-- Filter Chips -->
+      <div class="category-pills" id="history-filter-pills">
+        <button class="category-pill active" data-filter="all">Все</button>
+        <button class="category-pill" data-filter="pending">⏳ В игре</button>
+        <button class="category-pill" data-filter="won">🎉 Выигрыши</button>
+        <button class="category-pill" data-filter="lost">❌ Проигрыши</button>
+      </div>
+
+      <!-- Saved Draft Coupons Section -->
+      <div id="saved-coupons-container" style="margin-bottom: 16px;"></div>
+
+      <!-- History Cards List -->
       <div id="history-list-container">
         <div style="text-align: center; padding: 40px 20px; color: var(--text-muted);">
           Загрузка истории...
@@ -98,13 +126,39 @@
       </div>
     </section>
 
-    <!-- 5. Profile & Achievements View -->
+    <!-- 5. Profile, Analytics & Achievements View -->
     <section id="view-profile" class="view-section">
       <!-- Esports Gamer Card -->
       <div class="gamer-profile-card" id="profile-card-container"></div>
 
+      <!-- 7-Day Login Streak Calendar Card -->
+      <div class="streak-card" id="streak-calendar-container" style="margin-top: 14px;"></div>
+
+      <!-- Performance KPI Analytics Grid -->
+      <div style="font-size: 1.05rem; font-weight: 800; margin: 20px 0 10px; color: #fff;">
+        📈 Статистика Каппера
+      </div>
+      <div class="kpi-grid" id="kpi-grid-container">
+        <div class="kpi-card">
+          <span class="kpi-label">ROI (Окупаемость)</span>
+          <span class="kpi-value gold" id="kpi-roi">0.0%</span>
+        </div>
+        <div class="kpi-card">
+          <span class="kpi-label">Проходимость (Винрейт)</span>
+          <span class="kpi-value green" id="kpi-winrate">0.0%</span>
+        </div>
+        <div class="kpi-card">
+          <span class="kpi-label">Средний коэффициент</span>
+          <span class="kpi-value" id="kpi-avg-odds">1.00</span>
+        </div>
+        <div class="kpi-card">
+          <span class="kpi-label">Лучший выигрыш</span>
+          <span class="kpi-value gold" id="kpi-best-win">0 🪙</span>
+        </div>
+      </div>
+
       <!-- Achievements Showcase -->
-      <div style="font-size: 1.1rem; font-weight: 800; margin: 20px 0 10px; color: #fff; display: flex; align-items: center; justify-content: space-between;">
+      <div style="font-size: 1.05rem; font-weight: 800; margin: 16px 0 10px; color: #fff; display: flex; align-items: center; justify-content: space-between;">
         <span>🏆 Достижения и Награды</span>
         <span id="achievements-count-label" style="font-size: 0.8rem; color: var(--text-gold); font-weight: 700;">0/22</span>
       </div>
@@ -122,13 +176,13 @@
 
   </main>
 
-  <!-- Floating Bet Slip Drawer -->
+  <!-- Floating Smart Bet Slip Drawer -->
   <div class="slip-drawer" id="slip-drawer">
     <!-- Collapsed Header Bar -->
     <div class="slip-bar-collapsed" id="slip-bar-collapsed">
       <div class="slip-bar-info">
-        <span class="slip-bar-badge" id="slip-count-badge">Купон (1)</span>
-        <span class="slip-bar-odd" id="slip-total-odd">Кэф: 1.85</span>
+        <span class="slip-bar-badge" id="slip-count-badge">Купон (0)</span>
+        <span class="slip-bar-odd" id="slip-total-odd">Кэф: 1.00</span>
       </div>
       <div style="display: flex; align-items: center; gap: 6px;">
         <span id="slip-toggle-label" style="font-size: 0.85rem; font-weight: 700; color: var(--accent-gold);">Открыть</span>
@@ -139,8 +193,11 @@
     <!-- Expanded Slip Content -->
     <div class="slip-body">
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-        <span style="font-size: 0.88rem; font-weight: 700; color: var(--text-secondary);">Выбранные события:</span>
-        <button id="btn-clear-slip" style="background: transparent; border: none; color: var(--color-danger); font-size: 0.78rem; font-weight: 600; cursor: pointer;">Очистить</button>
+        <span style="font-size: 0.88rem; font-weight: 700; color: var(--text-secondary);">Выбранные исходы:</span>
+        <div style="display: flex; gap: 10px;">
+          <button id="btn-save-draft-slip" style="background: transparent; border: none; color: var(--accent-gold); font-size: 0.78rem; font-weight: 700; cursor: pointer;">💾 Сохранить</button>
+          <button id="btn-clear-slip" style="background: transparent; border: none; color: var(--color-danger); font-size: 0.78rem; font-weight: 600; cursor: pointer;">Очистить</button>
+        </div>
       </div>
 
       <!-- Items List -->
@@ -166,7 +223,7 @@
       <!-- Forecast Calculation -->
       <div class="slip-forecast">
         <span style="color: var(--text-secondary);">Потенциальный выигрыш:</span>
-        <span class="forecast-val" id="slip-forecast-val">185 🪙</span>
+        <span class="forecast-val" id="slip-forecast-val">0 🪙</span>
       </div>
 
       <!-- Submit CTA Button -->
@@ -182,25 +239,35 @@
       <span class="nav-icon">⚽</span>
       <span>Линия</span>
     </button>
-    <button class="nav-item" data-view="quests">
-      <span class="nav-icon">🎯</span>
-      <span>Квесты</span>
-      <span class="nav-badge" id="quests-badge" style="display: none;">!</span>
+    <button class="nav-item" data-view="match_center">
+      <span class="nav-icon">📊</span>
+      <span>Центр</span>
     </button>
-    <button class="nav-item" data-view="duels">
-      <span class="nav-icon">⚔️</span>
-      <span>Дуэли</span>
+    <button class="nav-item" data-view="tournaments">
+      <span class="nav-icon">🏆</span>
+      <span>Турнир</span>
     </button>
     <button class="nav-item" data-view="history">
       <span class="nav-icon">📜</span>
-      <span>Ставки</span>
+      <span>Купоны</span>
     </button>
     <button class="nav-item" data-view="profile">
       <span class="nav-icon">🐺</span>
-      <span>Профиль</span>
+      <span>Кабинет</span>
       <span class="nav-badge" id="achievements-badge" style="display: none;">!</span>
     </button>
   </nav>
+
+  <!-- Match Full Markets Modal Drawer -->
+  <div class="modal-overlay" id="match-markets-modal">
+    <div class="modal-content" style="max-height: 85vh; overflow-y: auto; text-align: left;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
+        <div style="font-size: 1.15rem; font-weight: 900; color: #fff;" id="modal-match-title">Все рынки матча</div>
+        <button class="btn-modal-close" style="background: transparent; color: var(--text-muted); font-size: 1.2rem; border: none; cursor: pointer;">✕</button>
+      </div>
+      <div id="modal-markets-list"></div>
+    </div>
+  </div>
 
   <!-- Leaderboard Modal -->
   <div class="modal-overlay" id="leaderboard-modal">
@@ -213,28 +280,6 @@
       <div class="podium-container" id="leaderboard-podium"></div>
       <!-- Full Rankings List -->
       <div id="leaderboard-list"></div>
-    </div>
-  </div>
-
-  <!-- Create Duel Modal -->
-  <div class="modal-overlay" id="create-duel-modal">
-    <div class="modal-content" style="text-align: left;">
-      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
-        <div style="font-size: 1.2rem; font-weight: 900; color: #fff;">⚔️ Создать Дуэль 1v1</div>
-        <button class="btn-modal-close" style="background: transparent; color: var(--text-muted); font-size: 1.2rem; border: none; cursor: pointer;">✕</button>
-      </div>
-      <p style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 12px;">
-        Выберите ставку и спрогнозируйте исходы матчей текущего тура. Оппонент сделает свои прогнозы. Победитель забирает банк!
-      </p>
-      <div style="font-size: 0.82rem; font-weight: 700; color: var(--text-muted); margin-bottom: 6px;">Сумма ставки (🪙):</div>
-      <input type="number" id="duel-stake-input" value="500" min="50" step="50"
-             style="width: 100%; background: var(--bg-tertiary); border: 1px solid var(--border-subtle); color: #fff; padding: 10px 14px; border-radius: var(--radius-sm); font-size: 1rem; font-weight: 700; outline: none; margin-bottom: 14px;">
-      
-      <div id="duel-matches-selector" style="max-height: 220px; overflow-y: auto; margin-bottom: 14px;"></div>
-
-      <button class="btn-submit-bet" id="btn-confirm-create-duel">
-        Бросить вызов
-      </button>
     </div>
   </div>
 

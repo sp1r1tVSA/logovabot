@@ -1,6 +1,6 @@
 /**
  * web/js/ui.js
- * UI Components and Views Renderer for Logovo.bet.
+ * Comprehensive UI Components and Views Renderer for Logovo.bet (v2.0).
  */
 
 import { store } from './store.js';
@@ -13,7 +13,16 @@ const OUTCOME_NAMES = {
   tb25: 'ТБ 2.5',
   tm25: 'ТМ 2.5',
   btts_yes: 'ОЗ: Да',
-  btts_no: 'ОЗ: Нет'
+  btts_no: 'ОЗ: Нет',
+  dc_1x: '1X',
+  dc_12: '12',
+  dc_x2: 'X2',
+  over_15: 'ТБ 1.5',
+  under_15: 'ТМ 1.5',
+  over_25: 'ТБ 2.5',
+  under_25: 'ТМ 2.5',
+  over_35: 'ТБ 3.5',
+  under_35: 'ТМ 3.5'
 };
 
 export class UIRenderer {
@@ -31,12 +40,6 @@ export class UIRenderer {
       lvlEl.textContent = `Lvl ${progression.level || 1}`;
     }
 
-    // Badges on nav items
-    const qBadge = document.getElementById('quests-badge');
-    if (qBadge) {
-      qBadge.style.display = store.state.unclaimedQuestsCount > 0 ? 'inline-block' : 'none';
-      qBadge.textContent = store.state.unclaimedQuestsCount;
-    }
     const aBadge = document.getElementById('achievements-badge');
     if (aBadge) {
       aBadge.style.display = store.state.unclaimedAchievementsCount > 0 ? 'inline-block' : 'none';
@@ -90,7 +93,7 @@ export class UIRenderer {
     if (!container) return;
 
     if (!tours || tours.length === 0) {
-      container.innerHTML = '';
+      container.innerHTML = '<div style="color: var(--text-muted); font-size: 0.85rem; padding: 10px 0;">Нет активных туров</div>';
       return;
     }
 
@@ -102,83 +105,118 @@ export class UIRenderer {
     `).join('');
   }
 
-  static renderMatchCards(matches, currentSlip = []) {
+  static renderMatches(tours, selectedTour, activeCategory = 'all', searchQuery = '') {
     const container = document.getElementById('matches-list-container');
     if (!container) return;
 
-    if (!matches || matches.length === 0) {
+    const currentTour = tours.find(t => t.round_number === selectedTour);
+    if (!currentTour || !currentTour.matches || currentTour.matches.length === 0) {
       container.innerHTML = `
-        <div style="text-align: center; padding: 48px 20px; color: var(--text-muted);">
+        <div style="text-align: center; padding: 50px 20px; color: var(--text-muted);">
           <div style="font-size: 2.5rem; margin-bottom: 10px;">🏆</div>
-          <div style="font-weight: 700; font-size: 1.05rem; color: #fff; margin-bottom: 6px;">Матчи тура завершены</div>
-          <div style="font-size: 0.85rem;">Все результаты внесены или тур закрыт. Ожидайте открытия следующего тура!</div>
+          <div style="font-size: 1rem; font-weight: 700; color: #fff; margin-bottom: 4px;">Матчи тура завершены</div>
+          <div style="font-size: 0.85rem;">Ожидайте открытия следующего тура Лиги</div>
         </div>
       `;
       return;
     }
 
-    container.innerHTML = matches.map(m => {
-      const isPick = (outcome) => {
-        const item = currentSlip.find(s => s.match_id === m.match_id);
-        return item && item.outcome === outcome;
-      };
+    let filteredMatches = currentTour.matches;
 
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase().trim();
+      filteredMatches = filteredMatches.filter(m => 
+        (m.team1_name || '').toLowerCase().includes(q) || 
+        (m.team2_name || '').toLowerCase().includes(q)
+      );
+    }
+
+    if (filteredMatches.length === 0) {
+      container.innerHTML = `
+        <div style="text-align: center; padding: 40px 20px; color: var(--text-muted);">
+          Ничего не найдено по запросу «${searchQuery}»
+        </div>
+      `;
+      return;
+    }
+
+    container.innerHTML = filteredMatches.map(m => {
+      const isLive = m.status === 'live';
       return `
         <div class="match-card" data-match-id="${m.match_id}">
-          <div class="match-header">
-            <span>⚽ Тур #${m.tour}</span>
-            <span style="color: var(--accent-gold); font-weight: 800;">До ${m.deadline ? m.deadline.slice(0, 16) : 'дедлайна'}</span>
-          </div>
-
-          <div class="match-teams">
-            <div class="team-block home">
-              <span class="team-name" title="${m.team1_name}">${m.team1_name}</span>
+          <!-- Match Card Header -->
+          <div class="match-card-header">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span class="match-tour-tag">Тур #${m.tour || selectedTour}</span>
+              ${isLive ? `
+                <span class="live-badge">
+                  <span class="live-dot"></span> LIVE ${m.live_minute ? `${m.live_minute}'` : ''}
+                </span>
+              ` : ''}
             </div>
-            <div class="vs-badge">VS</div>
-            <div class="team-block away">
-              <span class="team-name" title="${m.team2_name}">${m.team2_name}</span>
-            </div>
-          </div>
-
-          <!-- Main 1X2 Odds -->
-          <div class="odds-grid-main">
-            <button class="odd-btn ${isPick('p1') ? 'selected' : ''}" data-match-id="${m.match_id}" data-outcome="p1" data-odd="${m.odd_p1}">
-              <span class="odd-label">П1</span>
-              <span class="odd-val">${Number(m.odd_p1).toFixed(2)}</span>
-            </button>
-            <button class="odd-btn ${isPick('x') ? 'selected' : ''}" data-match-id="${m.match_id}" data-outcome="x" data-odd="${m.odd_x}">
-              <span class="odd-label">Ничья</span>
-              <span class="odd-val">${Number(m.odd_x).toFixed(2)}</span>
-            </button>
-            <button class="odd-btn ${isPick('p2') ? 'selected' : ''}" data-match-id="${m.match_id}" data-outcome="p2" data-odd="${m.odd_p2}">
-              <span class="odd-label">П2</span>
-              <span class="odd-val">${Number(m.odd_p2).toFixed(2)}</span>
+            <button class="btn-open-match-center" data-match-id="${m.match_id}" style="background: transparent; border: none; color: var(--accent-gold); font-size: 0.8rem; font-weight: 700; cursor: pointer;">
+              Статистика & H2H ➔
             </button>
           </div>
 
-          <!-- Extra Markets Accordion Toggle -->
-          <button class="extra-markets-toggle" data-target="extra-${m.match_id}">
-            <span>Дополнительные рынки (ТБ / ОЗ)</span>
-            <span class="arrow-icon">▼</span>
-          </button>
+          <!-- Teams Row -->
+          <div class="match-teams-row">
+            <div class="team-name" style="flex: 1; text-align: right;">${m.team1_name}</div>
+            <div style="font-family: 'Outfit', sans-serif; font-size: 0.95rem; font-weight: 900; color: var(--text-gold); padding: 0 12px;">VS</div>
+            <div class="team-name" style="flex: 1; text-align: left;">${m.team2_name}</div>
+          </div>
 
-          <!-- Extra Markets Panel -->
-          <div class="extra-markets-panel" id="extra-${m.match_id}">
-            <button class="odd-btn ${isPick('tb25') ? 'selected' : ''}" data-match-id="${m.match_id}" data-outcome="tb25" data-odd="${m.odd_tb25}">
-              <span class="odd-label">ТБ 2.5</span>
-              <span class="odd-val">${Number(m.odd_tb25).toFixed(2)}</span>
-            </button>
-            <button class="odd-btn ${isPick('tm25') ? 'selected' : ''}" data-match-id="${m.match_id}" data-outcome="tm25" data-odd="${m.odd_tm25}">
-              <span class="odd-label">ТМ 2.5</span>
-              <span class="odd-val">${Number(m.odd_tm25).toFixed(2)}</span>
-            </button>
-            <button class="odd-btn ${isPick('btts_yes') ? 'selected' : ''}" data-match-id="${m.match_id}" data-outcome="btts_yes" data-odd="${m.odd_btts_yes}">
-              <span class="odd-label">ОЗ: Да</span>
-              <span class="odd-val">${Number(m.odd_btts_yes).toFixed(2)}</span>
-            </button>
-            <button class="odd-btn ${isPick('btts_no') ? 'selected' : ''}" data-match-id="${m.match_id}" data-outcome="btts_no" data-odd="${m.odd_btts_no}">
-              <span class="odd-label">ОЗ: Нет</span>
-              <span class="odd-val">${Number(m.odd_btts_no).toFixed(2)}</span>
+          <!-- Quick Market Odds Buttons -->
+          <div class="odds-grid" style="margin-top: 10px;">
+            ${(activeCategory === 'all' || activeCategory === 'main') ? `
+              <div class="odds-btn ${store.isSelectionActive(m.match_id, 'p1') ? 'selected' : ''}" 
+                   data-match-id="${m.match_id}" data-outcome="p1" data-odd="${m.odds?.p1 || 1.90}">
+                <span class="odds-btn-label">П1</span>
+                <span class="odds-btn-val">${(m.odds?.p1 || 1.90).toFixed(2)}</span>
+              </div>
+              <div class="odds-btn ${store.isSelectionActive(m.match_id, 'x') ? 'selected' : ''}" 
+                   data-match-id="${m.match_id}" data-outcome="x" data-odd="${m.odds?.x || 3.20}">
+                <span class="odds-btn-label">X</span>
+                <span class="odds-btn-val">${(m.odds?.x || 3.20).toFixed(2)}</span>
+              </div>
+              <div class="odds-btn ${store.isSelectionActive(m.match_id, 'p2') ? 'selected' : ''}" 
+                   data-match-id="${m.match_id}" data-outcome="p2" data-odd="${m.odds?.p2 || 2.40}">
+                <span class="odds-btn-label">П2</span>
+                <span class="odds-btn-val">${(m.odds?.p2 || 2.40).toFixed(2)}</span>
+              </div>
+            ` : ''}
+
+            ${(activeCategory === 'all' || activeCategory === 'totals') ? `
+              <div class="odds-btn ${store.isSelectionActive(m.match_id, 'tb25') ? 'selected' : ''}" 
+                   data-match-id="${m.match_id}" data-outcome="tb25" data-odd="${m.odds?.tb25 || 1.80}">
+                <span class="odds-btn-label">ТБ 2.5</span>
+                <span class="odds-btn-val">${(m.odds?.tb25 || 1.80).toFixed(2)}</span>
+              </div>
+              <div class="odds-btn ${store.isSelectionActive(m.match_id, 'tm25') ? 'selected' : ''}" 
+                   data-match-id="${m.match_id}" data-outcome="tm25" data-odd="${m.odds?.tm25 || 1.95}">
+                <span class="odds-btn-label">ТМ 2.5</span>
+                <span class="odds-btn-val">${(m.odds?.tm25 || 1.95).toFixed(2)}</span>
+              </div>
+            ` : ''}
+
+            ${(activeCategory === 'all' || activeCategory === 'btts') ? `
+              <div class="odds-btn ${store.isSelectionActive(m.match_id, 'btts_yes') ? 'selected' : ''}" 
+                   data-match-id="${m.match_id}" data-outcome="btts_yes" data-odd="${m.odds?.btts_yes || 1.70}">
+                <span class="odds-btn-label">ОЗ Да</span>
+                <span class="odds-btn-val">${(m.odds?.btts_yes || 1.70).toFixed(2)}</span>
+              </div>
+              <div class="odds-btn ${store.isSelectionActive(m.match_id, 'btts_no') ? 'selected' : ''}" 
+                   data-match-id="${m.match_id}" data-outcome="btts_no" data-odd="${m.odds?.btts_no || 2.05}">
+                <span class="odds-btn-label">ОЗ Нет</span>
+                <span class="odds-btn-val">${(m.odds?.btts_no || 2.05).toFixed(2)}</span>
+              </div>
+            ` : ''}
+          </div>
+
+          <!-- More Markets Button -->
+          <div style="margin-top: 10px; text-align: center;">
+            <button class="btn-more-markets" data-match-id="${m.match_id}" style="width: 100%; background: var(--bg-tertiary); border: 1px dashed var(--border-subtle); color: var(--text-secondary); font-size: 0.8rem; font-weight: 700; padding: 7px; border-radius: var(--radius-sm); cursor: pointer;">
+              ⚡ Все рынки и коэффициенты (+6)
             </button>
           </div>
         </div>
@@ -186,313 +224,494 @@ export class UIRenderer {
     }).join('');
   }
 
-  static renderBetSlip(slip, stakeAmount) {
-    const drawer = document.getElementById('slip-drawer');
-    const badge = document.getElementById('slip-count-badge');
-    const oddEl = document.getElementById('slip-total-odd');
-    const itemsContainer = document.getElementById('slip-items-container');
-    const forecastEl = document.getElementById('slip-forecast-val');
-    const inputEl = document.getElementById('stake-input');
+  static renderMatchCenter(matchDetail, stats, h2h, insights, live) {
+    const container = document.getElementById('match-center-container');
+    if (!container) return;
 
-    if (!drawer) return;
-
-    if (!slip || slip.length === 0) {
-      drawer.classList.remove('has-items');
-      drawer.classList.remove('expanded');
+    if (!matchDetail) {
+      container.innerHTML = '<div style="text-align: center; padding: 40px; color: var(--text-muted);">Матч не выбран.</div>';
       return;
     }
 
-    drawer.classList.add('has-items');
-    const count = slip.length;
-    const typeLabel = count === 1 ? 'Ординар' : `Экспресс (${count})`;
-    badge.textContent = typeLabel;
+    const t1 = matchDetail.team1_name || matchDetail.player1_team || 'Хозяева';
+    const t2 = matchDetail.team2_name || matchDetail.player2_team || 'Гости';
+    const s1 = live?.score1 ?? matchDetail.player1_score ?? '-';
+    const s2 = live?.score2 ?? matchDetail.player2_score ?? '-';
 
-    const totalOdd = store.getTotalOdd();
-    oddEl.textContent = `Кэф: ${totalOdd.toFixed(2)}`;
+    const t1Form = stats?.team1?.stats?.form || ['W', 'D', 'W'];
+    const t2Form = stats?.team2?.stats?.form || ['D', 'L', 'W'];
 
-    if (itemsContainer) {
-      itemsContainer.innerHTML = slip.map(s => `
-        <div class="slip-item">
-          <div class="slip-item-left">
-            <div class="slip-item-match">${s.team1_name} vs ${s.team2_name}</div>
-            <div class="slip-item-pick">${OUTCOME_NAMES[s.outcome] || s.outcome}</div>
+    container.innerHTML = `
+      <!-- Header vs Card -->
+      <div class="match-center-header">
+        <div class="team-vs-display">
+          <div class="team-block">
+            <div class="team-crest">🛡</div>
+            <div class="team-name-lg">${t1}</div>
+            <div class="form-badges-row">
+              ${t1Form.map(f => `<span class="form-dot ${f.toLowerCase()}">${f}</span>`).join('')}
+            </div>
           </div>
-          <div class="slip-item-right">
-            <span class="slip-item-odd">${s.odd.toFixed(2)}</span>
-            <button class="btn-remove-item" data-remove-match="${s.match_id}">✕</button>
+          <div style="display: flex; flex-direction: column; align-items: center; gap: 4px;">
+            <div class="score-center-badge">${s1} : ${s2}</div>
+            <span style="font-size: 0.75rem; color: var(--text-muted); font-weight: 700;">
+              ${matchDetail.status === 'live' ? '🔴 LIVE' : 'Тур #' + (matchDetail.round_number || 1)}
+            </span>
+          </div>
+          <div class="team-block">
+            <div class="team-crest">⚔️</div>
+            <div class="team-name-lg">${t2}</div>
+            <div class="form-badges-row">
+              ${t2Form.map(f => `<span class="form-dot ${f.toLowerCase()}">${f}</span>`).join('')}
+            </div>
           </div>
         </div>
+      </div>
+
+      <!-- Statistical Insights -->
+      <div style="font-size: 0.95rem; font-weight: 800; color: #fff; margin-bottom: 8px;">
+        🔥 Аналитические Инсайты
+      </div>
+      <div style="margin-bottom: 16px;">
+        ${(insights?.insights || []).map(txt => `
+          <div class="insight-card">
+            <span>${txt}</span>
+          </div>
+        `).join('')}
+      </div>
+
+      <!-- Head-to-Head Section -->
+      ${h2h?.summary ? `
+        <div style="font-size: 0.95rem; font-weight: 800; color: #fff; margin-bottom: 8px;">
+          🤝 История Очных Встреч (H2H)
+        </div>
+        <div style="background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 12px; margin-bottom: 16px;">
+          <div style="display: flex; justify-content: space-between; font-size: 0.8rem; font-weight: 700; color: var(--text-secondary);">
+            <span>Побед ${t1}: ${h2h.summary.team1_wins}</span>
+            <span>Ничьих: ${h2h.summary.draws}</span>
+            <span>Побед ${t2}: ${h2h.summary.team2_wins}</span>
+          </div>
+          <div class="h2h-progress-bar">
+            <div class="h2h-bar-p1" style="width: ${(h2h.summary.team1_wins / Math.max(1, h2h.summary.total_meetings)) * 100}%"></div>
+            <div class="h2h-bar-x" style="width: ${(h2h.summary.draws / Math.max(1, h2h.summary.total_meetings)) * 100}%"></div>
+            <div class="h2h-bar-p2" style="width: ${(h2h.summary.team2_wins / Math.max(1, h2h.summary.total_meetings)) * 100}%"></div>
+          </div>
+        </div>
+      ` : ''}
+
+      <!-- Goals Analytics -->
+      ${stats?.team1?.stats ? `
+        <div style="font-size: 0.95rem; font-weight: 800; color: #fff; margin-bottom: 8px;">
+          ⚽ Статистика Голов
+        </div>
+        <div class="kpi-grid">
+          <div class="kpi-card">
+            <span class="kpi-label">Ср. забитых ${t1}</span>
+            <span class="kpi-value gold">${stats.team1.stats.avg_goals_scored}</span>
+          </div>
+          <div class="kpi-card">
+            <span class="kpi-label">Ср. забитых ${t2}</span>
+            <span class="kpi-value gold">${stats.team2.stats.avg_goals_scored}</span>
+          </div>
+          <div class="kpi-card">
+            <span class="kpi-label">ТБ 2.5 % (${t1})</span>
+            <span class="kpi-value green">${stats.team1.stats.over_25_pct}%</span>
+          </div>
+          <div class="kpi-card">
+            <span class="kpi-label">ТБ 2.5 % (${t2})</span>
+            <span class="kpi-value green">${stats.team2.stats.over_25_pct}%</span>
+          </div>
+        </div>
+      ` : ''}
+    `;
+  }
+
+  static renderTournaments(standings, results, topScorers, activeTab = 'standings') {
+    const container = document.getElementById('tournaments-content-container');
+    if (!container) return;
+
+    if (activeTab === 'standings') {
+      if (!standings || standings.length === 0) {
+        container.innerHTML = '<div style="text-align: center; padding: 40px; color: var(--text-muted);">Таблица пока пуста.</div>';
+        return;
+      }
+      container.innerHTML = `
+        <div style="background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 10px; overflow-x: auto;">
+          <table class="standings-table">
+            <thead>
+              <tr>
+                <th>Клуб</th>
+                <th>И</th>
+                <th>В</th>
+                <th>Н</th>
+                <th>П</th>
+                <th>Р/Г</th>
+                <th>О</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${standings.map((s, idx) => `
+                <tr>
+                  <td>
+                    <span class="standings-pos-pill ${idx < 3 ? 'top' : 'mid'}">${idx + 1}</span>
+                    ${s.team || s.player_team || s.name || 'Команда'}
+                  </td>
+                  <td>${s.played ?? s.games ?? 0}</td>
+                  <td>${s.won ?? s.wins ?? 0}</td>
+                  <td>${s.drawn ?? s.draws ?? 0}</td>
+                  <td>${s.lost ?? s.losses ?? 0}</td>
+                  <td>${(s.goals_for ?? 0) - (s.goals_against ?? 0)}</td>
+                  <td style="font-weight: 800; color: var(--accent-gold);">${s.points ?? 0}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      `;
+    } else if (activeTab === 'results') {
+      if (!results || results.length === 0) {
+        container.innerHTML = '<div style="text-align: center; padding: 40px; color: var(--text-muted);">Архив результатов пуст.</div>';
+        return;
+      }
+      container.innerHTML = results.map(r => `
+        <div style="background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 12px 14px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center;">
+          <div style="flex: 1; text-align: right; font-weight: 700; color: #fff;">${r.team1_name || r.player1_team}</div>
+          <div style="padding: 4px 12px; font-family: 'Outfit', sans-serif; font-weight: 900; font-size: 1.1rem; color: var(--accent-gold);">
+            ${r.player1_score ?? 0} : ${r.player2_score ?? 0}
+          </div>
+          <div style="flex: 1; text-align: left; font-weight: 700; color: #fff;">${r.team2_name || r.player2_team}</div>
+        </div>
       `).join('');
-    }
-
-    if (inputEl) {
-      inputEl.value = stakeAmount;
-    }
-
-    if (forecastEl) {
-      const potWin = store.getPotentialWin();
-      forecastEl.textContent = `${this.formatNumber(potWin)} 🪙`;
+    } else if (activeTab === 'scorers') {
+      if (!topScorers || topScorers.length === 0) {
+        container.innerHTML = '<div style="text-align: center; padding: 40px; color: var(--text-muted);">Список бомбардиров формируется.</div>';
+        return;
+      }
+      container.innerHTML = `
+        <div style="background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 10px;">
+          ${topScorers.map((sc, idx) => `
+            <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.04);">
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <span style="font-weight: 800; color: ${idx < 3 ? 'var(--accent-gold)' : 'var(--text-secondary)'}; width: 20px;">#${idx + 1}</span>
+                <div>
+                  <div style="font-weight: 700; color: #fff; font-size: 0.88rem;">${sc.player_name}</div>
+                  <div style="font-size: 0.75rem; color: var(--text-muted);">${sc.team_name}</div>
+                </div>
+              </div>
+              <div style="font-family: 'Outfit', sans-serif; font-weight: 800; color: var(--accent-gold); font-size: 1rem;">
+                ⚽ ${sc.goals}
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      `;
     }
   }
 
-  static renderQuestsView(quests, streak) {
-    const calendarContainer = document.getElementById('streak-calendar-container');
-    const questsContainer = document.getElementById('quests-list-container');
-    const countLabel = document.getElementById('quests-count-label');
+  static renderPredictionsHistory(bets, filter = 'all') {
+    const container = document.getElementById('history-list-container');
+    if (!container) return;
 
-    if (calendarContainer && streak) {
-      const curStreak = streak.streak || 1;
-      const rewards = [200, 300, 500, 700, 1000, 1500, 3000];
-      calendarContainer.innerHTML = `
-        <div class="streak-header">
-          <div class="streak-title-wrap">
-            <span class="streak-flame-icon">🔥</span>
+    let filtered = bets || [];
+    if (filter !== 'all') {
+      filtered = filtered.filter(b => b.status === filter);
+    }
+
+    if (filtered.length === 0) {
+      container.innerHTML = `
+        <div style="text-align: center; padding: 40px 20px; color: var(--text-muted);">
+          <div style="font-size: 2rem; margin-bottom: 8px;">📜</div>
+          <div>Прогнозов в данной категории не найдено</div>
+        </div>
+      `;
+      return;
+    }
+
+    container.innerHTML = filtered.map(b => {
+      const isWon = b.status === 'won';
+      const isLost = b.status === 'lost';
+      const isPending = b.status === 'pending';
+      const isRefunded = b.status === 'refunded';
+
+      const statusBadge = isWon 
+        ? '<span style="color: var(--color-success); font-weight: 800;">🎉 ВЫИГРЫШ</span>'
+        : isLost 
+        ? '<span style="color: var(--color-danger); font-weight: 800;">❌ ПРОИГРЫШ</span>'
+        : isRefunded 
+        ? '<span style="color: var(--color-warning); font-weight: 800;">↩️ ВОЗВРАТ</span>'
+        : '<span style="color: var(--accent-gold); font-weight: 800;">⏳ В ИГРЕ</span>';
+
+      return `
+        <div style="background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 14px; margin-bottom: 12px; box-shadow: var(--shadow-card);">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 8px;">
+            <div style="display: flex; align-items: center; gap: 6px;">
+              <span style="font-size: 0.75rem; font-weight: 800; background: var(--bg-tertiary); padding: 3px 8px; border-radius: var(--radius-xs); color: #fff;">
+                ${b.bet_type === 'express' ? '⚡ ЭКСПРЕСС' : 'ОДИНАР'}
+              </span>
+              <span style="font-size: 0.78rem; color: var(--text-muted);">${b.created_at || ''}</span>
+            </div>
+            <div>${statusBadge}</div>
+          </div>
+
+          <!-- Items in Slip -->
+          <div style="margin-bottom: 10px;">
+            ${(b.items || []).map(it => `
+              <div style="display: flex; justify-content: space-between; align-items: center; padding: 4px 0; font-size: 0.82rem;">
+                <span style="color: #fff; font-weight: 600;">${it.team1_name} — ${it.team2_name}</span>
+                <div style="display: flex; align-items: center; gap: 6px;">
+                  <span style="background: rgba(245,176,39,0.15); color: var(--accent-gold); padding: 2px 6px; border-radius: 4px; font-weight: 700;">
+                    ${OUTCOME_NAMES[it.outcome_type] || it.outcome_type} @ ${Number(it.odd || it.odds_at_placement || 1.0).toFixed(2)}
+                  </span>
+                  <span style="font-size: 0.75rem;">
+                    ${it.status === 'won' ? '✅' : it.status === 'lost' ? '❌' : it.status === 'refunded' ? '↩️' : '⏳'}
+                  </span>
+                </div>
+              </div>
+            `).join('')}
+          </div>
+
+          <!-- Payout Summary -->
+          <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.85rem; border-top: 1px solid rgba(255,255,255,0.06); padding-top: 8px;">
             <div>
-              <div style="font-family: 'Outfit'; font-size: 1.1rem; font-weight: 900; color: #fff;">
-                Серия входов: ${curStreak} дн.
-              </div>
-              <div style="font-size: 0.78rem; color: var(--text-secondary);">
-                Заходи каждый день за растущими бонусами!
-              </div>
+              <span style="color: var(--text-muted);">Ставка: </span>
+              <span style="font-weight: 800; color: #fff;">${b.amount} 🪙</span>
+              <span style="color: var(--text-muted); margin-left: 8px;">Кэф: </span>
+              <span style="font-weight: 800; color: var(--accent-gold);">${Number(b.total_odd || 1.0).toFixed(2)}</span>
+            </div>
+            <div>
+              <span style="color: var(--text-muted);">Выплата: </span>
+              <span style="font-weight: 900; color: ${isWon ? 'var(--color-success)' : '#fff'};">
+                ${isWon ? (b.actual_payout || b.potential_win) : isPending ? b.potential_win : 0} 🪙
+              </span>
             </div>
           </div>
-          <div style="text-align: right;">
-            <span style="font-size: 0.72rem; font-weight: 800; color: var(--accent-cyan); background: rgba(0,210,255,0.12); padding: 3px 8px; border-radius: var(--radius-xs);">
-              🛡 Щиты: ${streak.streak_shield_count || 0}
-            </span>
+
+          <!-- Repeat Prediction CTA -->
+          <div style="margin-top: 10px; text-align: right;">
+            <button class="btn-repeat-bet" data-bet-id="${b.id}" style="background: transparent; border: 1px solid var(--border-subtle); color: var(--text-secondary); font-size: 0.75rem; font-weight: 700; padding: 5px 10px; border-radius: var(--radius-sm); cursor: pointer;">
+              🔄 Повторить прогноз
+            </button>
           </div>
         </div>
-        <div class="streak-days-grid">
-          ${rewards.map((r, i) => {
-            const dayNum = i + 1;
-            const isCompleted = dayNum < (curStreak % 7 || 7);
-            const isCurrent = dayNum === (curStreak % 7 || 7);
+      `;
+    }).join('');
+  }
+
+  static renderSavedCoupons(savedCoupons) {
+    const container = document.getElementById('saved-coupons-container');
+    if (!container) return;
+
+    if (!savedCoupons || savedCoupons.length === 0) {
+      container.innerHTML = '';
+      return;
+    }
+
+    container.innerHTML = `
+      <div style="font-size: 0.95rem; font-weight: 800; color: #fff; margin-bottom: 8px;">
+        💾 Сохраненные Черновики (${savedCoupons.length})
+      </div>
+      ${savedCoupons.map(sc => `
+        <div class="saved-coupon-card">
+          <div>
+            <div style="font-weight: 800; color: #fff; font-size: 0.88rem;">${sc.name || 'Купон'}</div>
+            <div style="font-size: 0.75rem; color: var(--text-muted);">
+              ${sc.selections?.length || 0} событий | Кэф: ${(sc.total_odd || 1.0).toFixed(2)}
+            </div>
+          </div>
+          <div style="display: flex; gap: 8px;">
+            <button class="btn-restore-coupon" data-saved-id="${sc.id}">Загрузить</button>
+            <button class="btn-delete-saved-coupon" data-saved-id="${sc.id}" style="background: transparent; border: none; color: var(--color-danger); font-size: 0.9rem; cursor: pointer;">✕</button>
+          </div>
+        </div>
+      `).join('')}
+    `;
+  }
+
+  static renderProfile(user, progression, streak, stats, achievements) {
+    const cardEl = document.getElementById('profile-card-container');
+    if (cardEl && user) {
+      const uName = user.username ? `@${user.username}` : (user.first_name || 'Каппер');
+      cardEl.innerHTML = `
+        <div style="display: flex; align-items: center; gap: 14px;">
+          <div style="font-size: 2.8rem; background: var(--bg-tertiary); width: 64px; height: 64px; border-radius: 50%; display: flex; align-items: center; justify-content: center; border: 2px solid var(--accent-gold); box-shadow: var(--shadow-gold);">
+            🐺
+          </div>
+          <div>
+            <div style="font-family: 'Outfit', sans-serif; font-size: 1.25rem; font-weight: 900; color: #fff;">
+              ${uName}
+            </div>
+            <div style="font-size: 0.82rem; color: var(--accent-gold); font-weight: 700; margin-top: 2px;">
+              ${progression?.equipped_title || 'Каппер Лиги'} • Уровень ${progression?.level || 1}
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    // KPI Metrics
+    if (stats) {
+      const roiEl = document.getElementById('kpi-roi');
+      if (roiEl) {
+        roiEl.textContent = `${stats.roi_pct > 0 ? '+' : ''}${stats.roi_pct}%`;
+        roiEl.className = `kpi-value ${stats.roi_pct >= 0 ? 'green' : 'red'}`;
+      }
+      const wrEl = document.getElementById('kpi-winrate');
+      if (wrEl) wrEl.textContent = `${stats.win_rate_pct}%`;
+      const avgEl = document.getElementById('kpi-avg-odds');
+      if (avgEl) avgEl.textContent = (stats.average_odds || 1.0).toFixed(2);
+      const bestEl = document.getElementById('kpi-best-win');
+      if (bestEl) bestEl.textContent = `${this.formatNumber(stats.best_win)} 🪙`;
+    }
+
+    // 7-day streak calendar
+    const streakEl = document.getElementById('streak-calendar-container');
+    if (streakEl && streak) {
+      streakEl.innerHTML = `
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+          <div>
+            <span style="font-size: 1rem; font-weight: 800; color: #fff;">🔥 Серия Входов: ${streak.streak || 1} дн.</span>
+            <span style="font-size: 0.78rem; color: var(--text-muted); margin-left: 6px;">(Рекорд: ${streak.best_streak || 1})</span>
+          </div>
+          <span style="font-size: 0.78rem; color: var(--accent-cyan); font-weight: 700;">🛡 Щит серии</span>
+        </div>
+        <div style="display: flex; gap: 6px; justify-content: space-between;">
+          ${[1,2,3,4,5,6,7].map(d => `
+            <div style="flex: 1; text-align: center; background: ${d <= (streak.streak % 7 || 1) ? 'rgba(245,176,39,0.2)' : 'var(--bg-tertiary)'}; border: 1px solid ${d <= (streak.streak % 7 || 1) ? 'var(--accent-gold)' : 'var(--border-subtle)'}; border-radius: var(--radius-sm); padding: 8px 0;">
+              <div style="font-size: 0.7rem; color: var(--text-muted); font-weight: 700;">Д${d}</div>
+              <div style="font-size: 0.9rem; margin-top: 2px;">${d <= (streak.streak % 7 || 1) ? '🔥' : '🪙'}</div>
+            </div>
+          `).join('')}
+        </div>
+      `;
+    }
+
+    // Achievements Grid
+    const achEl = document.getElementById('achievements-grid-container');
+    const achCountEl = document.getElementById('achievements-count-label');
+    if (achEl && achievements) {
+      const unlocked = achievements.filter(a => a.is_unlocked).length;
+      if (achCountEl) achCountEl.textContent = `${unlocked}/${achievements.length}`;
+
+      achEl.innerHTML = achievements.map(a => `
+        <div class="achievement-card ${a.is_unlocked ? 'unlocked' : 'locked'}" data-ach-id="${a.id}">
+          <div class="ach-icon" style="font-size: 1.8rem;">${a.icon || '🏆'}</div>
+          <div style="margin-top: 6px;">
+            <div class="ach-title" style="font-weight: 800; color: #fff; font-size: 0.85rem;">${a.title}</div>
+            <div class="ach-desc" style="font-size: 0.72rem; color: var(--text-secondary); margin-top: 2px;">${a.description}</div>
+          </div>
+          ${a.is_unlocked && !a.is_claimed ? `
+            <button class="btn-claim-ach" data-ach-id="${a.id}" style="margin-top: 8px; background: var(--accent-gold); color: #000; border: none; font-weight: 800; font-size: 0.75rem; padding: 4px 8px; border-radius: 4px; cursor: pointer;">
+              Забрать +${a.reward_coins}🪙
+            </button>
+          ` : ''}
+        </div>
+      `).join('');
+    }
+  }
+
+  static renderSlipDrawer(slip, stakeAmount) {
+    const badgeEl = document.getElementById('slip-count-badge');
+    const oddEl = document.getElementById('slip-total-odd');
+    const itemsEl = document.getElementById('slip-items-container');
+    const forecastEl = document.getElementById('slip-forecast-val');
+
+    const totalOdd = store.getTotalOdd();
+    const potentialWin = store.getPotentialWin();
+    const isExpress = slip.length > 1;
+
+    if (badgeEl) badgeEl.textContent = `Купон (${slip.length})`;
+    if (oddEl) {
+      oddEl.innerHTML = `Кэф: <b>${totalOdd.toFixed(2)}</b> ${isExpress ? '<span style="color: var(--accent-cyan); font-size: 0.75rem;">(⚡+5% Экспресс)</span>' : ''}`;
+    }
+    if (forecastEl) forecastEl.textContent = `${this.formatNumber(potentialWin)} 🪙`;
+
+    if (itemsEl) {
+      if (slip.length === 0) {
+        itemsEl.innerHTML = '<div style="text-align: center; padding: 20px; color: var(--text-muted); font-size: 0.85rem;">Выберите исходы матчей для добавления в купон</div>';
+      } else {
+        itemsEl.innerHTML = slip.map(s => `
+          <div style="display: flex; justify-content: space-between; align-items: center; background: var(--bg-tertiary); padding: 8px 10px; border-radius: var(--radius-sm); margin-bottom: 6px;">
+            <div>
+              <div style="font-weight: 700; font-size: 0.82rem; color: #fff;">${s.team1_name} — ${s.team2_name}</div>
+              <div style="font-size: 0.75rem; color: var(--accent-gold); font-weight: 800;">
+                ${s.selection_name || OUTCOME_NAMES[s.outcome] || s.outcome} @ ${s.odd.toFixed(2)}
+              </div>
+            </div>
+            <button class="btn-remove-slip-item" data-match-id="${s.match_id}" style="background: transparent; border: none; color: var(--text-muted); font-size: 1.1rem; cursor: pointer;">✕</button>
+          </div>
+        `).join('');
+      }
+    }
+  }
+
+  static renderMatchMarketsModal(matchId, markets, matchTitle) {
+    const titleEl = document.getElementById('modal-match-title');
+    const listEl = document.getElementById('modal-markets-list');
+    if (titleEl && matchTitle) titleEl.textContent = matchTitle;
+
+    if (!listEl) return;
+
+    if (!markets || markets.length === 0) {
+      listEl.innerHTML = '<div style="text-align: center; padding: 30px; color: var(--text-muted);">Рынки загружаются...</div>';
+      return;
+    }
+
+    listEl.innerHTML = markets.map(m => `
+      <div style="background: var(--bg-tertiary); border-radius: var(--radius-sm); padding: 10px; margin-bottom: 10px;">
+        <div style="font-weight: 800; font-size: 0.85rem; color: #fff; margin-bottom: 8px;">${m.name}</div>
+        <div style="display: grid; grid-template-columns: repeat(${Math.min(3, m.selections?.length || 2)}, 1fr); gap: 6px;">
+          ${(m.selections || []).map(sel => {
+            const isSel = store.isSelectionActive(matchId, sel.selection_key);
             return `
-              <div class="streak-day-item ${isCompleted ? 'active' : ''} ${isCurrent ? 'current' : ''}">
-                <span>День ${dayNum}</span>
-                <span class="streak-day-reward">+${r}</span>
-                <span>🪙</span>
+              <div class="odds-btn ${isSel ? 'selected' : ''}" 
+                   data-match-id="${matchId}" 
+                   data-outcome="${sel.selection_key}" 
+                   data-odd="${sel.current_odd}"
+                   data-market-id="${m.id}"
+                   data-selection-id="${sel.id}"
+                   data-selection-name="${sel.name}">
+                <span class="odds-btn-label">${sel.name}</span>
+                <span class="odds-btn-val">${Number(sel.current_odd).toFixed(2)}</span>
               </div>
             `;
           }).join('')}
         </div>
-      `;
-    }
-
-    if (questsContainer && quests) {
-      const completedCount = quests.filter(q => q.is_completed).length;
-      if (countLabel) countLabel.textContent = `${completedCount}/${quests.length}`;
-
-      questsContainer.innerHTML = quests.map(q => {
-        const pct = Math.min(100, Math.round((q.progress / q.target_count) * 100));
-        return `
-          <div class="quest-card">
-            <div class="quest-top">
-              <div>
-                <div class="quest-title">${q.title}</div>
-                <div class="quest-desc">${q.description}</div>
-              </div>
-              <div class="quest-rewards-badge">
-                +${q.reward_coins} 🪙 | +${q.reward_xp} XP
-              </div>
-            </div>
-
-            <div class="quest-progress-bar-wrap">
-              <div class="quest-progress-bar-fill" style="width: ${pct}%;"></div>
-            </div>
-
-            <div class="quest-bottom">
-              <span class="quest-count-label">Прогресс: ${q.progress}/${q.target_count}</span>
-              ${q.is_claimed ? `
-                <span style="font-size: 0.78rem; font-weight: 700; color: var(--text-muted);">Получено ✓</span>
-              ` : q.is_completed ? `
-                <button class="btn-claim-quest" data-quest-id="${q.id}">Забрать награду</button>
-              ` : `
-                <span style="font-size: 0.78rem; font-weight: 700; color: var(--text-secondary);">В процессе</span>
-              `}
-            </div>
-          </div>
-        `;
-      }).join('');
-    }
-  }
-
-  static renderDuelsView(duels) {
-    const container = document.getElementById('duels-list-container');
-    if (!container) return;
-
-    if (!duels || duels.length === 0) {
-      container.innerHTML = `
-        <div style="text-align: center; padding: 40px 20px; color: var(--text-muted);">
-          <div style="font-size: 2.5rem; margin-bottom: 8px;">⚔️</div>
-          <div style="font-weight: 700; color: #fff;">Открытых вызовов нет</div>
-          <div style="font-size: 0.85rem; margin-top: 4px;">Создайте свой первый вызов и отправьте ссылку другу!</div>
-        </div>
-      `;
-      return;
-    }
-
-    container.innerHTML = duels.map(d => `
-      <div class="duel-card">
-        <div class="duel-players">
-          <span style="font-size: 1.8rem;">⚔️</span>
-          <div>
-            <div style="font-family: 'Outfit'; font-size: 0.95rem; font-weight: 800; color: #fff;">
-              ${d.creator_username || 'Игрок'} (${d.stake_amount} 🪙)
-            </div>
-            <div style="font-size: 0.76rem; color: var(--text-secondary);">
-              Тур #${d.round_number} • ${d.status === 'open' ? 'Ожидает оппонента' : 'В игре'}
-            </div>
-          </div>
-        </div>
-        ${d.status === 'open' ? `
-          <button class="btn-accept-duel" data-duel-id="${d.id}">Принять вызов</button>
-        ` : `
-          <span style="font-size: 0.8rem; font-weight: 800; color: var(--accent-gold);">Активна</span>
-        `}
       </div>
     `).join('');
   }
 
-  static renderProfileView(profile, achievements) {
-    const cardContainer = document.getElementById('profile-card-container');
-    const achContainer = document.getElementById('achievements-grid-container');
-    const achCountLabel = document.getElementById('achievements-count-label');
-
-    if (cardContainer && profile) {
-      const nextLvlXp = (profile.level ** 2) * 120;
-      const curLvlXp = ((profile.level - 1) ** 2) * 120;
-      const spanXp = nextLvlXp - curLvlXp;
-      const progressXp = profile.current_xp || 0;
-      const pct = Math.min(100, Math.max(5, Math.round((progressXp / spanXp) * 100)));
-
-      cardContainer.innerHTML = `
-        <div class="gamer-header">
-          <div class="gamer-avatar-wrap">🐺</div>
-          <div class="gamer-info">
-            <div class="gamer-username">${profile.username || 'Каппер'}</div>
-            <div class="gamer-title-badge">${profile.title || 'Новичок'}</div>
-          </div>
-        </div>
-
-        <div style="display: flex; justify-content: space-between; font-size: 0.8rem; font-weight: 800; color: var(--text-secondary);">
-          <span>Уровень ${profile.level}</span>
-          <span>${progressXp} / ${spanXp} XP</span>
-        </div>
-        <div class="gamer-xp-bar-wrap">
-          <div class="gamer-xp-bar-fill" style="width: ${pct}%;"></div>
-        </div>
-
-        <div class="gamer-stats-grid">
-          <div class="gamer-stat-item">
-            <div class="gamer-stat-val">${profile.win_rate}%</div>
-            <div class="gamer-stat-lbl">Винрейт</div>
-          </div>
-          <div class="gamer-stat-item">
-            <div class="gamer-stat-val">${profile.bets_count}</div>
-            <div class="gamer-stat-lbl">Прогнозов</div>
-          </div>
-          <div class="gamer-stat-item">
-            <div class="gamer-stat-val">${profile.best_streak} 🔥</div>
-            <div class="gamer-stat-lbl">Рекорд стрика</div>
-          </div>
-        </div>
-      `;
-    }
-
-    if (achContainer && achievements) {
-      const unlockedCount = achievements.filter(a => a.is_unlocked).length;
-      if (achCountLabel) achCountLabel.textContent = `${unlockedCount}/${achievements.length}`;
-
-      achContainer.innerHTML = achievements.map(a => `
-        <div class="achievement-card rarity-${a.rarity} ${a.is_unlocked ? 'unlocked' : ''}">
-          <div class="ach-icon-name">
-            <span class="ach-icon">${a.badge_icon}</span>
-            <div class="ach-name">${a.name}</div>
-          </div>
-          <div class="ach-desc">${a.description}</div>
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 4px;">
-            <span style="font-size: 0.74rem; font-weight: 800; color: var(--accent-gold);">+${a.reward_coins} 🪙</span>
-            ${a.is_unlocked && !a.is_claimed ? `
-              <button class="btn-claim-achievement" data-ach-id="${a.id}">Забрать</button>
-            ` : a.is_claimed ? `
-              <span style="font-size: 0.72rem; color: var(--text-muted);">Получено ✓</span>
-            ` : ''}
-          </div>
-        </div>
-      `).join('');
-    }
-  }
-
-  static renderHistory(bets) {
-    const container = document.getElementById('history-list-container');
-    if (!container) return;
-
-    if (!bets || bets.length === 0) {
-      container.innerHTML = `
-        <div style="text-align: center; padding: 40px 20px; color: var(--text-muted);">
-          <div style="font-size: 2rem; margin-bottom: 8px;">📜</div>
-          <div>У вас пока нет оформленных прогнозов</div>
-        </div>
-      `;
-      return;
-    }
-
-    container.innerHTML = bets.map(b => {
-      const statusIcon = b.status === 'won' ? '🎉 Выигрыш' : b.status === 'lost' ? '❌ Проигрыш' : '⏳ В игре';
-      const statusColor = b.status === 'won' ? 'var(--color-success)' : b.status === 'lost' ? 'var(--color-danger)' : 'var(--accent-gold)';
-
-      return `
-        <div class="match-card" style="margin-bottom: 12px;">
-          <div style="display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 0.85rem;">
-            <span style="font-weight: 800; color: #fff;">Ставка #${b.id} (${b.bet_type === 'express' ? 'Экспресс' : 'Ординар'})</span>
-            <span style="color: ${statusColor}; font-weight: 800;">${statusIcon}</span>
-          </div>
-          <div style="font-size: 0.82rem; color: var(--text-secondary); margin-bottom: 8px;">
-            Сумма: <b>${this.formatNumber(b.amount)} 🪙</b> | Кэф: <b>${b.total_odd.toFixed(2)}</b> | Выигрыш: <b>${this.formatNumber(b.potential_win)} 🪙</b>
-          </div>
-          <div style="border-top: 1px solid var(--border-subtle); padding-top: 8px;">
-            ${(b.items || []).map(i => `
-              <div style="display: flex; justify-content: space-between; font-size: 0.82rem; margin-bottom: 4px;">
-                <span>${i.team1_name} vs ${i.team2_name} (${OUTCOME_NAMES[i.outcome_type] || i.outcome_type})</span>
-                <span style="font-weight: 800; color: var(--accent-gold);">${Number(i.odd).toFixed(2)}</span>
-              </div>
-            `).join('')}
-          </div>
-        </div>
-      `;
-    }).join('');
-  }
-
-  static renderLeaderboard(leaders) {
+  static renderLeaderboardModal(leaderboard, myRank) {
     const podiumEl = document.getElementById('leaderboard-podium');
     const listEl = document.getElementById('leaderboard-list');
 
-    if (!podiumEl || !listEl || !leaders || leaders.length === 0) return;
+    if (!leaderboard || leaderboard.length === 0) {
+      if (listEl) listEl.innerHTML = '<div style="text-align: center; padding: 30px; color: var(--text-muted);">Зал славы формируется...</div>';
+      return;
+    }
 
-    const top3 = leaders.slice(0, 3);
-    const rest = leaders.slice(3);
+    const top3 = leaderboard.slice(0, 3);
+    const rest = leaderboard.slice(3);
 
-    const medals = ['🥇', '🥈', '🥉'];
-    podiumEl.innerHTML = top3.map((u, i) => `
-      <div class="podium-card ${i === 0 ? 'first' : ''}">
-        <div class="podium-medal">${medals[i]}</div>
-        <div class="podium-name">${u.username || u.team_name || 'Каппер'}</div>
-        <div class="podium-bal">${this.formatNumber(u.balance)} 🪙</div>
-      </div>
-    `).join('');
-
-    listEl.innerHTML = rest.map((u, idx) => `
-      <div class="leader-row">
-        <div class="leader-left">
-          <span class="leader-rank">#${idx + 4}</span>
-          <div>
-            <div class="leader-name">${u.username || u.team_name || 'Каппер'}</div>
-            <div class="leader-stats">Винрейт: ${Math.round((u.bets_won / Math.max(1, u.bets_count)) * 100)}% (${u.bets_count} ставок)</div>
-          </div>
+    if (podiumEl) {
+      podiumEl.innerHTML = top3.map((p, idx) => `
+        <div class="podium-col rank-${idx + 1}" style="text-align: center; flex: 1;">
+          <div style="font-size: 1.8rem; margin-bottom: 4px;">${idx === 0 ? '🥇' : idx === 1 ? '🥈' : '🥉'}</div>
+          <div style="font-weight: 800; font-size: 0.85rem; color: #fff;">${p.username || 'Игрок'}</div>
+          <div style="font-size: 0.78rem; color: var(--accent-gold); font-weight: 800;">${this.formatNumber(p.balance)} 🪙</div>
         </div>
-        <span class="leader-bal">${this.formatNumber(u.balance)} 🪙</span>
-      </div>
-    `).join('');
+      `).join('');
+    }
+
+    if (listEl) {
+      listEl.innerHTML = rest.map((p, idx) => `
+        <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 4px; border-bottom: 1px solid rgba(255,255,255,0.05); font-size: 0.85rem;">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span style="font-weight: 800; color: var(--text-muted); width: 22px;">#${idx + 4}</span>
+            <span style="font-weight: 700; color: #fff;">${p.username || 'Игрок'}</span>
+          </div>
+          <div style="font-weight: 800; color: var(--accent-gold);">${this.formatNumber(p.balance)} 🪙</div>
+        </div>
+      `).join('');
+    }
   }
 }

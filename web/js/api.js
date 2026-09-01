@@ -1,6 +1,6 @@
 /**
  * web/js/api.js
- * REST API Client for Logovo.bet Backend.
+ * Comprehensive REST API Client for Logovo.bet Prediction Platform (v2.0).
  */
 
 import { tgBridge } from './tg.js';
@@ -34,43 +34,149 @@ class ApiClient {
     }
   }
 
+  // 1. Bootstrap & Wallet
   getBootstrap() {
     return this.request('/api/bootstrap');
-  }
-
-  getTours() {
-    return this.request('/api/markets/tours');
   }
 
   claimBonus() {
     return this.request('/api/bonus/claim', { method: 'POST' });
   }
 
-  placePrediction(amount, selections) {
-    return this.request('/api/predictions', {
-      method: 'POST',
-      body: JSON.stringify({ amount, selections })
-    });
-  }
-
-  getPredictions() {
-    return this.request('/api/predictions');
-  }
-
   getLeaderboard() {
     return this.request('/api/leaderboard');
   }
 
-  // Gamification & Quests
-  getProgression() {
-    return this.request('/api/progression');
+  // 2. Markets & Tours
+  getTours() {
+    return this.request('/api/markets/tours');
   }
 
-  claimQuest(questId) {
-    return this.request('/api/quests/claim', {
+  getMatchMarkets(matchId) {
+    return this.request(`/api/matches/${matchId}/markets`);
+  }
+
+  getOddsHistory(marketId, selectionKey) {
+    const q = selectionKey ? `?selection_key=${encodeURIComponent(selectionKey)}` : '';
+    return this.request(`/api/markets/${marketId}/odds-history${q}`);
+  }
+
+  // 3. Match Center 3.0
+  getMatches(tour = null, status = null) {
+    const params = new URLSearchParams();
+    if (tour) params.append('tour', tour);
+    if (status) params.append('status', status);
+    const q = params.toString() ? `?${params.toString()}` : '';
+    return this.request(`/api/matches${q}`);
+  }
+
+  getMatchDetail(matchId) {
+    return this.request(`/api/matches/${matchId}`);
+  }
+
+  getMatchStats(matchId) {
+    return this.request(`/api/matches/${matchId}/stats`);
+  }
+
+  getMatchH2H(matchId) {
+    return this.request(`/api/matches/${matchId}/h2h`);
+  }
+
+  getMatchInsights(matchId) {
+    return this.request(`/api/matches/${matchId}/insights`);
+  }
+
+  getMatchLive(matchId) {
+    return this.request(`/api/matches/${matchId}/live`);
+  }
+
+  // 4. Predictions & Coupon Engine
+  placePrediction(amount, selections, idempotencyKey = null) {
+    return this.request('/api/predictions', {
       method: 'POST',
-      body: JSON.stringify({ quest_id: questId })
+      body: JSON.stringify({ amount, selections, idempotency_key: idempotencyKey })
     });
+  }
+
+  getPredictions(status = null, limit = 30) {
+    const params = new URLSearchParams();
+    if (status && status !== 'all') params.append('status', status);
+    if (limit) params.append('limit', limit);
+    const q = params.toString() ? `?${params.toString()}` : '';
+    return this.request(`/api/predictions${q}`);
+  }
+
+  getPredictionDetail(betId) {
+    return this.request(`/api/predictions/${betId}`);
+  }
+
+  repeatPrediction(betId) {
+    return this.request(`/api/predictions/${betId}/repeat`, { method: 'POST' });
+  }
+
+  // 5. Tournament Hub
+  getTournaments() {
+    return this.request('/api/tournaments');
+  }
+
+  getStandings(tournamentId = 1) {
+    return this.request(`/api/tournaments/${tournamentId}/standings`);
+  }
+
+  getResults(tournamentId = 1, limit = 30) {
+    return this.request(`/api/tournaments/${tournamentId}/results?limit=${limit}`);
+  }
+
+  getTopScorers(tournamentId = 1) {
+    return this.request(`/api/tournaments/${tournamentId}/top-scorers`);
+  }
+
+  // 6. User Stats, Saved Coupons, Favorites & Notifications
+  getMyStats() {
+    return this.request('/api/stats/me');
+  }
+
+  saveCoupon(name, selections, totalOdd) {
+    return this.request('/api/saved-coupons', {
+      method: 'POST',
+      body: JSON.stringify({ name, selections, total_odd: totalOdd })
+    });
+  }
+
+  getSavedCoupons() {
+    return this.request('/api/saved-coupons');
+  }
+
+  deleteSavedCoupon(id) {
+    return this.request(`/api/saved-coupons/${id}`, { method: 'DELETE' });
+  }
+
+  addFavorite(targetType, targetId) {
+    return this.request('/api/favorites', {
+      method: 'POST',
+      body: JSON.stringify({ target_type: targetType, target_id: targetId })
+    });
+  }
+
+  getFavorites() {
+    return this.request('/api/favorites');
+  }
+
+  deleteFavorite(id) {
+    return this.request(`/api/favorites/${id}`, { method: 'DELETE' });
+  }
+
+  getNotifications() {
+    return this.request('/api/notifications');
+  }
+
+  markNotificationsRead() {
+    return this.request('/api/notifications/read', { method: 'POST' });
+  }
+
+  // 7. Progression, Achievements & Profile
+  getProgression() {
+    return this.request('/api/progression');
   }
 
   getAchievements() {
@@ -81,24 +187,6 @@ class ApiClient {
     return this.request('/api/achievements/claim', {
       method: 'POST',
       body: JSON.stringify({ achievement_id: achId })
-    });
-  }
-
-  getDuels() {
-    return this.request('/api/duels');
-  }
-
-  createDuel(payload) {
-    return this.request('/api/duels/create', {
-      method: 'POST',
-      body: JSON.stringify(payload)
-    });
-  }
-
-  acceptDuel(duelId, picks) {
-    return this.request('/api/duels/accept', {
-      method: 'POST',
-      body: JSON.stringify({ duel_id: duelId, picks })
     });
   }
 

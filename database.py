@@ -210,12 +210,55 @@ def init_db() -> None:
             ("player2_team", "TEXT"),
             ("frozen_seconds", "INTEGER DEFAULT 0"),
             ("frozen_at", "TEXT"),
+            ("ht_score1", "INTEGER"),
+            ("ht_score2", "INTEGER"),
+            ("match_date", "TEXT"),
+            ("match_time", "TEXT"),
+            ("stadium", "TEXT"),
+            ("referee", "TEXT"),
+            ("live_minute", "INTEGER"),
         )
         for col_name, col_type in SAFE_COLUMNS:
             try:
                 cursor.execute(f"ALTER TABLE matches ADD COLUMN {col_name} {col_type}")
             except sqlite3.OperationalError:
                 pass
+
+        # Safely migration-add new columns to user_bets, bet_items, coin_transactions, user_wallets
+        for col_name, col_type in (
+            ("system_config", "TEXT"),
+            ("actual_payout", "INTEGER DEFAULT 0"),
+            ("idempotency_key", "TEXT"),
+            ("cashout_at", "TIMESTAMP"),
+        ):
+            try:
+                cursor.execute(f"ALTER TABLE user_bets ADD COLUMN {col_name} {col_type}")
+            except sqlite3.OperationalError:
+                pass
+
+        for col_name, col_type in (
+            ("market_id", "INTEGER"),
+            ("selection_id", "INTEGER"),
+            ("odds_at_placement", "REAL"),
+        ):
+            try:
+                cursor.execute(f"ALTER TABLE bet_items ADD COLUMN {col_name} {col_type}")
+            except sqlite3.OperationalError:
+                pass
+
+        for col_name, col_type in (
+            ("reference_type", "TEXT"),
+            ("balance_after", "INTEGER"),
+        ):
+            try:
+                cursor.execute(f"ALTER TABLE coin_transactions ADD COLUMN {col_name} {col_type}")
+            except sqlite3.OperationalError:
+                pass
+
+        try:
+            cursor.execute("ALTER TABLE user_wallets ADD COLUMN daily_limit INTEGER")
+        except sqlite3.OperationalError:
+            pass
             
         # Performance indexes for matches and match_events
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_matches_p1 ON matches(player1_id)")
@@ -361,6 +404,149 @@ def init_db() -> None:
         """)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_coin_tx_user ON coin_transactions(user_id, created_at)")
 
+        # ─── Logovo.bet: Relational Markets & Extended Prediction Schema ───
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS teams (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                short_name TEXT,
+                logo_url TEXT,
+                owner_id INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(owner_id) REFERENCES users(telegram_id)
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_teams_name ON teams(LOWER(name))")
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS tournaments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                type TEXT NOT NULL DEFAULT 'league' CHECK(type IN ('league', 'cup', 'friendly')),
+                season TEXT,
+                is_active BOOLEAN DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS markets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                match_id INTEGER NOT NULL,
+                market_key TEXT NOT NULL,
+                market_name TEXT NOT NULL,
+                category TEXT NOT NULL DEFAULT 'main',
+                status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','suspended','closed','settled','voided')),
+                sort_order INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(match_id, market_key),
+                FOREIGN KEY(match_id) REFERENCES matches(id) ON DELETE CASCADE
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_markets_match ON markets(match_id, status)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_markets_key ON markets(market_key)")
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS market_selections (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                market_id INTEGER NOT NULL,
+                selection_key TEXT NOT NULL,
+                selection_name TEXT NOT NULL,
+                odds_value REAL NOT NULL,
+                odds_version INTEGER NOT NULL DEFAULT 1,
+                status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','locked','voided')),
+                previous_odds REAL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(market_id, selection_key),
+                FOREIGN KEY(market_id) REFERENCES markets(id) ON DELETE CASCADE
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_selections_market ON market_selections(market_id, status)")
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS odds_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                selection_id INTEGER NOT NULL,
+                old_value REAL,
+                new_value REAL NOT NULL,
+                changed_by INTEGER,
+                reason TEXT,
+                changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(selection_id) REFERENCES market_selections(id) ON DELETE CASCADE,
+                FOREIGN KEY(changed_by) REFERENCES users(telegram_id)
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_odds_hist_sel ON odds_history(selection_id, changed_at DESC)")
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS favorites (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                target_type TEXT NOT NULL CHECK(target_type IN ('match','team','tournament')),
+                target_id INTEGER NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(user_id, target_type, target_id),
+                FOREIGN KEY(user_id) REFERENCES users(telegram_id) ON DELETE CASCADE
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_favorites_user ON favorites(user_id, target_type)")
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS notifications (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                body TEXT,
+                reference_id INTEGER,
+                is_read BOOLEAN DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(user_id) REFERENCES users(telegram_id) ON DELETE CASCADE
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_notif_user ON notifications(user_id, is_read, created_at DESC)")
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS user_notification_settings (
+                user_id INTEGER NOT NULL,
+                notification_type TEXT NOT NULL,
+                is_enabled BOOLEAN NOT NULL DEFAULT 1,
+                PRIMARY KEY(user_id, notification_type),
+                FOREIGN KEY(user_id) REFERENCES users(telegram_id) ON DELETE CASCADE
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS admin_audit_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                admin_id INTEGER NOT NULL,
+                action TEXT NOT NULL,
+                target_type TEXT NOT NULL,
+                target_id INTEGER,
+                old_value TEXT,
+                new_value TEXT,
+                reason TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(admin_id) REFERENCES users(telegram_id)
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_admin ON admin_audit_log(admin_id, created_at DESC)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_target ON admin_audit_log(target_type, target_id)")
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS saved_coupons (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                name TEXT,
+                selections_json TEXT NOT NULL,
+                total_odd REAL NOT NULL,
+                status TEXT DEFAULT 'active' CHECK(status IN ('active','expired','updated')),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(user_id) REFERENCES users(telegram_id) ON DELETE CASCADE
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_saved_user ON saved_coupons(user_id, status)")
+
         # ─── Logovo.bet: Gamification, Progression, Quests & Social Tables ───
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS user_progression (
@@ -405,52 +591,8 @@ def init_db() -> None:
         """)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_achievements_uid ON user_achievements(user_id)")
 
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS quests_catalog (
-                id TEXT PRIMARY KEY,
-                title TEXT NOT NULL,
-                description TEXT,
-                quest_type TEXT NOT NULL,
-                target_count INTEGER NOT NULL,
-                reward_xp INTEGER NOT NULL,
-                reward_coins INTEGER NOT NULL,
-                period TEXT NOT NULL DEFAULT 'daily'
-            )
-        """)
+        # (quests_catalog, user_quests, pvp_duels tables removed in v2.0 cleanup)
 
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS user_quests (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                quest_id TEXT NOT NULL,
-                progress INTEGER NOT NULL DEFAULT 0,
-                is_completed BOOLEAN NOT NULL DEFAULT 0,
-                is_claimed BOOLEAN NOT NULL DEFAULT 0,
-                assigned_date TEXT NOT NULL,
-                FOREIGN KEY (quest_id) REFERENCES quests_catalog(id)
-            )
-        """)
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_quests_user ON user_quests(user_id, assigned_date)")
-
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS pvp_duels (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                creator_id INTEGER NOT NULL,
-                opponent_id INTEGER,
-                stake_amount INTEGER NOT NULL,
-                round_number INTEGER NOT NULL,
-                match_ids_json TEXT NOT NULL DEFAULT '[]',
-                creator_picks_json TEXT NOT NULL DEFAULT '{}',
-                opponent_picks_json TEXT NOT NULL DEFAULT '{}',
-                status TEXT NOT NULL DEFAULT 'open',
-                creator_score INTEGER NOT NULL DEFAULT 0,
-                opponent_score INTEGER NOT NULL DEFAULT 0,
-                winner_id INTEGER,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                expires_at TIMESTAMP
-            )
-        """)
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_pvp_duels_status ON pvp_duels(status, created_at DESC)")
 
         # Standardize and migrate canonical team names across all tables
         migrate_team_names_canonical(cursor)
@@ -5021,118 +5163,195 @@ def get_bet_market_by_match_id(match_id: int) -> dict | None:
         return dict(row) if row else None
 
 
-def place_user_bet(user_id: int, amount: int, selections: list[dict]) -> tuple[bool, int | str]:
+def place_user_bet(
+    user_id: int,
+    amount: int,
+    selections: list[dict],
+    idempotency_key: str | None = None
+) -> tuple[bool, int | str]:
     """
-    Place a single or express bet slip.
-    selections format: [ {"match_id": 12, "outcome": "p1", "odd": 1.85}, ... ]
-    Returns (success, bet_id_or_error_msg).
+    Validate, deduct coins, and store user prediction coupon atomically.
+    Supports single & express parlays, relational selections, and idempotency protection.
     """
-    if not selections or amount <= 0:
-        return False, "Неверные параметры ставки."
+    import datetime
+    if amount < 10:
+        return False, "Минимальная сумма прогноза — 10 🪙."
+
+    if not selections or not isinstance(selections, list):
+        return False, "Купон пуст."
 
     with transaction() as conn:
         cursor = conn.cursor()
+
+        # Idempotency check
+        if idempotency_key:
+            cursor.execute("SELECT id FROM user_bets WHERE idempotency_key = ?", (idempotency_key,))
+            existing = cursor.fetchone()
+            if existing:
+                return True, existing["id"]
+
         wallet = get_or_create_wallet(user_id)
         if wallet["balance"] < amount:
-            return False, f"Недостаточно средств (Баланс: {wallet['balance']} 🪙)."
+            return False, f"Недостаточно монет на балансе (Баланс: {wallet['balance']} 🪙)."
 
-        # Validate markets are strictly in open rounds and not finished
+        # Validate selections
         total_odd = 1.0
         validated_items = []
-        now = datetime.datetime.now()
+        seen_matches = set()
+        now = datetime.datetime.now(datetime.timezone.utc)
+
         for s in selections:
             m_id = s.get("match_id")
-            out_type = s.get("outcome", "").lower().strip()
-            cursor.execute(
-                """
-                SELECT bm.*, m.status as match_status, r.is_open as round_is_open, r.deadline as round_deadline
-                FROM bet_markets bm 
-                JOIN matches m ON bm.match_id = m.id 
-                JOIN rounds r ON m.round_number = r.round_number
-                WHERE bm.match_id = ? AND bm.is_active = 1 AND m.status NOT IN ('confirmed', 'completed') AND r.is_open = 1
-                """,
-                (m_id,)
-            )
-            m_row = cursor.fetchone()
-            if not m_row:
-                return False, f"Матч #{m_id} уже сыгран или приём ставок на данный тур закрыт."
+            out_type = s.get("outcome") or s.get("selection_key")
+            mkt_id = s.get("market_id")
+            sel_id = s.get("selection_id")
 
-            dl_dt = _parse_round_deadline(m_row["round_deadline"])
-            if dl_dt and now > dl_dt:
-                cursor.execute("UPDATE bet_markets SET is_active = 0 WHERE match_id = ?", (m_id,))
-                return False, f"Время приёма ставок на тур (дедлайн) истекло."
+            if not m_id or not out_type:
+                return False, "Некорректная структура исхода в купоне."
 
-            odd_val = 1.0
-            if out_type == "p1":
-                odd_val = m_row["odd_p1"]
-            elif out_type == "x":
-                odd_val = m_row["odd_x"]
-            elif out_type == "p2":
-                odd_val = m_row["odd_p2"]
-            elif out_type == "tb25":
-                odd_val = m_row["odd_tb25"]
-            elif out_type == "tm25":
-                odd_val = m_row["odd_tm25"]
-            elif out_type == "btts_yes":
-                odd_val = m_row["odd_btts_yes"]
-            elif out_type == "btts_no":
-                odd_val = m_row["odd_btts_no"]
-            else:
-                return False, f"Неизвестный исход ставки '{out_type}'."
+            if len(selections) > 1 and m_id in seen_matches:
+                return False, f"Нельзя добавлять несколько исходов из одного матча #{m_id} в стандартный экспресс."
+            seen_matches.add(m_id)
 
-            total_odd *= max(1.01, float(odd_val))
-            validated_items.append((m_id, out_type, round(float(odd_val), 2)))
+            # Check match status
+            cursor.execute("SELECT * FROM matches WHERE id = ?", (m_id,))
+            match_row = cursor.fetchone()
+            if not match_row:
+                return False, f"Матч #{m_id} не найден."
+            if match_row["status"] not in ("scheduled", "pending", "live", "open"):
+                return False, f"Матч #{m_id} уже сыгран или завершен."
+
+            # Check round deadline if present
+            r_num = match_row["round_number"] if "round_number" in match_row.keys() else None
+            if r_num:
+                cursor.execute("SELECT is_open, deadline FROM rounds WHERE round_number = ?", (r_num,))
+                r_row = cursor.fetchone()
+                if r_row:
+                    if not r_row["is_open"]:
+                        return False, f"Приём прогнозов на Тур #{r_num} закрыт."
+                    if r_row["deadline"]:
+                        raw_dl = str(r_row["deadline"]).strip()
+                        dl_dt = None
+                        for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
+                            try:
+                                dl_dt = datetime.datetime.strptime(raw_dl[:19], fmt)
+                                break
+                            except ValueError:
+                                pass
+                        if dl_dt and datetime.datetime.now() > dl_dt:
+                            return False, f"Дедлайн для прогнозов на Тур #{r_num} истек."
+
+            # Determine odds value from relational schema or legacy bet_markets
+            odd_val = None
+            resolved_market_id = mkt_id
+            resolved_sel_id = sel_id
+
+            if resolved_market_id and resolved_sel_id:
+                cursor.execute(
+                    "SELECT odds_value, status FROM market_selections WHERE id = ? AND market_id = ?",
+                    (resolved_sel_id, resolved_market_id)
+                )
+                ms_row = cursor.fetchone()
+                if ms_row and ms_row["status"] == "active":
+                    odd_val = float(ms_row["odds_value"])
+            
+            if odd_val is None:
+                cursor.execute("""
+                    SELECT ms.id as sel_id, ms.market_id, ms.odds_value, ms.status, m.status as mkt_status
+                    FROM market_selections ms
+                    JOIN markets m ON ms.market_id = m.id
+                    WHERE m.match_id = ? AND ms.selection_key = ?
+                """, (m_id, out_type))
+                ms_match = cursor.fetchone()
+                if ms_match and ms_match["mkt_status"] == "open" and ms_match["status"] == "active":
+                    odd_val = float(ms_match["odds_value"])
+                    resolved_market_id = ms_match["market_id"]
+                    resolved_sel_id = ms_match["sel_id"]
+
+            if odd_val is None:
+                cursor.execute("SELECT * FROM bet_markets WHERE match_id = ? AND is_active = 1", (m_id,))
+                bm_row = cursor.fetchone()
+                if bm_row:
+                    if out_type == "p1":
+                        odd_val = bm_row["odd_p1"]
+                    elif out_type == "x":
+                        odd_val = bm_row["odd_x"]
+                    elif out_type == "p2":
+                        odd_val = bm_row["odd_p2"]
+                    elif out_type in ("tb25", "over_2.5"):
+                        odd_val = bm_row["odd_tb25"]
+                    elif out_type in ("tm25", "under_2.5"):
+                        odd_val = bm_row["odd_tm25"]
+                    elif out_type in ("btts_yes", "yes"):
+                        odd_val = bm_row["odd_btts_yes"]
+                    elif out_type in ("btts_no", "no"):
+                        odd_val = bm_row["odd_btts_no"]
+
+            if odd_val is None:
+                return False, f"Исход '{out_type}' на матч #{m_id} недоступен или заблокирован."
+
+            odd_val = round(float(odd_val), 2)
+            total_odd *= max(1.01, odd_val)
+            validated_items.append({
+                "match_id": m_id,
+                "outcome_type": out_type,
+                "odd": odd_val,
+                "market_id": resolved_market_id,
+                "selection_id": resolved_sel_id
+            })
 
         total_odd = round(total_odd, 2)
         potential_win = int(round(amount * total_odd))
         bet_type = "single" if len(validated_items) == 1 else "express"
 
         # 1. Deduct coins
-        cursor.execute(
-            """
+        cursor.execute("""
             UPDATE user_wallets 
             SET balance = balance - ?, total_wagered = total_wagered + ?, bets_count = bets_count + 1, updated_at = CURRENT_TIMESTAMP
             WHERE user_id = ?
-            """,
-            (amount, amount, user_id)
-        )
+        """, (amount, amount, user_id))
+
+        cursor.execute("SELECT balance FROM user_wallets WHERE user_id = ?", (user_id,))
+        new_balance = cursor.fetchone()["balance"]
 
         # 2. Insert user_bet
-        cursor.execute(
-            """
-            INSERT INTO user_bets (user_id, bet_type, amount, total_odd, potential_win, status)
-            VALUES (?, ?, ?, ?, ?, 'pending')
-            """,
-            (user_id, bet_type, amount, total_odd, potential_win)
-        )
+        cursor.execute("""
+            INSERT INTO user_bets (user_id, bet_type, amount, total_odd, potential_win, status, idempotency_key)
+            VALUES (?, ?, ?, ?, ?, 'pending', ?)
+        """, (user_id, bet_type, amount, total_odd, potential_win, idempotency_key))
         bet_id = cursor.lastrowid
 
         # 3. Insert items
-        for m_id, out_type, odd_v in validated_items:
-            cursor.execute(
-                """
-                INSERT INTO bet_items (bet_id, match_id, outcome_type, odd, status)
-                VALUES (?, ?, ?, ?, 'pending')
-                """,
-                (bet_id, m_id, out_type, odd_v)
-            )
+        for item in validated_items:
+            cursor.execute("""
+                INSERT INTO bet_items (bet_id, match_id, outcome_type, odd, market_id, selection_id, odds_at_placement, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')
+            """, (
+                bet_id,
+                item["match_id"],
+                item["outcome_type"],
+                item["odd"],
+                item["market_id"],
+                item["selection_id"],
+                item["odd"]
+            ))
 
-        # 4. Record transaction
-        cursor.execute(
-            "INSERT INTO coin_transactions (user_id, amount, transaction_type, reference_id) VALUES (?, ?, 'bet_placed', ?)",
-            (user_id, -amount, bet_id)
-        )
+        # 4. Record transaction with balance_after
+        cursor.execute("""
+            INSERT INTO coin_transactions (user_id, amount, transaction_type, reference_id, reference_type, balance_after)
+            VALUES (?, ?, 'bet_placed', ?, 'bet', ?)
+        """, (user_id, -amount, bet_id, new_balance))
 
         return True, bet_id
 
 
-def get_user_bets(user_id: int, status: str | None = None, limit: int = 10) -> list[dict]:
-    """Fetch user's bets with nested selections."""
+def get_user_bets(user_id: int, status: str | None = None, limit: int = 20) -> list[dict]:
+    """Fetch user's prediction slips with rich nested legs and match status."""
     with transaction() as conn:
         cursor = conn.cursor()
         query = "SELECT * FROM user_bets WHERE user_id = ?"
         params = [user_id]
-        if status:
+        if status and status != "all":
             query += " AND status = ?"
             params.append(status)
         query += " ORDER BY id DESC LIMIT ?"
@@ -5144,9 +5363,23 @@ def get_user_bets(user_id: int, status: str | None = None, limit: int = 10) -> l
         for b in bets:
             cursor.execute(
                 """
-                SELECT bi.*, bm.team1_name, bm.team2_name, bm.tour
+                SELECT bi.*, 
+                       COALESCE(m.player1_team, bm.team1_name, 'Хозяева') as team1_name,
+                       COALESCE(m.player2_team, bm.team2_name, 'Гости') as team2_name,
+                       COALESCE(m.round_number, bm.tour, 1) as tour,
+                       m.status as match_status,
+                       m.player1_score,
+                       m.player2_score,
+                       m.ht_score1,
+                       m.ht_score2,
+                       m.live_minute,
+                       mkt.market_name,
+                       ms.selection_name
                 FROM bet_items bi
+                LEFT JOIN matches m ON bi.match_id = m.id
                 LEFT JOIN bet_markets bm ON bi.match_id = bm.match_id
+                LEFT JOIN markets mkt ON bi.market_id = mkt.id
+                LEFT JOIN market_selections ms ON bi.selection_id = ms.id
                 WHERE bi.bet_id = ?
                 """,
                 (b["id"],)
@@ -5159,106 +5392,10 @@ def get_user_bets(user_id: int, status: str | None = None, limit: int = 10) -> l
 def settle_match_bets(match_id: int, score1: int, score2: int) -> list[dict]:
     """
     Settle all pending bets related to a finished match.
-    Evaluates P1, X, P2, TB25, TM25, BTTS_YES, BTTS_NO.
-    Resolves single bets and partial/complete express slips.
-    Returns list of won bet payloads for notifications.
+    Delegates to full-featured services.settlement_engine.
     """
-    with transaction() as conn:
-        cursor = conn.cursor()
-
-        # 1. Close market
-        cursor.execute("UPDATE bet_markets SET is_active = 0 WHERE match_id = ?", (match_id,))
-
-        # 2. Determine winning outcomes
-        winning_outcomes = set()
-        if score1 > score2:
-            winning_outcomes.add("p1")
-        elif score2 > score1:
-            winning_outcomes.add("p2")
-        else:
-            winning_outcomes.add("x")
-
-        tot_goals = score1 + score2
-        if tot_goals > 2.5:
-            winning_outcomes.add("tb25")
-        else:
-            winning_outcomes.add("tm25")
-
-        if score1 > 0 and score2 > 0:
-            winning_outcomes.add("btts_yes")
-        else:
-            winning_outcomes.add("btts_no")
-
-        # 3. Update bet_items for this match
-        cursor.execute("SELECT id, bet_id, outcome_type FROM bet_items WHERE match_id = ? AND status = 'pending'", (match_id,))
-        pending_items = cursor.fetchall()
-
-        affected_bet_ids = set()
-        for item in pending_items:
-            item_id = item["id"]
-            b_id = item["bet_id"]
-            out_type = item["outcome_type"]
-            item_status = "won" if out_type in winning_outcomes else "lost"
-            cursor.execute("UPDATE bet_items SET status = ? WHERE id = ?", (item_status, item_id))
-            affected_bet_ids.add(b_id)
-
-        # 4. Settle parent user_bets
-        payout_notifications = []
-        for b_id in affected_bet_ids:
-            cursor.execute("SELECT * FROM user_bets WHERE id = ? AND status = 'pending'", (b_id,))
-            bet_row = cursor.fetchone()
-            if not bet_row:
-                continue
-
-            # Check all items in this bet
-            cursor.execute("SELECT status FROM bet_items WHERE bet_id = ?", (b_id,))
-            all_statuses = [r["status"] for r in cursor.fetchall()]
-
-            if "lost" in all_statuses:
-                # Any loss makes the entire slip lost
-                cursor.execute(
-                    "UPDATE user_bets SET status = 'lost', settled_at = CURRENT_TIMESTAMP WHERE id = ?",
-                    (b_id,)
-                )
-            elif all(s == "won" for s in all_statuses):
-                # All items won -> Payout!
-                payout = bet_row["potential_win"]
-                u_id = bet_row["user_id"]
-                cursor.execute(
-                    "UPDATE user_bets SET status = 'won', settled_at = CURRENT_TIMESTAMP WHERE id = ?",
-                    (b_id,)
-                )
-                cursor.execute(
-                    """
-                    UPDATE user_wallets 
-                    SET balance = balance + ?, total_won = total_won + ?, bets_won = bets_won + 1, updated_at = CURRENT_TIMESTAMP
-                    WHERE user_id = ?
-                    """,
-                    (payout, payout, u_id)
-                )
-                cursor.execute(
-                    "INSERT INTO coin_transactions (user_id, amount, transaction_type, reference_id) VALUES (?, ?, 'bet_won', ?)",
-                    (u_id, payout, b_id)
-                )
-
-                # Gamification hooks on win
-                try:
-                    add_user_xp(u_id, 100)
-                    evaluate_quest_progress(u_id, "win_bets", 1)
-                    evaluate_betting_achievements(u_id, dict(bet_row))
-                except Exception as e:
-                    logger.warning(f"Error in gamification hook on win: {e}")
-
-                payout_notifications.append({
-                    "user_id": u_id,
-                    "bet_id": b_id,
-                    "bet_type": bet_row["bet_type"],
-                    "amount": bet_row["amount"],
-                    "total_odd": bet_row["total_odd"],
-                    "payout": payout
-                })
-
-        return payout_notifications
+    from services.settlement_engine import settle_match_predictions
+    return settle_match_predictions(match_id, score1, score2)
 
 
 def settle_all_pending_finished_matches() -> list[dict]:
@@ -5290,7 +5427,7 @@ def settle_all_pending_finished_matches() -> list[dict]:
 # ═════════════════════════════════════════════════════════════════════════════
 
 def seed_gamification_catalog(cursor) -> None:
-    """Seed standard 20+ achievements and default quests catalog."""
+    """Seed standard 20+ achievements catalog (quests removed in v2.0)."""
     achievements = [
         ("ACH_FIRST_BET", "🐺 Первый шаг", "Сделать свой первый прогноз", "general", "common", 100, 250, "🎯"),
         ("ACH_FIRST_WIN", "🏆 Первая кровь", "Выиграть свой первый прогноз", "general", "common", 150, 300, "⚔️"),
@@ -5310,8 +5447,6 @@ def seed_gamification_catalog(cursor) -> None:
         ("ACH_LOGIN_3", "📅 Разминка", "Заходить в игру 3 дня подряд", "loyalty", "common", 200, 400, "📅"),
         ("ACH_LOGIN_7", "🔥 Неделя в строю", "Заходить в игру 7 дней подряд", "loyalty", "rare", 800, 1500, "🔥"),
         ("ACH_LOGIN_30", "🐺 Вожак Стаи", "Заходить в игру 30 дней подряд", "loyalty", "legendary", 4000, 10000, "🐺"),
-        ("ACH_DUEL_FIRST", "⚔️ Дуэлянт", "Сыграть 1 дуэль против друга", "social", "common", 250, 500, "⚔️"),
-        ("ACH_DUEL_5_WINS", "🛡 Чемпион Арены", "Выиграть 5 дуэлей против других игроков", "social", "rare", 1000, 2000, "🛡"),
         ("ACH_TB_SPECIALIST", "⚽ Голевой Маньяк", "Выиграть 5 прогнозов на Тотал Больше 2.5", "markets", "rare", 500, 1000, "⚽"),
         ("ACH_BTTS_MASTER", "🤝 Обе Забьют", "Выиграть 5 прогнозов на Обе Забьют", "markets", "rare", 500, 1000, "🤝")
     ]
@@ -5329,26 +5464,7 @@ def seed_gamification_catalog(cursor) -> None:
                 badge_icon = excluded.badge_icon
         """, ach)
 
-    quests = [
-        ("QUEST_PLACE_2_BETS", "Сделать 2 прогноза", "Оформите любые 2 ставки в текущем туре", "place_bets", 2, 80, 200, "daily"),
-        ("QUEST_WIN_1_BET", "Выиграть 1 прогноз", "Угадайте исход любого матча", "win_bets", 1, 100, 250, "daily"),
-        ("QUEST_MAKE_EXPRESS", "Собрать 1 экспресс", "Оформите купон минимум из 2 событий", "express_count", 1, 120, 300, "daily"),
-        ("QUEST_WEEKLY_10_BETS", "10 прогнозов за неделю", "Сделайте 10 прогнозов в течение недели", "place_bets", 10, 500, 1500, "weekly"),
-        ("QUEST_WEEKLY_WIN_5", "5 побед за неделю", "Выиграйте 5 прогнозов за текущую неделю", "win_bets", 5, 800, 2500, "weekly"),
-    ]
-    for q in quests:
-        cursor.execute("""
-            INSERT INTO quests_catalog (id, title, description, quest_type, target_count, reward_xp, reward_coins, period)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-                title = excluded.title,
-                description = excluded.description,
-                quest_type = excluded.quest_type,
-                target_count = excluded.target_count,
-                reward_xp = excluded.reward_xp,
-                reward_coins = excluded.reward_coins,
-                period = excluded.period
-        """, q)
+    # Quest catalog removed in v2.0 — no quest seeding
 
 
 def get_or_create_progression(user_id: int) -> dict:
@@ -5501,94 +5617,6 @@ def check_and_update_login_streak(user_id: int) -> dict:
         }
 
 
-def get_user_quests(user_id: int) -> list[dict]:
-    """Ensure today's daily quests and active weekly quests exist, then return list."""
-    today_str = datetime.date.today().isoformat()
-    with transaction() as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT uq.*, qc.title, qc.description, qc.quest_type, qc.target_count, qc.reward_xp, qc.reward_coins, qc.period
-            FROM user_quests uq
-            JOIN quests_catalog qc ON uq.quest_id = qc.id
-            WHERE uq.user_id = ? AND uq.assigned_date = ?
-        """, (user_id, today_str))
-        rows = cursor.fetchall()
-
-        if not rows:
-            # Assign standard daily quests for today
-            cursor.execute("SELECT id FROM quests_catalog WHERE period = 'daily'")
-            daily_ids = [r["id"] for r in cursor.fetchall()]
-            for q_id in daily_ids:
-                cursor.execute("""
-                    INSERT INTO user_quests (user_id, quest_id, progress, is_completed, is_claimed, assigned_date)
-                    VALUES (?, ?, 0, 0, 0, ?)
-                """, (user_id, q_id, today_str))
-
-            cursor.execute("""
-                SELECT uq.*, qc.title, qc.description, qc.quest_type, qc.target_count, qc.reward_xp, qc.reward_coins, qc.period
-                FROM user_quests uq
-                JOIN quests_catalog qc ON uq.quest_id = qc.id
-                WHERE uq.user_id = ? AND uq.assigned_date = ?
-            """, (user_id, today_str))
-            rows = cursor.fetchall()
-
-        return [dict(r) for r in rows]
-
-
-def evaluate_quest_progress(user_id: int, quest_type: str, increment: int = 1) -> None:
-    """Increment progress for active matching daily/weekly quests."""
-    today_str = datetime.date.today().isoformat()
-    with transaction() as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT uq.id, uq.progress, qc.target_count
-            FROM user_quests uq
-            JOIN quests_catalog qc ON uq.quest_id = qc.id
-            WHERE uq.user_id = ? AND uq.assigned_date = ? AND qc.quest_type = ? AND uq.is_completed = 0
-        """, (user_id, today_str, quest_type))
-        matching = cursor.fetchall()
-
-        for q in matching:
-            new_prog = q["progress"] + increment
-            is_done = 1 if new_prog >= q["target_count"] else 0
-            cursor.execute("""
-                UPDATE user_quests
-                SET progress = ?, is_completed = ?
-                WHERE id = ?
-            """, (new_prog, is_done, q["id"]))
-
-
-def claim_quest_reward(user_id: int, user_quest_id: int) -> tuple[bool, str, dict]:
-    """Claim XP and coin rewards for a completed quest."""
-    with transaction() as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT uq.*, qc.reward_xp, qc.reward_coins, qc.title
-            FROM user_quests uq
-            JOIN quests_catalog qc ON uq.quest_id = qc.id
-            WHERE uq.id = ? AND uq.user_id = ?
-        """, (user_quest_id, user_id))
-        q = cursor.fetchone()
-
-        if not q:
-            return False, "Задание не найдено.", {}
-        if not q["is_completed"]:
-            return False, "Задание ещё не завершено.", {}
-        if q["is_claimed"]:
-            return False, "Награда за это задание уже получена.", {}
-
-        # Mark claimed
-        cursor.execute("UPDATE user_quests SET is_claimed = 1 WHERE id = ?", (user_quest_id,))
-
-        # Award XP & Coins
-        xp_res = add_user_xp(user_id, q["reward_xp"])
-        add_coins(user_id, q["reward_coins"], tx_type="quest_reward", ref_id=user_quest_id)
-
-        return True, f"🎉 Награда получена: +{q['reward_coins']} 🪙 и +{q['reward_xp']} XP!", {
-            "coins": q["reward_coins"],
-            "xp": q["reward_xp"],
-            "progression": xp_res
-        }
 
 
 def unlock_achievement(user_id: int, achievement_id: str) -> bool:
@@ -5696,92 +5724,6 @@ def evaluate_betting_achievements(user_id: int, bet_payload: dict | None = None)
                 unlock_achievement(user_id, "ACH_UNDERDOG")
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# ⚔️ PVP DUELS (1v1 PREDICTOR ARENA)
-# ═════════════════════════════════════════════════════════════════════════════
-
-def create_pvp_duel(creator_id: int, stake_amount: int, round_number: int, match_ids: list[int], picks: dict) -> tuple[bool, int | str]:
-    """Create a new 1v1 PvP duel challenge."""
-    import json
-    if stake_amount <= 0:
-        return False, "Сумма ставки на дуэль должна быть положительной."
-
-    with transaction() as conn:
-        cursor = conn.cursor()
-        wallet = get_or_create_wallet(creator_id)
-        if wallet["balance"] < stake_amount:
-            return False, f"Недостаточно монет (Баланс: {wallet['balance']} 🪙)."
-
-        # Deduct stake from creator
-        deduct_coins(creator_id, stake_amount, tx_type="duel_stake_escrow")
-
-        cursor.execute("""
-            INSERT INTO pvp_duels (creator_id, stake_amount, round_number, match_ids_json, creator_picks_json, status)
-            VALUES (?, ?, ?, ?, ?, 'open')
-        """, (creator_id, stake_amount, round_number, json.dumps(match_ids), json.dumps(picks)))
-
-        duel_id = cursor.lastrowid
-        unlock_achievement(creator_id, "ACH_DUEL_FIRST")
-        return True, duel_id
-
-
-def get_pvp_duels(user_id: int | None = None, limit: int = 15) -> list[dict]:
-    """Get active and open PvP duels."""
-    import json
-    with transaction() as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT d.*, 
-                   u1.username as creator_username, u1.team_name as creator_team,
-                   u2.username as opponent_username, u2.team_name as opponent_team
-            FROM pvp_duels d
-            LEFT JOIN users u1 ON d.creator_id = u1.telegram_id
-            LEFT JOIN users u2 ON d.opponent_id = u2.telegram_id
-            WHERE d.status IN ('open', 'active')
-            ORDER BY d.id DESC
-            LIMIT ?
-        """, (limit,))
-        rows = [dict(r) for r in cursor.fetchall()]
-        for r in rows:
-            try:
-                r["match_ids"] = json.loads(r["match_ids_json"])
-                r["creator_picks"] = json.loads(r["creator_picks_json"])
-                r["opponent_picks"] = json.loads(r["opponent_picks_json"])
-            except Exception:
-                r["match_ids"] = []
-                r["creator_picks"] = {}
-                r["opponent_picks"] = {}
-        return rows
-
-
-def accept_pvp_duel(duel_id: int, opponent_id: int, picks: dict) -> tuple[bool, str]:
-    """Accept an open PvP duel."""
-    import json
-    with transaction() as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM pvp_duels WHERE id = ? AND status = 'open'", (duel_id,))
-        duel = cursor.fetchone()
-
-        if not duel:
-            return False, "Дуэль не найдена или уже принята."
-        if duel["creator_id"] == opponent_id:
-            return False, "Вы не можете принять собственный вызов."
-
-        stake = duel["stake_amount"]
-        wallet = get_or_create_wallet(opponent_id)
-        if wallet["balance"] < stake:
-            return False, f"Недостаточно монет для принятия дуэли (Нужно: {stake} 🪙)."
-
-        deduct_coins(opponent_id, stake, tx_type="duel_stake_escrow", ref_id=duel_id)
-
-        cursor.execute("""
-            UPDATE pvp_duels
-            SET opponent_id = ?, opponent_picks_json = ?, status = 'active'
-            WHERE id = ?
-        """, (opponent_id, json.dumps(picks), duel_id))
-
-        unlock_achievement(opponent_id, "ACH_DUEL_FIRST")
-        return True, "⚔️ Вызов принят! Дуэль началась."
 
 
 def get_public_gamer_profile(user_id: int) -> dict:
