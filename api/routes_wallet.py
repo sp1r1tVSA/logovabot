@@ -118,6 +118,13 @@ async def handle_leaderboard(request: web.Request) -> web.Response:
     """
     init_data = request.headers.get("X-Telegram-Init-Data", "")
     user_info = get_authenticated_user(init_data)
+    user_id = user_info.get("id") if user_info else 0
+    if not check_user_access(user_id):
+        return web.json_response({
+            "status": "error",
+            "error": "lab_mode",
+            "message": "Logovo.bet находится на закрытом тесте в Лаборатории."
+        }, status=403)
 
     leaders = database.get_top_bettors(20)
 

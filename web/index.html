@@ -153,17 +153,17 @@
     </div>
   </div>
 
-  <!-- Lab Mode Restricted Modal -->
-  <div class="modal-overlay" id="lab-restricted-modal">
-    <div class="modal-content">
-      <div class="modal-icon">🧪</div>
-      <div class="modal-title">Режим Лаборатории</div>
-      <div class="modal-desc">
-        Букмекерская контора <b>Logovo.bet</b> в данный момент проходит закрытое тестирование администрацией турнира в <code>/lab</code>.<br><br>
-        Скоро мы откроем ставки для всех участников чемпионата! 🎰
-      </div>
-      <button class="btn-modal-close">Понятно</button>
-    </div>
+  <!-- Fullscreen Lab Mode Restricted Screen -->
+  <div id="lab-lock-screen" style="display: none; position: fixed; inset: 0; z-index: 999; background: #080a0e; flex-direction: column; align-items: center; justify-content: center; padding: 24px; text-align: center;">
+    <div style="font-size: 3.5rem; margin-bottom: 16px; filter: drop-shadow(0 0 20px rgba(245, 176, 39, 0.4));">🔒</div>
+    <h2 style="font-size: 1.4rem; font-weight: 800; color: #fff; margin-bottom: 10px;">Доступ Ограничен</h2>
+    <p style="font-size: 0.92rem; color: var(--text-secondary); line-height: 1.5; max-width: 380px; margin-bottom: 24px;">
+      Платформа <b>Logovo.bet</b> в данный момент проходит закрытое тестирование администрацией турнира в <code>/lab</code>.<br><br>
+      Приём ставок для всех участников лиги будет открыт в ближайшем обновлении! 🎰
+    </p>
+    <button id="btn-close-locked-app" style="background: var(--accent-gold); color: #000; font-size: 0.95rem; font-weight: 700; border: none; padding: 12px 28px; border-radius: var(--radius-md); cursor: pointer; box-shadow: var(--shadow-gold);">
+      Вернуться в чат
+    </button>
   </div>
 
   <!-- Main JavaScript App -->

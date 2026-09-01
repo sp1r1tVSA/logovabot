@@ -45,7 +45,14 @@ class AppController {
         store.setUser(data.user, data.bonus);
 
         if (!data.user.has_access) {
-          this.showModal('lab-restricted-modal');
+          const lockScreen = document.getElementById('lab-lock-screen');
+          if (lockScreen) lockScreen.style.display = 'flex';
+          const nav = document.querySelector('.bottom-nav');
+          if (nav) nav.style.display = 'none';
+          const drawer = document.getElementById('slip-drawer');
+          if (drawer) drawer.style.display = 'none';
+          const views = document.querySelector('.views-container');
+          if (views) views.style.display = 'none';
           return;
         }
 
@@ -194,6 +201,11 @@ class AppController {
       btn.addEventListener('click', () => {
         document.querySelectorAll('.modal-overlay').forEach(m => m.classList.remove('open'));
       });
+    });
+
+    // Close locked app
+    document.getElementById('btn-close-locked-app')?.addEventListener('click', () => {
+      tgBridge.close();
     });
   }
 

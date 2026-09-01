@@ -25,14 +25,31 @@ async def post_init(application: Application) -> None:
     except Exception as e:
         logger.warning(f"Failed to start Logovo.bet Mini App server: {e}")
 
-    # 📱 Configure Telegram WebApp Menu Button if HTTPS URL is set
+    # 📱 Configure Telegram WebApp Menu Button (Admins only in Lab mode, or Global if public)
     try:
-        from telegram import MenuButtonWebApp, WebAppInfo
+        from telegram import MenuButtonWebApp, MenuButtonDefault, WebAppInfo
         import config
-        if config.WEBAPP_URL and config.WEBAPP_URL.startswith("https://"):
+        from database import get_feature_flag
+        
+        is_public = get_feature_flag("betting_market", default="admin_only") == "public"
+        
+        if is_public and config.WEBAPP_URL and config.WEBAPP_URL.startswith("https://"):
             await application.bot.set_chat_menu_button(
                 menu_button=MenuButtonWebApp(text="🎰 Logovo.bet", web_app=WebAppInfo(url=config.WEBAPP_URL))
             )
+        else:
+            # Set default menu button globally for all users
+            await application.bot.set_chat_menu_button(menu_button=MenuButtonDefault())
+            # Set WebApp button exclusively for admin chats
+            if config.WEBAPP_URL and config.WEBAPP_URL.startswith("https://"):
+                for adm_id in config.ADMIN_IDS:
+                    try:
+                        await application.bot.set_chat_menu_button(
+                            chat_id=adm_id,
+                            menu_button=MenuButtonWebApp(text="🎰 Logovo.bet [Lab]", web_app=WebAppInfo(url=config.WEBAPP_URL))
+                        )
+                    except Exception:
+                        pass
     except Exception as e:
         logger.warning(f"Could not set WebApp menu button: {e}")
 

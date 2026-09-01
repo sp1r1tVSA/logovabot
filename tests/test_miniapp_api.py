@@ -73,8 +73,17 @@ class TestMiniAppApi(AioHTTPTestCase):
         self.assertIn("balance", data["user"])
 
     @unittest_run_loop
-    async def test_leaderboard_endpoint(self):
+    async def test_leaderboard_endpoint_lab_locked(self):
+        # Non-admin / unauthorized should be locked in lab mode
         resp = await self.client.request("GET", "/api/leaderboard")
+        self.assertEqual(resp.status, 403)
+
+    @unittest_run_loop
+    async def test_leaderboard_endpoint_admin(self):
+        admin_id = config.ADMIN_IDS[0] if config.ADMIN_IDS else 12345
+        init_data = self._generate_mock_init_data(user_id=admin_id)
+        headers = {"X-Telegram-Init-Data": init_data}
+        resp = await self.client.request("GET", "/api/leaderboard", headers=headers)
         self.assertEqual(resp.status, 200)
         data = await resp.json()
         self.assertEqual(data["status"], "ok")

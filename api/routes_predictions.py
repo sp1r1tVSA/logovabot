@@ -85,6 +85,13 @@ async def handle_get_predictions(request: web.Request) -> web.Response:
         return web.json_response({"status": "error", "error": "unauthorized"}, status=401)
 
     user_id = user_info["id"]
+    if not check_user_access(user_id):
+        return web.json_response({
+            "status": "error",
+            "error": "lab_mode",
+            "message": "Logovo.bet находится на закрытом тесте в Лаборатории."
+        }, status=403)
+
     bets = database.get_user_bets(user_id, limit=30)
 
     return web.json_response({
