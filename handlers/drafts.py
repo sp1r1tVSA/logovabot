@@ -507,8 +507,31 @@ async def cb_draft_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 await handle_debt_played_rewards(
                     context, m_id, g.get('round_number', 0), g.get('player1_id'), g.get('player2_id')
                 )
+            # 🎰 Settle Logovo.bet predictions and bets
+            try:
+                payouts = await asyncio.to_thread(
+                    database.settle_match_bets, m_id, g.get('h_score', 0), g.get('a_score', 0)
+                )
+                for pay in payouts:
+                    try:
+                        p_user_id = pay["user_id"]
+                        p_won = pay["payout"]
+                        p_odd = pay["total_odd"]
+                        p_type = "Ординар" if pay["bet_type"] == "single" else "Экспресс"
+                        await context.bot.send_message(
+                            chat_id=p_user_id,
+                            text=(
+                                f"🎉 <b>Ваша ставка #{pay['bet_id']} ({p_type}) сыграла!</b>\n\n"
+                                f"🔥 Итоговый Кэф: <b>{p_odd:.2f}</b>\n"
+                                f"💸 Выигрыш: <b>+{p_won:,} 🪙</b> зачислен на баланс!\n\n"
+                                f"<i>Темшик поздравляет с победным прогнозом! 🎰</i>"
+                            ),
+                            parse_mode="HTML"
+                        )
+                    except Exception:
+                        pass
             except Exception as e:
-                logger.warning(f"Failed to handle debt rewards in draft confirm: {e}")
+                logger.warning(f"Failed to settle bets for match {m_id}: {e}")
         except Exception as e:
             logger.exception(f"Failed to confirm match {m_id}")
             

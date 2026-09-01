@@ -281,6 +281,86 @@ def init_db() -> None:
         """)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_media_cache_type ON telegram_media_cache(media_type)")
 
+        # ─── Logovo.bet: Virtual Prediction & Betting System ───
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS user_wallets (
+                user_id INTEGER PRIMARY KEY,
+                balance INTEGER NOT NULL DEFAULT 1000,
+                total_wagered INTEGER NOT NULL DEFAULT 0,
+                total_won INTEGER NOT NULL DEFAULT 0,
+                bets_count INTEGER NOT NULL DEFAULT 0,
+                bets_won INTEGER NOT NULL DEFAULT 0,
+                last_bonus_at TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_wallets_balance ON user_wallets(balance DESC)")
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS bet_markets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                match_id INTEGER NOT NULL UNIQUE,
+                tour INTEGER NOT NULL,
+                team1_name TEXT NOT NULL,
+                team2_name TEXT NOT NULL,
+                odd_p1 REAL NOT NULL,
+                odd_x REAL NOT NULL,
+                odd_p2 REAL NOT NULL,
+                odd_tb25 REAL NOT NULL DEFAULT 1.80,
+                odd_tm25 REAL NOT NULL DEFAULT 1.95,
+                odd_btts_yes REAL NOT NULL DEFAULT 1.70,
+                odd_btts_no REAL NOT NULL DEFAULT 2.05,
+                is_active BOOLEAN DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(match_id) REFERENCES matches(id) ON DELETE CASCADE
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_bet_markets_tour ON bet_markets(tour, is_active)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_bet_markets_match ON bet_markets(match_id)")
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS user_bets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                bet_type TEXT NOT NULL DEFAULT 'single' CHECK(bet_type IN ('single', 'express')),
+                amount INTEGER NOT NULL,
+                total_odd REAL NOT NULL,
+                potential_win INTEGER NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'won', 'lost', 'refunded')),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                settled_at TIMESTAMP
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_bets_user ON user_bets(user_id, status)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_bets_status ON user_bets(status)")
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS bet_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                bet_id INTEGER NOT NULL,
+                match_id INTEGER NOT NULL,
+                outcome_type TEXT NOT NULL,
+                odd REAL NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'won', 'lost', 'refunded')),
+                FOREIGN KEY(bet_id) REFERENCES user_bets(id) ON DELETE CASCADE,
+                FOREIGN KEY(match_id) REFERENCES matches(id) ON DELETE CASCADE
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_bet_items_bet ON bet_items(bet_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_bet_items_match ON bet_items(match_id, status)")
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS coin_transactions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                amount INTEGER NOT NULL,
+                transaction_type TEXT NOT NULL,
+                reference_id INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_coin_tx_user ON coin_transactions(user_id, created_at)")
+
         # Standardize and migrate canonical team names across all tables
         migrate_team_names_canonical(cursor)
 
@@ -4507,6 +4587,442 @@ def count_user_remaining_debts(user_id: int) -> int:
         if m.get("player1_id") == user_id or m.get("player2_id") == user_id:
             count += 1
     return count
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 🎰 LOGOVO.BET — VIRTUAL SPORTS PREDICTION & BETTING REPOSITORY
+# ═════════════════════════════════════════════════════════════════════════════
+
+def get_or_create_wallet(user_id: int) -> dict:
+    """Get user's betting wallet or initialize a new one with 1,000 start coins."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM user_wallets WHERE user_id = ?", (user_id,))
+        row = cursor.fetchone()
+        if row:
+            return dict(row)
+        
+        cursor.execute(
+            """
+            INSERT INTO user_wallets (user_id, balance, total_wagered, total_won, bets_count, bets_won)
+            VALUES (?, 1000, 0, 0, 0, 0)
+            """,
+            (user_id,)
+        )
+        cursor.execute(
+            "INSERT INTO coin_transactions (user_id, amount, transaction_type) VALUES (?, 1000, 'welcome_bonus')",
+            (user_id,)
+        )
+        cursor.execute("SELECT * FROM user_wallets WHERE user_id = ?", (user_id,))
+        new_row = cursor.fetchone()
+        return dict(new_row) if new_row else {"user_id": user_id, "balance": 1000}
+
+
+def get_wallet_balance(user_id: int) -> int:
+    """Get the current coin balance of a user."""
+    wallet = get_or_create_wallet(user_id)
+    return wallet.get("balance", 0)
+
+
+def add_coins(user_id: int, amount: int, tx_type: str = "deposit", ref_id: int | None = None) -> int:
+    """Safely credit coins to user's wallet with transaction log."""
+    if amount <= 0:
+        return get_wallet_balance(user_id)
+
+    with transaction() as conn:
+        cursor = conn.cursor()
+        get_or_create_wallet(user_id)
+        cursor.execute(
+            "UPDATE user_wallets SET balance = balance + ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?",
+            (amount, user_id)
+        )
+        cursor.execute(
+            "INSERT INTO coin_transactions (user_id, amount, transaction_type, reference_id) VALUES (?, ?, ?, ?)",
+            (user_id, amount, tx_type, ref_id)
+        )
+        cursor.execute("SELECT balance FROM user_wallets WHERE user_id = ?", (user_id,))
+        row = cursor.fetchone()
+        return row["balance"] if row else 0
+
+
+def deduct_coins(user_id: int, amount: int, tx_type: str = "bet_placed", ref_id: int | None = None) -> bool:
+    """Deduct coins from wallet if balance is sufficient."""
+    if amount <= 0:
+        return False
+
+    with transaction() as conn:
+        cursor = conn.cursor()
+        get_or_create_wallet(user_id)
+        cursor.execute("SELECT balance FROM user_wallets WHERE user_id = ?", (user_id,))
+        row = cursor.fetchone()
+        if not row or row["balance"] < amount:
+            return False
+
+        cursor.execute(
+            """
+            UPDATE user_wallets 
+            SET balance = balance - ?, total_wagered = total_wagered + ?, updated_at = CURRENT_TIMESTAMP 
+            WHERE user_id = ?
+            """,
+            (amount, amount, user_id)
+        )
+        cursor.execute(
+            "INSERT INTO coin_transactions (user_id, amount, transaction_type, reference_id) VALUES (?, ?, ?, ?)",
+            (user_id, -amount, tx_type, ref_id)
+        )
+        return True
+
+
+def claim_daily_bonus(user_id: int, bonus_amount: int = 250) -> tuple[bool, int, str]:
+    """
+    Claim daily bonus once every 24 hours.
+    Returns (success, new_balance_or_remaining_hours, message).
+    """
+    with transaction() as conn:
+        cursor = conn.cursor()
+        wallet = get_or_create_wallet(user_id)
+        last_bonus = wallet.get("last_bonus_at")
+        now = datetime.datetime.now()
+
+        if last_bonus:
+            try:
+                last_time = datetime.datetime.fromisoformat(last_bonus)
+                diff = now - last_time
+                if diff.total_seconds() < 86400:
+                    remaining_secs = 86400 - diff.total_seconds()
+                    rem_hours = int(remaining_secs // 3600)
+                    rem_mins = int((remaining_secs % 3600) // 60)
+                    return False, rem_hours, f"⏳ Бонус уже получен! Следующий через {rem_hours}ч {rem_mins}м."
+            except Exception:
+                pass
+
+        now_str = now.isoformat()
+        cursor.execute(
+            """
+            UPDATE user_wallets 
+            SET balance = balance + ?, last_bonus_at = ?, updated_at = CURRENT_TIMESTAMP 
+            WHERE user_id = ?
+            """,
+            (bonus_amount, now_str, user_id)
+        )
+        cursor.execute(
+            "INSERT INTO coin_transactions (user_id, amount, transaction_type) VALUES (?, ?, 'daily_bonus')",
+            (user_id, bonus_amount)
+        )
+        cursor.execute("SELECT balance FROM user_wallets WHERE user_id = ?", (user_id,))
+        row = cursor.fetchone()
+        new_bal = row["balance"] if row else 0
+        return True, new_bal, f"🎁 Ежедневный бонус получен: <b>+{bonus_amount} 🪙</b>!"
+
+
+def get_top_bettors(limit: int = 10) -> list[dict]:
+    """Leaderboard of top bettors by net coin balance and win rate."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT w.user_id, w.balance, w.total_won, w.bets_count, w.bets_won, u.username, u.team_name
+            FROM user_wallets w
+            LEFT JOIN users u ON w.user_id = u.telegram_id
+            ORDER BY w.balance DESC, w.total_won DESC
+            LIMIT ?
+            """,
+            (limit,)
+        )
+        return [dict(r) for r in cursor.fetchall()]
+
+
+def save_bet_market(
+    match_id: int,
+    tour: int,
+    team1_name: str,
+    team2_name: str,
+    odd_p1: float,
+    odd_x: float,
+    odd_p2: float,
+    odd_tb25: float = 1.80,
+    odd_tm25: float = 1.95,
+    odd_btts_yes: float = 1.70,
+    odd_btts_no: float = 2.05
+) -> int:
+    """Save or update betting odds for a given match."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO bet_markets (
+                match_id, tour, team1_name, team2_name,
+                odd_p1, odd_x, odd_p2, odd_tb25, odd_tm25, odd_btts_yes, odd_btts_no, is_active
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+            ON CONFLICT(match_id) DO UPDATE SET
+                tour = excluded.tour,
+                team1_name = excluded.team1_name,
+                team2_name = excluded.team2_name,
+                odd_p1 = excluded.odd_p1,
+                odd_x = excluded.odd_x,
+                odd_p2 = excluded.odd_p2,
+                odd_tb25 = excluded.odd_tb25,
+                odd_tm25 = excluded.odd_tm25,
+                odd_btts_yes = excluded.odd_btts_yes,
+                odd_btts_no = excluded.odd_btts_no,
+                is_active = 1
+            """,
+            (match_id, tour, team1_name, team2_name, odd_p1, odd_x, odd_p2, odd_tb25, odd_tm25, odd_btts_yes, odd_btts_no)
+        )
+        return cursor.lastrowid or match_id
+
+
+def get_active_bet_markets(tour: int | None = None) -> list[dict]:
+    """Retrieve all open betting markets for unplayed matches in a tour."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        query = """
+            SELECT bm.*, m.status as match_status, m.round_number
+            FROM bet_markets bm
+            JOIN matches m ON bm.match_id = m.id
+            WHERE bm.is_active = 1 AND m.status != 'completed'
+        """
+        params = []
+        if tour is not None:
+            query += " AND bm.tour = ?"
+            params.append(tour)
+        query += " ORDER BY bm.tour ASC, bm.id ASC"
+        cursor.execute(query, params)
+        return [dict(r) for r in cursor.fetchall()]
+
+
+def get_bet_market_by_match_id(match_id: int) -> dict | None:
+    """Fetch market odds for a specific match ID."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM bet_markets WHERE match_id = ?", (match_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+
+def place_user_bet(user_id: int, amount: int, selections: list[dict]) -> tuple[bool, int | str]:
+    """
+    Place a single or express bet slip.
+    selections format: [ {"match_id": 12, "outcome": "p1", "odd": 1.85}, ... ]
+    Returns (success, bet_id_or_error_msg).
+    """
+    if not selections or amount <= 0:
+        return False, "Неверные параметры ставки."
+
+    with transaction() as conn:
+        cursor = conn.cursor()
+        wallet = get_or_create_wallet(user_id)
+        if wallet["balance"] < amount:
+            return False, f"Недостаточно средств (Баланс: {wallet['balance']} 🪙)."
+
+        # Validate markets are still active and matches not finished
+        total_odd = 1.0
+        validated_items = []
+        for s in selections:
+            m_id = s.get("match_id")
+            out_type = s.get("outcome", "").lower().strip()
+            cursor.execute(
+                """
+                SELECT bm.*, m.status as match_status 
+                FROM bet_markets bm 
+                JOIN matches m ON bm.match_id = m.id 
+                WHERE bm.match_id = ? AND bm.is_active = 1 AND m.status != 'completed'
+                """,
+                (m_id,)
+            )
+            m_row = cursor.fetchone()
+            if not m_row:
+                return False, f"Матч #{m_id} уже сыгран или линия закрыта."
+
+            odd_val = 1.0
+            if out_type == "p1":
+                odd_val = m_row["odd_p1"]
+            elif out_type == "x":
+                odd_val = m_row["odd_x"]
+            elif out_type == "p2":
+                odd_val = m_row["odd_p2"]
+            elif out_type == "tb25":
+                odd_val = m_row["odd_tb25"]
+            elif out_type == "tm25":
+                odd_val = m_row["odd_tm25"]
+            elif out_type == "btts_yes":
+                odd_val = m_row["odd_btts_yes"]
+            elif out_type == "btts_no":
+                odd_val = m_row["odd_btts_no"]
+            else:
+                return False, f"Неизвестный исход ставки '{out_type}'."
+
+            total_odd *= max(1.01, float(odd_val))
+            validated_items.append((m_id, out_type, round(float(odd_val), 2)))
+
+        total_odd = round(total_odd, 2)
+        potential_win = int(round(amount * total_odd))
+        bet_type = "single" if len(validated_items) == 1 else "express"
+
+        # 1. Deduct coins
+        cursor.execute(
+            """
+            UPDATE user_wallets 
+            SET balance = balance - ?, total_wagered = total_wagered + ?, bets_count = bets_count + 1, updated_at = CURRENT_TIMESTAMP
+            WHERE user_id = ?
+            """,
+            (amount, amount, user_id)
+        )
+
+        # 2. Insert user_bet
+        cursor.execute(
+            """
+            INSERT INTO user_bets (user_id, bet_type, amount, total_odd, potential_win, status)
+            VALUES (?, ?, ?, ?, ?, 'pending')
+            """,
+            (user_id, bet_type, amount, total_odd, potential_win)
+        )
+        bet_id = cursor.lastrowid
+
+        # 3. Insert items
+        for m_id, out_type, odd_v in validated_items:
+            cursor.execute(
+                """
+                INSERT INTO bet_items (bet_id, match_id, outcome_type, odd, status)
+                VALUES (?, ?, ?, ?, 'pending')
+                """,
+                (bet_id, m_id, out_type, odd_v)
+            )
+
+        # 4. Record transaction
+        cursor.execute(
+            "INSERT INTO coin_transactions (user_id, amount, transaction_type, reference_id) VALUES (?, ?, 'bet_placed', ?)",
+            (user_id, -amount, bet_id)
+        )
+
+        return True, bet_id
+
+
+def get_user_bets(user_id: int, status: str | None = None, limit: int = 10) -> list[dict]:
+    """Fetch user's bets with nested selections."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        query = "SELECT * FROM user_bets WHERE user_id = ?"
+        params = [user_id]
+        if status:
+            query += " AND status = ?"
+            params.append(status)
+        query += " ORDER BY id DESC LIMIT ?"
+        params.append(limit)
+
+        cursor.execute(query, params)
+        bets = [dict(r) for r in cursor.fetchall()]
+
+        for b in bets:
+            cursor.execute(
+                """
+                SELECT bi.*, bm.team1_name, bm.team2_name, bm.tour
+                FROM bet_items bi
+                LEFT JOIN bet_markets bm ON bi.match_id = bm.match_id
+                WHERE bi.bet_id = ?
+                """,
+                (b["id"],)
+            )
+            b["items"] = [dict(item) for item in cursor.fetchall()]
+
+        return bets
+
+
+def settle_match_bets(match_id: int, score1: int, score2: int) -> list[dict]:
+    """
+    Settle all pending bets related to a finished match.
+    Evaluates P1, X, P2, TB25, TM25, BTTS_YES, BTTS_NO.
+    Resolves single bets and partial/complete express slips.
+    Returns list of won bet payloads for notifications.
+    """
+    with transaction() as conn:
+        cursor = conn.cursor()
+
+        # 1. Close market
+        cursor.execute("UPDATE bet_markets SET is_active = 0 WHERE match_id = ?", (match_id,))
+
+        # 2. Determine winning outcomes
+        winning_outcomes = set()
+        if score1 > score2:
+            winning_outcomes.add("p1")
+        elif score2 > score1:
+            winning_outcomes.add("p2")
+        else:
+            winning_outcomes.add("x")
+
+        tot_goals = score1 + score2
+        if tot_goals > 2.5:
+            winning_outcomes.add("tb25")
+        else:
+            winning_outcomes.add("tm25")
+
+        if score1 > 0 and score2 > 0:
+            winning_outcomes.add("btts_yes")
+        else:
+            winning_outcomes.add("btts_no")
+
+        # 3. Update bet_items for this match
+        cursor.execute("SELECT id, bet_id, outcome_type FROM bet_items WHERE match_id = ? AND status = 'pending'", (match_id,))
+        pending_items = cursor.fetchall()
+
+        affected_bet_ids = set()
+        for item in pending_items:
+            item_id = item["id"]
+            b_id = item["bet_id"]
+            out_type = item["outcome_type"]
+            item_status = "won" if out_type in winning_outcomes else "lost"
+            cursor.execute("UPDATE bet_items SET status = ? WHERE id = ?", (item_status, item_id))
+            affected_bet_ids.add(b_id)
+
+        # 4. Settle parent user_bets
+        payout_notifications = []
+        for b_id in affected_bet_ids:
+            cursor.execute("SELECT * FROM user_bets WHERE id = ? AND status = 'pending'", (b_id,))
+            bet_row = cursor.fetchone()
+            if not bet_row:
+                continue
+
+            # Check all items in this bet
+            cursor.execute("SELECT status FROM bet_items WHERE bet_id = ?", (b_id,))
+            all_statuses = [r["status"] for r in cursor.fetchall()]
+
+            if "lost" in all_statuses:
+                # Any loss makes the entire slip lost
+                cursor.execute(
+                    "UPDATE user_bets SET status = 'lost', settled_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    (b_id,)
+                )
+            elif all(s == "won" for s in all_statuses):
+                # All items won -> Payout!
+                payout = bet_row["potential_win"]
+                u_id = bet_row["user_id"]
+                cursor.execute(
+                    "UPDATE user_bets SET status = 'won', settled_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    (b_id,)
+                )
+                cursor.execute(
+                    """
+                    UPDATE user_wallets 
+                    SET balance = balance + ?, total_won = total_won + ?, bets_won = bets_won + 1, updated_at = CURRENT_TIMESTAMP
+                    WHERE user_id = ?
+                    """,
+                    (payout, payout, u_id)
+                )
+                cursor.execute(
+                    "INSERT INTO coin_transactions (user_id, amount, transaction_type, reference_id) VALUES (?, ?, 'bet_won', ?)",
+                    (u_id, payout, b_id)
+                )
+                payout_notifications.append({
+                    "user_id": u_id,
+                    "bet_id": b_id,
+                    "bet_type": bet_row["bet_type"],
+                    "amount": bet_row["amount"],
+                    "total_odd": bet_row["total_odd"],
+                    "payout": payout
+                })
+
+        return payout_notifications
+
 
 
 

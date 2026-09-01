@@ -663,6 +663,10 @@ def register_all_handlers(application: Application) -> None:
     _register_cabinet_handlers(application)
     _register_admin_handlers(application)
 
+    # 🎰 Logovo.bet: Virtual Prediction & Sportsbook Handlers
+    from handlers.betting import register_betting_handlers
+    register_betting_handlers(application)
+
     # 3. И ТОЛЬКО В САМОМ КОНЦЕ перехватчик текста и голосовых сообщений для ИИ Темшика!
     application.add_handler(MessageHandler((filters.TEXT | filters.VOICE) & ~filters.COMMAND, handle_ai_chat))
 
