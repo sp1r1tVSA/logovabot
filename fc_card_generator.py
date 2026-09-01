@@ -490,15 +490,27 @@ def render_master_static_card(player_data: dict, style_id: str = "toty_gold") ->
         draw.text((c2_num_x, cur_y), str(rv), font=font_s_val, fill=cfg["text_primary"], anchor="rt")
         draw.text((c2_lbl_x, cur_y + int(3 * SCALE)), rl, font=font_s_lbl, fill=cfg["border_primary"], anchor="lt")
 
-    # 9. Bottom Finial & Edition Badge
+    # 9. Bottom Finial & Edition Badge (Auto-fit to guarantee zero overflow)
     foot_y = grid_y + int(148 * SCALE)
-    foot_w = int(300 * SCALE)
-    foot_h = int(26 * SCALE)
-    foot_x = (WIDTH - foot_w) // 2
-
-    # Clean display title (avoid verbose slash descriptions in small footer)
     title_short = cfg['title'].split(' / ')[0].strip()
     foot_text = f"★ {title_short} • КПЛ 2026 ★"
+
+    # Find optimal font size and adapt badge width to text
+    max_text_w = int(280 * SCALE)
+    font_sz = 13
+    font_foot = load_card_font(font_sz, bold=True)
+    bbox = draw.textbbox((0, 0), foot_text, font=font_foot)
+    text_w = bbox[2] - bbox[0]
+
+    while text_w > max_text_w and font_sz > 8:
+        font_sz -= 1
+        font_foot = load_card_font(font_sz, bold=True)
+        bbox = draw.textbbox((0, 0), foot_text, font=font_foot)
+        text_w = bbox[2] - bbox[0]
+
+    foot_w = min(int(320 * SCALE), text_w + int(24 * SCALE))
+    foot_h = int(26 * SCALE)
+    foot_x = (WIDTH - foot_w) // 2
 
     draw.rounded_rectangle(
         [(foot_x, foot_y), (foot_x + foot_w, foot_y + foot_h)],
@@ -508,8 +520,6 @@ def render_master_static_card(player_data: dict, style_id: str = "toty_gold") ->
         width=int(1.5 * SCALE)
     )
 
-    font_sz = 11 if len(foot_text) > 28 else (12 if len(foot_text) > 22 else 13)
-    font_foot = load_card_font(font_sz, bold=True)
     draw.text((WIDTH // 2, foot_y + (foot_h // 2)), foot_text, font=font_foot, fill=cfg["border_primary"], anchor="mm")
 
     return img
