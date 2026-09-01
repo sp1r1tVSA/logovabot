@@ -467,8 +467,8 @@ async def cb_bet_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 def register_betting_handlers(app) -> None:
     """Register all Logovo.bet commands and callback queries."""
-    app.add_handler(CommandHandler(["bet", "logovobet", "ставки", "букмекер"], cmd_bet_hub))
-    app.add_handler(CommandHandler(["bonus", "бонус"], cmd_bonus))
+    app.add_handler(CommandHandler(["bet", "logovobet"], cmd_bet_hub))
+    app.add_handler(CommandHandler(["bonus"], cmd_bonus))
     app.add_handler(CommandHandler(["bet_top", "top_bettors"], cb_bet_leaderboard))
 
     app.add_handler(CallbackQueryHandler(cmd_bet_hub, pattern="^bet_menu_main$"))
