@@ -92,6 +92,11 @@ async def handle_get_predictions(request: web.Request) -> web.Response:
             "message": "Logovo.bet находится на закрытом тесте в Лаборатории."
         }, status=403)
 
+    try:
+        database.settle_all_pending_finished_matches()
+    except Exception as e:
+        logger.warning(f"Error auto-settling in get_predictions: {e}")
+
     bets = database.get_user_bets(user_id, limit=30)
 
     return web.json_response({

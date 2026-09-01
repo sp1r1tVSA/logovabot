@@ -1080,6 +1080,10 @@ def confirm_and_finalize_match(match_id: int, p1_score: int, p2_score: int, even
             "UPDATE matches SET player1_score = ?, player2_score = ?, reported_by = ?, photo_id = ?, status = 'confirmed', played_at = ? WHERE id = ?",
             (p1_score, p2_score, reporter_id, photo_id, datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), match_id)
         )
+        try:
+            settle_match_bets(match_id, p1_score, p2_score)
+        except Exception as e:
+            logger.warning(f"Error settling bets for match {match_id}: {e}")
     return process_cup_match_completion(match_id)
 
 def set_technical_result(match_id: int, p1_score: int, p2_score: int) -> str | None:
@@ -1091,6 +1095,10 @@ def set_technical_result(match_id: int, p1_score: int, p2_score: int) -> str | N
             (p1_score, p2_score, datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), match_id)
         )
         cursor.execute("DELETE FROM match_events WHERE match_id = ?", (match_id,))
+        try:
+            settle_match_bets(match_id, p1_score, p2_score)
+        except Exception as e:
+            logger.warning(f"Error settling bets on technical result for match {match_id}: {e}")
     return process_cup_match_completion(match_id)
 
 def save_pending_report(match_id: int, reporter_id: int, payload: dict) -> None:
@@ -1509,6 +1517,10 @@ def admin_set_match_score(match_id: int, player1_score: int, player2_score: int)
             "UPDATE matches SET player1_score = ?, player2_score = ?, status = 'confirmed', played_at = ? WHERE id = ?",
             (player1_score, player2_score, datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), match_id)
         )
+        try:
+            settle_match_bets(match_id, player1_score, player2_score)
+        except Exception as e:
+            logger.warning(f"Error settling bets in admin_set_match_score for match {match_id}: {e}")
 
 def get_config(key: str) -> str | None:
     """Retrieve a configuration value by key."""
@@ -4842,7 +4854,7 @@ def get_open_betting_tours() -> list[dict]:
             SELECT 
                 r.round_number, r.deadline,
                 COUNT(m.id) as total_matches,
-                SUM(CASE WHEN m.status != 'completed' THEN 1 ELSE 0 END) as unplayed_matches
+                SUM(CASE WHEN m.status NOT IN ('confirmed', 'completed') THEN 1 ELSE 0 END) as unplayed_matches
             FROM rounds r
             JOIN matches m ON r.round_number = m.round_number
             WHERE r.is_open = 1
@@ -4880,7 +4892,7 @@ def get_active_bet_markets(tour: int | None = None) -> list[dict]:
             FROM bet_markets bm
             JOIN matches m ON bm.match_id = m.id
             JOIN rounds r ON m.round_number = r.round_number
-            WHERE bm.is_active = 1 AND m.status != 'completed' AND r.is_open = 1
+            WHERE bm.is_active = 1 AND m.status NOT IN ('confirmed', 'completed') AND r.is_open = 1
         """
         params = []
         if tour is not None:
@@ -4909,7 +4921,7 @@ def get_bet_market_by_match_id(match_id: int) -> dict | None:
             FROM bet_markets bm
             JOIN matches m ON bm.match_id = m.id
             JOIN rounds r ON m.round_number = r.round_number
-            WHERE bm.match_id = ? AND r.is_open = 1
+            WHERE bm.match_id = ? AND r.is_open = 1 AND m.status NOT IN ('confirmed', 'completed')
         """, (match_id,))
         row = cursor.fetchone()
         return dict(row) if row else None
@@ -4943,7 +4955,7 @@ def place_user_bet(user_id: int, amount: int, selections: list[dict]) -> tuple[b
                 FROM bet_markets bm 
                 JOIN matches m ON bm.match_id = m.id 
                 JOIN rounds r ON m.round_number = r.round_number
-                WHERE bm.match_id = ? AND bm.is_active = 1 AND m.status != 'completed' AND r.is_open = 1
+                WHERE bm.match_id = ? AND bm.is_active = 1 AND m.status NOT IN ('confirmed', 'completed') AND r.is_open = 1
                 """,
                 (m_id,)
             )
@@ -5146,8 +5158,26 @@ def settle_match_bets(match_id: int, score1: int, score2: int) -> list[dict]:
         return payout_notifications
 
 
-
-
-
-
+def settle_all_pending_finished_matches() -> list[dict]:
+    """
+    Self-healing trigger: Scan all pending bet items for matches that are already
+    completed/confirmed in the database and settle them immediately.
+    """
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT DISTINCT m.id, m.player1_score, m.player2_score
+            FROM bet_items bi
+            JOIN matches m ON bi.match_id = m.id
+            WHERE bi.status = 'pending' 
+              AND m.status IN ('confirmed', 'completed')
+              AND m.player1_score IS NOT NULL 
+              AND m.player2_score IS NOT NULL
+        """)
+        matches = cursor.fetchall()
+        all_payouts = []
+        for m in matches:
+            res = settle_match_bets(m["id"], m["player1_score"], m["player2_score"])
+            all_payouts.extend(res)
+        return all_payouts
 

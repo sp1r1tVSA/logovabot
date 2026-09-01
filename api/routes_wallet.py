@@ -32,6 +32,12 @@ async def handle_bootstrap(request: web.Request) -> web.Response:
     is_adm = is_admin(user_id)
     has_access = check_user_access(user_id)
 
+    # Auto-settle any finished matches in background
+    try:
+        database.settle_all_pending_finished_matches()
+    except Exception as e:
+        logger.warning(f"Error in auto-settlement: {e}")
+
     # Fetch wallet
     wallet = database.get_or_create_wallet(user_id)
 
