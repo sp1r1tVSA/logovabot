@@ -6,6 +6,66 @@
 import { store } from './store.js';
 import { tgBridge } from './tg.js';
 
+export const TEAM_LOGO_MAP = {
+  'спортинг': 'sporting.png',
+  'sporting': 'sporting.png',
+  'копенгаген': 'copenhagen.png',
+  'copenhagen': 'copenhagen.png',
+  'ривер плейт': 'river_plate.png',
+  'river plate': 'river_plate.png',
+  'ривер': 'river_plate.png',
+  'бока хуниорс': 'boca_juniors.png',
+  'boca juniors': 'boca_juniors.png',
+  'бока': 'boca_juniors.png',
+  'бенфика': 'benfica.png',
+  'benfica': 'benfica.png',
+  'псв': 'psv.png',
+  'psv': 'psv.png',
+  'порту': 'porto.png',
+  'porto': 'porto.png',
+  'будё глимт': 'bodo_glimt.png',
+  'будë глимт': 'bodo_glimt.png',
+  'буде глимт': 'bodo_glimt.png',
+  'bodo glimt': 'bodo_glimt.png',
+  'bodo_glimt': 'bodo_glimt.png',
+  'фейеноорд': 'feyenoord.png',
+  'feyenoord': 'feyenoord.png',
+  'селтик': 'celtic.png',
+  'celtic': 'celtic.png',
+  'расинг': 'racing.png',
+  'racing': 'racing.png',
+  'аякс': 'ajax.png',
+  'ajax': 'ajax.png',
+  'брага': 'braga.png',
+  'braga': 'braga.png',
+  'рейнджерс': 'rangers.png',
+  'rangers': 'rangers.png',
+  'брюгге': 'brugge.png',
+  'club brugge': 'brugge.png',
+  'brugge': 'brugge.png',
+  'аек': 'aek.png',
+  'aek': 'aek.png'
+};
+
+export function getTeamLogoUrl(teamName) {
+  if (!teamName) return null;
+  const t = teamName.trim().toLowerCase();
+  for (const [k, file] of Object.entries(TEAM_LOGO_MAP)) {
+    if (t === k || t.includes(k) || k.includes(t)) {
+      return `/assets/logos/${file}`;
+    }
+  }
+  return null;
+}
+
+export function renderTeamLogoHtml(teamName, size = 28, extraClass = '') {
+  const url = getTeamLogoUrl(teamName);
+  if (url) {
+    return `<img src="${url}" alt="${teamName || 'Club'}" class="team-logo-img ${extraClass}" style="width:${size}px; height:${size}px; object-fit:contain; filter:drop-shadow(0 2px 6px rgba(0,0,0,0.4)); vertical-align:middle; display:inline-block; flex-shrink:0;" onerror="this.style.display='none'; if(this.nextElementSibling) this.nextElementSibling.style.display='inline-block';" /><span class="team-logo-fallback ${extraClass}" style="display:none; font-size:${Math.round(size * 0.75)}px; vertical-align:middle;">🛡️</span>`;
+  }
+  return `<span class="team-logo-fallback ${extraClass}" style="font-size:${Math.round(size * 0.75)}px; vertical-align:middle;">🛡️</span>`;
+}
+
 const OUTCOME_NAMES = {
   p1: 'П1',
   x: 'Х',
@@ -159,11 +219,17 @@ export class UIRenderer {
             </button>
           </div>
 
-          <!-- Teams Row -->
+          <!-- Teams Row with Crest Logos -->
           <div class="match-teams-row">
-            <div class="team-name" style="flex: 1; text-align: right;">${m.team1_name}</div>
-            <div style="font-family: 'Outfit', sans-serif; font-size: 0.95rem; font-weight: 900; color: var(--text-gold); padding: 0 12px;">VS</div>
-            <div class="team-name" style="flex: 1; text-align: left;">${m.team2_name}</div>
+            <div class="team-name" style="flex: 1; text-align: right; display: flex; align-items: center; justify-content: flex-end; gap: 8px;">
+              <span>${m.team1_name}</span>
+              ${renderTeamLogoHtml(m.team1_name, 26)}
+            </div>
+            <div style="font-family: 'Outfit', sans-serif; font-size: 0.88rem; font-weight: 900; color: var(--text-gold); padding: 0 10px;">VS</div>
+            <div class="team-name" style="flex: 1; text-align: left; display: flex; align-items: center; justify-content: flex-start; gap: 8px;">
+              ${renderTeamLogoHtml(m.team2_name, 26)}
+              <span>${m.team2_name}</span>
+            </div>
           </div>
 
           <!-- Quick Market Odds Buttons -->
@@ -242,12 +308,14 @@ export class UIRenderer {
     const t2Form = stats?.team2?.stats?.form || ['D', 'L', 'W'];
 
     container.innerHTML = `
-      <!-- Header vs Card -->
+      <!-- Header vs Card with Club Logos -->
       <div class="match-center-header">
         <div class="team-vs-display">
           <div class="team-block">
-            <div class="team-crest">🛡</div>
-            <div class="team-name-lg">${t1}</div>
+            <div class="team-crest-container">
+              ${renderTeamLogoHtml(t1, 48, 'team-crest-img')}
+            </div>
+            <div class="team-name-lg" style="margin-top: 6px;">${t1}</div>
             <div class="form-badges-row">
               ${t1Form.map(f => `<span class="form-dot ${f.toLowerCase()}">${f}</span>`).join('')}
             </div>
@@ -259,8 +327,10 @@ export class UIRenderer {
             </span>
           </div>
           <div class="team-block">
-            <div class="team-crest">⚔️</div>
-            <div class="team-name-lg">${t2}</div>
+            <div class="team-crest-container">
+              ${renderTeamLogoHtml(t2, 48, 'team-crest-img')}
+            </div>
+            <div class="team-name-lg" style="margin-top: 6px;">${t2}</div>
             <div class="form-badges-row">
               ${t2Form.map(f => `<span class="form-dot ${f.toLowerCase()}">${f}</span>`).join('')}
             </div>
@@ -350,20 +420,36 @@ export class UIRenderer {
               </tr>
             </thead>
             <tbody>
-              ${standings.map((s, idx) => `
-                <tr>
-                  <td>
-                    <span class="standings-pos-pill ${idx < 3 ? 'top' : 'mid'}">${idx + 1}</span>
-                    ${s.team || s.player_team || s.name || 'Команда'}
-                  </td>
-                  <td>${s.played ?? s.games ?? 0}</td>
-                  <td>${s.won ?? s.wins ?? 0}</td>
-                  <td>${s.drawn ?? s.draws ?? 0}</td>
-                  <td>${s.lost ?? s.losses ?? 0}</td>
-                  <td>${(s.goals_for ?? 0) - (s.goals_against ?? 0)}</td>
-                  <td style="font-weight: 800; color: var(--accent-gold);">${s.points ?? 0}</td>
-                </tr>
-              `).join('')}
+              ${standings.map((s, idx) => {
+                const teamName = s.team_name || s.team || s.player_team || s.name || 'Команда';
+                const played = s.played ?? s.games ?? 0;
+                const wins = s.wins ?? s.won ?? 0;
+                const draws = s.draws ?? s.drawn ?? 0;
+                const losses = s.losses ?? s.lost ?? 0;
+                const gf = s.goals_scored ?? s.goals_for ?? 0;
+                const ga = s.goals_conceded ?? s.goals_against ?? 0;
+                const diff = gf - ga;
+                const diffStr = diff > 0 ? `+${diff}` : `${diff}`;
+                const points = s.points ?? 0;
+
+                return `
+                  <tr>
+                    <td style="text-align: left;">
+                      <div style="display: flex; align-items: center; gap: 8px;">
+                        <span class="standings-pos-pill ${idx < 3 ? 'top' : 'mid'}">${idx + 1}</span>
+                        ${renderTeamLogoHtml(teamName, 22)}
+                        <span style="font-weight: 700; color: #fff;">${teamName}</span>
+                      </div>
+                    </td>
+                    <td>${played}</td>
+                    <td>${wins}</td>
+                    <td>${draws}</td>
+                    <td>${losses}</td>
+                    <td style="color: ${diff > 0 ? 'var(--color-success)' : diff < 0 ? 'var(--color-danger)' : 'var(--text-secondary)'}; font-weight: 700;">${diffStr}</td>
+                    <td style="font-weight: 900; color: var(--accent-gold); font-size: 0.95rem;">${points}</td>
+                  </tr>
+                `;
+              }).join('')}
             </tbody>
           </table>
         </div>
@@ -373,15 +459,25 @@ export class UIRenderer {
         container.innerHTML = '<div style="text-align: center; padding: 40px; color: var(--text-muted);">Архив результатов пуст.</div>';
         return;
       }
-      container.innerHTML = results.map(r => `
-        <div style="background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 12px 14px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center;">
-          <div style="flex: 1; text-align: right; font-weight: 700; color: #fff;">${r.team1_name || r.player1_team}</div>
-          <div style="padding: 4px 12px; font-family: 'Outfit', sans-serif; font-weight: 900; font-size: 1.1rem; color: var(--accent-gold);">
-            ${r.player1_score ?? 0} : ${r.player2_score ?? 0}
+      container.innerHTML = results.map(r => {
+        const t1 = r.team1_name || r.player1_team || 'Хозяева';
+        const t2 = r.team2_name || r.player2_team || 'Гости';
+        return `
+          <div style="background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 12px 14px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center;">
+            <div style="flex: 1; text-align: right; font-weight: 700; color: #fff; display: flex; align-items: center; justify-content: flex-end; gap: 6px;">
+              <span>${t1}</span>
+              ${renderTeamLogoHtml(t1, 22)}
+            </div>
+            <div style="padding: 4px 14px; font-family: 'Outfit', sans-serif; font-weight: 900; font-size: 1.15rem; color: var(--accent-gold); background: rgba(0,0,0,0.3); border-radius: var(--radius-sm); margin: 0 10px;">
+              ${r.player1_score ?? 0} : ${r.player2_score ?? 0}
+            </div>
+            <div style="flex: 1; text-align: left; font-weight: 700; color: #fff; display: flex; align-items: center; justify-content: flex-start; gap: 6px;">
+              ${renderTeamLogoHtml(t2, 22)}
+              <span>${t2}</span>
+            </div>
           </div>
-          <div style="flex: 1; text-align: left; font-weight: 700; color: #fff;">${r.team2_name || r.player2_team}</div>
-        </div>
-      `).join('');
+        `;
+      }).join('');
     } else if (activeTab === 'scorers') {
       if (!topScorers || topScorers.length === 0) {
         container.innerHTML = '<div style="text-align: center; padding: 40px; color: var(--text-muted);">Список бомбардиров формируется.</div>';
@@ -390,15 +486,16 @@ export class UIRenderer {
       container.innerHTML = `
         <div style="background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 10px;">
           ${topScorers.map((sc, idx) => `
-            <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.04);">
-              <div style="display: flex; align-items: center; gap: 8px;">
-                <span style="font-weight: 800; color: ${idx < 3 ? 'var(--accent-gold)' : 'var(--text-secondary)'}; width: 20px;">#${idx + 1}</span>
+            <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 4px; border-bottom: 1px solid rgba(255,255,255,0.04);">
+              <div style="display: flex; align-items: center; gap: 10px;">
+                <span style="font-weight: 800; color: ${idx < 3 ? 'var(--accent-gold)' : 'var(--text-secondary)'}; width: 22px;">#${idx + 1}</span>
+                ${renderTeamLogoHtml(sc.team_name, 26)}
                 <div>
                   <div style="font-weight: 700; color: #fff; font-size: 0.88rem;">${sc.player_name}</div>
                   <div style="font-size: 0.75rem; color: var(--text-muted);">${sc.team_name}</div>
                 </div>
               </div>
-              <div style="font-family: 'Outfit', sans-serif; font-weight: 800; color: var(--accent-gold); font-size: 1rem;">
+              <div style="font-family: 'Outfit', sans-serif; font-weight: 900; color: var(--accent-gold); font-size: 1.05rem;">
                 ⚽ ${sc.goals}
               </div>
             </div>
@@ -456,8 +553,14 @@ export class UIRenderer {
           <!-- Items in Slip -->
           <div style="margin-bottom: 10px;">
             ${(b.items || []).map(it => `
-              <div style="display: flex; justify-content: space-between; align-items: center; padding: 4px 0; font-size: 0.82rem;">
-                <span style="color: #fff; font-weight: 600;">${it.team1_name} — ${it.team2_name}</span>
+              <div style="display: flex; justify-content: space-between; align-items: center; padding: 6px 0; font-size: 0.82rem; border-bottom: 1px dashed rgba(255,255,255,0.04);">
+                <div style="display: flex; align-items: center; gap: 6px; color: #fff; font-weight: 600;">
+                  ${renderTeamLogoHtml(it.team1_name, 18)}
+                  <span>${it.team1_name}</span>
+                  <span style="color: var(--text-muted); font-size: 0.75rem;">vs</span>
+                  ${renderTeamLogoHtml(it.team2_name, 18)}
+                  <span>${it.team2_name}</span>
+                </div>
                 <div style="display: flex; align-items: center; gap: 6px;">
                   <span style="background: rgba(245,176,39,0.15); color: var(--accent-gold); padding: 2px 6px; border-radius: 4px; font-weight: 700;">
                     ${OUTCOME_NAMES[it.outcome_type] || it.outcome_type} @ ${Number(it.odd || it.odds_at_placement || 1.0).toFixed(2)}
@@ -632,8 +735,14 @@ export class UIRenderer {
         itemsEl.innerHTML = slip.map(s => `
           <div style="display: flex; justify-content: space-between; align-items: center; background: var(--bg-tertiary); padding: 8px 10px; border-radius: var(--radius-sm); margin-bottom: 6px;">
             <div>
-              <div style="font-weight: 700; font-size: 0.82rem; color: #fff;">${s.team1_name} — ${s.team2_name}</div>
-              <div style="font-size: 0.75rem; color: var(--accent-gold); font-weight: 800;">
+              <div style="font-weight: 700; font-size: 0.82rem; color: #fff; display: flex; align-items: center; gap: 6px;">
+                ${renderTeamLogoHtml(s.team1_name, 16)}
+                <span>${s.team1_name}</span>
+                <span style="color: var(--text-muted); font-size: 0.7rem;">—</span>
+                ${renderTeamLogoHtml(s.team2_name, 16)}
+                <span>${s.team2_name}</span>
+              </div>
+              <div style="font-size: 0.75rem; color: var(--accent-gold); font-weight: 800; margin-top: 2px;">
                 ${s.selection_name || OUTCOME_NAMES[s.outcome] || s.outcome} @ ${s.odd.toFixed(2)}
               </div>
             </div>

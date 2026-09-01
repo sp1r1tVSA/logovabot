@@ -1255,9 +1255,24 @@
   flex: 1;
 }
 
-.team-crest {
-  font-size: 2.2rem;
-  filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.5));
+.team-crest-container {
+  width: 60px;
+  height: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 50%;
+  padding: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+
+.team-crest-img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  filter: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.6));
 }
 
 .team-name-lg {

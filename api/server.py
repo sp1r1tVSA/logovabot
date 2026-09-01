@@ -52,7 +52,9 @@ from api.routes_gamification import (
 
 logger = logging.getLogger(__name__)
 
-WEB_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "web")
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+WEB_DIR = os.path.join(ROOT_DIR, "web")
+ASSETS_DIR = os.path.join(ROOT_DIR, "assets")
 
 
 @web.middleware
@@ -130,15 +132,15 @@ def create_app() -> web.Application:
     app.router.add_post("/api/achievements/claim", handle_claim_achievement)
     app.router.add_get("/api/profile/{user_id}", handle_get_profile)
 
-    # Static SPA Frontend
+    # Static SPA Frontend & Assets
     app.router.add_get("/", handle_index)
     app.router.add_get("/app", handle_index)
     if os.path.exists(WEB_DIR):
         app.router.add_static("/static/", WEB_DIR, show_index=True)
         app.router.add_static("/css/", os.path.join(WEB_DIR, "css"))
         app.router.add_static("/js/", os.path.join(WEB_DIR, "js"))
-        if os.path.exists(os.path.join(WEB_DIR, "assets")):
-            app.router.add_static("/assets/", os.path.join(WEB_DIR, "assets"))
+    if os.path.exists(ASSETS_DIR):
+        app.router.add_static("/assets/", ASSETS_DIR, show_index=True)
 
     return app
 
