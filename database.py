@@ -4593,6 +4593,20 @@ def count_user_remaining_debts(user_id: int) -> int:
 # 🎰 LOGOVO.BET — VIRTUAL SPORTS PREDICTION & BETTING REPOSITORY
 # ═════════════════════════════════════════════════════════════════════════════
 
+def get_active_round_number() -> int:
+    """Return the lowest currently open round number or the latest created round."""
+    try:
+        open_rounds = get_open_rounds_with_deadlines()
+        if open_rounds:
+            return min(r["round_number"] for r in open_rounds)
+        all_rounds = get_all_rounds()
+        if all_rounds:
+            return max(r["round_number"] for r in all_rounds)
+    except Exception:
+        pass
+    return 1
+
+
 def get_or_create_wallet(user_id: int) -> dict:
     """Get user's betting wallet or initialize a new one with 1,000 start coins."""
     with transaction() as conn:
