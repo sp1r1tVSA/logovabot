@@ -12,6 +12,7 @@ import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler
 
+from handlers.base import is_admin
 import database
 from services.betting_engine import generate_round_markets
 
@@ -27,6 +28,17 @@ OUTCOME_TITLES = {
     "btts_yes": "Обе забьют: ДА",
     "btts_no": "Обе забьют: НЕТ"
 }
+
+
+def _check_betting_access(user_id: int) -> bool:
+    """Check if Logovo.bet is accessible to the user (admin_only while in Lab)."""
+    if is_admin(user_id):
+        return True
+    try:
+        flag = database.get_feature_flag("betting_market")
+        return flag == "public"
+    except Exception:
+        return False
 
 
 def _get_slip(context: ContextTypes.DEFAULT_TYPE) -> list[dict]:
@@ -50,7 +62,7 @@ def _format_wallet_header(user_id: int, wallet: dict) -> str:
 
     return (
         f"🎰 <b>Букмекерская Контора «Logovo.bet»</b>\n"
-        f"<i>Управляющий: ИИ «Темшик»</i>\n\n"
+        f"<i>Управляющий: ИИ «Темшик» [Лаборатория]</i>\n\n"
         f"🪙 <b>Ваш баланс:</b> <code>{bal:,} 🪙</code>\n"
         f"📊 <b>Ставок:</b> {b_count} | <b>Побед:</b> {b_won} (<b>{winrate}%</b>)\n"
         f"📈 <b>Чистый профит:</b> <code>{profit_str}</code>\n"
@@ -64,6 +76,20 @@ async def cmd_bet_hub(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     user_id = update.effective_user.id
+
+    # Check Lab access restriction
+    if not _check_betting_access(user_id):
+        text_restricted = (
+            "🧪 <b>Logovo.bet находится в Лаборатории!</b>\n\n"
+            "<i>Букмекерская контора ИИ «Темшик» в данный момент проходит закрытое тестирование администрацией турнира в <code>/lab</code>.\n\n"
+            "Скоро мы откроем ставки для всех участников чемпионата! Следите за анонсами в канале лиги. 🎰</i>"
+        )
+        if update.callback_query:
+            await update.callback_query.answer("🎰 Logovo.bet временно на закрытом тесте в Лаборатории.", show_alert=True)
+        elif update.message:
+            await update.message.reply_text(text_restricted, parse_mode="HTML")
+        return
+
     wallet = await asyncio.to_thread(database.get_or_create_wallet, user_id)
     slip = _get_slip(context)
 
@@ -84,6 +110,9 @@ async def cmd_bet_hub(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             InlineKeyboardButton("🏆 Топ Капперов", callback_data="bet_leaderboard")
         ]
     ]
+
+    if is_admin(user_id):
+        kb.append([InlineKeyboardButton("🧪 Назад в Лабораторию (/lab)", callback_data="admin_lab_menu")])
 
     if update.callback_query:
         await update.callback_query.answer()
@@ -400,6 +429,14 @@ async def cmd_bonus(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     user_id = update.effective_user.id
+    if not _check_betting_access(user_id):
+        await update.message.reply_text(
+            "🧪 <b>Logovo.bet находится в Лаборатории!</b>\n\n"
+            "<i>Функция ежедневного бонуса станет доступна после открытия букмекерки для всех участников чемпионата. 🎰</i>",
+            parse_mode="HTML"
+        )
+        return
+
     success, val, msg = await asyncio.to_thread(database.claim_daily_bonus, user_id, 250)
     await update.message.reply_text(msg, parse_mode="HTML")
 
