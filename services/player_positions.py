@@ -116,6 +116,8 @@ KNOWN_PLAYER_POSITIONS: dict[str, str] = {
     "pedro neto": "RW", "neto": "RW", "педру нету": "RW",
 
     # Attacking Midfielders / Playmakers (CAM / AM)
+    "ryan christie": "CAM", "christie": "CAM", "райан кристи": "CAM", "кристи": "CAM",
+    "matias zaracho": "CAM", "zaracho": "CAM", "матияс сарачо": "CAM", "сарачо": "CAM",
     "jude bellingham": "CAM", "bellingham": "CAM", "джуд беллингем": "CAM", "беллингем": "CAM",
     "florian wirtz": "CAM", "wirtz": "CAM", "флориан вирц": "CAM", "вирц": "CAM",
     "jamal musiala": "CAM", "musiala": "CAM", "джамал мусиала": "CAM", "мусиала": "CAM",
@@ -252,11 +254,76 @@ def _normalize_name_key(name: str) -> str:
     return re.sub(r"\s+", " ", clean)
 
 
+def _fetch_thesportsdb_position(player_name: str) -> str | None:
+    """Query TheSportsDB API to extract player's real world position."""
+    try:
+        query = urllib.parse.quote(player_name)
+        url = f"https://www.thesportsdb.com/api/v1/json/3/searchplayers.php?p={query}"
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=3.5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            players = data.get("player")
+            if players and len(players) > 0:
+                pos = players[0].get("strPosition")
+                if pos:
+                    return normalize_position(pos)
+    except Exception as e:
+        logger.debug(f"TheSportsDB position search failed for '{player_name}': {e}")
+    return None
+
+
+def _fetch_wikipedia_position(player_name: str) -> str | None:
+    """Extract player position from Wikipedia lead sentence / description."""
+    try:
+        clean = player_name.replace(" ", "_")
+        candidates = [clean, f"{clean}_(footballer)", f"{clean}_(soccer)"]
+        for c in candidates:
+            url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{urllib.parse.quote(c)}"
+            req = urllib.request.Request(url, headers={"User-Agent": "Logovobot/1.0 (contact@logovo.bot)"})
+            try:
+                with urllib.request.urlopen(req, timeout=3.0) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                    text = (data.get("description", "") + " " + data.get("extract", "")).lower()
+                    if not text:
+                        continue
+                    if "attacking midfielder" in text:
+                        return "CAM"
+                    if "defensive midfielder" in text:
+                        return "CDM"
+                    if "central midfielder" in text or "center midfielder" in text:
+                        return "CM"
+                    if "left winger" in text or "left wing" in text:
+                        return "LW"
+                    if "right winger" in text or "right wing" in text:
+                        return "RW"
+                    if "winger" in text:
+                        return "RW"
+                    if "centre-back" in text or "central defender" in text:
+                        return "CB"
+                    if "left-back" in text or "left back" in text:
+                        return "LB"
+                    if "right-back" in text or "right back" in text:
+                        return "RB"
+                    if "goalkeeper" in text:
+                        return "GK"
+                    if "striker" in text or "centre-forward" in text or "forward" in text:
+                        return "ST"
+                    if "midfielder" in text:
+                        return "CM"
+                    if "defender" in text:
+                        return "CB"
+            except Exception:
+                continue
+    except Exception as e:
+        logger.debug(f"Wikipedia position search failed for '{player_name}': {e}")
+    return None
+
+
 def _fetch_fotmob_position(player_name: str) -> str | None:
     """Query FotMob Search API to extract player's real world position."""
     try:
         query = urllib.parse.quote(player_name)
-        url = f"https://www.fotmob.com/api/search/suggest?term={query}&lang=en"
+        url = f"https://apigw.fotmob.com/searchapi/suggest?term={query}"
         req = urllib.request.Request(
             url,
             headers={
@@ -280,9 +347,11 @@ def _fetch_fotmob_position(player_name: str) -> str | None:
 def detect_player_position(player_name: str, team_name: str | None = None, fallback_goals: int = 0, fallback_assists: int = 0) -> str:
     """
     Resolve the authentic football position for a player.
-    1. Built-in Known Positions Registry
-    2. Online FotMob API (fast non-blocking with 3.5s timeout)
-    3. Heuristic fallback based on goals / assists
+    1. Built-in Known Positions Registry (0ms)
+    2. Online TheSportsDB API
+    3. Online Wikipedia REST API
+    4. Online FotMob API
+    5. Heuristic fallback based on goals / assists
     """
     if not player_name:
         return "ST"
@@ -298,11 +367,25 @@ def detect_player_position(player_name: str, team_name: str | None = None, fallb
         if len(k) > 3 and (k == p_norm or (k in p_norm and len(k) >= 5)):
             return v
             
-    # 3. Online metadata discovery
+    # 3. Online metadata discovery (TheSportsDB -> Wikipedia -> FotMob)
     try:
-        online_pos = _fetch_fotmob_position(player_name)
-        if online_pos:
-            return online_pos
+        tsdb_pos = _fetch_thesportsdb_position(player_name)
+        if tsdb_pos:
+            return tsdb_pos
+    except Exception:
+        pass
+
+    try:
+        wiki_pos = _fetch_wikipedia_position(player_name)
+        if wiki_pos:
+            return wiki_pos
+    except Exception:
+        pass
+
+    try:
+        fotmob_pos = _fetch_fotmob_position(player_name)
+        if fotmob_pos:
+            return fotmob_pos
     except Exception:
         pass
         
