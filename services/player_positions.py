@@ -55,6 +55,22 @@ POSITION_ALIASES: dict[str, str] = {
 # ⚽ CANONICAL REAL-WORLD PLAYER POSITION REGISTRY (200+ PLAYERS)
 # ═════════════════════════════════════════════════════════════════════════════
 KNOWN_PLAYER_POSITIONS: dict[str, str] = {
+    # ── Auto-synced Club Players from Server DB ──
+    "addai": "ST",
+    "cristian tello": "CM",
+    "dodi lukebakio": "RW",
+    "evander": "LW",
+    "giacomo raspadori": "ST",
+    "gronbaek": "CM",
+    "grønbæk": "CM",
+    "jamie bynoe-gittens": "CM",
+    "joao pedro": "ST",
+    "noa lang": "LW",
+    "orbelin pineda": "CM",
+    "ricardo horta": "ST",
+    "seko fofana": "CM",
+    "vinicius jr реал": "LW",
+
     # Strikers / Forwards (ST / CF)
     "erling haaland": "ST", "haaland": "ST", "эрлинг холанд": "ST", "холанд": "ST",
     "kylian mbappe": "ST", "mbappe": "ST", "килиан мбаппе": "ST", "мбаппе": "ST",
