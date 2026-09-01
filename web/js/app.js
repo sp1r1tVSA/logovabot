@@ -26,7 +26,7 @@ class AppController {
       UIRenderer.renderTournaments(state.standings, state.results, state.topScorers, this.currentTournamentTab);
       UIRenderer.renderPredictionsHistory(state.myBets, state.myBetsFilter);
       UIRenderer.renderSavedCoupons(state.savedCoupons);
-      UIRenderer.renderProfile(state.user, state.progression, state.streak, state.myStats, state.achievements);
+      UIRenderer.renderProfile(state.user, state.progression, state.myStats, state.achievements);
       UIRenderer.renderSlipDrawer(state.slip, state.stakeAmount);
     });
 

@@ -931,18 +931,40 @@
   margin-bottom: 16px;
 }
 
-.gamer-avatar-wrap {
+.gamer-avatar-wrap, .user-profile-avatar-container {
   position: relative;
   width: 64px;
   height: 64px;
-  background: linear-gradient(135deg, rgba(245, 176, 39, 0.3) 0%, rgba(0, 210, 255, 0.2) 100%);
+  background: var(--bg-tertiary);
   border: 2px solid var(--accent-gold);
   border-radius: var(--radius-full);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 2rem;
   box-shadow: 0 0 16px var(--accent-gold-glow);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.user-profile-avatar-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
+}
+
+.user-profile-avatar-fallback {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'Outfit', sans-serif;
+  font-size: 1.6rem;
+  font-weight: 900;
+  color: var(--accent-gold);
 }
 
 .gamer-info {

@@ -765,14 +765,22 @@ export class UIRenderer {
     `;
   }
 
-  static renderProfile(user, progression, streak, stats, achievements) {
+  static renderProfile(user, progression, stats, achievements) {
     const cardEl = document.getElementById('profile-card-container');
     if (cardEl && user) {
       const uName = user.username ? `@${user.username}` : (user.first_name || 'Каппер');
+      const tgUser = tgBridge.getUser();
+      const photoUrl = user.photo_url || tgUser?.photo_url || null;
+      const initial = (user.username || user.first_name || 'K').replace('@', '').charAt(0).toUpperCase();
+
+      const avatarHtml = photoUrl 
+        ? `<img src="${photoUrl}" alt="Avatar" class="user-profile-avatar-img" onerror="this.outerHTML='<div class=\\'user-profile-avatar-fallback\\'>${initial}</div>'" />`
+        : `<div class="user-profile-avatar-fallback">${initial}</div>`;
+
       cardEl.innerHTML = `
         <div style="display: flex; align-items: center; gap: 14px;">
-          <div style="font-size: 2.8rem; background: var(--bg-tertiary); width: 64px; height: 64px; border-radius: 50%; display: flex; align-items: center; justify-content: center; border: 2px solid var(--accent-gold); box-shadow: var(--shadow-gold);">
-            🐺
+          <div class="user-profile-avatar-container">
+            ${avatarHtml}
           </div>
           <div>
             <div style="font-family: 'Outfit', sans-serif; font-size: 1.25rem; font-weight: 900; color: #fff;">
@@ -799,28 +807,6 @@ export class UIRenderer {
       if (avgEl) avgEl.textContent = (stats.average_odds || 1.0).toFixed(2);
       const bestEl = document.getElementById('kpi-best-win');
       if (bestEl) bestEl.textContent = `${this.formatNumber(stats.best_win)} 🪙`;
-    }
-
-    // 7-day streak calendar
-    const streakEl = document.getElementById('streak-calendar-container');
-    if (streakEl && streak) {
-      streakEl.innerHTML = `
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-          <div>
-            <span style="font-size: 1rem; font-weight: 800; color: #fff;">🔥 Серия Входов: ${streak.streak || 1} дн.</span>
-            <span style="font-size: 0.78rem; color: var(--text-muted); margin-left: 6px;">(Рекорд: ${streak.best_streak || 1})</span>
-          </div>
-          <span style="font-size: 0.78rem; color: var(--accent-cyan); font-weight: 700;">🛡 Щит серии</span>
-        </div>
-        <div style="display: flex; gap: 6px; justify-content: space-between;">
-          ${[1,2,3,4,5,6,7].map(d => `
-            <div style="flex: 1; text-align: center; background: ${d <= (streak.streak % 7 || 1) ? 'rgba(245,176,39,0.2)' : 'var(--bg-tertiary)'}; border: 1px solid ${d <= (streak.streak % 7 || 1) ? 'var(--accent-gold)' : 'var(--border-subtle)'}; border-radius: var(--radius-sm); padding: 8px 0;">
-              <div style="font-size: 0.7rem; color: var(--text-muted); font-weight: 700;">Д${d}</div>
-              <div style="font-size: 0.9rem; margin-top: 2px;">${d <= (streak.streak % 7 || 1) ? '🔥' : '🪙'}</div>
-            </div>
-          `).join('')}
-        </div>
-      `;
     }
 
     // Achievements Grid

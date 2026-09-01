@@ -65,6 +65,7 @@ async def handle_bootstrap(request: web.Request) -> web.Response:
             "user_id": user_id,
             "first_name": user_info.get("first_name", "Игрок"),
             "username": user_info.get("username", ""),
+            "photo_url": user_info.get("photo_url", ""),
             "balance": wallet.get("balance", 1000),
             "total_wagered": wallet.get("total_wagered", 0),
             "total_won": wallet.get("total_won", 0),
