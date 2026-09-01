@@ -72,7 +72,9 @@ class TestBettingEngine(unittest.TestCase):
             conn.execute("DELETE FROM user_bets WHERE user_id = ?", (test_user,))
             conn.execute("DELETE FROM matches WHERE id IN (8881, 8882)")
             conn.execute("DELETE FROM bet_markets WHERE match_id IN (8881, 8882)")
-            
+            conn.execute(
+                "INSERT OR REPLACE INTO rounds (round_number, is_open, deadline) VALUES (1, 1, '2099-01-01 23:59')"
+            )
             conn.execute(
                 "INSERT INTO matches (id, tournament_id, round_number, status) VALUES (8881, 1, 1, 'pending'), (8882, 1, 1, 'pending')"
             )

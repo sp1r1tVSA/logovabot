@@ -4804,10 +4804,37 @@ def save_bet_market(
         return cursor.lastrowid or match_id
 
 
+def _parse_round_deadline(dl_str: str | None) -> datetime.datetime | None:
+    """Safely parse deadline string from various common formats."""
+    if not dl_str:
+        return None
+    dl_clean = str(dl_str).strip()
+    formats = [
+        "%d.%m.%Y %H:%M",
+        "%d.%m.%Y %H:%M:%S",
+        "%d.%m.%Y",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%dT%H:%M",
+        "%d/%m/%Y %H:%M",
+    ]
+    for fmt in formats:
+        try:
+            return datetime.datetime.strptime(dl_clean, fmt)
+        except Exception:
+            continue
+    try:
+        return datetime.datetime.fromisoformat(dl_clean)
+    except Exception:
+        return None
+
+
 def get_open_betting_tours() -> list[dict]:
     """
     Retrieve all currently open tours that have unplayed matches
     and where the round deadline has not expired.
+    Strictly filters by rounds.is_open = 1.
     """
     with transaction() as conn:
         cursor = conn.cursor()
@@ -4829,24 +4856,12 @@ def get_open_betting_tours() -> list[dict]:
         for row in rows:
             r_num = row["round_number"]
             dl_str = row["deadline"]
-            # Check if deadline passed
-            if dl_str:
-                try:
-                    dl_clean = str(dl_str).strip()
-                    if "T" in dl_clean:
-                        dl_dt = datetime.datetime.fromisoformat(dl_clean)
-                    elif len(dl_clean) == 16:
-                        dl_dt = datetime.datetime.strptime(dl_clean, "%Y-%m-%d %H:%M")
-                    elif len(dl_clean) >= 19:
-                        dl_dt = datetime.datetime.strptime(dl_clean[:19], "%Y-%m-%d %H:%M:%S")
-                    else:
-                        dl_dt = None
-                    if dl_dt and now > dl_dt:
-                        # Deadline passed: close the betting market for this tour
-                        cursor.execute("UPDATE bet_markets SET is_active = 0 WHERE tour = ?", (r_num,))
-                        continue
-                except Exception:
-                    pass
+            dl_dt = _parse_round_deadline(dl_str)
+            if dl_dt and now > dl_dt:
+                # Deadline passed: close the betting market for this tour
+                cursor.execute("UPDATE bet_markets SET is_active = 0 WHERE tour = ?", (r_num,))
+                continue
+
             open_tours.append({
                 "round_number": r_num,
                 "deadline": dl_str,
@@ -4857,14 +4872,15 @@ def get_open_betting_tours() -> list[dict]:
 
 
 def get_active_bet_markets(tour: int | None = None) -> list[dict]:
-    """Retrieve all open betting markets for unplayed matches in a tour."""
+    """Retrieve open betting markets for unplayed matches strictly in open rounds."""
     with transaction() as conn:
         cursor = conn.cursor()
         query = """
-            SELECT bm.*, m.status as match_status, m.round_number
+            SELECT bm.*, m.status as match_status, m.round_number, r.deadline, r.is_open
             FROM bet_markets bm
             JOIN matches m ON bm.match_id = m.id
-            WHERE bm.is_active = 1 AND m.status != 'completed'
+            JOIN rounds r ON m.round_number = r.round_number
+            WHERE bm.is_active = 1 AND m.status != 'completed' AND r.is_open = 1
         """
         params = []
         if tour is not None:
@@ -4872,14 +4888,29 @@ def get_active_bet_markets(tour: int | None = None) -> list[dict]:
             params.append(tour)
         query += " ORDER BY bm.tour ASC, bm.id ASC"
         cursor.execute(query, params)
-        return [dict(r) for r in cursor.fetchall()]
+        rows = cursor.fetchall()
+        now = datetime.datetime.now()
+        valid_markets = []
+        for r in rows:
+            dl_dt = _parse_round_deadline(r["deadline"])
+            if dl_dt and now > dl_dt:
+                cursor.execute("UPDATE bet_markets SET is_active = 0 WHERE match_id = ?", (r["match_id"],))
+                continue
+            valid_markets.append(dict(r))
+        return valid_markets
 
 
 def get_bet_market_by_match_id(match_id: int) -> dict | None:
-    """Fetch market odds for a specific match ID."""
+    """Fetch market odds for a specific match ID if round is open."""
     with transaction() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM bet_markets WHERE match_id = ?", (match_id,))
+        cursor.execute("""
+            SELECT bm.*, r.is_open, r.deadline
+            FROM bet_markets bm
+            JOIN matches m ON bm.match_id = m.id
+            JOIN rounds r ON m.round_number = r.round_number
+            WHERE bm.match_id = ? AND r.is_open = 1
+        """, (match_id,))
         row = cursor.fetchone()
         return dict(row) if row else None
 
@@ -4899,24 +4930,31 @@ def place_user_bet(user_id: int, amount: int, selections: list[dict]) -> tuple[b
         if wallet["balance"] < amount:
             return False, f"Недостаточно средств (Баланс: {wallet['balance']} 🪙)."
 
-        # Validate markets are still active and matches not finished
+        # Validate markets are strictly in open rounds and not finished
         total_odd = 1.0
         validated_items = []
+        now = datetime.datetime.now()
         for s in selections:
             m_id = s.get("match_id")
             out_type = s.get("outcome", "").lower().strip()
             cursor.execute(
                 """
-                SELECT bm.*, m.status as match_status 
+                SELECT bm.*, m.status as match_status, r.is_open as round_is_open, r.deadline as round_deadline
                 FROM bet_markets bm 
                 JOIN matches m ON bm.match_id = m.id 
-                WHERE bm.match_id = ? AND bm.is_active = 1 AND m.status != 'completed'
+                JOIN rounds r ON m.round_number = r.round_number
+                WHERE bm.match_id = ? AND bm.is_active = 1 AND m.status != 'completed' AND r.is_open = 1
                 """,
                 (m_id,)
             )
             m_row = cursor.fetchone()
             if not m_row:
-                return False, f"Матч #{m_id} уже сыгран или линия закрыта."
+                return False, f"Матч #{m_id} уже сыгран или приём ставок на данный тур закрыт."
+
+            dl_dt = _parse_round_deadline(m_row["round_deadline"])
+            if dl_dt and now > dl_dt:
+                cursor.execute("UPDATE bet_markets SET is_active = 0 WHERE match_id = ?", (m_id,))
+                return False, f"Время приёма ставок на тур (дедлайн) истекло."
 
             odd_val = 1.0
             if out_type == "p1":
