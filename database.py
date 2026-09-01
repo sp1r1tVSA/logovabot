@@ -100,6 +100,7 @@ def init_db() -> None:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 team_name TEXT NOT NULL,
                 player_name TEXT NOT NULL,
+                position TEXT,
                 UNIQUE(team_name, player_name)
             )
         """)
@@ -282,6 +283,13 @@ def init_db() -> None:
 
         # Standardize and migrate canonical team names across all tables
         migrate_team_names_canonical(cursor)
+
+        # Safe migration for squad_players.position
+        cursor.execute("PRAGMA table_info(squad_players)")
+        squad_cols = [c[1] for c in cursor.fetchall()]
+        if "position" not in squad_cols:
+            cursor.execute("ALTER TABLE squad_players ADD COLUMN position TEXT")
+            logger.info("Migrated squad_players table: added 'position' column.")
 
         logger.info("Database tables initialized successfully.")
 
@@ -2239,23 +2247,49 @@ def get_team_squad_photo(team_name: str) -> str | None:
         row = cursor.fetchone()
         return row[0] if row and row[0] else None
 
-def save_squad_players(team_name: str, player_names: list[str]) -> int:
+def save_squad_players(team_name: str, player_names: list) -> int:
     """Save or add players to a club squad."""
     return add_squad(team_name, player_names)
 
-def add_squad(team_name: str, player_names: list[str]) -> int:
-    """Add players to a club's squad. Returns count of newly added players."""
+def add_squad(team_name: str, player_names: list) -> int:
+    """
+    Add players to a club's squad with authentic positions.
+    Accepts list of names: ["Vinicius Jr", ...] or tuples: [("Vinicius Jr", "LW"), ...] or dicts.
+    Auto-detects authentic real-world position if not specified.
+    """
+    from services.player_positions import detect_player_position, normalize_position
+
     added = 0
     with transaction() as conn:
         cursor = conn.cursor()
-        for name in player_names:
-            clean = name.strip()
+        for item in player_names:
+            pos = None
+            if isinstance(item, (tuple, list)) and len(item) >= 2:
+                name, pos = item[0], item[1]
+            elif isinstance(item, dict):
+                name = item.get("player_name") or item.get("name")
+                pos = item.get("position") or item.get("pos")
+            else:
+                name = str(item)
+
+            clean = name.strip() if name else ""
             if not clean or len(clean) > 50:
                 continue
+
+            if not pos:
+                pos = detect_player_position(clean, team_name)
+            else:
+                pos = normalize_position(pos)
+
             try:
                 cursor.execute(
-                    "INSERT OR IGNORE INTO squad_players (team_name, player_name) VALUES (?, ?)",
-                    (team_name.strip(), clean)
+                    """
+                    INSERT INTO squad_players (team_name, player_name, position) 
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(team_name, player_name) DO UPDATE SET
+                        position = COALESCE(excluded.position, squad_players.position)
+                    """,
+                    (team_name.strip(), clean, pos)
                 )
                 if cursor.rowcount > 0:
                     added += 1
@@ -2286,6 +2320,101 @@ def get_squad(team_name: str) -> list[str]:
                 cursor.execute("SELECT player_name FROM squad_players WHERE team_name = ? ORDER BY id ASC", (t,))
                 return [row["player_name"] for row in cursor.fetchall()]
         return []
+
+
+def get_squad_with_positions(team_name: str) -> list[dict]:
+    """Get list of players with their positions: [{'player_name': ..., 'position': ...}]."""
+    from services.player_positions import detect_player_position
+
+    if not team_name:
+        return []
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT player_name, position FROM squad_players WHERE LOWER(team_name) = LOWER(?) ORDER BY id ASC",
+            (team_name.strip(),)
+        )
+        rows = cursor.fetchall()
+        if not rows:
+            cursor.execute("SELECT DISTINCT team_name FROM squad_players")
+            all_t = [r["team_name"] for r in cursor.fetchall()]
+            for t in all_t:
+                if teams_match(t, team_name):
+                    cursor.execute("SELECT player_name, position FROM squad_players WHERE team_name = ? ORDER BY id ASC", (t,))
+                    rows = cursor.fetchall()
+                    break
+
+        result = []
+        for r in rows:
+            p_name = r["player_name"]
+            pos = r["position"]
+            if not pos:
+                pos = detect_player_position(p_name, team_name)
+                # Auto-heal position in background DB
+                cursor.execute(
+                    "UPDATE squad_players SET position = ? WHERE LOWER(team_name) = LOWER(?) AND LOWER(player_name) = LOWER(?)",
+                    (pos, team_name.strip(), p_name.strip())
+                )
+            result.append({"player_name": p_name, "position": pos})
+        return result
+
+
+def get_player_position(player_name: str, team_name: str | None = None) -> str:
+    """
+    Get the authentic position of a player (e.g. ST, LW, RW, CAM, CB, GK).
+    Checks DB squad_players, resolves canonical/online position, and caches in DB.
+    """
+    from services.player_positions import detect_player_position, normalize_position
+
+    if not player_name:
+        return "ST"
+
+    p_clean = player_name.strip()
+    with transaction() as conn:
+        cursor = conn.cursor()
+        if team_name:
+            cursor.execute(
+                "SELECT position FROM squad_players WHERE LOWER(player_name) = LOWER(?) AND LOWER(team_name) = LOWER(?)",
+                (p_clean, team_name.strip())
+            )
+            row = cursor.fetchone()
+            if row and row["position"]:
+                return row["position"]
+
+        cursor.execute(
+            "SELECT position FROM squad_players WHERE LOWER(player_name) = LOWER(?) AND position IS NOT NULL LIMIT 1",
+            (p_clean,)
+        )
+        row = cursor.fetchone()
+        if row and row["position"]:
+            return row["position"]
+
+        # Resolve position dynamically
+        pos = detect_player_position(p_clean, team_name)
+        if team_name and pos:
+            cursor.execute(
+                "UPDATE squad_players SET position = ? WHERE LOWER(player_name) = LOWER(?) AND LOWER(team_name) = LOWER(?)",
+                (pos, p_clean, team_name.strip())
+            )
+        return pos
+
+
+def set_player_position(player_name: str, team_name: str, position: str) -> bool:
+    """Set or update the authentic position for a player in a squad."""
+    from services.player_positions import normalize_position
+
+    norm_pos = normalize_position(position)
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO squad_players (team_name, player_name, position)
+            VALUES (?, ?, ?)
+            ON CONFLICT(team_name, player_name) DO UPDATE SET position = excluded.position
+            """,
+            (team_name.strip(), player_name.strip(), norm_pos)
+        )
+        return cursor.rowcount > 0
 
 
 def clear_squad(team_name: str) -> int:
@@ -2761,6 +2890,7 @@ def get_player_card_stats(player_name: str, team_name: str) -> dict:
         return {
             "player_name": player_name,
             "team_name": team_name,
+            "position": get_player_position(player_name, team_name),
             "total_goals": total_goals,
             "total_assists": total_assists,
             "total_points": total_goals + total_assists,

@@ -2799,12 +2799,14 @@ async def admin_view_squad(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
 
     club = query.data.replace("admin_squad_view_", "")
-    squad = await asyncio.to_thread(database.get_squad, club)
+    squad_items = await asyncio.to_thread(database.get_squad_with_positions, club)
 
-    if squad:
+    if squad_items:
         lines = [f"👥 <b>Состав команды {html.escape(club)}:</b>\n"]
-        for i, name in enumerate(squad, 1):
-            lines.append(f"{i}. {html.escape(name)}")
+        for i, item in enumerate(squad_items, 1):
+            p_name = item.get("player_name", "Игрок")
+            p_pos = item.get("position", "ST")
+            lines.append(f"{i}. <code>[{p_pos}]</code> <b>{html.escape(p_name)}</b>")
         text = "\n".join(lines)
     else:
         text = f"👥 <b>Состав команды {html.escape(club)}:</b>\n\n<i>Состав пуст.</i>"

@@ -411,15 +411,15 @@ async def cb_lab_card_generate_player(update: Update, context: ContextTypes.DEFA
 
     user_id = query.from_user.id
 
-    # 1. Fetch player stats from database
     db_stats = await asyncio.to_thread(database.get_player_card_stats, player_name, club)
     goals = db_stats.get("total_goals", 0)
     assists = db_stats.get("total_assists", 0)
+    real_pos = db_stats.get("position") or await asyncio.to_thread(database.get_player_position, player_name, club)
 
     card_data = {
         "player_name": player_name,
         "team_name": club,
-        "position": "ST" if goals >= assists else "CAM",
+        "position": real_pos,
         "total_goals": goals,
         "total_assists": assists,
         "matches_played": max(1, goals + assists),
@@ -519,11 +519,12 @@ async def cb_lab_player_anim(update: Update, context: ContextTypes.DEFAULT_TYPE)
     db_stats = await asyncio.to_thread(database.get_player_card_stats, player_name, club)
     goals = db_stats.get("total_goals", 0)
     assists = db_stats.get("total_assists", 0)
+    real_pos = db_stats.get("position") or await asyncio.to_thread(database.get_player_position, player_name, club)
 
     card_data = {
         "player_name": player_name,
         "team_name": club,
-        "position": "ST" if goals >= assists else "CAM",
+        "position": real_pos,
         "total_goals": goals,
         "total_assists": assists,
         "matches_played": max(1, goals + assists),
@@ -644,14 +645,15 @@ async def cmd_test_anim(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     player_name = args[0]
     team_name = args[1] if len(args) > 1 else "Спортинг"
-    style_id = args[2] if len(args) > 2 else "toty_gold"
+    style_id = args[2] if len(args) > 2 else "kpl_prime"
+    real_pos = await asyncio.to_thread(database.get_player_position, player_name, team_name)
 
     status_msg = await update.message.reply_text("⏳ Рендерю анимацию через FFmpeg...")
 
     card_data = {
         "player_name": player_name,
         "team_name": team_name,
-        "position": "ST",
+        "position": real_pos,
         "total_goals": 18,
         "total_assists": 9,
         "matches_played": 14,

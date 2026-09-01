@@ -241,10 +241,16 @@ def load_card_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont | Im
 
 def calculate_fut_attributes(stats: dict) -> dict:
     """Calculate 6 FUT attributes & OVR based on stats."""
+    from services.player_positions import detect_player_position, normalize_position
+
     goals = int(stats.get("total_goals", 0) or 0)
     assists = int(stats.get("total_assists", 0) or 0)
     matches = int(stats.get("matches_played", 0) or max(1, math.ceil((goals + assists) / 2)))
-    position = (stats.get("position") or "ST").strip().upper()
+
+    pos_raw = stats.get("position")
+    if not pos_raw and stats.get("player_name"):
+        pos_raw = detect_player_position(stats["player_name"], stats.get("team_name"), goals, assists)
+    position = normalize_position(pos_raw or "ST")
 
     pac_base, sho_base, pas_base, dri_base, def_base, phy_base = 78, 70, 68, 72, 40, 70
 

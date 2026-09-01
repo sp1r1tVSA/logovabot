@@ -330,6 +330,35 @@ async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_T
         return True
 
     if (
+        action in ("позиция", "позиция_игрока", "set_pos", "setpos", "position") or
+        full_cmd.startswith("позиция игрока") or
+        full_cmd.startswith("сменить позицию") or
+        full_cmd.startswith("изменить позицию")
+    ):
+        if not is_adm:
+            await msg.reply_text("⚠️ Эта команда доступна только администраторам турнира.")
+            return True
+
+        clean_args = re.sub(r"^(?:позиция|сменить позицию|изменить позицию)?\s*(?:игрока)?\s*", "", cmd_text, flags=re.IGNORECASE).strip()
+        parts_s = clean_args.split(None, 2)
+        if len(parts_s) < 3:
+            await msg.reply_text(
+                "ℹ️ Формат: <code>Темшик позиция [Клуб] [Позиция] [Имя игрока]</code>\n"
+                "Пример: <code>Темшик позиция Спортинг ST Viktor Gyökeres</code>",
+                parse_mode="HTML"
+            )
+            return True
+
+        team_name, pos_val, player_name = parts_s[0], parts_s[1].strip().upper(), parts_s[2].strip()
+        updated = await asyncio.to_thread(database.set_player_position, player_name, team_name, pos_val)
+        norm_pos = await asyncio.to_thread(database.get_player_position, player_name, team_name)
+        await msg.reply_text(
+            f"✅ Позиция игрока <b>{html.escape(player_name)}</b> в клубе <b>{html.escape(team_name)}</b> установлена: <b>[{norm_pos}]</b>.",
+            parse_mode="HTML"
+        )
+        return True
+
+    if (
         action in ("переименовать", "rename_player") or
         full_cmd.startswith("переименовать игрока")
     ):
