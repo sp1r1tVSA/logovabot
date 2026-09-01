@@ -1,23 +1,25 @@
 /* ==========================================================================
-   LOGOVO.BET — CSS Design System & Theme Tokens (Dark Esports Glassmorphism)
+   LOGOVO.BET — Premium Esports Dark Glassmorphism CSS Design System
    ========================================================================== */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Outfit:wght@600;700;800;900&display=swap');
 
 :root {
   /* Surface Colors */
-  --bg-app: #080a0e;
-  --bg-card: rgba(18, 22, 31, 0.85);
-  --bg-card-hover: rgba(26, 32, 44, 0.95);
-  --bg-tertiary: #161c28;
-  --bg-glass: rgba(18, 22, 31, 0.75);
-  --bg-drawer: rgba(12, 15, 22, 0.96);
+  --bg-app: #07090e;
+  --bg-card: rgba(16, 20, 29, 0.78);
+  --bg-card-hover: rgba(24, 30, 43, 0.92);
+  --bg-tertiary: #131824;
+  --bg-glass: rgba(14, 18, 27, 0.82);
+  --bg-drawer: rgba(10, 13, 20, 0.96);
 
   /* Brand Accents */
   --accent-gold: #f5b027;
   --accent-gold-hover: #e09e1d;
-  --accent-gold-glow: rgba(245, 176, 39, 0.28);
+  --accent-gold-glow: rgba(245, 176, 39, 0.35);
   --accent-gold-light: rgba(245, 176, 39, 0.12);
   --accent-cyan: #00d2ff;
-  --accent-cyan-glow: rgba(0, 210, 255, 0.25);
+  --accent-cyan-glow: rgba(0, 210, 255, 0.3);
 
   /* Status Colors */
   --color-success: #10b981;
@@ -35,9 +37,10 @@
 
   /* Borders & Shadows */
   --border-subtle: rgba(255, 255, 255, 0.08);
-  --border-active: rgba(245, 176, 39, 0.7);
-  --shadow-card: 0 8px 32px rgba(0, 0, 0, 0.36);
-  --shadow-gold: 0 4px 20px rgba(245, 176, 39, 0.35);
+  --border-active: rgba(245, 176, 39, 0.8);
+  --shadow-card: 0 8px 32px rgba(0, 0, 0, 0.45);
+  --shadow-gold: 0 4px 24px rgba(245, 176, 39, 0.4);
+  --shadow-neon: 0 0 16px rgba(245, 176, 39, 0.5);
 
   /* Radius */
   --radius-xs: 6px;
@@ -47,8 +50,8 @@
   --radius-full: 9999px;
 
   /* Transitions */
-  --transition-fast: 0.15s ease;
-  --transition-normal: 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-fast: 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-bounce: 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
 * {
@@ -60,13 +63,17 @@
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Inter", sans-serif;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   background-color: var(--bg-app);
+  background-image: 
+    radial-gradient(circle at 10% 15%, rgba(245, 176, 39, 0.06) 0%, transparent 40%),
+    radial-gradient(circle at 90% 85%, rgba(0, 210, 255, 0.05) 0%, transparent 40%);
+  background-attachment: fixed;
   color: var(--text-primary);
   min-height: 100vh;
   min-height: 100dvh;
   overflow-x: hidden;
-  padding-bottom: calc(70px + env(safe-area-inset-bottom, 20px));
+  padding-bottom: calc(76px + env(safe-area-inset-bottom, 20px));
 }
 
 /* Scrollbar */
@@ -92,9 +99,10 @@ body {
   justify-content: space-between;
   padding: 12px 16px;
   background: var(--bg-glass);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
   border-bottom: 1px solid var(--border-subtle);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
 }
 
 .brand-block {
@@ -103,17 +111,23 @@ body {
   gap: 8px;
 }
 
-.brand-logo {
-  width: 28px;
-  height: 28px;
-  filter: drop-shadow(0 0 8px var(--accent-gold-glow));
+.brand-logo-icon {
+  font-size: 1.5rem;
+  filter: drop-shadow(0 0 10px var(--accent-gold-glow));
+  animation: floatIcon 3s ease-in-out infinite;
+}
+
+@keyframes floatIcon {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-3px); }
 }
 
 .brand-title {
-  font-size: 1.15rem;
-  font-weight: 800;
-  letter-spacing: -0.02em;
-  background: linear-gradient(135deg, #ffffff 0%, var(--accent-gold) 100%);
+  font-family: 'Outfit', sans-serif;
+  font-size: 1.22rem;
+  font-weight: 900;
+  letter-spacing: 0.02em;
+  background: linear-gradient(135deg, #ffffff 30%, var(--accent-gold) 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
 }
@@ -128,26 +142,36 @@ body {
   display: flex;
   align-items: center;
   gap: 6px;
-  background: var(--accent-gold-light);
+  background: linear-gradient(135deg, rgba(245, 176, 39, 0.18) 0%, rgba(245, 176, 39, 0.06) 100%);
   border: 1px solid var(--border-active);
-  padding: 6px 12px;
+  padding: 7px 14px;
   border-radius: var(--radius-full);
   cursor: pointer;
+  box-shadow: 0 0 12px rgba(245, 176, 39, 0.15);
   transition: var(--transition-fast);
 }
 .balance-pill:active {
-  transform: scale(0.96);
+  transform: scale(0.95);
 }
 
 .balance-icon {
-  font-size: 1.05rem;
+  font-size: 1.1rem;
+  animation: coinSpin 4s ease-in-out infinite;
+}
+
+@keyframes coinSpin {
+  0%, 100% { transform: rotate(0deg); }
+  25% { transform: rotate(-10deg) scale(1.1); }
+  75% { transform: rotate(10deg) scale(1.1); }
 }
 
 .balance-amount {
-  font-size: 0.95rem;
+  font-family: 'Outfit', sans-serif;
+  font-size: 1rem;
   font-weight: 800;
   color: var(--accent-gold);
   font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
 }
 
 /* App Views Container */
@@ -159,15 +183,15 @@ body {
 
 .view-section {
   display: none;
-  animation: fadeIn 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .view-section.active {
   display: block;
+  animation: pageSlideIn 0.3s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-@keyframes fadeIn {
-  from { opacity: 0; transform: translateY(6px); }
+@keyframes pageSlideIn {
+  from { opacity: 0; transform: translateY(10px); }
   to { opacity: 1; transform: translateY(0); }
 }
 
@@ -182,8 +206,8 @@ body {
   align-items: center;
   justify-content: space-around;
   background: var(--bg-glass);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
   border-top: 1px solid var(--border-subtle);
   padding: 8px 8px calc(8px + env(safe-area-inset-bottom, 12px));
   max-width: 600px;
@@ -199,17 +223,17 @@ body {
   border: none;
   color: var(--text-muted);
   font-size: 0.72rem;
-  font-weight: 600;
+  font-weight: 700;
   cursor: pointer;
-  padding: 6px 12px;
+  padding: 6px 14px;
   border-radius: var(--radius-sm);
   transition: var(--transition-fast);
   position: relative;
 }
 
 .nav-item .nav-icon {
-  font-size: 1.25rem;
-  transition: var(--transition-fast);
+  font-size: 1.3rem;
+  transition: var(--transition-bounce);
 }
 
 .nav-item.active {
@@ -217,20 +241,21 @@ body {
 }
 
 .nav-item.active .nav-icon {
-  transform: translateY(-2px);
-  filter: drop-shadow(0 0 6px var(--accent-gold-glow));
+  transform: translateY(-3px) scale(1.15);
+  filter: drop-shadow(0 0 8px var(--accent-gold-glow));
 }
 
 .nav-badge {
   position: absolute;
   top: 2px;
-  right: 8px;
+  right: 10px;
   background: var(--accent-gold);
   color: #000;
   font-size: 0.65rem;
-  font-weight: 800;
+  font-weight: 900;
   padding: 1px 5px;
   border-radius: var(--radius-full);
   min-width: 16px;
   text-align: center;
+  box-shadow: 0 0 8px var(--accent-gold-glow);
 }

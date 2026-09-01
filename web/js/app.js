@@ -7,6 +7,7 @@ import { api } from './api.js';
 import { store } from './store.js';
 import { tgBridge } from './tg.js';
 import { UIRenderer } from './ui.js';
+import { ParticleEffects } from './effects.js';
 
 class AppController {
   constructor() {
@@ -186,6 +187,7 @@ class AppController {
           const res = await api.claimBonus();
           if (res.status === 'ok') {
             tgBridge.hapticNotification('success');
+            ParticleEffects.burstConfetti();
             store.setUser({ ...store.state.user, balance: res.new_balance }, { can_claim: false, cooldown_seconds: 86400 });
             this.showSuccessModal("🎁 Бонус получен!", `На ваш баланс зачислено <b>+${res.claimed_amount} 🪙</b>!`);
           }
@@ -231,6 +233,7 @@ class AppController {
       const res = await api.placePrediction(amount, selections);
       if (res.status === 'ok') {
         tgBridge.hapticNotification('success');
+        ParticleEffects.burstConfetti();
         store.setUser({ ...store.state.user, balance: res.new_balance });
         store.clearSlip();
         this.showSuccessModal("🎉 Прогноз принят!", `Ставка на <b>${amount} 🪙</b> успешно оформлена.<br>Удачи в туре!`);
