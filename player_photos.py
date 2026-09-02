@@ -168,9 +168,13 @@ def _get_thesportsdb_url(player_name: str) -> str | None:
                         # Strict name matching
                         if clean_name not in found_name and found_name not in clean_name:
                             continue
-                        img = p.get("strCutout") or p.get("strRender") or p.get("strThumb")
-                        if img:
-                            return img
+                        # Prioritize transparent PNG cutouts (with torso & kit) over square thumbnails
+                        cutout = p.get("strCutout") or p.get("strRender")
+                        if cutout:
+                            return cutout
+                        thumb = p.get("strThumb")
+                        if thumb:
+                            return thumb
         except Exception as e:
             logger.debug(f"[TheSportsDB] Error for '{term}': {e}")
     return None
@@ -212,24 +216,27 @@ def _download_photo(url: str, dest_path: str, headers: dict | None = None) -> bo
         return False
 
 
-def fetch_and_cache(player_name: str, team: str | None = None) -> str | None:
+def fetch_and_cache(player_name: str, team: str | None = None, force_refresh: bool = False) -> str | None:
     """Fetch photo for player_name and cache it locally."""
     _ensure_photos_dir()
     cached = get_cached_photo_path(player_name, team)
     
-    existing = get_photo_path(player_name, team)
-    if existing:
-        return existing
-
-    with _photos_lock:
-        # Double check inside lock
+    if not force_refresh:
         existing = get_photo_path(player_name, team)
         if existing:
             return existing
 
+    with _photos_lock:
+        if not force_refresh:
+            # Double check inside lock
+            existing = get_photo_path(player_name, team)
+            if existing:
+                return existing
+
+        # Priority: TheSportsDB first for full cutouts/renders, then FotMob, then Wikipedia
         providers = [
-            ("FotMob", _get_fotmob_url, FOTMOB_HEADERS),
             ("TheSportsDB", _get_thesportsdb_url, STD_HEADERS),
+            ("FotMob", _get_fotmob_url, FOTMOB_HEADERS),
             ("Wikipedia", _get_wikipedia_url, WIKI_HEADERS),
         ]
 
@@ -246,12 +253,13 @@ def fetch_and_cache(player_name: str, team: str | None = None) -> str | None:
         return None
 
 
-def get_player_photo(player_name: str, team: str | None = None) -> str | None:
+def get_player_photo(player_name: str, team: str | None = None, force_refresh: bool = False) -> str | None:
     """Convenience alias to fetch and return cached photo path on demand."""
-    cached = get_photo_path(player_name, team)
-    if cached:
-        return cached
-    return fetch_and_cache(player_name, team)
+    if not force_refresh:
+        cached = get_photo_path(player_name, team)
+        if cached:
+            return cached
+    return fetch_and_cache(player_name, team, force_refresh=force_refresh)
 
 
 def fetch_all_players(players: list[str] | list[tuple[str, str]]) -> dict[str, str | None]:

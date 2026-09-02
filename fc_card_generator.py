@@ -356,6 +356,84 @@ def _normalize_style_key(style_name: str) -> str:
     return alias_map.get(s, s if s in CARD_STYLES else "kpl_prime")
 
 
+def _generate_jersey_silhouette(width: int, height: int, collar_y: int, plaque_y: int, cfg: dict) -> Image.Image:
+    """
+    Render a sleek, authentic athletic esports/football jersey silhouette
+    underneath players where only a headshot photo is available.
+    Eliminates the 'severed floating head' effect by grounding the head in an authentic kit.
+    """
+    layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(layer)
+    cx = width // 2
+
+    sh_w = int(175 * SCALE)
+    collar_w = int(42 * SCALE)
+    collar_depth = int(28 * SCALE)
+    shoulder_y = collar_y + int(24 * SCALE)
+    chest_bottom_y = plaque_y + int(12 * SCALE)
+
+    # 1. Torso & Shoulders Geometry
+    body_poly = [
+        (cx - collar_w, collar_y + int(6 * SCALE)),
+        (cx, collar_y + collar_depth),
+        (cx + collar_w, collar_y + int(6 * SCALE)),
+        (cx + sh_w, shoulder_y + int(32 * SCALE)),
+        (cx + sh_w - int(12 * SCALE), chest_bottom_y),
+        (cx - sh_w + int(12 * SCALE), chest_bottom_y),
+        (cx - sh_w, shoulder_y + int(32 * SCALE)),
+    ]
+
+    body_mask = Image.new("L", (width, height), 0)
+    ImageDraw.Draw(body_mask).polygon(body_poly, fill=255)
+    body_mask = body_mask.filter(ImageFilter.GaussianBlur(1.5))
+
+    tr, tg, tb = cfg.get("bg_top", (18, 20, 28))
+    br, bg_c, bb = cfg.get("bg_bot", (8, 9, 14))
+
+    # 2. Deep Matte Obsidian & Carbon Jersey Gradient
+    grad = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    g_draw = ImageDraw.Draw(grad)
+    for y in range(collar_y, chest_bottom_y + 1):
+        t = (y - collar_y) / float(max(1, chest_bottom_y - collar_y))
+        r = int((tr + 18) * (1 - t) + (br + 10) * t)
+        g = int((tg + 18) * (1 - t) + (bg_c + 10) * t)
+        b = int((tb + 24) * (1 - t) + (bb + 12) * t)
+        a = int(240 * (1.0 - t * 0.15))
+        g_draw.line([(cx - sh_w - 20, y), (cx + sh_w + 20, y)], fill=(r, g, b, a))
+
+    layer.paste(grad, (0, 0), body_mask)
+
+    # 3. Collar Trim & Seam Accents in Card Theme Border / Accent Colors
+    accent = cfg.get("border_primary", (255, 215, 0))
+    # Elegant V-neck collar trim
+    draw.line([
+        (cx - collar_w, collar_y + int(6 * SCALE)),
+        (cx, collar_y + collar_depth),
+        (cx + collar_w, collar_y + int(6 * SCALE))
+    ], fill=accent + (190,), width=int(2.5 * SCALE))
+
+    # Subtle athletic shoulder seams
+    draw.line([(cx - collar_w, collar_y + int(10 * SCALE)), (cx - sh_w + int(10 * SCALE), shoulder_y + int(24 * SCALE))], fill=(255, 255, 255, 38), width=int(1.5 * SCALE))
+    draw.line([(cx + collar_w, collar_y + int(10 * SCALE)), (cx + sh_w - int(10 * SCALE), shoulder_y + int(24 * SCALE))], fill=(255, 255, 255, 38), width=int(1.5 * SCALE))
+
+    # Trapezius contour lines
+    draw.line([(cx - int(collar_w * 0.7), collar_y + int(14 * SCALE)), (cx - int(sh_w * 0.6), shoulder_y + int(30 * SCALE))], fill=accent + (60,), width=int(1 * SCALE))
+    draw.line([(cx + int(collar_w * 0.7), collar_y + int(14 * SCALE)), (cx + int(sh_w * 0.6), shoulder_y + int(30 * SCALE))], fill=accent + (60,), width=int(1 * SCALE))
+
+    # 4. Soft Bottom Dissolve into Name Plaque
+    fade_start = chest_bottom_y - int(32 * SCALE)
+    for y in range(fade_start, chest_bottom_y + 1):
+        ratio = (y - fade_start) / float(max(1, chest_bottom_y - fade_start))
+        factor = 1.0 - ratio
+        # Multiply row alpha
+        row_crop = layer.crop((0, y, width, y + 1))
+        r, g, b, a = row_crop.split()
+        a = a.point(lambda p: int(p * factor))
+        layer.paste(Image.merge("RGBA", (r, g, b, a)), (0, y))
+
+    return layer
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # 🎨 MASTER STATIC CARD GENERATOR (Authentic EA Sports FC FUT Shield Engine)
 # ═════════════════════════════════════════════════════════════════════════════
@@ -425,7 +503,10 @@ def render_master_static_card(player_data: dict, style_id: str = "toty_gold") ->
     draw.polygon(shield_poly, outline=cfg["border_primary"], width=int(5 * SCALE))
     draw.polygon(shield_poly, outline=cfg["border_secondary"] + (190,), width=int(2 * SCALE))
 
-    # 5. Heroic Large Player Cutout (Perfect Horizontal Center)
+    # Name plaque position reference
+    ry = int(HEIGHT * 0.515)
+
+    # 5. Heroic Player Cutout & Headshot Handling
     player_img = _get_player_photo_image(player_name, team_name)
     if player_img:
         # 1. Trim transparent borders to get actual player bounds
@@ -433,42 +514,95 @@ def render_master_static_card(player_data: dict, style_id: str = "toty_gold") ->
         if bbox:
             player_img = player_img.crop(bbox)
 
-        # 2. Proportional resize to heroic scale (height ~720px in 2x master resolution)
-        target_h = int(360 * SCALE)
         orig_w, orig_h = player_img.size
         aspect = orig_w / float(orig_h) if orig_h > 0 else 1.0
-        ph = target_h
-        pw = int(ph * aspect)
-        max_pw = int(320 * SCALE)
-        if pw > max_pw:
-            pw = max_pw
-            ph = int(pw / aspect)
 
-        player_img = player_img.resize((pw, ph), Image.Resampling.LANCZOS)
+        # Intelligent Headshot Detection:
+        # Full cutouts include torso/shoulders (aspect ~0.50-0.75, orig_h >= 300).
+        # Headshots are compact face crops (aspect >= 0.78 or small resolution orig_h <= 260).
+        is_headshot = (aspect >= 0.78) or (orig_h <= 260)
 
-        # Soft 3D drop shadow
-        shadow = Image.new("RGBA", (pw + 40, ph + 40), (0, 0, 0, 0))
-        s_mask = player_img.split()[3] if "A" in player_img.getbands() else Image.new("L", (pw, ph), 255)
-        shadow.paste(Image.new("RGBA", (pw, ph), (0, 0, 0, 220)), (14, 14), s_mask)
-        shadow = shadow.filter(ImageFilter.GaussianBlur(14))
+        if is_headshot:
+            # Anatomically proportionate head scale (~210px in 1x, not oversized 360px)
+            target_h = int(215 * SCALE)
+            ph = target_h
+            pw = int(ph * aspect)
+            max_pw = int(205 * SCALE)
+            if pw > max_pw:
+                pw = max_pw
+                ph = int(pw / aspect)
 
-        # Centered horizontally on the card
-        px = (WIDTH - pw) // 2
-        py = top_y + int(10 * SCALE)
+            player_img = player_img.resize((pw, ph), Image.Resampling.LANCZOS)
+            px = (WIDTH - pw) // 2
+            py = top_y + int(24 * SCALE)
 
-        img.paste(shadow, (px - 7, py - 7), shadow)
+            collar_y = py + int(ph * 0.68)
 
-        # Baseline fade into name plaque
-        fade = Image.new("L", (pw, ph), 255)
-        f_draw = ImageDraw.Draw(fade)
-        f_start = int(ph * 0.70)
-        for y in range(f_start, ph):
-            val = int(255 * (1.0 - ((y - f_start) / (ph - f_start)) ** 1.6))
-            f_draw.line([(0, y), (pw, y)], fill=val)
-        if "A" in player_img.getbands():
-            fade = ImageChops.multiply(s_mask, fade)
+            # A. Render sleek athletic esports jersey silhouette underlay
+            jersey_silhouette = _generate_jersey_silhouette(WIDTH, HEIGHT, collar_y, ry, cfg)
 
-        img.paste(player_img, (px, py), fade)
+            # Jersey drop shadow
+            j_mask = jersey_silhouette.split()[3]
+            j_shadow = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
+            j_shadow.paste(Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 180)), (0, int(6 * SCALE)), j_mask)
+            j_shadow = j_shadow.filter(ImageFilter.GaussianBlur(16))
+            img.paste(j_shadow, (0, 0), j_shadow)
+            img.paste(jersey_silhouette, (0, 0), jersey_silhouette)
+
+            # B. Soft 3D drop shadow around head
+            shadow = Image.new("RGBA", (pw + 40, ph + 40), (0, 0, 0, 0))
+            s_mask = player_img.split()[3] if "A" in player_img.getbands() else Image.new("L", (pw, ph), 255)
+            shadow.paste(Image.new("RGBA", (pw, ph), (0, 0, 0, 200)), (14, 14), s_mask)
+            shadow = shadow.filter(ImageFilter.GaussianBlur(12))
+            img.paste(shadow, (px - 7, py - 7), shadow)
+
+            # C. Parabolic soft neck dissolve into collar (no horizontal cut)
+            fade = Image.new("L", (pw, ph), 255)
+            f_draw = ImageDraw.Draw(fade)
+            f_start = int(ph * 0.60)
+            for y in range(f_start, ph):
+                val = int(255 * (1.0 - ((y - f_start) / float(max(1, ph - f_start))) ** 1.8))
+                f_draw.line([(0, y), (pw, y)], fill=val)
+            if "A" in player_img.getbands():
+                fade = ImageChops.multiply(s_mask, fade)
+
+            img.paste(player_img, (px, py), fade)
+
+        else:
+            # Full cutout with torso & jersey
+            target_h = int(360 * SCALE)
+            ph = target_h
+            pw = int(ph * aspect)
+            max_pw = int(320 * SCALE)
+            if pw > max_pw:
+                pw = max_pw
+                ph = int(pw / aspect)
+
+            player_img = player_img.resize((pw, ph), Image.Resampling.LANCZOS)
+
+            # Soft 3D drop shadow
+            shadow = Image.new("RGBA", (pw + 40, ph + 40), (0, 0, 0, 0))
+            s_mask = player_img.split()[3] if "A" in player_img.getbands() else Image.new("L", (pw, ph), 255)
+            shadow.paste(Image.new("RGBA", (pw, ph), (0, 0, 0, 220)), (14, 14), s_mask)
+            shadow = shadow.filter(ImageFilter.GaussianBlur(14))
+
+            # Centered horizontally on the card
+            px = (WIDTH - pw) // 2
+            py = top_y + int(10 * SCALE)
+
+            img.paste(shadow, (px - 7, py - 7), shadow)
+
+            # Baseline fade into name plaque
+            fade = Image.new("L", (pw, ph), 255)
+            f_draw = ImageDraw.Draw(fade)
+            f_start = int(ph * 0.70)
+            for y in range(f_start, ph):
+                val = int(255 * (1.0 - ((y - f_start) / float(max(1, ph - f_start))) ** 1.6))
+                f_draw.line([(0, y), (pw, y)], fill=val)
+            if "A" in player_img.getbands():
+                fade = ImageChops.multiply(s_mask, fade)
+
+            img.paste(player_img, (px, py), fade)
 
     # 6. Authentic Left HUD (OVR, Position, Divider, Club Logo)
     col_x = left_x + int(52 * SCALE)

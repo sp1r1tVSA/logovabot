@@ -647,6 +647,25 @@ def save_cached_telegram_media(file_hash: str, file_id: str, media_type: str = "
         logger.warning(f"Error saving cached telegram media for hash {file_hash[:8]}: {e}")
 
 
+def clear_telegram_media_cache(media_type: str | None = None) -> int:
+    """Clear cached Telegram file_ids from telegram_media_cache."""
+    try:
+        with transaction() as conn:
+            cursor = conn.cursor()
+            if media_type:
+                cursor.execute("SELECT COUNT(*) FROM telegram_media_cache WHERE media_type = ?", (media_type,))
+                cnt = cursor.fetchone()[0]
+                cursor.execute("DELETE FROM telegram_media_cache WHERE media_type = ?", (media_type,))
+            else:
+                cursor.execute("SELECT COUNT(*) FROM telegram_media_cache")
+                cnt = cursor.fetchone()[0]
+                cursor.execute("DELETE FROM telegram_media_cache")
+            return cnt
+    except Exception as e:
+        logger.warning(f"Error clearing telegram media cache: {e}")
+        return 0
+
+
 def migrate_team_names_canonical(cursor: sqlite3.Cursor) -> None:
     """Migrate and standardize legacy/variant team spellings across all DB tables."""
     try:

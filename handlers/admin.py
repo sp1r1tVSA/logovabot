@@ -3922,15 +3922,25 @@ async def admin_fetch_photos(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if query:
         await query.answer()
 
+    force = False
+    if context and context.args and any(a.lower() in ("force", "all", "refresh") for a in context.args):
+        force = True
+    elif query and "force" in str(query.data):
+        force = True
+
     unique_players = await asyncio.to_thread(database.get_all_unique_players)
 
-    already_cached = [item for item in unique_players if player_photos.is_cached(item[0], item[1])]
-    to_fetch       = [item for item in unique_players if not player_photos.is_cached(item[0], item[1])]
+    if force:
+        to_fetch = list(unique_players)
+        already_cached = []
+    else:
+        already_cached = [item for item in unique_players if player_photos.is_cached(item[0], item[1])]
+        to_fetch       = [item for item in unique_players if not player_photos.is_cached(item[0], item[1])]
 
     text_initial = (
         f"✅ Все {len(already_cached)} игроков уже имеют кэшированные фото."
         if not to_fetch else
-        f"⏳ Загружаю фото для <b>{len(to_fetch)}</b> игроков (уже есть: {len(already_cached)})..."
+        f"⏳ Загружаю фото для <b>{len(to_fetch)}</b> игроков (принудительно: {force})..."
     )
 
     if not to_fetch:
@@ -3952,7 +3962,7 @@ async def admin_fetch_photos(update: Update, context: ContextTypes.DEFAULT_TYPE)
     failed_names: list[str] = []
 
     for i, (name, team) in enumerate(to_fetch, 1):
-        result = await asyncio.to_thread(player_photos.fetch_and_cache, name, team)
+        result = await asyncio.to_thread(player_photos.fetch_and_cache, name, team, force_refresh=force)
 
         if result:
             ok_count += 1
@@ -3971,12 +3981,18 @@ async def admin_fetch_photos(update: Update, context: ContextTypes.DEFAULT_TYPE)
             except Exception:
                 pass
 
+    cleared_cache = 0
+    if force:
+        cleared_cache = await asyncio.to_thread(database.clear_telegram_media_cache)
+
     result_text = (
         f"✅ <b>Готово!</b>\n\n"
         f"Загружено: <b>{ok_count}</b>\n"
         f"Не найдено: <b>{fail_count}</b>\n"
         f"Уже были: <b>{len(already_cached)}</b>"
     )
+    if cleared_cache > 0:
+        result_text += f"\n🗑️ Очищен кэш карточек в базе: <b>{cleared_cache}</b> записей"
     if failed_names:
         sample = failed_names[:10]
         result_text += "\n\n<b>Не найдены:</b>\n" + "\n".join(f"• {html.escape(n)}" for n in sample)
