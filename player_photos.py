@@ -62,12 +62,23 @@ STD_HEADERS = {
 _photos_lock = threading.Lock()
 
 
+PLAYER_NAME_ALIASES = {
+    "oxl.-chamberlain": "Alex Oxlade-Chamberlain",
+    "oxl. chamberlain": "Alex Oxlade-Chamberlain",
+    "vítor carvalho": "Vitor Carvalho",
+    "vitor carvalho": "Vitor Carvalho",
+}
+
+
 def _ensure_photos_dir() -> None:
     os.makedirs(PHOTOS_DIR, exist_ok=True)
 
 
 def _normalize_name(name: str) -> str:
     """Убирает акценты/диакритику и нормализует спецсимволы латиницы."""
+    clean_lower = name.lower().strip()
+    if clean_lower in PLAYER_NAME_ALIASES:
+        name = PLAYER_NAME_ALIASES[clean_lower]
     for k, v in TRANSLIT_LATIN.items():
         name = name.replace(k, v)
     nfkd_form = unicodedata.normalize('NFKD', name)
