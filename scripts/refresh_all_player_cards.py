@@ -15,11 +15,37 @@ import sys
 import sqlite3
 import logging
 import argparse
-from PIL import Image
 
 # Add project root to sys.path
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, BASE_DIR)
+
+# Auto-reexec with virtual environment if running in bare system python without PIL
+venv_candidates = [
+    os.path.join(BASE_DIR, "venv", "bin", "python3"),
+    os.path.join(BASE_DIR, "venv", "bin", "python"),
+    os.path.join(BASE_DIR, ".venv", "bin", "python3"),
+    os.path.join(BASE_DIR, ".venv", "bin", "python"),
+    os.path.join(BASE_DIR, "venv", "Scripts", "python.exe"),
+]
+for venv_py in venv_candidates:
+    if os.path.isfile(venv_py) and os.path.abspath(sys.executable) != os.path.abspath(venv_py):
+        try:
+            from PIL import Image
+        except ImportError:
+            os.execv(venv_py, [venv_py] + sys.argv)
+
+try:
+    from PIL import Image
+except ImportError:
+    print(
+        "\n❌ Ошибка: Библиотека Pillow (PIL) не найдена в текущем интерпретаторе Python.\n"
+        "Бот использует виртуальное окружение. Запустите команду через venv:\n\n"
+        "  venv/bin/python3 scripts/refresh_all_player_cards.py\n\n"
+        "или активируйте его перед запуском:\n\n"
+        "  source venv/bin/activate && python3 scripts/refresh_all_player_cards.py\n"
+    )
+    sys.exit(1)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("refresh_cards")
