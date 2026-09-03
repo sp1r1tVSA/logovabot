@@ -135,7 +135,7 @@ def resize_logo_proportional(img: Image.Image, max_w: int, max_h: int) -> tuple[
     return resized, new_w, new_h
 
 
-def generate_league_table_image(standings: list[dict] | None = None, form_map: dict[str, list[str]] | None = None) -> io.BytesIO:
+def generate_league_table_image(standings: list[dict] | None = None, form_map: dict[str, list[str]] | None = None, division_name: str | None = None) -> io.BytesIO:
     """
     Generate a 2x supersampled, high-res graphic image of the league table.
     Returns io.BytesIO PNG buffer.
@@ -181,8 +181,10 @@ def generate_league_table_image(standings: list[dict] | None = None, form_map: d
     font_footer     = load_font(13 * SCALE)
 
     # Header
-    draw.text((35 * SCALE, 25 * SCALE), "КПЛ 2026", fill=red_accent_color, font=font_title)
-    draw.text((35 * SCALE, 58 * SCALE), "Standings", fill=header_text_color, font=font_subtitle)
+    title_str = f"КПЛ 2026 • {division_name.upper()}" if division_name else "КПЛ 2026"
+    subtitle_str = f"Турнирная таблица дивизиона {division_name}" if division_name else "Standings"
+    draw.text((35 * SCALE, 25 * SCALE), title_str, fill=red_accent_color, font=font_title)
+    draw.text((35 * SCALE, 58 * SCALE), subtitle_str, fill=header_text_color, font=font_subtitle)
 
     # Column X offsets (scaled)
     col_x = {

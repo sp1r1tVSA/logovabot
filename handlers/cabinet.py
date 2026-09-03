@@ -277,10 +277,17 @@ async def show_cabinet(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     warn_line = f"\n⚠️ <b>Предупреждения:</b> {warn_count} / {MAX_WARNS_LIMIT}"
 
+    div_line = ""
+    if user_record and user_record['division_id']:
+        div_row = await asyncio.to_thread(database.get_division, user_record['division_id'])
+        if div_row:
+            div_line = f"• <b>Дивизион:</b> {html.escape(div_row['name'])}\n"
+
     text = (
         f"👤 <b>Личный кабинет участника</b>\n\n"
         f"• <b>Telegram:</b> {username_display}\n"
         f"• <b>Игровой клуб:</b> {html.escape(team)}\n"
+        f"{div_line}"
         f"• <b>Лига:</b> КПЛ\n\n"
         f"📊 <b>Ваша статистика в лиге:</b>\n"
         f"• <b>Сыграно матчей:</b> {stats['played']}\n"
@@ -2565,9 +2572,15 @@ def build_formatted_match_post(
             )
             footer = "\n\n📸 <i>Результат официально занесен в сетку Кубка КПЛ.</i>"
     else:
+        div_label = ""
+        if match_info and match_info.get("division_id"):
+            div_row = database.get_division(match_info["division_id"])
+            if div_row:
+                div_label = f" • {safe_escape(div_row['name'])}"
+
         if is_draft:
             header = (
-                f"📝 <b>ЧЕРНОВИК РЕЗУЛЬТАТА | Тур {round_number}</b>\n\n"
+                f"📝 <b>ЧЕРНОВИК РЕЗУЛЬТАТА | Тур {round_number}{div_label}</b>\n\n"
                 f"🏠 <b>{home_team_esc}</b>{p1_str} <b>{h_score} : {a_score}</b> <b>{away_team_esc}</b>{p2_str} ✈️"
             )
             footer = "\n\n⏳ <i>Ожидает подтверждения администратором...</i>"
@@ -2575,13 +2588,13 @@ def build_formatted_match_post(
             match_id_str = f" #{match_id}" if match_id else ""
             header = (
                 f"{pm_title}\n\n"
-                f"🏟 <b>Матч{match_id_str} (Тур {round_number})</b>\n"
+                f"🏟 <b>Матч{match_id_str} (Тур {round_number}{div_label})</b>\n"
                 f"🏠 <b>{home_team_esc}</b> <b>{h_score} : {a_score}</b> <b>{away_team_esc}</b> ✈️"
             )
             footer = "\n\n📊 <i>Турнирная таблица и статистика игроков обновлены.</i>"
         else:
             header = (
-                f"🏆 <b>РЕЗУЛЬТАТ МАТЧА | Тур {round_number}</b>\n\n"
+                f"🏆 <b>РЕЗУЛЬТАТ МАТЧА | Тур {round_number}{div_label}</b>\n\n"
                 f"🏠 <b>{home_team_esc}</b>{p1_str} <b>{h_score} : {a_score}</b> <b>{away_team_esc}</b>{p2_str} ✈️"
             )
             footer = "\n\n📸 <i>Результат официально занесен в турнирную таблицу.</i>"

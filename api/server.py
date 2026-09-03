@@ -28,6 +28,7 @@ from api.routes_matches import (
 )
 from api.routes_tournaments import (
     handle_get_tournaments,
+    handle_get_divisions,
     handle_get_standings,
     handle_get_results,
     handle_get_top_scorers
@@ -109,7 +110,9 @@ def create_app() -> web.Application:
     app.router.add_get("/api/predictions/{id}", handle_get_prediction_detail)
     app.router.add_post("/api/predictions/{id}/repeat", handle_repeat_prediction)
 
-    # 5. Tournament Hub
+    # 5. Tournament Hub & Divisions
+    app.router.add_get("/api/divisions", handle_get_divisions)
+    app.router.add_get("/api/standings", handle_get_standings)
     app.router.add_get("/api/tournaments", handle_get_tournaments)
     app.router.add_get("/api/tournaments/{id}/standings", handle_get_standings)
     app.router.add_get("/api/tournaments/{id}/results", handle_get_results)

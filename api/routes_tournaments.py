@@ -46,9 +46,26 @@ async def handle_get_tournaments(request: web.Request) -> web.Response:
     })
 
 
+async def handle_get_divisions(request: web.Request) -> web.Response:
+    """
+    GET /api/divisions
+    List all active divisions.
+    """
+    init_data = request.headers.get("X-Telegram-Init-Data", "")
+    user_info = get_authenticated_user(init_data)
+    if not user_info or "id" not in user_info:
+        return web.json_response({"status": "error", "error": "unauthorized"}, status=401)
+
+    divisions = database.get_divisions(only_active=True)
+    return web.json_response({
+        "status": "ok",
+        "divisions": divisions
+    })
+
+
 async def handle_get_standings(request: web.Request) -> web.Response:
     """
-    GET /api/tournaments/{id}/standings
+    GET /api/tournaments/{id}/standings?division_id=X
     Returns tournament standings table.
     """
     init_data = request.headers.get("X-Telegram-Init-Data", "")
@@ -56,8 +73,12 @@ async def handle_get_standings(request: web.Request) -> web.Response:
     if not user_info or "id" not in user_info:
         return web.json_response({"status": "error", "error": "unauthorized"}, status=401)
 
+    division_id = request.query.get("division_id")
     try:
-        standings = database.get_standings()
+        if division_id and division_id.isdigit():
+            standings = database.get_standings(division_id=int(division_id))
+        else:
+            standings = database.get_standings()
     except Exception as e:
         logger.warning(f"Error fetching standings: {e}")
         standings = []
@@ -102,7 +123,7 @@ async def handle_get_results(request: web.Request) -> web.Response:
 
 async def handle_get_top_scorers(request: web.Request) -> web.Response:
     """
-    GET /api/tournaments/{id}/top-scorers
+    GET /api/tournaments/{id}/top-scorers?division_id=X
     Returns top goalscorers and assist leaders.
     """
     init_data = request.headers.get("X-Telegram-Init-Data", "")
@@ -110,19 +131,14 @@ async def handle_get_top_scorers(request: web.Request) -> web.Response:
     if not user_info or "id" not in user_info:
         return web.json_response({"status": "error", "error": "unauthorized"}, status=401)
 
-    with database.transaction() as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT player_name, team_name, SUM(count) as goals
-            FROM match_events
-            WHERE event_type = 'goal'
-            GROUP BY player_name, team_name
-            ORDER BY goals DESC
-            LIMIT 15
-        """)
-        top_scorers = [dict(r) for r in cursor.fetchall()]
+    div_param = request.query.get("division_id")
+    div_id = int(div_param) if div_param and div_param.isdigit() else None
+
+    top_scorers = database.get_top_scorers(limit=15, division_id=div_id)
+    top_assists = database.get_top_assists(limit=15, division_id=div_id)
 
     return web.json_response({
         "status": "ok",
-        "top_scorers": top_scorers
+        "top_scorers": top_scorers,
+        "top_assists": top_assists
     })

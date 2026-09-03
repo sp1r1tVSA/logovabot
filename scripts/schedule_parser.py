@@ -60,15 +60,20 @@ def parse_schedule_text(text: str) -> tuple[dict[int, list[tuple[str, str]]], li
             
     return rounds, errors
 
-def create_matches_from_parsed_schedule(rounds_data: dict[int, list[tuple[str, str]]]) -> tuple[int, int, list[str]]:
+def create_matches_from_parsed_schedule(rounds_data: dict[int, list[tuple[str, str]]], division_id: int | None = None) -> tuple[int, int, list[str]]:
     """
     Creates rounds and matches in DB from parsed schedule data.
-    Clears all existing rounds and matches first!
+    If division_id is provided, clears only matches of that division and resolves teams among division users.
+    Otherwise clears all existing rounds and matches first!
     Returns tuple: (num_rounds_created, num_matches_created, list_of_unmatched_teams).
     """
-    database.clear_all_rounds_and_matches()
+    if division_id is not None:
+        database.clear_matches_by_division(division_id)
+        users = [dict(u) for u in database.get_division_users(division_id)]
+    else:
+        database.clear_all_rounds_and_matches()
+        users = [dict(u) for u in database.list_users()]
     
-    users = [dict(u) for u in database.list_users()]
     team_to_user_id = {normalize_team(u['team_name']): u['telegram_id'] for u in users if u.get('team_name')}
     
     unmatched_teams = set()
@@ -77,7 +82,7 @@ def create_matches_from_parsed_schedule(rounds_data: dict[int, list[tuple[str, s
     
     for r_num, pairs in rounds_data.items():
         # Ensure round exists in DB
-        database.create_round(r_num)
+        database.create_round(r_num, division_id=division_id)
         
         for t1, t2 in pairs:
             u1_id = team_to_user_id.get(normalize_team(t1))
@@ -89,7 +94,7 @@ def create_matches_from_parsed_schedule(rounds_data: dict[int, list[tuple[str, s
                 unmatched_teams.add(t2)
                 
             if u1_id and u2_id:
-                database.create_match(r_num, u1_id, u2_id)
+                database.create_match(r_num, u1_id, u2_id, division_id=division_id)
                 total_matches += 1
                 
     return total_rounds, total_matches, list(unmatched_teams)

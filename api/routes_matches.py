@@ -29,6 +29,7 @@ async def handle_get_matches(request: web.Request) -> web.Response:
 
     tour_param = request.query.get("tour")
     status_param = request.query.get("status")
+    division_id_param = request.query.get("division_id")
 
     with database.transaction() as conn:
         cursor = conn.cursor()
@@ -46,6 +47,9 @@ async def handle_get_matches(request: web.Request) -> web.Response:
         if status_param:
             query += " AND m.status = ?"
             params.append(status_param)
+        if division_id_param and division_id_param.isdigit():
+            query += " AND m.division_id = ?"
+            params.append(int(division_id_param))
 
         query += " ORDER BY m.round_number ASC, m.id ASC LIMIT 100"
         cursor.execute(query, params)

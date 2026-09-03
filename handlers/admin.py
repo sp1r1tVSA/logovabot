@@ -84,6 +84,7 @@ async def show_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     chat_mode = database.get_config("chat_mode") or "temshik"
     mode_label = "Темшик 🍺" if chat_mode == "temshik" else "Булли 😈"
     keyboard = [
+        [InlineKeyboardButton("🏆 Дивизионы и темы", callback_data="admin_divs_hub")],
         [InlineKeyboardButton("👥 Управление игроками", callback_data="admin_manage_players")],
         [InlineKeyboardButton("📋 Составы команд", callback_data="admin_manage_squads")],
         [InlineKeyboardButton("⚔️ Управление матчами", callback_data="admin_manage_matches_info")],
@@ -842,68 +843,165 @@ async def _post_or_update_debts_in_warns(context: ContextTypes.DEFAULT_TYPE) -> 
 
 @admin_only
 async def admin_generate_matches_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Display division selection menu for Round Robin match generation."""
     query = update.callback_query
     if not query or not is_admin(query.from_user.id):
         return
     await query.answer()
-    keyboard = [[InlineKeyboardButton("« Назад в админку", callback_data="admin_main_menu")]]
-    await query.edit_message_text(
-        "🚧 **В разработке**\n\nФункция генерации матчей находится в разработке.",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="Markdown"
+
+    divisions = await asyncio.to_thread(database.get_divisions, is_active=1)
+    keyboard = []
+
+    for d in divisions:
+        users = await asyncio.to_thread(database.get_division_users, d["id"])
+        with_team = [u for u in users if u.get("team_name")]
+        keyboard.append([InlineKeyboardButton(f"🏆 {d['name']} ({len(with_team)} игроков)", callback_data=f"admin_gen_div_{d['id']}")])
+
+    # Option for unassigned or global/legacy
+    unassigned = await asyncio.to_thread(database.get_division_users, None)
+    unassigned_with_team = [u for u in unassigned if u.get("team_name")]
+    if unassigned_with_team:
+        keyboard.append([InlineKeyboardButton(f"🌐 Без дивизиона / Общий ({len(unassigned_with_team)} игроков)", callback_data="admin_gen_div_none")])
+
+    keyboard.append([InlineKeyboardButton("« Назад к управлению", callback_data="admin_manage_matches_info")])
+
+    text = (
+        "⚔️ <b>Генерация расписания (Round Robin)</b>\n\n"
+        "Выберите дивизион, для которого необходимо сгенерировать туры и матчи лиги:\n\n"
+        "<i>Каждый дивизион получает полностью изолированное расписание. Старые матчи выбранного дивизиона будут очищены безопасно.</i>"
     )
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+
+
+@admin_only
+async def admin_gen_div_select(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Display confirmation screen before wiping and generating fixtures for the selected division."""
+    query = update.callback_query
+    if not query or not is_admin(query.from_user.id):
+        return
+    await query.answer()
+
+    target_raw = query.data.replace("admin_gen_div_", "")
+    div_id = None if target_raw == "none" else int(target_raw)
+
+    div_title = "Без дивизиона / Общий"
+    if div_id is not None:
+        d = await asyncio.to_thread(database.get_division, div_id)
+        if d:
+            div_title = d["name"]
+
+    users = await asyncio.to_thread(database.get_division_users, div_id)
+    with_team = [u for u in users if u.get("team_name")]
+
+    if len(with_team) < 2:
+        keyboard = [[InlineKeyboardButton("« Назад к выбору", callback_data="admin_generate_matches_confirm")]]
+        await query.edit_message_text(
+            f"❌ <b>Недостаточно участников!</b>\n\n"
+            f"В дивизионе <b>{html.escape(div_title)}</b> всего {len(with_team)} игрок(ов) с назначенным клубом.\n"
+            f"Для создания расписания Round Robin требуется минимум 2 участника.",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="HTML"
+        )
+        return
+
+    keyboard = [
+        [InlineKeyboardButton("✅ Подтвердить и сгенерировать", callback_data=f"admin_gen_exec_{target_raw}")],
+        [InlineKeyboardButton("« Отмена", callback_data="admin_generate_matches_confirm")]
+    ]
+
+    text = (
+        f"⚠️ <b>Подтверждение генерации расписания</b>\n\n"
+        f"• Дивизион: <b>{html.escape(div_title)}</b>\n"
+        f"• Готовых участников: <b>{len(with_team)}</b>\n\n"
+        f"⚠️ <i>Внимание: Существующие матчи <b>ТОЛЬКО</b> этого дивизиона будут сброшены и сгенерированы заново по системе Round Robin (каждый с каждым в 1 круг).\n"
+        f"Матчи и результаты других дивизионов затронуты НЕ будут!</i>"
+    )
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+
 
 @admin_only
 async def admin_generate_matches_execute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Execute match generation for division or legacy global."""
     query = update.callback_query
     if not query or not is_admin(query.from_user.id):
         return
     await query.answer()
 
-    # Get players with team
-    players = [p['telegram_id'] for p in (await asyncio.to_thread(database.list_users)) if p['team_name']]
-    
+    data = query.data
+    div_id = None
+    if data.startswith("admin_gen_exec_"):
+        target_raw = data.replace("admin_gen_exec_", "")
+        div_id = None if target_raw == "none" else int(target_raw)
+
+    div_title = "Общий / Легаси"
+    if div_id is not None:
+        d = await asyncio.to_thread(database.get_division, div_id)
+        if d:
+            div_title = d["name"]
+
+    # Fetch players for this division
+    if div_id is not None:
+        users = await asyncio.to_thread(database.get_division_users, div_id)
+    else:
+        users = await asyncio.to_thread(database.list_users)
+
+    players = [p['telegram_id'] for p in users if p.get('team_name')]
+
     if len(players) < 2:
-        keyboard = [[InlineKeyboardButton("« Назад в админку", callback_data="admin_main_menu")]]
+        keyboard = [[InlineKeyboardButton("« Назад", callback_data="admin_generate_matches_confirm")]]
         await query.edit_message_text(
-            "❌ **Ошибка генерации:**\n\nНеобходимо как минимум 2 зарегистрированных игрока с заполненными профилями.",
+            f"❌ <b>Ошибка генерации:</b>\n\nНеобходимо как минимум 2 зарегистрированных игрока с заполненными профилями.",
             reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode="Markdown"
+            parse_mode="HTML"
         )
         return
 
     # Generate round robin
     fixtures = generate_round_robin_fixtures(players)
-    
-    # Clear and insert
-    await asyncio.to_thread(database.clear_all_matches)
-    await asyncio.to_thread(database.batch_insert_matches, fixtures)
+
+    # Safe clear and insert for this division
+    if div_id is not None:
+        await asyncio.to_thread(database.clear_matches_by_division, div_id)
+        await asyncio.to_thread(database.batch_insert_matches, fixtures, division_id=div_id)
+    else:
+        await asyncio.to_thread(database.clear_all_matches)
+        await asyncio.to_thread(database.batch_insert_matches, fixtures, division_id=None)
 
     total_rounds = max(f[0] for f in fixtures) if fixtures else 0
-    
-    keyboard = [[InlineKeyboardButton("« Назад в админку", callback_data="admin_main_menu")]]
+
+    keyboard = [[InlineKeyboardButton("« Назад к матчам", callback_data="admin_manage_matches_info")]]
     await query.edit_message_text(
-        f"📅 **Расписание успешно сгенерировано!**\n\n"
-        f"• Зарегистрировано участников: **{len(players)}**\n"
-        f"• Всего туров: **{total_rounds}**\n"
-        f"• Всего матчей: **{len(fixtures)}**\n\n"
-        f"Все результаты и старые матчи сброшены в базе данных.",
+        f"📅 <b>Расписание успешно сгенерировано!</b>\n\n"
+        f"• Дивизион: <b>{html.escape(div_title)}</b>\n"
+        f"• Участников: <b>{len(players)}</b>\n"
+        f"• Всего туров: <b>{total_rounds}</b>\n"
+        f"• Всего матчей: <b>{len(fixtures)}</b>\n\n"
+        f"Матчи и туры дивизиона занесены в базу данных.",
         reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="Markdown"
+        parse_mode="HTML"
     )
 
-    # Notify group
+    # Notify division topic or main group
     group_id = await asyncio.to_thread(database.get_group_id)
     if group_id:
+        topic_id = None
+        if div_id is not None:
+            topic_id = await asyncio.to_thread(database.get_division_topic, div_id, "drafts")
+
         group_text = (
-            f"📅 **Старт новой лиги!**\n\n"
+            f"📅 <b>Старт сезона в дивизионе {html.escape(div_title)}!</b>\n\n"
             f"Администратор сгенерировал расписание матчей.\n"
             f"• Участников: {len(players)}\n"
             f"• Всего туров: {total_rounds}\n\n"
-            f"Свои матчи вы можете посмотреть в личном кабинете бота в разделе '📋 Мои матчи'."
+            f"Свои матчи вы можете посмотреть в личном кабинете бота в разделе «📋 Мои матчи»."
         )
         try:
-            await context.bot.send_message(chat_id=group_id, text=group_text, parse_mode="Markdown")
+            await context.bot.send_message(
+                chat_id=group_id,
+                message_thread_id=topic_id,
+                text=group_text,
+                parse_mode="HTML"
+            )
         except Exception as e:
             logger.exception("Не удалось отправить уведомление о генерации в группу")
 
@@ -923,6 +1021,11 @@ ADMIN_WAITING_FOR_BATCH_ROUNDS = 210
 ADMIN_WAITING_FOR_BATCH_DEADLINE = 211
 ADMIN_EXPECT_MATCH_SCHEDULE_INPUT = 212
 
+# Conversation States for Admin Division management
+ADMIN_EXPECT_DIV_NAME = 230
+ADMIN_EXPECT_DIV_RENAME = 231
+ADMIN_EXPECT_DIV_TOPIC_ID = 232
+
 @admin_only
 async def admin_manage_players_info(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show participant management hub menu."""
@@ -937,6 +1040,7 @@ async def admin_manage_players_info(update: Update, context: ContextTypes.DEFAUL
     )
     keyboard = [
         [InlineKeyboardButton("📋 Список участников", callback_data="admin_list_players_page_0")],
+        [InlineKeyboardButton("🏆 Дивизионы и участники", callback_data="admin_div_players_menu")],
         [InlineKeyboardButton("➕ Добавить игрока", callback_data="admin_add_player_start")],
         [InlineKeyboardButton("📊 Импорт списка участников", callback_data="admin_import_players_start")],
         [InlineKeyboardButton("⚠️ Сбросить лигу (Очистить всех)", callback_data="admin_clear_league_start")],
@@ -993,6 +1097,459 @@ async def admin_list_players_page(update: Update, context: ContextTypes.DEFAULT_
     
     text = f"📋 **Список участников лиги** (Всего: {len(players)}):\n\nВыберите игрока для редактирования или удаления:"
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+@admin_only
+async def admin_div_players_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Hub menu showing participant counts by division and allowing filtered listing."""
+    query = update.callback_query
+    if not query or not is_admin(query.from_user.id):
+        return
+    await query.answer()
+
+    divisions = await asyncio.to_thread(database.get_divisions)
+    all_users = await asyncio.to_thread(database.list_users)
+
+    div_counts = {}
+    unassigned_count = 0
+    for u in all_users:
+        did = u.get("division_id") if isinstance(u, dict) else u["division_id"]
+        if did is None:
+            unassigned_count += 1
+        else:
+            div_counts[did] = div_counts.get(did, 0) + 1
+
+    lines = ["🏆 <b>Распределение участников по дивизионам:</b>\n"]
+    keyboard = []
+
+    for d in divisions:
+        did = d["id"]
+        cnt = div_counts.get(did, 0)
+        status_icon = "🟢" if d.get("is_active") else "⚪"
+        lines.append(f"{status_icon} <b>{html.escape(d['name'])}:</b> {cnt} участников")
+        keyboard.append([InlineKeyboardButton(f"👥 {d['name']} ({cnt})", callback_data=f"admin_list_div_players_{did}_0")])
+
+    lines.append(f"⚪ <b>Без дивизиона:</b> {unassigned_count} участников")
+    keyboard.append([InlineKeyboardButton(f"👥 Без дивизиона ({unassigned_count})", callback_data="admin_list_div_players_none_0")])
+    keyboard.append([InlineKeyboardButton("« Назад к участникам", callback_data="admin_manage_players_info")])
+
+    text = "\n".join(lines)
+    await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+
+@admin_only
+async def admin_list_div_players(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show paginated list of players filtered by division."""
+    query = update.callback_query
+    if not query or not is_admin(query.from_user.id):
+        return
+    await query.answer()
+
+    # Callback format: admin_list_div_players_{div_id}_{page}
+    parts = query.data.replace("admin_list_div_players_", "").rsplit("_", 1)
+    div_raw = parts[0]
+    page = int(parts[1]) if len(parts) > 1 else 0
+
+    target_div_id = None if div_raw == "none" else int(div_raw)
+    players = await asyncio.to_thread(database.get_division_users, target_div_id)
+
+    div_title = "Без дивизиона"
+    if target_div_id is not None:
+        div_row = await asyncio.to_thread(database.get_division, target_div_id)
+        if div_row:
+            div_title = div_row["name"]
+
+    if not players:
+        keyboard = [[InlineKeyboardButton("« К дивизионам", callback_data="admin_div_players_menu")]]
+        await query.edit_message_text(f"👥 В «{html.escape(div_title)}» нет участников.", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+
+    per_page = 8
+    total_pages = (len(players) + per_page - 1) // per_page
+    page = max(0, min(page, total_pages - 1))
+
+    start_idx = page * per_page
+    page_players = players[start_idx:start_idx + per_page]
+
+    keyboard = []
+    for p in page_players:
+        username_val = p['username'] or str(p['telegram_id'])
+        team_val = f" ({p['team_name']})" if p['team_name'] else ""
+        btn_text = f"👤 @{username_val}{team_val}"
+        keyboard.append([InlineKeyboardButton(btn_text, callback_data=f"admin_view_player_{p['telegram_id']}")])
+
+    nav_row = []
+    if page > 0:
+        nav_row.append(InlineKeyboardButton("⬅️", callback_data=f"admin_list_div_players_{div_raw}_{page - 1}"))
+    nav_row.append(InlineKeyboardButton(f"{page + 1} / {total_pages}", callback_data="noop"))
+    if page < total_pages - 1:
+        nav_row.append(InlineKeyboardButton("➡️", callback_data=f"admin_list_div_players_{div_raw}_{page + 1}"))
+    if nav_row:
+        keyboard.append(nav_row)
+
+    keyboard.append([InlineKeyboardButton("« К дивизионам", callback_data="admin_div_players_menu")])
+
+    text = f"📋 <b>Участники: {html.escape(div_title)}</b> (Всего: {len(players)}):\n\nВыберите игрока:"
+    await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+
+# --- Division Management Handlers ---
+
+@admin_only
+async def admin_divs_hub(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Hub menu displaying all divisions with status and quick management actions."""
+    query = update.callback_query
+    if not query or not is_admin(query.from_user.id):
+        return
+    await query.answer()
+
+    divisions = await asyncio.to_thread(database.get_divisions)
+    keyboard = []
+
+    for d in divisions:
+        did = d["id"]
+        users = await asyncio.to_thread(database.get_division_users, did)
+        status_icon = "🟢" if d.get("is_active") else "🔴"
+        keyboard.append([InlineKeyboardButton(f"{status_icon} {d['name']} ({len(users)} игр.)", callback_data=f"admin_div_view_{did}")])
+
+    keyboard.append([InlineKeyboardButton("➕ Создать дивизион", callback_data="admin_div_create_start")])
+    keyboard.append([InlineKeyboardButton("« Назад в админку", callback_data="admin_main_menu")])
+
+    text = (
+        "🏆 <b>Управление дивизионами лиги</b>\n\n"
+        "Здесь вы можете создавать новые дивизионы, включать/отключать их, "
+        "а также настраивать отдельные темы (форум-топики) для драфтов и результатов.\n\n"
+        "Выберите дивизион для настройки:"
+    )
+    await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+@admin_only
+async def admin_div_view(update: Update, context: ContextTypes.DEFAULT_TYPE, div_id: int | None = None) -> None:
+    """Detailed division card with settings and topic bindings."""
+    query = update.callback_query
+    if not query or not is_admin(query.from_user.id):
+        return
+    await query.answer()
+
+    if div_id is None:
+        target_raw = query.data.replace("admin_div_view_", "")
+        div_id = int(target_raw)
+
+    division = await asyncio.to_thread(database.get_division, div_id)
+    if not division:
+        keyboard = [[InlineKeyboardButton("« К списку дивизионов", callback_data="admin_divs_hub")]]
+        await query.edit_message_text("❌ Дивизион не найден.", reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+
+    users = await asyncio.to_thread(database.get_division_users, div_id)
+    drafts_tid = await asyncio.to_thread(database.get_division_topic, div_id, "drafts")
+    results_tid = await asyncio.to_thread(database.get_division_topic, div_id, "results")
+    tables_tid = await asyncio.to_thread(database.get_division_topic, div_id, "tables")
+
+    status_str = "🟢 Активен" if division.get("is_active") else "🔴 Отключен"
+    drafts_str = f"<code>{drafts_tid}</code>" if drafts_tid else "<i>По умолчанию (общий)</i>"
+    results_str = f"<code>{results_tid}</code>" if results_tid else "<i>По умолчанию (общий)</i>"
+    tables_str = f"<code>{tables_tid}</code>" if tables_tid else "<i>По умолчанию (общий)</i>"
+
+    text = (
+        f"🏆 <b>Дивизион: {html.escape(division['name'])}</b>\n\n"
+        f"• <b>Код:</b> <code>{division['code']}</code>\n"
+        f"• <b>Статус:</b> {status_str}\n"
+        f"• <b>Участников:</b> {len(users)}\n\n"
+        f"📌 <b>Привязанные топики супергруппы:</b>\n"
+        f"• 📸 <b>Драфты (скриншоты):</b> {drafts_str}\n"
+        f"• 📢 <b>Результаты:</b> {results_str}\n"
+        f"• 📊 <b>Таблицы:</b> {tables_str}\n"
+    )
+
+    toggle_btn_text = "🔴 Отключить" if division.get("is_active") else "🟢 Включить"
+    keyboard = [
+        [
+            InlineKeyboardButton(toggle_btn_text, callback_data=f"admin_div_toggle_{div_id}"),
+            InlineKeyboardButton("✏️ Переименовать", callback_data=f"admin_div_rename_{div_id}")
+        ],
+        [
+            InlineKeyboardButton("📌 Настроить топики", callback_data=f"admin_div_topics_{div_id}"),
+            InlineKeyboardButton("👥 Участники", callback_data=f"admin_list_div_players_{div_id}_0")
+        ],
+        [InlineKeyboardButton("« К списку дивизионов", callback_data="admin_divs_hub")]
+    ]
+    await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+@admin_only
+async def admin_div_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Toggle division active status."""
+    query = update.callback_query
+    if not query or not is_admin(query.from_user.id):
+        return
+
+    div_id = int(query.data.replace("admin_div_toggle_", ""))
+    division = await asyncio.to_thread(database.get_division, div_id)
+    if not division:
+        await query.answer("❌ Дивизион не найден.", show_alert=True)
+        return
+
+    new_active = 0 if division.get("is_active") else 1
+    await asyncio.to_thread(database.update_division, div_id, is_active=new_active)
+    await query.answer(f"✅ Дивизион {'активирован' if new_active else 'деактивирован'}!", show_alert=False)
+    await admin_div_view(update, context, div_id=div_id)
+
+
+@admin_only
+async def admin_div_topics_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Menu to manage topic bindings for a division."""
+    query = update.callback_query
+    if not query or not is_admin(query.from_user.id):
+        return
+    await query.answer()
+
+    div_id = int(query.data.replace("admin_div_topics_", ""))
+    division = await asyncio.to_thread(database.get_division, div_id)
+    if not division:
+        await query.edit_message_text("❌ Дивизион не найден.")
+        return
+
+    drafts_tid = await asyncio.to_thread(database.get_division_topic, div_id, "drafts")
+    results_tid = await asyncio.to_thread(database.get_division_topic, div_id, "results")
+    tables_tid = await asyncio.to_thread(database.get_division_topic, div_id, "tables")
+
+    keyboard = [
+        [InlineKeyboardButton(f"📸 Драфты: {drafts_tid or 'Общий'}", callback_data=f"admin_div_settopic_{div_id}_drafts")],
+        [InlineKeyboardButton(f"📢 Результаты: {results_tid or 'Общий'}", callback_data=f"admin_div_settopic_{div_id}_results")],
+        [InlineKeyboardButton(f"📊 Таблицы: {tables_tid or 'Общий'}", callback_data=f"admin_div_settopic_{div_id}_tables")],
+        [InlineKeyboardButton("« К дивизиону", callback_data=f"admin_div_view_{div_id}")]
+    ]
+
+    text = (
+        f"📌 <b>Настройка тем для «{html.escape(division['name'])}»</b>\n\n"
+        f"Нажмите на нужный тип топика, чтобы привязать числовой ID темы (message_thread_id) или сбросить на общий топик.\n\n"
+        f"<i>💡 Вы также можете отправить команду <code>/set_div_topic {division['code']} [drafts|results|tables]</code> прямо внутри нужного топика группы!</i>"
+    )
+    await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+@admin_only
+async def admin_div_create_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Start division creation conversation."""
+    query = update.callback_query
+    if not query or not is_admin(query.from_user.id):
+        return ConversationHandler.END
+    await query.answer()
+
+    keyboard = [[InlineKeyboardButton("« Отмена", callback_data="admin_divs_hub")]]
+    text = (
+        "➕ <b>Создание нового дивизиона</b>\n\n"
+        "Отправьте в чат название нового дивизиона.\n"
+        "<i>Например: Премьер-Лига, Первый Дивизион, Кубок Надежды</i>"
+    )
+    await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+    return ADMIN_EXPECT_DIV_NAME
+
+
+@admin_only
+async def admin_div_create_receive(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Receive new division name, generate code, and insert into DB."""
+    user = update.effective_user
+    if not user or not is_admin(user.id):
+        return ConversationHandler.END
+
+    name = update.message.text.strip()
+    if len(name) < 2:
+        await update.message.reply_text("❌ Название слишком короткое (минимум 2 символа). Попробуйте еще раз:")
+        return ADMIN_EXPECT_DIV_NAME
+
+    import re
+    cleaned = re.sub(r'[^a-zA-Z0-9]', '', name).upper()
+    if len(cleaned) < 3:
+        import uuid
+        cleaned = f"DIV_{uuid.uuid4().hex[:4].upper()}"
+    base_code = cleaned[:16]
+    code = base_code
+    counter = 1
+    while database.get_division_by_code(code) is not None:
+        code = f"{base_code}_{counter}"
+        counter += 1
+
+    div_id = await asyncio.to_thread(database.create_division, name=name, code=code)
+
+    keyboard = [
+        [InlineKeyboardButton("🏆 Перейти к дивизиону", callback_data=f"admin_div_view_{div_id}")],
+        [InlineKeyboardButton("« К списку дивизионов", callback_data="admin_divs_hub")]
+    ]
+    await update.message.reply_text(
+        f"✅ <b>Дивизион «{html.escape(name)}» успешно создан!</b>\n\n"
+        f"• <b>Код:</b> <code>{code}</code>\n"
+        f"• <b>ID:</b> <code>{div_id}</code>\n\n"
+        f"Теперь вы можете привязать к нему участников и настроить форум-топики.",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+    return ConversationHandler.END
+
+
+@admin_only
+async def admin_div_rename_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Start division rename conversation."""
+    query = update.callback_query
+    if not query or not is_admin(query.from_user.id):
+        return ConversationHandler.END
+    await query.answer()
+
+    div_id = int(query.data.replace("admin_div_rename_", ""))
+    context.user_data["rename_div_id"] = div_id
+
+    keyboard = [[InlineKeyboardButton("« Отмена", callback_data=f"admin_div_view_{div_id}")]]
+    await query.edit_message_text(
+        "✏️ <b>Переименование дивизиона</b>\n\n"
+        "Отправьте новое название для дивизиона:",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+    return ADMIN_EXPECT_DIV_RENAME
+
+
+@admin_only
+async def admin_div_rename_receive(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Receive new name and update division in DB."""
+    user = update.effective_user
+    if not user or not is_admin(user.id):
+        return ConversationHandler.END
+
+    div_id = context.user_data.get("rename_div_id")
+    if not div_id:
+        await update.message.reply_text("❌ Ошибка: не найден дивизион.")
+        return ConversationHandler.END
+
+    new_name = update.message.text.strip()
+    if len(new_name) < 2:
+        await update.message.reply_text("❌ Название слишком короткое. Введите другое:")
+        return ADMIN_EXPECT_DIV_RENAME
+
+    await asyncio.to_thread(database.update_division, div_id, name=new_name)
+    keyboard = [[InlineKeyboardButton("« К дивизиону", callback_data=f"admin_div_view_{div_id}")],
+                [InlineKeyboardButton("« К списку дивизионов", callback_data="admin_divs_hub")]]
+    await update.message.reply_text(
+        f"✅ Название дивизиона изменено на: <b>{html.escape(new_name)}</b>!",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+    return ConversationHandler.END
+
+
+@admin_only
+async def admin_div_settopic_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Prompt for topic ID input."""
+    query = update.callback_query
+    if not query or not is_admin(query.from_user.id):
+        return ConversationHandler.END
+    await query.answer()
+
+    parts = query.data.replace("admin_div_settopic_", "").rsplit("_", 1)
+    div_id = int(parts[0])
+    topic_type = parts[1]
+
+    context.user_data["div_topic_div_id"] = div_id
+    context.user_data["div_topic_type"] = topic_type
+
+    keyboard = [[InlineKeyboardButton("« Отмена", callback_data=f"admin_div_topics_{div_id}")]]
+    await query.edit_message_text(
+        f"📌 <b>Привязка топика «{topic_type}»</b>\n\n"
+        f"Отправьте числовой ID темы в супергруппе (<code>message_thread_id</code>).\n\n"
+        f"• Отправьте <code>0</code> или <code>none</code>, чтобы сбросить тему на глобальную по умолчанию.\n"
+        f"• Или напишите в нужном топике команду <code>/set_div_topic {div_id} {topic_type}</code>.",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+    return ADMIN_EXPECT_DIV_TOPIC_ID
+
+
+@admin_only
+async def admin_div_settopic_receive(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Receive topic ID and bind in database."""
+    user = update.effective_user
+    if not user or not is_admin(user.id):
+        return ConversationHandler.END
+
+    div_id = context.user_data.get("div_topic_div_id")
+    topic_type = context.user_data.get("div_topic_type")
+    if not div_id or not topic_type:
+        await update.message.reply_text("❌ Ошибка сессии настройки топика.")
+        return ConversationHandler.END
+
+    val = update.message.text.strip().lower()
+    if val in ("0", "none", "нет", "сброс"):
+        await asyncio.to_thread(database.set_division_topic, div_id, topic_type, None)
+        msg = f"✅ Топик «{topic_type}» сброшен на глобальный по умолчанию."
+    else:
+        try:
+            tid = int(val)
+            await asyncio.to_thread(database.set_division_topic, div_id, topic_type, tid)
+            msg = f"✅ Топик «{topic_type}» успешно установлен на ID: <code>{tid}</code>!"
+        except ValueError:
+            await update.message.reply_text("❌ Введите корректный числовой ID топика (или 0 для сброса):")
+            return ADMIN_EXPECT_DIV_TOPIC_ID
+
+    keyboard = [[InlineKeyboardButton("« К настройке топиков", callback_data=f"admin_div_topics_{div_id}")],
+                [InlineKeyboardButton("« К дивизиону", callback_data=f"admin_div_view_{div_id}")]]
+    await update.message.reply_text(msg, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+    return ConversationHandler.END
+
+
+@admin_only
+async def admin_cancel_div_action(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Cancel division conversation action."""
+    if update.callback_query:
+        await update.callback_query.answer()
+        await admin_divs_hub(update, context)
+    elif update.message:
+        await update.message.reply_text("Действие отменено.")
+    return ConversationHandler.END
+
+
+@admin_only
+async def admin_set_div_topic_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Command /set_div_topic [div_id_or_code] [topic_type] called inside a group topic."""
+    user = update.effective_user
+    if not user or not is_admin(user.id):
+        await update.message.reply_text("❌ Доступ запрещён.")
+        return
+
+    thread_id = update.message.message_thread_id
+    if not thread_id:
+        await update.message.reply_text("⚠️ Вызовите команду внутри нужного форум-топика супергруппы!")
+        return
+
+    args = context.args or []
+    if len(args) < 2:
+        await update.message.reply_text(
+            "⚠️ <b>Использование:</b> <code>/set_div_topic [ID_или_КОД_дивизиона] [drafts|results|tables]</code>\n\n"
+            "Пример: <code>/set_div_topic 1 drafts</code>",
+            parse_mode="HTML"
+        )
+        return
+
+    target = args[0].strip()
+    topic_type = args[1].strip().lower()
+
+    if topic_type not in ("drafts", "results", "tables"):
+        await update.message.reply_text("❌ Неверный тип топика. Разрешены: `drafts`, `results`, `tables`.")
+        return
+
+    division = None
+    if target.isdigit():
+        division = await asyncio.to_thread(database.get_division, int(target))
+    if not division:
+        division = await asyncio.to_thread(database.get_division_by_code, target)
+
+    if not division:
+        await update.message.reply_text(f"❌ Дивизион «{target}» не найден в базе данных.")
+        return
+
+    div_id = division["id"]
+    await asyncio.to_thread(database.set_division_topic, div_id, topic_type, thread_id)
+    await update.message.reply_text(
+        f"✅ Тема «{topic_type}» для дивизиона <b>{html.escape(division['name'])}</b> успешно привязана к этому топику (ID: <code>{thread_id}</code>)!",
+        parse_mode="HTML"
+    )
 
 @admin_only
 async def admin_view_player(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1105,7 +1662,8 @@ async def admin_manage_matches_info(update: Update, context: ContextTypes.DEFAUL
     await query.answer()
     
     keyboard = [
-        [InlineKeyboardButton("📝 Создание матчей", callback_data="admin_create_matches_start")],
+        [InlineKeyboardButton("🎲 Сгенерировать (Round Robin)", callback_data="admin_generate_matches_confirm")],
+        [InlineKeyboardButton("📝 Создание матчей (текст)", callback_data="admin_create_matches_start")],
         [InlineKeyboardButton("📅 Открыть туры (массово)", callback_data="admin_open_batch_prompt")],
         [InlineKeyboardButton("⏰ Просроченные", callback_data="admin_list_overdue")]
     ]
@@ -2582,17 +3140,28 @@ async def admin_view_player(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     role_str = "Администратор" if player['role'] == 'admin' else "Игрок"
     warn_count = player.get('warn_count', 0) if isinstance(player, dict) else player['warn_count']
 
+    div_name = "Не назначен"
+    p_dict = dict(player) if player else {}
+    if p_dict.get('division_id'):
+        div_row = await asyncio.to_thread(database.get_division, p_dict['division_id'])
+        if div_row:
+            div_name = div_row['name']
+
     text = (
         f"👤 <b>Карточка участника:</b>\n\n"
         f"• <b>Telegram:</b> {html.escape(username_str)}\n"
         f"• <b>Клуб:</b> {html.escape(team_str)}\n"
+        f"• <b>Дивизион:</b> {html.escape(div_name)}\n"
         f"• <b>Telegram ID:</b> <code>{player['telegram_id']}</code>\n"
         f"• <b>Роль:</b> {role_str}\n"
         f"• <b>Варны:</b> {warn_count} / {MAX_WARNS_LIMIT}\n"
     )
 
     keyboard = [
-        [InlineKeyboardButton("✏️ Изменить клуб", callback_data=f"admin_edit_club_select_{p_id}")],
+        [
+            InlineKeyboardButton("✏️ Изменить клуб", callback_data=f"admin_edit_club_select_{p_id}"),
+            InlineKeyboardButton("🏆 Дивизион", callback_data=f"admin_edit_div_select_{p_id}")
+        ],
         [InlineKeyboardButton("✏️ Изменить юзернейм", callback_data=f"admin_edit_username_start_{p_id}")],
         [
             InlineKeyboardButton("➕ Выдать варн", callback_data=f"warn_add_{p_id}"),
@@ -2680,6 +3249,63 @@ async def admin_edit_club_execute(update: Update, context: ContextTypes.DEFAULT_
     # Use single query.answer() with the result message to avoid BadRequest: query already answered
     await query.answer(f"✅ {msg}" if success else f"❌ {msg}", show_alert=True)
 
+    await admin_view_player(update, context, player_id=p_id)
+
+@admin_only
+async def admin_edit_div_select(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show list of active divisions to assign player to."""
+    query = update.callback_query
+    if not query or not is_admin(query.from_user.id):
+        return
+    await query.answer()
+
+    p_id = int(query.data.replace("admin_edit_div_select_", ""))
+    player = await asyncio.to_thread(database.get_user, p_id)
+    if not player:
+        keyboard = [[InlineKeyboardButton("« К списку", callback_data="admin_list_players_page_0")]]
+        await query.edit_message_text("❌ Игрок не найден.", reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+
+    divisions = await asyncio.to_thread(database.get_divisions, is_active=1)
+
+    keyboard = []
+    curr_div_id = dict(player).get("division_id") if player else None
+    if curr_div_id is None:
+        keyboard.append([InlineKeyboardButton("⭐ Без дивизиона (Текущий)", callback_data=f"admin_ediv_{p_id}_none")])
+    else:
+        keyboard.append([InlineKeyboardButton("❌ Снять с дивизиона", callback_data=f"admin_ediv_{p_id}_none")])
+
+    for div in divisions:
+        d_id = div["id"]
+        d_name = div["name"]
+        if curr_div_id == d_id:
+            btn_text = f"⭐ {d_name} (текущий)"
+        else:
+            btn_text = f"🏆 {d_name}"
+        keyboard.append([InlineKeyboardButton(btn_text, callback_data=f"admin_ediv_{p_id}_{d_id}")])
+
+    keyboard.append([InlineKeyboardButton("« Отмена", callback_data=f"admin_view_player_{p_id}")])
+
+    text = (
+        f"🏆 <b>Выберите дивизион для игрока {html.escape('@' + player['username'] if player['username'] else str(p_id))}:</b>\n\n"
+        f"<i>(Клик по кнопке моментально назначит дивизион)</i>"
+    )
+    await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+
+@admin_only
+async def admin_edit_div_execute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Execute division assignment via inline button click."""
+    query = update.callback_query
+    if not query or not is_admin(query.from_user.id):
+        return
+
+    parts = query.data.replace("admin_ediv_", "").rsplit("_", 1)
+    p_id = int(parts[0])
+    target_div_raw = parts[1]
+    target_div_id = None if target_div_raw == "none" else int(target_div_raw)
+
+    await asyncio.to_thread(database.assign_user_division, p_id, target_div_id)
+    await query.answer("✅ Дивизион обновлен!", show_alert=False)
     await admin_view_player(update, context, player_id=p_id)
 
 @admin_only

@@ -217,12 +217,24 @@ def init_db() -> None:
             ("stadium", "TEXT"),
             ("referee", "TEXT"),
             ("live_minute", "INTEGER"),
+            ("division_id", "INTEGER DEFAULT NULL"),
         )
         for col_name, col_type in SAFE_COLUMNS:
             try:
                 cursor.execute(f"ALTER TABLE matches ADD COLUMN {col_name} {col_type}")
             except sqlite3.OperationalError:
                 pass
+
+        # Safely migration-add division_id to users and rounds
+        try:
+            cursor.execute("ALTER TABLE users ADD COLUMN division_id INTEGER DEFAULT NULL")
+        except sqlite3.OperationalError:
+            pass
+
+        try:
+            cursor.execute("ALTER TABLE rounds ADD COLUMN division_id INTEGER DEFAULT NULL")
+        except sqlite3.OperationalError:
+            pass
 
         # Safely migration-add new columns to user_bets, bet_items, coin_transactions, user_wallets
         for col_name, col_type in (
@@ -266,6 +278,8 @@ def init_db() -> None:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_matches_round ON matches(round_number)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_matches_status ON matches(status)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_matches_tourn ON matches(tournament_type)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_matches_division ON matches(division_id, status)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_division ON users(division_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_match ON match_events(match_id)")
 
         # Enforce one owner per club: de-duplicate team_name (prefer a real
@@ -428,6 +442,98 @@ def init_db() -> None:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        cursor.execute("""
+            INSERT OR IGNORE INTO tournaments (id, name, type, season, is_active)
+            VALUES (1, 'Логово Фифарей (Основная Лига)', 'league', 'Сезон 2026', 1)
+        """)
+
+        # ─── LOGOVO: Divisions & Multi-Topic Routing Tables ───
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS divisions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tournament_id INTEGER NOT NULL DEFAULT 1,
+                name TEXT NOT NULL,
+                code TEXT NOT NULL UNIQUE,
+                topic_id INTEGER DEFAULT NULL,
+                is_active BOOLEAN DEFAULT 1,
+                sort_order INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(tournament_id) REFERENCES tournaments(id)
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_divisions_active ON divisions(is_active, sort_order)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_divisions_topic ON divisions(topic_id)")
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS division_topics (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                division_id INTEGER NOT NULL,
+                topic_type TEXT NOT NULL,
+                message_thread_id INTEGER NOT NULL,
+                group_chat_id INTEGER DEFAULT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(division_id, topic_type),
+                FOREIGN KEY(division_id) REFERENCES divisions(id) ON DELETE CASCADE
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_div_topics_lookup ON division_topics(message_thread_id, topic_type)")
+        
+        try:
+            cursor.execute("ALTER TABLE division_topics ADD COLUMN group_chat_id INTEGER DEFAULT NULL")
+        except sqlite3.OperationalError:
+            pass
+
+        # Check if division_topics has restrictive CHECK constraint
+        cursor.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='division_topics'")
+        dt_schema = cursor.fetchone()
+        if dt_schema and dt_schema["sql"] and "CHECK(topic_type IN" in dt_schema["sql"]:
+            try:
+                cursor.execute("PRAGMA foreign_keys=OFF")
+                cursor.execute("""
+                    CREATE TABLE division_topics__migration (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        division_id INTEGER NOT NULL,
+                        topic_type TEXT NOT NULL,
+                        message_thread_id INTEGER NOT NULL,
+                        group_chat_id INTEGER DEFAULT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(division_id, topic_type),
+                        FOREIGN KEY(division_id) REFERENCES divisions(id) ON DELETE CASCADE
+                    )
+                """)
+                cursor.execute("PRAGMA table_info(division_topics)")
+                cols = [c["name"] for c in cursor.fetchall()]
+                if "group_chat_id" in cols:
+                    cursor.execute("""
+                        INSERT INTO division_topics__migration (id, division_id, topic_type, message_thread_id, group_chat_id, created_at)
+                        SELECT id, division_id, topic_type, message_thread_id, group_chat_id, created_at FROM division_topics
+                    """)
+                else:
+                    cursor.execute("""
+                        INSERT INTO division_topics__migration (id, division_id, topic_type, message_thread_id, created_at)
+                        SELECT id, division_id, topic_type, message_thread_id, created_at FROM division_topics
+                    """)
+                cursor.execute("UPDATE division_topics__migration SET topic_type = 'draft' WHERE topic_type = 'drafts'")
+                cursor.execute("DROP TABLE division_topics")
+                cursor.execute("ALTER TABLE division_topics__migration RENAME TO division_topics")
+                cursor.execute("PRAGMA foreign_keys=ON")
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_div_topics_lookup ON division_topics(message_thread_id, topic_type)")
+            except Exception as e:
+                logger.warning(f"Error migrating division_topics check constraint: {e}")
+
+        cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_div_topics_chat_thread ON division_topics(group_chat_id, message_thread_id) WHERE group_chat_id IS NOT NULL")
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS division_admins (
+                division_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY(division_id, user_id),
+                FOREIGN KEY(division_id) REFERENCES divisions(id) ON DELETE CASCADE,
+                FOREIGN KEY(user_id) REFERENCES users(telegram_id) ON DELETE CASCADE
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_div_admins_user ON division_admins(user_id)")
 
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS markets (
@@ -902,7 +1008,7 @@ def get_user(telegram_id: int) -> sqlite3.Row | None:
     with transaction() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT telegram_id, username, team_name, league_name, role, registered_at, squad_photo_id, warn_count, pending_notification FROM users WHERE telegram_id = ?
+            SELECT telegram_id, username, team_name, league_name, role, registered_at, squad_photo_id, warn_count, pending_notification, division_id FROM users WHERE telegram_id = ?
         """, (telegram_id,))
         return cursor.fetchone()
 
@@ -956,7 +1062,7 @@ def list_users() -> list[sqlite3.Row]:
     with transaction() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT telegram_id, username, team_name, league_name, role, registered_at, COALESCE(warn_count, 0) AS warn_count FROM users ORDER BY registered_at DESC"
+            "SELECT telegram_id, username, team_name, league_name, role, division_id, registered_at, COALESCE(warn_count, 0) AS warn_count FROM users ORDER BY registered_at DESC"
         )
         return cursor.fetchall()
 
@@ -1143,50 +1249,85 @@ def update_single_field(telegram_id: int, field_name: str, value: str) -> None:
             (value, telegram_id)
         )
 
-def get_standings() -> list[dict]:
-    """Calculate the standings of all registered players dynamically."""
+def get_standings(division_id: int | None = None) -> list[dict]:
+    """Calculate the standings of registered players dynamically, optionally filtered by division."""
     with transaction() as conn:
         cursor = conn.cursor()
         
-        from config import KPL_TEAMS
-        
-        # Get current user info for all teams
-        cursor.execute("SELECT telegram_id, team_name, username FROM users WHERE team_name IS NOT NULL AND team_name != ''")
-        all_users = cursor.fetchall()
-        
         teams = {}
-        for t in KPL_TEAMS:
-            canon = resolve_team_name(t) or t
-            u = None
-            for row in all_users:
-                if teams_match(row["team_name"], canon):
-                    u = row
-                    break
-            teams[canon] = {
-                "telegram_id": u["telegram_id"] if u else None,
-                "team_name": canon,
-                "username": u["username"] if u and u["username"] else "",
-                "played": 0,
-                "wins": 0,
-                "draws": 0,
-                "losses": 0,
-                "goals_scored": 0,
-                "goals_conceded": 0,
-                "points": 0,
-            }
+        if division_id is not None:
+            # Users assigned to this specific division
+            cursor.execute(
+                "SELECT telegram_id, team_name, username FROM users WHERE division_id = ? AND team_name IS NOT NULL AND team_name != ''",
+                (division_id,)
+            )
+            div_users = cursor.fetchall()
+            for row in div_users:
+                canon = resolve_team_name(row["team_name"]) or row["team_name"]
+                teams[canon] = {
+                    "telegram_id": row["telegram_id"],
+                    "team_name": canon,
+                    "username": row["username"] if row["username"] else "",
+                    "played": 0,
+                    "wins": 0,
+                    "draws": 0,
+                    "losses": 0,
+                    "goals_scored": 0,
+                    "goals_conceded": 0,
+                    "points": 0,
+                }
+            
+            # Fetch confirmed league matches strictly for this division
+            cursor.execute("""
+                SELECT 
+                    COALESCE(m.player1_team, u1.team_name) AS player1_team, 
+                    COALESCE(m.player2_team, u2.team_name) AS player2_team, 
+                    m.player1_score, 
+                    m.player2_score 
+                FROM matches m
+                LEFT JOIN users u1 ON LOWER(m.player1_team) = LOWER(u1.team_name)
+                LEFT JOIN users u2 ON LOWER(m.player2_team) = LOWER(u2.team_name)
+                WHERE m.status = 'confirmed' 
+                  AND (m.tournament_type IS NULL OR m.tournament_type = 'league')
+                  AND m.division_id = ?
+            """, (division_id,))
+        else:
+            from config import KPL_TEAMS
+            cursor.execute("SELECT telegram_id, team_name, username FROM users WHERE team_name IS NOT NULL AND team_name != ''")
+            all_users = cursor.fetchall()
+            for t in KPL_TEAMS:
+                canon = resolve_team_name(t) or t
+                u = None
+                for row in all_users:
+                    if teams_match(row["team_name"], canon):
+                        u = row
+                        break
+                teams[canon] = {
+                    "telegram_id": u["telegram_id"] if u else None,
+                    "team_name": canon,
+                    "username": u["username"] if u and u["username"] else "",
+                    "played": 0,
+                    "wins": 0,
+                    "draws": 0,
+                    "losses": 0,
+                    "goals_scored": 0,
+                    "goals_conceded": 0,
+                    "points": 0,
+                }
 
-        # Get all confirmed matches (League matches only)
-        cursor.execute("""
-            SELECT 
-                COALESCE(m.player1_team, u1.team_name) AS player1_team, 
-                COALESCE(m.player2_team, u2.team_name) AS player2_team, 
-                m.player1_score, 
-                m.player2_score 
-            FROM matches m
-            LEFT JOIN users u1 ON LOWER(m.player1_team) = LOWER(u1.team_name)
-            LEFT JOIN users u2 ON LOWER(m.player2_team) = LOWER(u2.team_name)
-            WHERE m.status = 'confirmed' AND (m.tournament_type IS NULL OR m.tournament_type = 'league')
-        """)
+            # Get all confirmed matches (League matches only)
+            cursor.execute("""
+                SELECT 
+                    COALESCE(m.player1_team, u1.team_name) AS player1_team, 
+                    COALESCE(m.player2_team, u2.team_name) AS player2_team, 
+                    m.player1_score, 
+                    m.player2_score 
+                FROM matches m
+                LEFT JOIN users u1 ON LOWER(m.player1_team) = LOWER(u1.team_name)
+                LEFT JOIN users u2 ON LOWER(m.player2_team) = LOWER(u2.team_name)
+                WHERE m.status = 'confirmed' AND (m.tournament_type IS NULL OR m.tournament_type = 'league')
+            """)
+        
         matches = cursor.fetchall()
 
         for match in matches:
@@ -1215,6 +1356,37 @@ def get_standings() -> list[dict]:
                     if teams_match(k, t2):
                         matched_u2 = obj
                         break
+
+            # If division_id is set and team was not in div_users, dynamically add it
+            if matched_u1 is None and division_id is not None and t1:
+                teams[t1] = {
+                    "telegram_id": None,
+                    "team_name": t1,
+                    "username": "",
+                    "played": 0,
+                    "wins": 0,
+                    "draws": 0,
+                    "losses": 0,
+                    "goals_scored": 0,
+                    "goals_conceded": 0,
+                    "points": 0,
+                }
+                matched_u1 = teams[t1]
+
+            if matched_u2 is None and division_id is not None and t2:
+                teams[t2] = {
+                    "telegram_id": None,
+                    "team_name": t2,
+                    "username": "",
+                    "played": 0,
+                    "wins": 0,
+                    "draws": 0,
+                    "losses": 0,
+                    "goals_scored": 0,
+                    "goals_conceded": 0,
+                    "points": 0,
+                }
+                matched_u2 = teams[t2]
 
             if matched_u1:
                 matched_u1["played"] += 1
@@ -1281,7 +1453,7 @@ def get_match(match_id: int) -> dict | None:
                 COALESCE(m.frozen_seconds, 0) AS frozen_seconds, m.frozen_at,
                 m.photo_id, m.dispute_photos, m.reported_by,
                 m.proposed_time, m.proposed_by, m.time_status,
-                m.tournament_type, m.cup_stage, m.cup_series_id, m.game_num_in_series,
+                m.tournament_type, m.cup_stage, m.cup_series_id, m.game_num_in_series, m.division_id,
                 m.player1_team AS direct_p1_team, m.player2_team AS direct_p2_team,
                 u1.username AS player1_nickname, u1.team_name AS u1_team, u1.username AS player1_username,
                 u2.username AS player2_nickname, u2.team_name AS u2_team, u2.username AS player2_username
@@ -1475,8 +1647,8 @@ def save_match_events(match_id: int, events: list[tuple[str, str, int]], team_na
                 (match_id, t_name, p_name, e_type, cnt)
             )
 
-def get_active_match_by_teams(team1: str, team2: str, caption: str | None = None) -> dict | None:
-    """Find an active (pending/reported/disputed) match given two team names and optional caption."""
+def get_active_match_by_teams(team1: str, team2: str, caption: str | None = None, division_id: int | None = None) -> dict | None:
+    """Find an active (pending/reported/disputed) match given two team names, optional caption, and optional division_id."""
     if not team1 or not team2:
         return None
     
@@ -1507,6 +1679,7 @@ def get_active_match_by_teams(team1: str, team2: str, caption: str | None = None
         cursor.execute("""
             SELECT 
                 m.id, m.status, m.tournament_type, m.round_number, m.cup_stage, m.cup_series_id, m.game_num_in_series,
+                m.division_id,
                 m.player1_team AS direct_p1_team, m.player2_team AS direct_p2_team,
                 u1.team_name AS u1_team, u2.team_name AS u2_team,
                 COALESCE(r.is_open, 0) AS is_round_open,
@@ -1539,6 +1712,11 @@ def get_active_match_by_teams(team1: str, team2: str, caption: str | None = None
                 is_match = True
                 
             if is_match:
+                # If division_id is specified, enforce division boundary unless it's a cup match hint
+                if division_id is not None and not is_cup_hint:
+                    if d.get("division_id") != division_id:
+                        continue
+
                 score = 0
                 t_type = d.get('tournament_type') or 'league'
                 is_pending = d['status'] in ('pending', 'reported', 'disputed')
@@ -1665,24 +1843,40 @@ def get_open_rounds_with_deadlines() -> list[dict]:
         )
         return [dict(row) for row in cursor.fetchall()]
 
-def get_teams_recent_form(limit: int = 5) -> dict[str, list[str]]:
+def get_teams_recent_form(limit: int = 5, division_id: int | None = None) -> dict[str, list[str]]:
     """
     Retrieve the last `limit` confirmed match outcomes for each team by team_name.
     Returns dict mapping lowercase team_name -> list of 'W', 'D', 'L' outcomes.
     """
     with transaction() as conn:
         cursor = conn.cursor()
-        from config import KPL_TEAMS
-        cursor.execute("""
-            SELECT player1_team, player2_team, player1_score, player2_score
-            FROM matches
-            WHERE status = 'confirmed' AND (tournament_type IS NULL OR tournament_type = 'league')
-            ORDER BY round_number DESC, id DESC
-        """)
-        all_matches = cursor.fetchall()
+        
+        if division_id is not None:
+            cursor.execute("""
+                SELECT player1_team, player2_team, player1_score, player2_score
+                FROM matches
+                WHERE status = 'confirmed' 
+                  AND (tournament_type IS NULL OR tournament_type = 'league')
+                  AND division_id = ?
+                ORDER BY round_number DESC, id DESC
+            """, (division_id,))
+            all_matches = cursor.fetchall()
+
+            cursor.execute("SELECT team_name FROM users WHERE division_id = ? AND team_name IS NOT NULL AND team_name != ''", (division_id,))
+            team_candidates = [r["team_name"] for r in cursor.fetchall()]
+        else:
+            from config import KPL_TEAMS
+            cursor.execute("""
+                SELECT player1_team, player2_team, player1_score, player2_score
+                FROM matches
+                WHERE status = 'confirmed' AND (tournament_type IS NULL OR tournament_type = 'league')
+                ORDER BY round_number DESC, id DESC
+            """)
+            all_matches = cursor.fetchall()
+            team_candidates = list(KPL_TEAMS)
 
         form_map = {}
-        for t in KPL_TEAMS:
+        for t in team_candidates:
             canon = resolve_team_name(t) or t
             outcomes = []
             for r in all_matches:
@@ -1727,16 +1921,16 @@ def clear_all_rounds_and_matches() -> None:
         cursor.execute("DELETE FROM matches")
         cursor.execute("DELETE FROM rounds")
 
-def create_round(round_number: int, deadline: str = None) -> None:
+def create_round(round_number: int, deadline: str = None, division_id: int | None = None) -> None:
     """Create a new round in DB if it doesn't already exist (closed by default)."""
     with transaction() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "INSERT OR IGNORE INTO rounds (round_number, is_open, deadline) VALUES (?, 0, ?)",
-            (round_number, deadline)
+            "INSERT OR IGNORE INTO rounds (round_number, is_open, deadline, division_id) VALUES (?, 0, ?, ?)",
+            (round_number, deadline, division_id)
         )
 
-def create_match(round_number: int, player1_id: int, player2_id: int) -> int:
+def create_match(round_number: int, player1_id: int, player2_id: int, division_id: int | None = None) -> int:
     """Create a new pending match between two players in a round."""
     if player1_id == player2_id:
         raise ValueError("Игрок не может играть сам с собой (player1_id == player2_id).")
@@ -1749,8 +1943,8 @@ def create_match(round_number: int, player1_id: int, player2_id: int) -> int:
             raise ValueError(f"Команды участников совпадают: {teams[0]}")
 
         cursor.execute(
-            "INSERT INTO matches (round_number, player1_id, player2_id, status) VALUES (?, ?, ?, 'pending')",
-            (round_number, player1_id, player2_id)
+            "INSERT INTO matches (round_number, player1_id, player2_id, status, division_id) VALUES (?, ?, ?, 'pending', ?)",
+            (round_number, player1_id, player2_id, division_id)
         )
         return cursor.lastrowid
 
@@ -2057,22 +2251,36 @@ def get_match_frozen_seconds(match_id: int) -> float:
                 total += max(0.0, (datetime.datetime.now() - f_at).total_seconds())
         return total
 
-def get_matches_by_round(round_number: int) -> list[dict]:
-    """Retrieve all matches for a specific round with player details."""
+def get_matches_by_round(round_number: int, division_id: int | None = None) -> list[dict]:
+    """Retrieve all matches for a specific round with player details, optionally filtered by division."""
     with transaction() as conn:
         cursor = conn.cursor()
-        cursor.execute("""
-            SELECT 
-                m.id, m.round_number, u1.telegram_id AS player1_id, u2.telegram_id AS player2_id,
-                m.player1_score, m.player2_score, m.status,
-                u1.username AS player1_nickname, COALESCE(m.player1_team, u1.team_name, 'Команда 1') AS player1_team,
-                u2.username AS player2_nickname, COALESCE(m.player2_team, u2.team_name, 'Команда 2') AS player2_team
-            FROM matches m
-            LEFT JOIN users u1 ON LOWER(m.player1_team) = LOWER(u1.team_name)
-            LEFT JOIN users u2 ON LOWER(m.player2_team) = LOWER(u2.team_name)
-            WHERE m.round_number = ?
-            ORDER BY m.id ASC
-        """, (round_number,))
+        if division_id is not None:
+            cursor.execute("""
+                SELECT 
+                    m.id, m.round_number, m.division_id, u1.telegram_id AS player1_id, u2.telegram_id AS player2_id,
+                    m.player1_score, m.player2_score, m.status,
+                    u1.username AS player1_nickname, COALESCE(m.player1_team, u1.team_name, 'Команда 1') AS player1_team,
+                    u2.username AS player2_nickname, COALESCE(m.player2_team, u2.team_name, 'Команда 2') AS player2_team
+                FROM matches m
+                LEFT JOIN users u1 ON LOWER(m.player1_team) = LOWER(u1.team_name)
+                LEFT JOIN users u2 ON LOWER(m.player2_team) = LOWER(u2.team_name)
+                WHERE m.round_number = ? AND m.division_id = ?
+                ORDER BY m.id ASC
+            """, (round_number, division_id))
+        else:
+            cursor.execute("""
+                SELECT 
+                    m.id, m.round_number, m.division_id, u1.telegram_id AS player1_id, u2.telegram_id AS player2_id,
+                    m.player1_score, m.player2_score, m.status,
+                    u1.username AS player1_nickname, COALESCE(m.player1_team, u1.team_name, 'Команда 1') AS player1_team,
+                    u2.username AS player2_nickname, COALESCE(m.player2_team, u2.team_name, 'Команда 2') AS player2_team
+                FROM matches m
+                LEFT JOIN users u1 ON LOWER(m.player1_team) = LOWER(u1.team_name)
+                LEFT JOIN users u2 ON LOWER(m.player2_team) = LOWER(u2.team_name)
+                WHERE m.round_number = ?
+                ORDER BY m.id ASC
+            """, (round_number,))
         return [dict(row) for row in cursor.fetchall()]
 
 def get_admins() -> list[dict]:
@@ -2870,7 +3078,7 @@ def clear_all_matches() -> None:
         conn.cursor().execute("DELETE FROM rounds")
 
 
-def batch_insert_matches(fixtures: list[tuple[int, int, int]]) -> None:
+def batch_insert_matches(fixtures: list[tuple[int, int, int]], division_id: int | None = None) -> None:
     """Insert a list of matches. fixtures format: (round_number, p1, p2)"""
     valid_fixtures = [f for f in fixtures if f[1] != f[2]]
     if not valid_fixtures:
@@ -2878,13 +3086,13 @@ def batch_insert_matches(fixtures: list[tuple[int, int, int]]) -> None:
     with transaction() as conn:
         cursor = conn.cursor()
         cursor.executemany(
-            "INSERT INTO matches (round_number, player1_id, player2_id, status) VALUES (?, ?, ?, 'pending')",
-            valid_fixtures
+            "INSERT INTO matches (round_number, player1_id, player2_id, status, division_id) VALUES (?, ?, ?, 'pending', ?)",
+            [(f[0], f[1], f[2], division_id) for f in valid_fixtures]
         )
         rounds = set([f[0] for f in valid_fixtures])
         cursor.executemany(
-            "INSERT OR IGNORE INTO rounds (round_number, is_open, deadline) VALUES (?, 0, NULL)",
-            [(r,) for r in rounds]
+            "INSERT OR IGNORE INTO rounds (round_number, is_open, deadline, division_id) VALUES (?, 0, NULL, ?)",
+            [(r, division_id) for r in rounds]
         )
 
 def get_round_info(round_number: int) -> dict | None:
@@ -2970,11 +3178,11 @@ def get_unplayed_matches_in_round(round_number: int) -> list[dict]:
         """, (round_number,))
         return [dict(row) for row in cursor.fetchall()]
 
-def get_top_scorers(limit: int = 20) -> list[dict]:
+def get_top_scorers(limit: int = 20, division_id: int | None = None) -> list[dict]:
     """Get top goalscorers in the league aggregated from match_events (strictly confirmed league matches, round_number > 0)."""
     with transaction() as conn:
         cursor = conn.cursor()
-        cursor.execute("""
+        query = """
             SELECT me.player_name, me.team_name, SUM(me.count) AS total_goals
             FROM match_events me
             JOIN matches m ON me.match_id = m.id
@@ -2982,17 +3190,25 @@ def get_top_scorers(limit: int = 20) -> list[dict]:
               AND (m.tournament_type IS NULL OR m.tournament_type = 'league')
               AND m.round_number > 0
               AND m.status = 'confirmed'
+        """
+        params = []
+        if division_id is not None:
+            query += " AND m.division_id = ?"
+            params.append(division_id)
+        query += """
             GROUP BY me.player_name, me.team_name
             ORDER BY total_goals DESC, me.player_name ASC
             LIMIT ?
-        """, (limit,))
+        """
+        params.append(limit)
+        cursor.execute(query, tuple(params))
         return [dict(row) for row in cursor.fetchall()]
 
-def get_top_assists(limit: int = 20) -> list[dict]:
+def get_top_assists(limit: int = 20, division_id: int | None = None) -> list[dict]:
     """Get top assist providers in the league aggregated from match_events (strictly confirmed league matches, round_number > 0)."""
     with transaction() as conn:
         cursor = conn.cursor()
-        cursor.execute("""
+        query = """
             SELECT me.player_name, me.team_name, SUM(me.count) AS total_assists
             FROM match_events me
             JOIN matches m ON me.match_id = m.id
@@ -3000,10 +3216,18 @@ def get_top_assists(limit: int = 20) -> list[dict]:
               AND (m.tournament_type IS NULL OR m.tournament_type = 'league')
               AND m.round_number > 0
               AND m.status = 'confirmed'
+        """
+        params = []
+        if division_id is not None:
+            query += " AND m.division_id = ?"
+            params.append(division_id)
+        query += """
             GROUP BY me.player_name, me.team_name
             ORDER BY total_assists DESC, me.player_name ASC
             LIMIT ?
-        """, (limit,))
+        """
+        params.append(limit)
+        cursor.execute(query, tuple(params))
         return [dict(row) for row in cursor.fetchall()]
 
 def get_recent_confirmed_matches(limit: int = 15) -> list[dict]:
@@ -5779,5 +6003,502 @@ def get_public_gamer_profile(user_id: int) -> dict:
             "unlocked_achievements_count": len(unlocked_ach),
             "achievements": unlocked_ach[:6]
         }
+
+
+# ─── LOGOVO: Division Management & Multi-Topic Routing ──────────────────────
+
+def create_division(
+    name: str,
+    code: str,
+    tournament_id: int = 1,
+    topic_id: int | None = None,
+    sort_order: int = 0
+) -> int:
+    """Create a new division within a tournament."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO divisions (name, code, tournament_id, topic_id, sort_order)
+            VALUES (?, ?, ?, ?, ?)
+        """, (name.strip(), code.strip().upper(), tournament_id, topic_id, sort_order))
+        return cursor.lastrowid
+
+
+def get_divisions(is_active: bool | None = None, only_active: bool | None = None) -> list[dict]:
+    """Retrieve all divisions, optionally filtered by is_active status."""
+    if only_active is not None and is_active is None:
+        is_active = only_active
+    with transaction() as conn:
+        cursor = conn.cursor()
+        if is_active is None:
+            cursor.execute("SELECT * FROM divisions ORDER BY sort_order ASC, id ASC")
+        else:
+            cursor.execute(
+                "SELECT * FROM divisions WHERE is_active = ? ORDER BY sort_order ASC, id ASC",
+                (1 if is_active else 0,)
+            )
+        return [dict(r) for r in cursor.fetchall()]
+
+
+def get_division(division_id: int) -> dict | None:
+    """Retrieve a single division by ID."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM divisions WHERE id = ?", (division_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+
+def get_division_by_code(code: str) -> dict | None:
+    """Retrieve a single division by unique code."""
+    if not code:
+        return None
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM divisions WHERE UPPER(code) = UPPER(?)", (code.strip(),))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+
+def update_division(division_id: int, **kwargs) -> None:
+    """Update division attributes dynamically (name, code, topic_id, is_active, sort_order)."""
+    allowed_keys = {"name", "code", "tournament_id", "topic_id", "is_active", "sort_order"}
+    updates = {k: v for k, v in kwargs.items() if k in allowed_keys}
+    if not updates:
+        return
+    set_clause = ", ".join(f"{k} = ?" for k in updates.keys())
+    values = list(updates.values()) + [division_id]
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute(f"UPDATE divisions SET {set_clause} WHERE id = ?", values)
+
+
+def assign_user_division(telegram_id: int, division_id: int | None) -> None:
+    """Assign or unassign (if None) a user to a division."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE users SET division_id = ? WHERE telegram_id = ?",
+            (division_id, telegram_id)
+        )
+
+
+def get_division_users(division_id: int | None) -> list[dict]:
+    """
+    Retrieve all users belonging to a specific division.
+    If division_id is None, returns legacy users without assigned division.
+    """
+    with transaction() as conn:
+        cursor = conn.cursor()
+        if division_id is None:
+            cursor.execute("""
+                SELECT telegram_id, username, team_name, league_name, role, division_id, warn_count, squad_photo_id
+                FROM users
+                WHERE division_id IS NULL AND team_name IS NOT NULL AND team_name != ''
+                ORDER BY team_name ASC
+            """)
+        else:
+            cursor.execute("""
+                SELECT telegram_id, username, team_name, league_name, role, division_id, warn_count, squad_photo_id
+                FROM users
+                WHERE division_id = ? AND team_name IS NOT NULL AND team_name != ''
+                ORDER BY team_name ASC
+            """, (division_id,))
+        return [dict(r) for r in cursor.fetchall()]
+
+
+# ─── LOGOVO: Canonical Division Topics & Roles ──────────────────────────────
+
+CANONICAL_TOPIC_TYPES = {
+    "draft": "draft",
+    "drafts": "draft",
+    "черновик": "draft",
+    "previews": "previews",
+    "preview": "previews",
+    "преды": "previews",
+    "results": "results",
+    "result": "results",
+    "результаты": "results",
+    "reports": "reports",
+    "report": "reports",
+    "отчеты": "reports",
+    "отчёты": "reports",
+    "lineups": "lineups",
+    "lineup": "lineups",
+    "squads": "lineups",
+    "squad": "lineups",
+    "составы": "lineups",
+    "tables": "tables",
+    "таблицы": "tables",
+    "warns": "warns",
+    "варны": "warns"
+}
+
+TOPIC_DISPLAY_NAMES = {
+    "draft": "🏟 ЧЕРНОВИК",
+    "previews": "👤 ПРЕДЫ",
+    "results": "🎛 РЕЗУЛЬТАТЫ",
+    "reports": "📞 ОТЧЁТЫ",
+    "lineups": "🗺 СОСТАВЫ",
+    "tables": "📊 ТАБЛИЦЫ",
+    "warns": "⚠️ ПРЕДУПРЕЖДЕНИЯ"
+}
+
+PRIMARY_DIVISION_TOPICS = ["draft", "previews", "results", "reports", "lineups"]
+
+def normalize_topic_type(topic_type: str) -> str:
+    raw = str(topic_type).strip().lower()
+    return CANONICAL_TOPIC_TYPES.get(raw, raw)
+
+
+def is_division_admin(user_id: int, division_id: int) -> bool:
+    """
+    Check if user is allowed to manage the given division.
+    True if:
+    1. User is Global Admin (in ADMIN_IDS or role == 'admin' with division_id IS NULL)
+    2. User is explicitly registered in division_admins table
+    3. User has role in ('admin', 'division_admin') and users.division_id == division_id
+    """
+    if not user_id:
+        return False
+    from config import ADMIN_IDS
+    if user_id in ADMIN_IDS:
+        return True
+
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT role, division_id FROM users WHERE telegram_id = ?", (user_id,))
+        u = cursor.fetchone()
+        if u:
+            if u["role"] == "admin" and (u["division_id"] is None or u["division_id"] == division_id):
+                return True
+            if u["role"] in ("admin", "division_admin") and u["division_id"] == division_id:
+                return True
+
+        cursor.execute("SELECT 1 FROM division_admins WHERE division_id = ? AND user_id = ?", (division_id, user_id))
+        if cursor.fetchone():
+            return True
+
+    return False
+
+
+def add_division_admin(division_id: int, user_id: int) -> None:
+    """Grant division admin privileges to a user."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO division_admins (division_id, user_id)
+            VALUES (?, ?)
+            ON CONFLICT(division_id, user_id) DO NOTHING
+        """, (division_id, user_id))
+
+
+def remove_division_admin(division_id: int, user_id: int) -> None:
+    """Revoke division admin privileges from a user."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM division_admins WHERE division_id = ? AND user_id = ?", (division_id, user_id))
+
+
+def get_division_admins(division_id: int) -> list[int]:
+    """List all admin user_ids for a division."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT user_id FROM division_admins WHERE division_id = ?", (division_id,))
+        return [r["user_id"] for r in cursor.fetchall()]
+
+
+def bind_division_topic(
+    division_id: int, 
+    group_chat_id: int, 
+    message_thread_id: int, 
+    topic_type: str, 
+    force: bool = False
+) -> dict:
+    """
+    Safely bind a Telegram forum topic (group_chat_id, message_thread_id) to a division.
+    Enforces isolation, prevents duplicate bindings, and protects against cross-division topic theft.
+    """
+    norm_type = normalize_topic_type(topic_type)
+    valid_types = set(CANONICAL_TOPIC_TYPES.values())
+    if norm_type not in valid_types:
+        return {"status": "error", "error": f"Invalid topic type: {topic_type}"}
+
+    with transaction() as conn:
+        cursor = conn.cursor()
+        
+        # 1. Validate division exists
+        cursor.execute("SELECT id, name FROM divisions WHERE id = ?", (division_id,))
+        div_row = cursor.fetchone()
+        if not div_row:
+            return {"status": "error", "error": f"Division {division_id} not found"}
+
+        # 2. Check current binding of this exact topic (group_chat_id, message_thread_id)
+        cursor.execute("""
+            SELECT id, division_id, topic_type 
+            FROM division_topics 
+            WHERE group_chat_id = ? AND message_thread_id = ?
+        """, (group_chat_id, message_thread_id))
+        existing_topic = cursor.fetchone()
+
+        # Idempotency: same topic already assigned to this exact division and type
+        if existing_topic:
+            e_div = existing_topic["division_id"]
+            e_type = normalize_topic_type(existing_topic["topic_type"])
+            if e_div == division_id and e_type == norm_type:
+                return {
+                    "status": "already_bound",
+                    "division_id": division_id,
+                    "division_name": div_row["name"],
+                    "topic_type": norm_type,
+                    "group_chat_id": group_chat_id,
+                    "message_thread_id": message_thread_id
+                }
+            elif not force:
+                # Conflict Scenario 1: topic belongs to another division or another type
+                cursor.execute("SELECT name FROM divisions WHERE id = ?", (e_div,))
+                other_div_row = cursor.fetchone()
+                other_div_name = other_div_row["name"] if other_div_row else f"ID {e_div}"
+                return {
+                    "status": "conflict_topic",
+                    "current_division_id": e_div,
+                    "current_division_name": other_div_name,
+                    "current_topic_type": e_type,
+                    "requested_division_id": division_id,
+                    "requested_division_name": div_row["name"],
+                    "requested_topic_type": norm_type,
+                    "group_chat_id": group_chat_id,
+                    "message_thread_id": message_thread_id
+                }
+
+        # 3. Check if division already has a topic assigned for this topic_type
+        cursor.execute("""
+            SELECT id, group_chat_id, message_thread_id 
+            FROM division_topics 
+            WHERE division_id = ? AND (topic_type = ? OR topic_type = ?)
+        """, (division_id, norm_type, "drafts" if norm_type == "draft" else norm_type))
+        existing_type = cursor.fetchone()
+
+        if existing_type and (existing_type["group_chat_id"] != group_chat_id or existing_type["message_thread_id"] != message_thread_id):
+            if not force:
+                # Conflict Scenario 2: division already has this topic type bound elsewhere
+                return {
+                    "status": "conflict_type",
+                    "current_chat_id": existing_type["group_chat_id"],
+                    "current_thread_id": existing_type["message_thread_id"],
+                    "requested_chat_id": group_chat_id,
+                    "requested_thread_id": message_thread_id,
+                    "division_id": division_id,
+                    "division_name": div_row["name"],
+                    "topic_type": norm_type
+                }
+
+        # 4. If force, clean up old conflicting records
+        if force:
+            cursor.execute("""
+                DELETE FROM division_topics 
+                WHERE group_chat_id = ? AND message_thread_id = ?
+            """, (group_chat_id, message_thread_id))
+            cursor.execute("""
+                DELETE FROM division_topics 
+                WHERE division_id = ? AND (topic_type = ? OR topic_type = ?)
+            """, (division_id, norm_type, "drafts" if norm_type == "draft" else norm_type))
+
+        # 5. Insert or update new binding
+        cursor.execute("""
+            INSERT INTO division_topics (division_id, topic_type, message_thread_id, group_chat_id)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(division_id, topic_type) DO UPDATE SET
+                message_thread_id = excluded.message_thread_id,
+                group_chat_id = excluded.group_chat_id
+        """, (division_id, norm_type, message_thread_id, group_chat_id))
+
+        return {
+            "status": "ok",
+            "division_id": division_id,
+            "division_name": div_row["name"],
+            "topic_type": norm_type,
+            "group_chat_id": group_chat_id,
+            "message_thread_id": message_thread_id
+        }
+
+
+def unbind_division_topic(group_chat_id: int, message_thread_id: int) -> dict | None:
+    """Unbind a topic by its (group_chat_id, message_thread_id). Returns unbind info or None."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT dt.id, dt.division_id, dt.topic_type, dt.group_chat_id, dt.message_thread_id, d.name as division_name
+            FROM division_topics dt
+            LEFT JOIN divisions d ON dt.division_id = d.id
+            WHERE dt.group_chat_id = ? AND dt.message_thread_id = ?
+        """, (group_chat_id, message_thread_id))
+        row = cursor.fetchone()
+        if not row:
+            return None
+        info = dict(row)
+        cursor.execute("DELETE FROM division_topics WHERE id = ?", (row["id"],))
+        return info
+
+
+def get_topic_binding(group_chat_id: int | None, message_thread_id: int) -> dict | None:
+    """Retrieve full binding record for a given chat and thread."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        if group_chat_id is not None:
+            cursor.execute("""
+                SELECT dt.*, d.name as division_name, d.code as division_code
+                FROM division_topics dt
+                JOIN divisions d ON dt.division_id = d.id
+                WHERE (dt.group_chat_id = ? OR dt.group_chat_id IS NULL) AND dt.message_thread_id = ?
+                ORDER BY dt.group_chat_id DESC LIMIT 1
+            """, (group_chat_id, message_thread_id))
+        else:
+            cursor.execute("""
+                SELECT dt.*, d.name as division_name, d.code as division_code
+                FROM division_topics dt
+                JOIN divisions d ON dt.division_id = d.id
+                WHERE dt.message_thread_id = ?
+                LIMIT 1
+            """, (message_thread_id,))
+        row = cursor.fetchone()
+        if row:
+            d = dict(row)
+            d["topic_type"] = normalize_topic_type(d["topic_type"])
+            return d
+        return None
+
+
+def get_division_topics_map(division_id: int) -> dict[str, dict]:
+    """Retrieve mapping of topic_type -> {group_chat_id, message_thread_id} for a division."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT topic_type, group_chat_id, message_thread_id
+            FROM division_topics
+            WHERE division_id = ?
+        """, (division_id,))
+        res = {}
+        for r in cursor.fetchall():
+            res[normalize_topic_type(r["topic_type"])] = {
+                "group_chat_id": r["group_chat_id"],
+                "message_thread_id": r["message_thread_id"]
+            }
+        return res
+
+
+def get_all_division_topics() -> list[dict]:
+    """Retrieve all division topic bindings across all divisions."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT dt.*, d.name as division_name, d.code as division_code
+            FROM division_topics dt
+            LEFT JOIN divisions d ON dt.division_id = d.id
+            ORDER BY d.sort_order ASC, dt.division_id ASC, dt.topic_type ASC
+        """)
+        rows = []
+        for r in cursor.fetchall():
+            item = dict(r)
+            item["topic_type"] = normalize_topic_type(item["topic_type"])
+            rows.append(item)
+        return rows
+
+
+def set_division_topic(
+    division_id: int, 
+    topic_type: str, 
+    message_thread_id: int | None,
+    group_chat_id: int | None = None
+) -> None:
+    """
+    Register or update a Telegram forum topic for a division.
+    If message_thread_id is None, removes the topic mapping.
+    """
+    norm_type = normalize_topic_type(topic_type)
+    with transaction() as conn:
+        cursor = conn.cursor()
+        if message_thread_id is None:
+            cursor.execute("""
+                DELETE FROM division_topics
+                WHERE division_id = ? AND (topic_type = ? OR topic_type = ?)
+            """, (division_id, norm_type, topic_type))
+        else:
+            if group_chat_id is not None:
+                cursor.execute("""
+                    DELETE FROM division_topics
+                    WHERE group_chat_id = ? AND message_thread_id = ?
+                """, (group_chat_id, message_thread_id))
+            cursor.execute("""
+                INSERT INTO division_topics (division_id, topic_type, message_thread_id, group_chat_id)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(division_id, topic_type) DO UPDATE SET 
+                    message_thread_id = excluded.message_thread_id,
+                    group_chat_id = COALESCE(excluded.group_chat_id, division_topics.group_chat_id)
+            """, (division_id, norm_type, message_thread_id, group_chat_id))
+
+
+def get_division_topic(division_id: int, topic_type: str, group_chat_id: int | None = None) -> int | None:
+    """Retrieve message_thread_id for a division's specific topic type."""
+    norm_type = normalize_topic_type(topic_type)
+    with transaction() as conn:
+        cursor = conn.cursor()
+        if group_chat_id is not None:
+            cursor.execute("""
+                SELECT message_thread_id FROM division_topics
+                WHERE division_id = ? AND (topic_type = ? OR topic_type = ?) AND (group_chat_id = ? OR group_chat_id IS NULL)
+                ORDER BY group_chat_id DESC LIMIT 1
+            """, (division_id, norm_type, topic_type, group_chat_id))
+        else:
+            cursor.execute("""
+                SELECT message_thread_id FROM division_topics
+                WHERE division_id = ? AND (topic_type = ? OR topic_type = ?)
+                LIMIT 1
+            """, (division_id, norm_type, topic_type))
+        row = cursor.fetchone()
+        return row["message_thread_id"] if row else None
+
+
+def get_division_by_topic(message_thread_id: int, topic_type: str = "drafts", group_chat_id: int | None = None) -> dict | None:
+    """
+    Find which division owns the given message_thread_id for the given topic_type.
+    Returns division dictionary or None.
+    """
+    norm_type = normalize_topic_type(topic_type)
+    with transaction() as conn:
+        cursor = conn.cursor()
+        if group_chat_id is not None:
+            cursor.execute("""
+                SELECT d.*
+                FROM divisions d
+                JOIN division_topics dt ON d.id = dt.division_id
+                WHERE dt.message_thread_id = ? 
+                  AND (dt.topic_type = ? OR dt.topic_type = ?)
+                  AND (dt.group_chat_id = ? OR dt.group_chat_id IS NULL)
+                ORDER BY dt.group_chat_id DESC LIMIT 1
+            """, (message_thread_id, norm_type, topic_type, group_chat_id))
+        else:
+            cursor.execute("""
+                SELECT d.*
+                FROM divisions d
+                JOIN division_topics dt ON d.id = dt.division_id
+                WHERE dt.message_thread_id = ? AND (dt.topic_type = ? OR dt.topic_type = ?)
+                LIMIT 1
+            """, (message_thread_id, norm_type, topic_type))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+
+
+def clear_matches_by_division(division_id: int) -> None:
+    """
+    SAFE fixture clearance: deletes only matches belonging to a specific division.
+    Leaves legacy matches (division_id IS NULL) and other divisions intact.
+    """
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM matches WHERE division_id = ?", (division_id,))
+        cursor.execute("DELETE FROM rounds WHERE division_id = ?", (division_id,))
+
 
 

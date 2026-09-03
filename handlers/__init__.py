@@ -122,6 +122,7 @@ from handlers.admin import (
     admin_toggle_chat_mode,
     admin_list_players,
     admin_generate_matches_confirm,
+    admin_gen_div_select,
     admin_generate_matches_execute,
     admin_manage_players_info,
     admin_list_players_page,
@@ -182,6 +183,25 @@ from handlers.admin import (
     admin_manage_players_menu,
     admin_edit_club_select,
     admin_edit_club_execute,
+    admin_edit_div_select,
+    admin_edit_div_execute,
+    admin_div_players_menu,
+    admin_list_div_players,
+    admin_divs_hub,
+    admin_div_view,
+    admin_div_toggle,
+    admin_div_topics_menu,
+    admin_div_create_start,
+    admin_div_create_receive,
+    admin_div_rename_start,
+    admin_div_rename_receive,
+    admin_div_settopic_prompt,
+    admin_div_settopic_receive,
+    admin_cancel_div_action,
+    admin_set_div_topic_cmd,
+    ADMIN_EXPECT_DIV_NAME,
+    ADMIN_EXPECT_DIV_RENAME,
+    ADMIN_EXPECT_DIV_TOPIC_ID,
     admin_delete_player_confirm,
     admin_remind_round,
     admin_toggle_remind_match,
@@ -228,6 +248,20 @@ from handlers.admin import (
     admin_check_debts_command,
     admin_unwarn_command,
 )
+
+from handlers.topic_management import (
+    cmd_assign_topic,
+    cmd_reassign_topic,
+    cmd_current_topic,
+    cmd_division_topics,
+    cmd_divisions_summary,
+    cmd_unbind_topic,
+    cb_set_topic,
+    cb_reassign_topic_confirm,
+    cb_unbind_topic_confirm,
+    cb_top_cancel,
+)
+from services.topic_cache import topic_cache
 
 logger = logging.getLogger(__name__)
 
@@ -290,7 +324,7 @@ def _register_user_handlers(app: Application) -> None:
     app.add_handler(CallbackQueryHandler(cb_draft_reject, pattern="^draft_rej_"))
     app.add_handler(MessageHandler(filters.Regex("^⚙️ Админ-панель$"), show_admin_panel))
 
-    app.add_handler(CallbackQueryHandler(cb_refresh_league_table_topic, pattern="^refresh_league_table_topic$"))
+    app.add_handler(CallbackQueryHandler(cb_refresh_league_table_topic, pattern="^(refresh_league_table_topic|refresh_div_table_\\d+)$"))
     app.add_handler(CallbackQueryHandler(show_cabinet, pattern="^menu_cabinet$"))
     app.add_handler(CallbackQueryHandler(show_tournaments, pattern="^menu_tournaments$"))
     app.add_handler(CallbackQueryHandler(show_league_menu, pattern="^menu_league$"))
@@ -561,6 +595,43 @@ def _register_admin_handlers(app: Application) -> None:
     )
     app.add_handler(admin_squad_conv)
 
+    admin_div_conv = ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(admin_div_create_start, pattern="^admin_div_create_start$"),
+            CallbackQueryHandler(admin_div_rename_start, pattern="^admin_div_rename_\\d+$"),
+            CallbackQueryHandler(admin_div_settopic_prompt, pattern="^admin_div_settopic_\\d+_(drafts|results|tables)$"),
+        ],
+        states={
+            ADMIN_EXPECT_DIV_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_div_create_receive)],
+            ADMIN_EXPECT_DIV_RENAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_div_rename_receive)],
+            ADMIN_EXPECT_DIV_TOPIC_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_div_settopic_receive)],
+        },
+        fallbacks=[
+            CallbackQueryHandler(admin_divs_hub, pattern="^admin_divs_hub$"),
+            CallbackQueryHandler(admin_div_view, pattern="^admin_div_view_\\d+$"),
+            CommandHandler("cancel", admin_cancel_div_action),
+            MessageHandler(filters.Regex("^(Отмена|отмена)$"), admin_cancel_div_action),
+        ],
+        allow_reentry=True,
+        per_message=False,
+        per_user=True,
+        conversation_timeout=300
+    )
+    app.add_handler(admin_div_conv)
+
+    app.add_handler(CommandHandler("set_div_topic", admin_set_div_topic_cmd))
+    app.add_handler(CommandHandler(["назначить_топик", "naznachit_topik"], cmd_assign_topic))
+    app.add_handler(CommandHandler(["переназначить_топик", "perenaznachit_topik"], cmd_reassign_topic))
+    app.add_handler(CommandHandler(["текущий_топик", "tekushiy_topik"], cmd_current_topic))
+    app.add_handler(CommandHandler(["топики", "topiki"], cmd_division_topics))
+    app.add_handler(CommandHandler(["дивизионы", "diviziony"], cmd_divisions_summary))
+    app.add_handler(CommandHandler(["снять_топик", "snyat_topik"], cmd_unbind_topic))
+
+    app.add_handler(CallbackQueryHandler(cb_set_topic, pattern="^set_top:\\d+:(d|p|r|rep|l)$"))
+    app.add_handler(CallbackQueryHandler(cb_reassign_topic_confirm, pattern="^reassign_top:\\d+:(d|p|r|rep|l)$"))
+    app.add_handler(CallbackQueryHandler(cb_unbind_topic_confirm, pattern="^unbind_confirm:-?\\d+:-?\\d+$"))
+    app.add_handler(CallbackQueryHandler(cb_top_cancel, pattern="^top_cancel$"))
+
     app.add_handler(CommandHandler("set_squad_topic", admin_set_squad_topic))
     app.add_handler(CommandHandler("set_drafts_topic", admin_set_drafts_topic))
     app.add_handler(CommandHandler("set_reports_topic", admin_set_reports_topic))
@@ -568,9 +639,14 @@ def _register_admin_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("set_warns_topic", admin_set_warns_topic))
 
     app.add_handler(CallbackQueryHandler(show_admin_panel, pattern="^admin_main_menu$"))
+    app.add_handler(CallbackQueryHandler(admin_divs_hub, pattern="^admin_divs_hub$"))
+    app.add_handler(CallbackQueryHandler(admin_div_view, pattern="^admin_div_view_\\d+$"))
+    app.add_handler(CallbackQueryHandler(admin_div_toggle, pattern="^admin_div_toggle_\\d+$"))
+    app.add_handler(CallbackQueryHandler(admin_div_topics_menu, pattern="^admin_div_topics_\\d+$"))
     app.add_handler(CallbackQueryHandler(admin_toggle_chat_mode, pattern="^admin_toggle_chat_mode$"))
     app.add_handler(CallbackQueryHandler(admin_generate_matches_confirm, pattern="^admin_generate_matches_confirm$"))
-    app.add_handler(CallbackQueryHandler(admin_generate_matches_execute, pattern="^admin_generate_matches_execute$"))
+    app.add_handler(CallbackQueryHandler(admin_gen_div_select, pattern="^admin_gen_div_(\\d+|none)$"))
+    app.add_handler(CallbackQueryHandler(admin_generate_matches_execute, pattern="^(admin_generate_matches_execute|admin_gen_exec_(\\d+|none))$"))
     app.add_handler(CallbackQueryHandler(admin_manage_matches_info, pattern="^admin_manage_matches_info$"))
     app.add_handler(CallbackQueryHandler(admin_manage_players_menu, pattern="^admin_manage_players$"))
     app.add_handler(CallbackQueryHandler(admin_manage_players_menu, pattern="^admin_manage_players_info$"))
@@ -578,6 +654,10 @@ def _register_admin_handlers(app: Application) -> None:
     app.add_handler(CallbackQueryHandler(admin_view_player, pattern="^admin_view_player_-?\\d+$"))
     app.add_handler(CallbackQueryHandler(admin_edit_club_select, pattern="^admin_edit_club_select_-?\\d+$"))
     app.add_handler(CallbackQueryHandler(admin_edit_club_execute, pattern="^admin_eclub_-?\\d+_\\d+$"))
+    app.add_handler(CallbackQueryHandler(admin_edit_div_select, pattern="^admin_edit_div_select_-?\\d+$"))
+    app.add_handler(CallbackQueryHandler(admin_edit_div_execute, pattern="^admin_ediv_-?\\d+_(\\d+|none)$"))
+    app.add_handler(CallbackQueryHandler(admin_div_players_menu, pattern="^admin_div_players_menu$"))
+    app.add_handler(CallbackQueryHandler(admin_list_div_players, pattern="^admin_list_div_players_"))
     app.add_handler(CallbackQueryHandler(admin_delete_player_confirm, pattern="^admin_delete_player_confirm_-?\\d+$"))
     app.add_handler(CallbackQueryHandler(admin_delete_player_execute, pattern="^admin_delete_player_execute_-?\\d+$"))
     app.add_handler(CallbackQueryHandler(admin_manage_round, pattern="^admin_manage_round_\\d+$"))
@@ -672,6 +752,9 @@ def register_all_handlers(application: Application) -> None:
 
     # Final catch-all for inline button clicks in development
     application.add_handler(CallbackQueryHandler(handle_placeholders, pattern=".*"))
+
+    # Initialize TopicCache for multi-division forum topics routing
+    topic_cache.reload_cache()
 
     # Register global error handler
     application.add_error_handler(error_handler)

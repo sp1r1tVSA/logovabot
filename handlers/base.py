@@ -773,10 +773,50 @@ async def show_round_matches(update: Update, context: ContextTypes.DEFAULT_TYPE)
             await context.bot.send_message(chat_id=target_chat_id, message_thread_id=thread_id, text=text, parse_mode="HTML", reply_markup=markup)
 
 async def group_table_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /table command in any chat — send graphic league standings."""
-    img_buf = await asyncio.to_thread(generate_league_table_image)
-    caption = "🏆 <b>Турнирная таблица лиги КПЛ 2026</b>"
-    keyboard = [[InlineKeyboardButton("🔄 Обновить", callback_data="refresh_league_table_topic")]]
+    """Handle /table command in any chat — send graphic league standings, supporting division routing."""
+    division_id = None
+    division_name = None
+
+    # Check topic ID
+    thread_id = update.message.message_thread_id if update.message else None
+    if thread_id:
+        div_id = await asyncio.to_thread(database.get_division_by_topic, thread_id, "tables")
+        if not div_id:
+            div_id = await asyncio.to_thread(database.get_division_by_topic, thread_id, "drafts")
+        if not div_id:
+            div_id = await asyncio.to_thread(database.get_division_by_topic, thread_id, "results")
+        if div_id:
+            div = await asyncio.to_thread(database.get_division, div_id)
+            if div:
+                division_id = div["id"]
+                division_name = div["name"]
+
+    # Check command arguments: /table [div_id_or_code]
+    args = context.args or []
+    if args:
+        target = args[0].strip()
+        div = None
+        if target.isdigit():
+            div = await asyncio.to_thread(database.get_division, int(target))
+        if not div:
+            div = await asyncio.to_thread(database.get_division_by_code, target)
+        if div:
+            division_id = div["id"]
+            division_name = div["name"]
+
+    if division_id:
+        standings = await asyncio.to_thread(database.get_standings, division_id=division_id)
+        form_map = await asyncio.to_thread(database.get_teams_recent_form, limit=5, division_id=division_id)
+        img_buf = await asyncio.to_thread(generate_league_table_image, standings=standings, form_map=form_map, division_name=division_name)
+        caption = f"🏆 <b>Турнирная таблица дивизиона «{html.escape(division_name)}»</b>"
+        refresh_cb = f"refresh_div_table_{division_id}"
+    else:
+        standings = await asyncio.to_thread(database.get_standings)
+        img_buf = await asyncio.to_thread(generate_league_table_image, standings=standings)
+        caption = "🏆 <b>Турнирная таблица лиги КПЛ 2026</b>"
+        refresh_cb = "refresh_league_table_topic"
+
+    keyboard = [[InlineKeyboardButton("🔄 Обновить", callback_data=refresh_cb)]]
     await update.message.reply_photo(photo=img_buf, caption=caption, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def show_league_table(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -874,9 +914,29 @@ async def cb_refresh_league_table_topic(update: Update, context: ContextTypes.DE
         return
     await query.answer("🔄 Таблица обновлена!")
 
-    img_buf = await asyncio.to_thread(generate_league_table_image)
-    caption = "🏆 <b>ТЕКУЩАЯ ТУРНИРНАЯ ТАБЛИЦА ЛИГИ</b>"
-    keyboard = [[InlineKeyboardButton("🔄 Обновить таблицу", callback_data="refresh_league_table_topic")]]
+    div_id = None
+    div_name = None
+    if query.data and query.data.startswith("refresh_div_table_"):
+        try:
+            div_id = int(query.data.replace("refresh_div_table_", ""))
+            div = await asyncio.to_thread(database.get_division, div_id)
+            if div:
+                div_name = div["name"]
+        except Exception:
+            pass
+
+    if div_id:
+        standings = await asyncio.to_thread(database.get_standings, division_id=div_id)
+        form_map = await asyncio.to_thread(database.get_teams_recent_form, limit=5, division_id=div_id)
+        img_buf = await asyncio.to_thread(generate_league_table_image, standings=standings, form_map=form_map, division_name=div_name)
+        caption = f"🏆 <b>ТЕКУЩАЯ ТУРНИРНАЯ ТАБЛИЦА ДИВИЗИОНА «{html.escape(div_name)}»</b>"
+        refresh_cb = f"refresh_div_table_{div_id}"
+    else:
+        img_buf = await asyncio.to_thread(generate_league_table_image)
+        caption = "🏆 <b>ТЕКУЩАЯ ТУРНИРНАЯ ТАБЛИЦА ЛИГИ</b>"
+        refresh_cb = "refresh_league_table_topic"
+
+    keyboard = [[InlineKeyboardButton("🔄 Обновить таблицу", callback_data=refresh_cb)]]
     markup = InlineKeyboardMarkup(keyboard)
 
     try:

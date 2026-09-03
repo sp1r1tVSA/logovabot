@@ -6,6 +6,7 @@ from telegram.ext import ContextTypes
 
 import database
 import config
+from services.topic_cache import topic_cache
 from services.ai.ai_recognizer import recognize_match_screenshots_bytes
 from handlers.cabinet import match_and_enrich_squad, build_formatted_match_post
 
@@ -25,17 +26,33 @@ async def handle_draft_media(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not msg:
         return
         
+    if not msg.is_topic_message:
+        return
+        
+    thread_id = msg.message_thread_id
+    target_division_id = None
+
     drafts_topic_id_str = database.get_config("drafts_topic_id")
-    if not drafts_topic_id_str or not msg.is_topic_message:
-        return
-        
-    try:
-        topic_id = int(drafts_topic_id_str)
-    except ValueError:
-        return
-        
-    if msg.message_thread_id != topic_id:
-        return
+    legacy_topic_id = None
+    if drafts_topic_id_str:
+        try:
+            legacy_topic_id = int(drafts_topic_id_str)
+        except ValueError:
+            pass
+
+    if legacy_topic_id is not None and thread_id == legacy_topic_id:
+        target_division_id = None
+    else:
+        chat_id = update.effective_chat.id if update.effective_chat else None
+        binding = topic_cache.get_by_topic(chat_id, thread_id)
+        if binding and binding.get("topic_type") in ("draft", "drafts"):
+            target_division_id = binding["division_id"]
+        else:
+            div = await asyncio.to_thread(database.get_division_by_topic, thread_id, "drafts", chat_id)
+            if div:
+                target_division_id = div["id"]
+            else:
+                return  # Message is in a topic not configured for drafts
         
     user_id = update.effective_user.id
     
@@ -51,7 +68,8 @@ async def handle_draft_media(update: Update, context: ContextTypes.DEFAULT_TYPE)
             "photo_file_ids": [],
             "caption": "",
             "user_id": user_id,
-            "message_ids": []
+            "message_ids": [],
+            "division_id": target_division_id
         }
         
     group_data = draft_media_groups[buffer_key]
@@ -143,7 +161,8 @@ async def _process_draft_group_delayed(buffer_key: str, update: Update, context:
     t2 = database.resolve_team_name(t2_raw) or t2_raw
         
     # 2. Find active match and determine the round automatically
-    first_match = await asyncio.to_thread(database.get_active_match_by_teams, t1, t2, caption)
+    division_id = group_data.get("division_id")
+    first_match = await asyncio.to_thread(database.get_active_match_by_teams, t1, t2, caption, division_id=division_id)
     if not first_match:
         await status_msg.edit_text(f"❌ Не найден активный матч между командами {html.escape(t1)} и {html.escape(t2)}.\nВозможно, этот тур уже подтвержден или названия клубов не совпадают.")
         return
@@ -172,9 +191,10 @@ async def _process_draft_group_delayed(buffer_key: str, update: Update, context:
                         "player2_team": first_match["player1_team"] if (idx % 2 == 1) else first_match["player2_team"],
                         "player1_username": first_match.get("player2_username") if (idx % 2 == 1) else first_match.get("player1_username"),
                         "player2_username": first_match.get("player1_username") if (idx % 2 == 1) else first_match.get("player2_username"),
+                        "division_id": first_match.get("division_id") or division_id,
                     }
             else:
-                cur_match = database.get_active_match_by_teams(t1, t2, caption=caption) or first_match
+                cur_match = database.get_active_match_by_teams(t1, t2, caption=caption, division_id=division_id) or first_match
 
         home_team = cur_match.get("player1_team") or cur_match.get("player1_nickname") or t1
         away_team = cur_match.get("player2_team") or cur_match.get("player2_nickname") or t2
@@ -286,7 +306,8 @@ async def _process_draft_group_delayed(buffer_key: str, update: Update, context:
             "is_single_timeline": is_single_timeline,
             "events": events,
             "reporter_id": user_id,
-            "photo_id": photo_file_ids[idx] if idx < len(photo_file_ids) else (photo_file_ids[0] if photo_file_ids else None)
+            "photo_id": photo_file_ids[idx] if idx < len(photo_file_ids) else (photo_file_ids[0] if photo_file_ids else None),
+            "division_id": cur_match.get("division_id") or division_id
         })
 
     import uuid
@@ -314,6 +335,7 @@ async def _process_draft_group_delayed(buffer_key: str, update: Update, context:
             "events": g["events"],
             "reporter_id": g["reporter_id"],
             "photo_id": g["photo_id"],
+            "division_id": g.get("division_id"),
             "games": prepared_games
         }
         group_text = build_formatted_match_post(
@@ -568,7 +590,18 @@ async def cb_draft_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         if main_group_id:
             try:
                 kwargs = {"chat_id": main_group_id, "parse_mode": "HTML"}
-                if results_topic_id: kwargs["message_thread_id"] = int(results_topic_id)
+                target_topic = None
+                div_id = g.get("division_id")
+                if not div_id and _m_row:
+                    div_id = _m_row.get("division_id")
+                if div_id:
+                    target_topic = (await asyncio.to_thread(database.get_division_topic, div_id, "results")) or \
+                                   (await asyncio.to_thread(database.get_division_topic, div_id, "reports"))
+                if not target_topic and results_topic_id:
+                    target_topic = results_topic_id
+                if target_topic:
+                    kwargs["message_thread_id"] = int(target_topic)
+
                 if g.get("photo_id") and len(official_text) <= 1024:
                     kwargs["photo"] = g["photo_id"]
                     kwargs["caption"] = official_text
