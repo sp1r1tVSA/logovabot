@@ -30,14 +30,18 @@ async def handle_get_matches(request: web.Request) -> web.Response:
     tour_param = request.query.get("tour")
     status_param = request.query.get("status")
     division_id_param = request.query.get("division_id")
+    season_id_param = request.query.get("season_id")
 
     with database.transaction() as conn:
         cursor = conn.cursor()
         query = """
             SELECT m.*, 
                    COALESCE(m.player1_team, 'Хозяева') as team1_name,
-                   COALESCE(m.player2_team, 'Гости') as team2_name
+                   COALESCE(m.player2_team, 'Гости') as team2_name,
+                   bm.odd_p1, bm.odd_x, bm.odd_p2,
+                   bm.odd_tb25, bm.odd_tm25, bm.odd_btts_yes, bm.odd_btts_no
             FROM matches m
+            LEFT JOIN bet_markets bm ON m.id = bm.match_id AND bm.is_active = 1
             WHERE 1=1
         """
         params = []
@@ -50,10 +54,26 @@ async def handle_get_matches(request: web.Request) -> web.Response:
         if division_id_param and division_id_param.isdigit():
             query += " AND m.division_id = ?"
             params.append(int(division_id_param))
+        if season_id_param and season_id_param.isdigit():
+            query += " AND (m.season_id = ? OR m.season_id IS NULL)"
+            params.append(int(season_id_param))
 
         query += " ORDER BY m.round_number ASC, m.id ASC LIMIT 100"
         cursor.execute(query, params)
-        matches = [dict(r) for r in cursor.fetchall()]
+        raw_rows = cursor.fetchall()
+        matches = []
+        for r in raw_rows:
+            m_dict = dict(r)
+            m_dict["odds"] = {
+                "p1": round(m_dict.pop("odd_p1") or 1.90, 2),
+                "x": round(m_dict.pop("odd_x") or 3.20, 2),
+                "p2": round(m_dict.pop("odd_p2") or 2.10, 2),
+                "tb25": round(m_dict.pop("odd_tb25") or 1.85, 2),
+                "tm25": round(m_dict.pop("odd_tm25") or 1.85, 2),
+                "btts_yes": round(m_dict.pop("odd_btts_yes") or 1.75, 2),
+                "btts_no": round(m_dict.pop("odd_btts_no") or 1.95, 2),
+            }
+            matches.append(m_dict)
 
     return web.json_response({
         "status": "ok",

@@ -18,6 +18,7 @@ from config import CLUBS, MAX_WARNS_LIMIT, GROUP_ID
 
 from scripts.schedule_parser import parse_schedule_text, create_matches_from_parsed_schedule
 from services.graphics import player_photos
+from services.tournament_validator import RoundRobinValidator
 import logging
 
 logger = logging.getLogger(__name__)
@@ -913,7 +914,7 @@ async def admin_gen_div_select(update: Update, context: ContextTypes.DEFAULT_TYP
         f"⚠️ <b>Подтверждение генерации расписания</b>\n\n"
         f"• Дивизион: <b>{html.escape(div_title)}</b>\n"
         f"• Готовых участников: <b>{len(with_team)}</b>\n\n"
-        f"⚠️ <i>Внимание: Существующие матчи <b>ТОЛЬКО</b> этого дивизиона будут сброшены и сгенерированы заново по системе Round Robin (каждый с каждым в 1 круг).\n"
+        f"⚠️ <i>Внимание: Существующие матчи <b>ТОЛЬКО</b> этого дивизиона будут сброшены и сгенерированы заново по системе Round Robin (2 круга / каждый с каждым дома и на выезде).\n"
         f"Матчи и результаты других дивизионов затронуты НЕ будут!</i>"
     )
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
@@ -927,6 +928,7 @@ async def admin_generate_matches_execute(update: Update, context: ContextTypes.D
         return
     await query.answer()
 
+    user_id = query.from_user.id
     data = query.data
     div_id = None
     if data.startswith("admin_gen_exec_"):
@@ -938,6 +940,28 @@ async def admin_generate_matches_execute(update: Update, context: ContextTypes.D
         d = await asyncio.to_thread(database.get_division, div_id)
         if d:
             div_title = d["name"]
+
+    # RBAC: caller must be Global Admin or assigned Division Admin for this division
+    if not (is_admin(user_id) or (div_id is not None and database.is_division_admin(user_id, div_id))):
+        await query.answer("❌ У вас нет прав для управления расписанием этого дивизиона!", show_alert=True)
+        return
+
+    # Resolve active season
+    active_season = await asyncio.to_thread(database.get_active_season)
+    season_id = active_season["id"] if active_season else 1
+
+    # Protection: check if division already has confirmed/completed matches in this season
+    has_played = await asyncio.to_thread(database.division_has_played_matches, div_id, season_id)
+    if has_played:
+        keyboard = [[InlineKeyboardButton("« Назад к матчам", callback_data="admin_manage_matches_info")]]
+        await query.edit_message_text(
+            f"🚫 <b>Генерация заблокирована!</b>\n\n"
+            f"В дивизионе <b>{html.escape(div_title)}</b> уже есть сыгранные или подтверждённые матчи в текущем сезоне.\n"
+            f"Повторная генерация расписания запрещена для защиты целостности турнирных данных.",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="HTML"
+        )
+        return
 
     # Fetch players for this division
     if div_id is not None:
@@ -959,15 +983,41 @@ async def admin_generate_matches_execute(update: Update, context: ContextTypes.D
     # Generate round robin
     fixtures = generate_round_robin_fixtures(players)
 
-    # Safe clear and insert for this division
+    # Validate fixtures if standard 16 teams format
+    if len(players) == 16:
+        is_valid, validation_errors = RoundRobinValidator.validate_fixtures(
+            fixtures, expected_teams=16, expected_rounds=30, expected_matches=240, division_id=div_id, season_id=season_id
+        )
+        if not is_valid:
+            keyboard = [[InlineKeyboardButton("« Назад к матчам", callback_data="admin_manage_matches_info")]]
+            err_msg = "\n• ".join(validation_errors[:5])
+            await query.edit_message_text(
+                f"❌ <b>Ошибка валидации расписания:</b>\n\n• {html.escape(err_msg)}",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode="HTML"
+            )
+            return
+
+    # Safe clear and insert for this division & season
     if div_id is not None:
-        await asyncio.to_thread(database.clear_matches_by_division, div_id)
-        await asyncio.to_thread(database.batch_insert_matches, fixtures, division_id=div_id)
+        await asyncio.to_thread(database.clear_matches_by_division, div_id, season_id)
+        await asyncio.to_thread(database.batch_insert_matches, fixtures, division_id=div_id, season_id=season_id)
     else:
-        await asyncio.to_thread(database.clear_all_matches)
-        await asyncio.to_thread(database.batch_insert_matches, fixtures, division_id=None)
+        await asyncio.to_thread(database.clear_all_matches, season_id)
+        await asyncio.to_thread(database.batch_insert_matches, fixtures, division_id=None, season_id=season_id)
 
     total_rounds = max(f[0] for f in fixtures) if fixtures else 0
+
+    await asyncio.to_thread(
+        database.log_admin_action,
+        admin_id=user_id,
+        action="generate_round_robin",
+        target_type="division",
+        target_id=div_id,
+        division_id=div_id,
+        season_id=season_id,
+        metadata=f"Generated {len(fixtures)} matches across {total_rounds} rounds for {div_title}"
+    )
 
     keyboard = [[InlineKeyboardButton("« Назад к матчам", callback_data="admin_manage_matches_info")]]
     await query.edit_message_text(
@@ -2195,9 +2245,40 @@ async def _notify_group_about_tp(context: ContextTypes.DEFAULT_TYPE, match_id: i
     except Exception as e:
         logger.warning(f"Failed to build debt footer for TP #{match_id}: {e}")
 
-    kwargs = {"chat_id": group_id, "text": text, "parse_mode": "HTML"}
-    if reports_topic_id:
-        kwargs["message_thread_id"] = int(reports_topic_id)
+    # Determine target chat and topic strictly by division
+    div_id = match.get("division_id")
+    target_chat_id = None
+    target_topic_id = None
+
+    if div_id:
+        from services.topic_cache import topic_cache
+        rep_topic = topic_cache.get_by_division(div_id, "reports")
+        if not rep_topic:
+            rep_topic = topic_cache.get_by_division(div_id, "results")
+        if rep_topic:
+            target_chat_id = rep_topic.get("group_chat_id")
+            target_topic_id = rep_topic.get("message_thread_id")
+        else:
+            topics_map = await asyncio.to_thread(database.get_division_topics_map, div_id)
+            if "reports" in topics_map:
+                target_chat_id = topics_map["reports"].get("group_chat_id")
+                target_topic_id = topics_map["reports"].get("message_thread_id")
+            elif "results" in topics_map:
+                target_chat_id = topics_map["results"].get("group_chat_id")
+                target_topic_id = topics_map["results"].get("message_thread_id")
+
+    if not target_chat_id:
+        if not div_id and group_id:
+            reports_topic_id = await asyncio.to_thread(database.get_config, "reports_topic_id")
+            target_chat_id = group_id
+            target_topic_id = int(reports_topic_id) if reports_topic_id else None
+        else:
+            logger.warning(f"No reports/results topic configured for division {div_id}; skipping TP notification.")
+            return
+
+    kwargs = {"chat_id": target_chat_id, "text": text, "parse_mode": "HTML"}
+    if target_topic_id:
+        kwargs["message_thread_id"] = int(target_topic_id)
         
     try:
         await context.bot.send_message(**kwargs)
@@ -2672,7 +2753,8 @@ async def admin_set_score_text(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text("❌ Матч не найден. Сброс.")
         return ConversationHandler.END
         
-    await asyncio.to_thread(database.admin_set_match_score, match_id, s1, s2)
+    admin_id = update.effective_user.id if update.effective_user else None
+    await asyncio.to_thread(database.admin_set_match_score, match_id, s1, s2, admin_id)
 
     # Debt note computed BEFORE rewards are applied
     try:
@@ -2698,7 +2780,7 @@ async def admin_set_score_text(update: Update, context: ContextTypes.DEFAULT_TYP
         except Exception as e:
             logger.exception(f"Не удалось отправить уведомление игроку {p_id}")
 
-    # Notify Telegram Group
+    # Notify Telegram Group (scoped to division topic)
     group_id = await asyncio.to_thread(database.get_group_id)
     if group_id:
         group_text = (
@@ -2708,8 +2790,19 @@ async def admin_set_score_text(update: Update, context: ContextTypes.DEFAULT_TYP
             f"**{s1} : {s2}** "
             f"**{match['player2_nickname']}** ({match['player2_team'] or 'нет'})"
         ) + debt_note.replace("<b>", "**").replace("</b>", "**")
+        
+        target_topic = None
+        div_id = match.get("division_id")
+        if div_id:
+            target_topic = await asyncio.to_thread(database.get_division_topic, div_id, "results")
+        if not target_topic:
+            target_topic = await asyncio.to_thread(database.get_config, "results_topic_id")
+
+        kwargs = {"chat_id": group_id, "text": group_text, "parse_mode": "Markdown"}
+        if target_topic:
+            kwargs["message_thread_id"] = int(target_topic)
         try:
-            await context.bot.send_message(chat_id=group_id, text=group_text, parse_mode="Markdown")
+            await context.bot.send_message(**kwargs)
         except Exception as e:
             logger.exception("Не удалось отправить сообщение в группу")
 
@@ -2930,6 +3023,12 @@ async def admin_clear_league_start(update: Update, context: ContextTypes.DEFAULT
     query = update.callback_query
     if not query or not is_admin(query.from_user.id):
         return ConversationHandler.END
+
+    import config
+    if query.from_user.id not in config.ADMIN_IDS:
+        await query.answer("❌ Сброс всей лиги разрешён только Главному Администратору!", show_alert=True)
+        return ConversationHandler.END
+
     await query.answer()
     
     text = (
@@ -2946,6 +3045,11 @@ async def admin_clear_league_start(update: Update, context: ContextTypes.DEFAULT
 @admin_only
 async def admin_clear_league_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Confirm text word and wipe the database tables."""
+    import config
+    if not update.effective_user or update.effective_user.id not in config.ADMIN_IDS:
+        await update.message.reply_text("❌ Сброс всей лиги разрешён только Главному Администратору!")
+        return ConversationHandler.END
+
     text_input = update.message.text.strip()
     
     if text_input != "СБРОС":
@@ -2956,6 +3060,16 @@ async def admin_clear_league_text(update: Update, context: ContextTypes.DEFAULT_
         return ConversationHandler.END
         
     await asyncio.to_thread(database.clear_entire_league)
+    try:
+        await asyncio.to_thread(
+            database.log_admin_action,
+            admin_id=update.effective_user.id,
+            action="clear_entire_league",
+            target_type="system",
+            reason="Confirmed by keyword СБРОС"
+        )
+    except Exception as e:
+        logger.warning(f"Failed to log clear_entire_league action: {e}")
     
     await update.message.reply_text(
         "✅ **Все матчи и игроки успешно удалены!**\n\nБаза данных очищена (за исключением администраторов). Вы можете добавлять новый список участников и генерировать расписание заново.",
@@ -3829,15 +3943,16 @@ async def send_round_reminders(
     context: ContextTypes.DEFAULT_TYPE, 
     round_number: int, 
     time_left_str: str | None = None,
-    target_match_ids: set[int] | list[int] | None = None
+    target_match_ids: set[int] | list[int] | None = None,
+    division_id: int | None = None
 ) -> tuple[int, int]:
     """
     Send match reminders for unplayed matches in a round.
     Sends PM to unplayed match participants and a summary to Reports topic.
     Returns (sent_pm_count, unplayed_matches_count).
     """
-    unplayed = await asyncio.to_thread(database.get_unplayed_matches_by_round, round_number)
-    round_info = await asyncio.to_thread(database.get_round_info, round_number)
+    unplayed = await asyncio.to_thread(database.get_unplayed_matches_by_round, round_number, division_id)
+    round_info = await asyncio.to_thread(database.get_round_info, round_number, division_id)
     deadline_text = round_info["deadline"] if round_info and round_info.get("deadline") else "не указан"
 
     if target_match_ids is not None:
@@ -3896,9 +4011,14 @@ async def send_round_reminders(
             if await safe_send_notification(context.bot, p2_id, text_a, InlineKeyboardMarkup(kb_a)):
                 pm_sent += 1
 
-    # 2. Public summary to Reports Topic
+    # 2. Public summary to Reports Topic (scoped by division)
     main_group_id = await asyncio.to_thread(database.get_group_id)
-    reports_topic_id = await asyncio.to_thread(database.get_config, "reports_topic_id")
+    reports_topic_id = None
+    if division_id:
+        reports_topic_id = await asyncio.to_thread(database.get_division_topic, division_id, "reports")
+    if not reports_topic_id:
+        reports_topic_id = await asyncio.to_thread(database.get_config, "reports_topic_id")
+
     if main_group_id:
         lines = [
             f"⏰ <b>НАПОМИНАНИЕ! Тур {round_number}</b>{time_hdr}\n",
@@ -4104,6 +4224,7 @@ async def job_check_deadlines_and_remind(context: ContextTypes.DEFAULT_TYPE) -> 
 
     for r in open_rounds:
         r_num = r["round_number"]
+        div_id = r.get("division_id") or 1
         dl_str = r["deadline"]
 
         dl_dt = database.parse_flexible_datetime(dl_str)
@@ -4118,21 +4239,21 @@ async def job_check_deadlines_and_remind(context: ContextTypes.DEFAULT_TYPE) -> 
 
         # 24h reminder (between 23h and 25h left)
         if 23.0 <= hours_left <= 25.0:
-            if not (await asyncio.to_thread(database.has_reminder_been_sent, r_num, "24h")):
-                await send_round_reminders(context, r_num, time_left_str="24 часа")
-                await asyncio.to_thread(database.record_reminder_sent, r_num, "24h")
+            if not (await asyncio.to_thread(database.has_reminder_been_sent, r_num, "24h", div_id)):
+                await send_round_reminders(context, r_num, time_left_str="24 часа", division_id=div_id)
+                await asyncio.to_thread(database.record_reminder_sent, r_num, "24h", div_id)
 
         # 6h reminder (between 5h and 7h left)
         elif 5.0 <= hours_left <= 7.0:
-            if not (await asyncio.to_thread(database.has_reminder_been_sent, r_num, "6h")):
-                await send_round_reminders(context, r_num, time_left_str="6 часов")
-                await asyncio.to_thread(database.record_reminder_sent, r_num, "6h")
+            if not (await asyncio.to_thread(database.has_reminder_been_sent, r_num, "6h", div_id)):
+                await send_round_reminders(context, r_num, time_left_str="6 часов", division_id=div_id)
+                await asyncio.to_thread(database.record_reminder_sent, r_num, "6h", div_id)
 
         # 1h reminder (between 0.5h and 1.5h left)
         elif 0.5 <= hours_left <= 1.5:
-            if not (await asyncio.to_thread(database.has_reminder_been_sent, r_num, "1h")):
-                await send_round_reminders(context, r_num, time_left_str="1 час! 🚨")
-                await asyncio.to_thread(database.record_reminder_sent, r_num, "1h")
+            if not (await asyncio.to_thread(database.has_reminder_been_sent, r_num, "1h", div_id)):
+                await send_round_reminders(context, r_num, time_left_str="1 час! 🚨", division_id=div_id)
+                await asyncio.to_thread(database.record_reminder_sent, r_num, "1h", div_id)
 
 async def job_post_debts_to_warns(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Periodic job (every 12 hours) posting/updating the debts summary in the ПРЕДЫ thread."""
@@ -4502,11 +4623,15 @@ async def admin_set_reports_topic(update: Update, context: ContextTypes.DEFAULT_
         return
         
     await asyncio.to_thread(database.set_config, "reports_topic_id", str(thread_id))
-    await update.message.reply_text(f"✅ Тема «Отчёты» успешно установлена (ID: {thread_id}). Анонсы туров и важные новости будут присылаться сюда!")
+    await update.message.reply_text(
+        f"✅ Тема «Отчёты» установлена (ID: {thread_id}).\n\n"
+        f"💡 <i>Примечание:</i> Для разделения топиков по дивизионам используйте команду /назначить_топик.",
+        parse_mode="HTML"
+    )
 
 @admin_only
 async def admin_set_results_topic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Set the topic for match results."""
+    """Set the topic for match results (legacy compatibility)."""
     user_id = update.effective_user.id
     if not is_admin(user_id):
         await update.message.reply_text("❌ Нет прав.")
@@ -4518,12 +4643,16 @@ async def admin_set_results_topic(update: Update, context: ContextTypes.DEFAULT_
         return
         
     await asyncio.to_thread(database.set_config, "results_topic_id", str(thread_id))
-    await update.message.reply_text(f"✅ Тема «Результаты» успешно установлена (ID: {thread_id}). Все результаты матчей с авторами голов и ассистов будут публиковаться сюда!")
+    await update.message.reply_text(
+        f"✅ Тема «Результаты» установлена (ID: {thread_id}).\n\n"
+        f"💡 <i>Примечание:</i> Для разделения топиков по дивизионам используйте команду /назначить_топик.",
+        parse_mode="HTML"
+    )
 
 
 @admin_only
 async def admin_set_warns_topic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Set the topic for warnings (ПРЕДЫ)."""
+    """Set the topic for warnings (legacy compatibility)."""
     user_id = update.effective_user.id
     if not is_admin(user_id):
         await update.message.reply_text("❌ Нет прав.")
@@ -4535,7 +4664,11 @@ async def admin_set_warns_topic(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     await asyncio.to_thread(database.set_config, "warns_topic_id", str(thread_id))
-    await update.message.reply_text(f"✅ Тема «ПРЕДЫ» успешно установлена (ID: {thread_id}). Уведомления о предупреждениях будут присылаться сюда!")
+    await update.message.reply_text(
+        f"✅ Тема «ПРЕДЫ» установлена (ID: {thread_id}).\n\n"
+        f"💡 <i>Примечание:</i> Для разделения топиков по дивизионам используйте команду /назначить_топик.",
+        parse_mode="HTML"
+    )
 
 
 @admin_only

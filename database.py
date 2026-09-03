@@ -65,6 +65,28 @@ def init_db() -> None:
     with transaction() as conn:
         cursor = conn.cursor()
         cursor.execute("""
+            CREATE TABLE IF NOT EXISTS schema_migrations (
+                version TEXT PRIMARY KEY,
+                applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                description TEXT
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS seasons (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'draft' CHECK(status IN ('draft', 'active', 'finished', 'archived')),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                started_at TIMESTAMP,
+                finished_at TIMESTAMP,
+                created_by INTEGER
+            )
+        """)
+        cursor.execute("""
+            INSERT OR IGNORE INTO seasons (id, name, status, created_at, started_at)
+            VALUES (1, 'Сезон 2026', 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        """)
+        cursor.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 telegram_id INTEGER PRIMARY KEY,
                 username TEXT,
@@ -117,19 +139,77 @@ def init_db() -> None:
         """)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS rounds (
-                round_number INTEGER PRIMARY KEY,
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                season_id INTEGER NOT NULL DEFAULT 1,
+                division_id INTEGER NOT NULL DEFAULT 1,
+                round_number INTEGER NOT NULL,
                 is_open BOOLEAN DEFAULT 0,
-                deadline TEXT
+                deadline TEXT,
+                UNIQUE(season_id, division_id, round_number)
             )
         """)
+
+        # Migration: check if rounds still uses legacy schema or lacks season_id
+        try:
+            cursor.execute("PRAGMA table_info(rounds)")
+            r_cols = cursor.fetchall()
+            r_col_names = [c["name"] if isinstance(c, sqlite3.Row) else c[1] for c in r_cols]
+            r_pk_cols = [c["name"] if isinstance(c, sqlite3.Row) else c[1] for c in r_cols if (c["pk"] if isinstance(c, sqlite3.Row) else c[5]) > 0]
+            div_col = next((c for c in r_cols if (c["name"] if isinstance(c, sqlite3.Row) else c[1]) == "division_id"), None)
+            div_dflt = (div_col["dflt_value"] if isinstance(div_col, sqlite3.Row) else div_col[4]) if div_col else None
+            has_season = "season_id" in r_col_names
+
+            if "id" not in r_col_names or r_pk_cols == ["round_number"] or div_dflt is None or not has_season:
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS rounds_v3 (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        season_id INTEGER NOT NULL DEFAULT 1,
+                        division_id INTEGER NOT NULL DEFAULT 1,
+                        round_number INTEGER NOT NULL,
+                        is_open BOOLEAN DEFAULT 0,
+                        deadline TEXT,
+                        UNIQUE(season_id, division_id, round_number)
+                    )
+                """)
+                if "id" in r_col_names and "division_id" in r_col_names:
+                    cursor.execute("""
+                        INSERT OR IGNORE INTO rounds_v3 (id, season_id, division_id, round_number, is_open, deadline)
+                        SELECT id, 1, COALESCE(division_id, 1), round_number, is_open, deadline
+                        FROM rounds
+                    """)
+                elif "division_id" in r_col_names:
+                    cursor.execute("""
+                        INSERT OR IGNORE INTO rounds_v3 (season_id, division_id, round_number, is_open, deadline)
+                        SELECT 1, COALESCE(division_id, 1), round_number, is_open, deadline
+                        FROM rounds
+                    """)
+                else:
+                    cursor.execute("""
+                        INSERT OR IGNORE INTO rounds_v3 (season_id, division_id, round_number, is_open, deadline)
+                        SELECT 1, 1, round_number, is_open, deadline
+                        FROM rounds
+                    """)
+                cursor.execute("DROP TABLE rounds")
+                cursor.execute("ALTER TABLE rounds_v3 RENAME TO rounds")
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_rounds_season_div_round ON rounds(season_id, division_id, round_number)")
+                logger.info("Migrated 'rounds' table to composite (season_id, division_id, round_number) schema successfully.")
+        except Exception as e:
+            logger.exception(f"Error during rounds table migration check: {e}")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_rounds_season_div_round ON rounds(season_id, division_id, round_number)")
+
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS round_reminders (
+                division_id INTEGER DEFAULT 1,
                 round_number INTEGER,
                 reminder_type TEXT,
                 sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY(round_number, reminder_type)
+                PRIMARY KEY(division_id, round_number, reminder_type)
             )
         """)
+        try:
+            cursor.execute("ALTER TABLE round_reminders ADD COLUMN division_id INTEGER DEFAULT 1")
+        except sqlite3.OperationalError:
+            pass
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS debt_reminders (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -218,12 +298,15 @@ def init_db() -> None:
             ("referee", "TEXT"),
             ("live_minute", "INTEGER"),
             ("division_id", "INTEGER DEFAULT NULL"),
+            ("season_id", "INTEGER NOT NULL DEFAULT 1"),
         )
         for col_name, col_type in SAFE_COLUMNS:
             try:
                 cursor.execute(f"ALTER TABLE matches ADD COLUMN {col_name} {col_type}")
             except sqlite3.OperationalError:
                 pass
+
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_matches_season_div ON matches(season_id, division_id)")
 
         # Safely migration-add division_id to users and rounds
         try:
@@ -325,6 +408,13 @@ def init_db() -> None:
                 config_json TEXT,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
+        """)
+
+        cursor.execute("""
+            INSERT INTO feature_flags (feature_key, status)
+            VALUES ('betting_market', 'public')
+            ON CONFLICT(feature_key) DO UPDATE SET status = 'public'
+            WHERE status != 'disabled'
         """)
 
         # High-performance Telegram file_id deduplication & media caching
@@ -454,15 +544,42 @@ def init_db() -> None:
                 tournament_id INTEGER NOT NULL DEFAULT 1,
                 name TEXT NOT NULL,
                 code TEXT NOT NULL UNIQUE,
+                season_id INTEGER NOT NULL DEFAULT 1,
                 topic_id INTEGER DEFAULT NULL,
                 is_active BOOLEAN DEFAULT 1,
                 sort_order INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY(tournament_id) REFERENCES tournaments(id)
+                FOREIGN KEY(tournament_id) REFERENCES tournaments(id),
+                FOREIGN KEY(season_id) REFERENCES seasons(id)
             )
         """)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_divisions_active ON divisions(is_active, sort_order)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_divisions_topic ON divisions(topic_id)")
+
+        try:
+            cursor.execute("PRAGMA table_info(divisions)")
+            d_cols = cursor.fetchall()
+            d_col_names = [c["name"] if isinstance(c, sqlite3.Row) else c[1] for c in d_cols]
+            if "season_id" not in d_col_names:
+                cursor.execute("ALTER TABLE divisions ADD COLUMN season_id INTEGER NOT NULL DEFAULT 1")
+        except Exception as e:
+            logger.debug(f"Notice during divisions season_id migration: {e}")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_divisions_season ON divisions(season_id)")
+
+        cursor.execute("""
+            INSERT OR IGNORE INTO divisions (id, tournament_id, name, code, season_id, sort_order)
+            VALUES 
+                (1, 1, 'Дивизион 1', 'DIV_1', 1, 1),
+                (2, 1, 'Дивизион 2', 'DIV_2', 1, 2),
+                (3, 1, 'Дивизион 3', 'DIV_3', 1, 3),
+                (4, 1, 'Дивизион 4', 'DIV_4', 1, 4),
+                (5, 1, 'Дивизион 5', 'DIV_5', 1, 5)
+        """)
+
+        cursor.execute("""
+            INSERT OR IGNORE INTO schema_migrations (version, description)
+            VALUES ('003_p2_seasons_and_isolation', 'Phase 2: Season entity, lifecycle, and strict isolation')
+        """)
 
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS division_topics (
@@ -631,13 +748,46 @@ def init_db() -> None:
                 target_id INTEGER,
                 old_value TEXT,
                 new_value TEXT,
-                reason TEXT,
+                division_id INTEGER DEFAULT NULL,
+                season_id INTEGER DEFAULT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY(admin_id) REFERENCES users(telegram_id)
             )
         """)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_admin ON admin_audit_log(admin_id, created_at DESC)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_audit_target ON admin_audit_log(target_type, target_id)")
+        for col_name, col_type in (
+            ("division_id", "INTEGER DEFAULT NULL"),
+            ("season_id", "INTEGER DEFAULT NULL"),
+        ):
+            try:
+                cursor.execute(f"ALTER TABLE admin_audit_log ADD COLUMN {col_name} {col_type}")
+            except sqlite3.OperationalError:
+                pass
+
+        # ─── Phase 5: Betting Audit Log ───────────────────────────────────────
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS bet_audit_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                actor_id INTEGER NOT NULL,
+                action TEXT NOT NULL,
+                entity_type TEXT NOT NULL,
+                entity_id INTEGER NOT NULL,
+                old_value TEXT,
+                new_value TEXT,
+                division_id INTEGER,
+                season_id INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_bet_audit_actor ON bet_audit_log(actor_id, created_at DESC)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_bet_audit_entity ON bet_audit_log(entity_type, entity_id)")
+
+        # ─── Phase 5: Idempotency payload hash migration ──────────────────────
+        try:
+            cursor.execute("ALTER TABLE user_bets ADD COLUMN idempotency_payload_hash TEXT")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
 
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS saved_coupons (
@@ -1122,20 +1272,20 @@ def get_player_stats(telegram_id: int) -> dict:
             "points": points
         }
 
-def get_pending_matches(telegram_id: int, only_expired_deadlines: bool = False) -> list[dict]:
-    """Retrieve active matches for a user from Round 1 up to the highest OPEN round number, plus active Cup matches.
-
-    When only_expired_deadlines is True, league matches are restricted to rounds whose
-    deadline has already passed (used for debt reminders). Cup matches are never filtered.
-    """
+def get_active_matches(telegram_id: int, only_expired_deadlines: bool = False, division_id: int | None = None) -> list[dict]:
+    """Retrieve active matches for a user from Round 1 up to the highest OPEN round number in their division."""
     with transaction() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT team_name FROM users WHERE telegram_id = ?", (telegram_id,))
+        cursor.execute("SELECT team_name, division_id FROM users WHERE telegram_id = ?", (telegram_id,))
         u_row = cursor.fetchone()
         u_team = u_row["team_name"] if u_row and u_row["team_name"] else ""
+        user_div_id = division_id if division_id is not None else (u_row["division_id"] if u_row and "division_id" in u_row.keys() else None)
 
-        # Get highest open round number
-        cursor.execute("SELECT MAX(round_number) FROM rounds WHERE is_open = 1")
+        # Get highest open round number for user's division (or global if unassigned)
+        if user_div_id is not None:
+            cursor.execute("SELECT MAX(round_number) FROM rounds WHERE is_open = 1 AND division_id = ?", (user_div_id,))
+        else:
+            cursor.execute("SELECT MAX(round_number) FROM rounds WHERE is_open = 1")
         max_open_row = cursor.fetchone()
         max_open_round = max_open_row[0] if max_open_row and max_open_row[0] is not None else 0
 
@@ -1143,7 +1293,10 @@ def get_pending_matches(telegram_id: int, only_expired_deadlines: bool = False) 
         expired_rounds: set[int] = set()
         if only_expired_deadlines:
             now = datetime.datetime.now()
-            cursor.execute("SELECT round_number, deadline FROM rounds WHERE is_open = 1")
+            if user_div_id is not None:
+                cursor.execute("SELECT round_number, deadline FROM rounds WHERE is_open = 1 AND division_id = ?", (user_div_id,))
+            else:
+                cursor.execute("SELECT round_number, deadline FROM rounds WHERE is_open = 1")
             for r_num, dl_str in cursor.fetchall():
                 if not dl_str:
                     continue
@@ -1151,13 +1304,16 @@ def get_pending_matches(telegram_id: int, only_expired_deadlines: bool = False) 
                 if dl_dt and dl_dt <= now:
                     expired_rounds.add(r_num)
 
+        div_filter = f"AND (m.division_id = {user_div_id} OR m.division_id IS NULL) " if user_div_id is not None else ""
         league_condition = (
-            "(m.tournament_type IS NULL OR m.tournament_type = 'league') "
+            f"(m.tournament_type IS NULL OR m.tournament_type = 'league') "
+            f"{div_filter}"
             f"AND m.round_number IN ({','.join('?' * len(expired_rounds))}) "
             "AND m.status IN ('pending', 'reported', 'disputed')"
             if only_expired_deadlines and expired_rounds
             else (
-                "(m.tournament_type IS NULL OR m.tournament_type = 'league') "
+                f"(m.tournament_type IS NULL OR m.tournament_type = 'league') "
+                f"{div_filter}"
                 "AND m.round_number >= 1 "
                 "AND m.round_number <= ? "
                 "AND m.status IN ('pending', 'reported', 'disputed')"
@@ -1210,6 +1366,8 @@ def get_pending_matches(telegram_id: int, only_expired_deadlines: bool = False) 
             matches.append(d)
         return matches
 
+get_pending_matches = get_active_matches
+
 def get_match_history(telegram_id: int) -> list[dict]:
     """Retrieve played (confirmed) matches for a user, including opponent profile details."""
     with transaction() as conn:
@@ -1249,11 +1407,182 @@ def update_single_field(telegram_id: int, field_name: str, value: str) -> None:
             (value, telegram_id)
         )
 
-def get_standings(division_id: int | None = None) -> list[dict]:
-    """Calculate the standings of registered players dynamically, optionally filtered by division."""
+def log_admin_action(
+    admin_id: int,
+    action: str,
+    target_type: str = "",
+    target_id: int | None = None,
+    old_value: str | None = None,
+    new_value: str | None = None,
+    reason: str | None = None,
+    division_id: int | None = None,
+    season_id: int | None = None,
+    metadata: str | None = None
+) -> None:
+    """Record an administrative action into admin_audit_log."""
+    try:
+        with transaction() as conn:
+            conn.cursor().execute(
+                """
+                INSERT INTO admin_audit_log (
+                    admin_id, action, target_type, target_id, old_value, new_value, division_id, season_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (admin_id, action, target_type, target_id, old_value, new_value or reason or metadata, division_id, season_id)
+            )
+    except Exception as e:
+        logger.warning(f"Failed to log admin action '{action}': {e}")
+
+
+def create_season(name: str, created_by: int | None = None) -> int:
+    """Create a new season in draft status."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO seasons (name, status, created_by) VALUES (?, 'draft', ?)",
+            (name.strip(), created_by)
+        )
+        season_id = cursor.lastrowid
+        log_admin_action(
+            admin_id=created_by or 0,
+            action="create_season",
+            target_type="season",
+            target_id=season_id,
+            new_value=name.strip(),
+            season_id=season_id
+        )
+        return season_id
+
+
+def get_season(season_id: int) -> dict | None:
+    """Retrieve a season by ID."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM seasons WHERE id = ?", (season_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+
+def get_active_season() -> dict | None:
+    """Retrieve the currently active season."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM seasons WHERE status = 'active' ORDER BY id DESC LIMIT 1")
+        row = cursor.fetchone()
+        if row:
+            return dict(row)
+        cursor.execute("SELECT * FROM seasons ORDER BY id DESC LIMIT 1")
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+
+def list_seasons(status: str | None = None) -> list[dict]:
+    """List all seasons, optionally filtered by status."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        if status:
+            cursor.execute("SELECT * FROM seasons WHERE status = ? ORDER BY id DESC", (status,))
+        else:
+            cursor.execute("SELECT * FROM seasons ORDER BY id DESC")
+        return [dict(r) for r in cursor.fetchall()]
+
+
+def activate_season(season_id: int, actor_user_id: int | None = None) -> tuple[bool, str]:
+    """
+    Transition a season to 'active'.
+    Marks previous active season as 'finished'.
+    """
+    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM seasons WHERE id = ?", (season_id,))
+        target = cursor.fetchone()
+        if not target:
+            return False, f"Сезон #{season_id} не найден."
+        if target["status"] == "active":
+            return True, f"Сезон #{season_id} уже активен."
+        if target["status"] in ("finished", "archived"):
+            return False, f"Нельзя напрямую активировать завершённый или архивированный сезон #{season_id}."
+
+        cursor.execute(
+            "UPDATE seasons SET status = 'finished', finished_at = ? WHERE status = 'active'",
+            (now,)
+        )
+        cursor.execute(
+            "UPDATE seasons SET status = 'active', started_at = ? WHERE id = ?",
+            (now, season_id)
+        )
+        log_admin_action(
+            admin_id=actor_user_id or 0,
+            action="activate_season",
+            target_type="season",
+            target_id=season_id,
+            new_value="active",
+            season_id=season_id
+        )
+        return True, f"Сезон #{season_id} ('{target['name']}') успешно активирован."
+
+
+def finish_season(season_id: int, actor_user_id: int | None = None) -> tuple[bool, str]:
+    """Transition an active season to 'finished'."""
+    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM seasons WHERE id = ?", (season_id,))
+        target = cursor.fetchone()
+        if not target:
+            return False, f"Сезон #{season_id} не найден."
+        if target["status"] != "active":
+            return False, f"Завершить можно только активный сезон (текущий статус: {target['status']})."
+
+        cursor.execute(
+            "UPDATE seasons SET status = 'finished', finished_at = ? WHERE id = ?",
+            (now, season_id)
+        )
+        log_admin_action(
+            admin_id=actor_user_id or 0,
+            action="finish_season",
+            target_type="season",
+            target_id=season_id,
+            new_value="finished",
+            season_id=season_id
+        )
+        return True, f"Сезон #{season_id} успешно завершён."
+
+
+def archive_season(season_id: int, actor_user_id: int | None = None) -> tuple[bool, str]:
+    """Transition a finished season to 'archived'."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM seasons WHERE id = ?", (season_id,))
+        target = cursor.fetchone()
+        if not target:
+            return False, f"Сезон #{season_id} не найден."
+        if target["status"] != "finished":
+            return False, f"Архивировать можно только завершённый сезон (текущий статус: {target['status']})."
+
+        cursor.execute("UPDATE seasons SET status = 'archived' WHERE id = ?", (season_id,))
+        log_admin_action(
+            admin_id=actor_user_id or 0,
+            action="archive_season",
+            target_type="season",
+            target_id=season_id,
+            new_value="archived",
+            season_id=season_id
+        )
+        return True, f"Сезон #{season_id} перенесён в архив."
+
+
+def get_standings(division_id: int | None = None, season_id: int | None = None) -> list[dict]:
+    """Calculate the standings of registered players dynamically, strictly scoped by division and season."""
     with transaction() as conn:
         cursor = conn.cursor()
         
+        target_season_id = season_id
+        if target_season_id is None:
+            act = get_active_season()
+            target_season_id = act["id"] if act else 1
+
         teams = {}
         if division_id is not None:
             # Users assigned to this specific division
@@ -1277,7 +1606,7 @@ def get_standings(division_id: int | None = None) -> list[dict]:
                     "points": 0,
                 }
             
-            # Fetch confirmed league matches strictly for this division
+            # Fetch confirmed league matches strictly for this division & season
             cursor.execute("""
                 SELECT 
                     COALESCE(m.player1_team, u1.team_name) AS player1_team, 
@@ -1290,7 +1619,8 @@ def get_standings(division_id: int | None = None) -> list[dict]:
                 WHERE m.status = 'confirmed' 
                   AND (m.tournament_type IS NULL OR m.tournament_type = 'league')
                   AND m.division_id = ?
-            """, (division_id,))
+                  AND (m.season_id = ? OR m.season_id IS NULL)
+            """, (division_id, target_season_id))
         else:
             from config import KPL_TEAMS
             cursor.execute("SELECT telegram_id, team_name, username FROM users WHERE team_name IS NOT NULL AND team_name != ''")
@@ -1315,7 +1645,7 @@ def get_standings(division_id: int | None = None) -> list[dict]:
                     "points": 0,
                 }
 
-            # Get all confirmed matches (League matches only)
+            # Get all confirmed matches for this season
             cursor.execute("""
                 SELECT 
                     COALESCE(m.player1_team, u1.team_name) AS player1_team, 
@@ -1325,8 +1655,10 @@ def get_standings(division_id: int | None = None) -> list[dict]:
                 FROM matches m
                 LEFT JOIN users u1 ON LOWER(m.player1_team) = LOWER(u1.team_name)
                 LEFT JOIN users u2 ON LOWER(m.player2_team) = LOWER(u2.team_name)
-                WHERE m.status = 'confirmed' AND (m.tournament_type IS NULL OR m.tournament_type = 'league')
-            """)
+                WHERE m.status = 'confirmed' 
+                  AND (m.tournament_type IS NULL OR m.tournament_type = 'league')
+                  AND (m.season_id = ? OR m.season_id IS NULL)
+            """, (target_season_id,))
         
         matches = cursor.fetchall()
 
@@ -1453,7 +1785,7 @@ def get_match(match_id: int) -> dict | None:
                 COALESCE(m.frozen_seconds, 0) AS frozen_seconds, m.frozen_at,
                 m.photo_id, m.dispute_photos, m.reported_by,
                 m.proposed_time, m.proposed_by, m.time_status,
-                m.tournament_type, m.cup_stage, m.cup_series_id, m.game_num_in_series, m.division_id,
+                m.tournament_type, m.cup_stage, m.cup_series_id, m.game_num_in_series, m.division_id, m.season_id,
                 m.player1_team AS direct_p1_team, m.player2_team AS direct_p2_team,
                 u1.username AS player1_nickname, u1.team_name AS u1_team, u1.username AS player1_username,
                 u2.username AS player2_nickname, u2.team_name AS u2_team, u2.username AS player2_username
@@ -1484,8 +1816,12 @@ def get_match(match_id: int) -> dict | None:
                     d['player2_nickname'] = u2.get('username')
         return d
 
+get_match_by_id = get_match
+
 def confirm_and_finalize_match(match_id: int, p1_score: int, p2_score: int, events: list, reporter_id: int = None, photo_id: str = None) -> str | None:
     """Instantly save and confirm a match with events in database."""
+    if p1_score < 0 or p2_score < 0:
+        raise ValueError("Scores must be non-negative integers")
     with transaction() as conn:
         cursor = conn.cursor()
         cursor.execute("DELETE FROM match_events WHERE match_id = ?", (match_id,))
@@ -1515,6 +1851,8 @@ def confirm_and_finalize_match(match_id: int, p1_score: int, p2_score: int, even
 
 def set_technical_result(match_id: int, p1_score: int, p2_score: int) -> str | None:
     """Set technical result for match and update cup series if applicable."""
+    if p1_score < 0 or p2_score < 0:
+        raise ValueError("Scores must be non-negative integers")
     with transaction() as conn:
         cursor = conn.cursor()
         cursor.execute(
@@ -1817,30 +2155,54 @@ def get_matches_in_rounds(round_numbers: list[int]) -> list[dict]:
         """, tuple(round_numbers))
         return [dict(row) for row in cursor.fetchall()]
 
-def get_unplayed_matches_by_round(round_number: int) -> list[dict]:
-    """Retrieve unplayed (pending) matches in a specific round with player details."""
+def get_unplayed_matches_by_round(round_number: int, division_id: int | None = None) -> list[dict]:
+    """Retrieve unplayed (pending) matches in a specific round with player details, optionally filtered by division."""
     with transaction() as conn:
         cursor = conn.cursor()
-        cursor.execute("""
-            SELECT 
-                m.id, m.round_number, u1.telegram_id AS player1_id, u2.telegram_id AS player2_id, m.status,
-                u1.username AS player1_username, u1.team_name AS player1_team,
-                u2.username AS player2_username, u2.team_name AS player2_team
-            FROM matches m
-            LEFT JOIN users u1 ON LOWER(m.player1_team) = LOWER(u1.team_name)
-            LEFT JOIN users u2 ON LOWER(m.player2_team) = LOWER(u2.team_name)
-            WHERE m.round_number = ? AND m.status = 'pending'
-            ORDER BY m.id ASC
-        """, (round_number,))
+        if division_id is not None:
+            cursor.execute("""
+                SELECT 
+                    m.id, m.round_number, m.division_id, u1.telegram_id AS player1_id, u2.telegram_id AS player2_id, m.status,
+                    u1.username AS player1_username, u1.team_name AS player1_team,
+                    u2.username AS player2_username, u2.team_name AS player2_team
+                FROM matches m
+                LEFT JOIN users u1 ON LOWER(m.player1_team) = LOWER(u1.team_name)
+                LEFT JOIN users u2 ON LOWER(m.player2_team) = LOWER(u2.team_name)
+                WHERE m.round_number = ? AND m.status = 'pending' AND (m.division_id = ? OR m.division_id IS NULL)
+                ORDER BY m.id ASC
+            """, (round_number, division_id))
+        else:
+            cursor.execute("""
+                SELECT 
+                    m.id, m.round_number, m.division_id, u1.telegram_id AS player1_id, u2.telegram_id AS player2_id, m.status,
+                    u1.username AS player1_username, u1.team_name AS player1_team,
+                    u2.username AS player2_username, u2.team_name AS player2_team
+                FROM matches m
+                LEFT JOIN users u1 ON LOWER(m.player1_team) = LOWER(u1.team_name)
+                LEFT JOIN users u2 ON LOWER(m.player2_team) = LOWER(u2.team_name)
+                WHERE m.round_number = ? AND m.status = 'pending'
+                ORDER BY m.id ASC
+            """, (round_number,))
         return [dict(row) for row in cursor.fetchall()]
 
-def get_open_rounds_with_deadlines() -> list[dict]:
-    """Retrieve all open rounds that have a deadline set."""
+def get_open_rounds_with_deadlines(division_id: int | None = None, season_id: int | None = None) -> list[dict]:
+    """Retrieve all open rounds that have a deadline set, optionally filtered by division and season."""
     with transaction() as conn:
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT round_number, deadline FROM rounds WHERE is_open = 1 AND deadline IS NOT NULL AND deadline != ''"
-        )
+        query = "SELECT round_number, deadline, division_id, season_id FROM rounds WHERE is_open = 1 AND deadline IS NOT NULL AND deadline != ''"
+        params = []
+        if division_id is not None:
+            query += " AND division_id = ?"
+            params.append(division_id)
+        if season_id is not None:
+            query += " AND season_id = ?"
+            params.append(season_id)
+        else:
+            act = get_active_season()
+            if act:
+                query += " AND (season_id = ? OR season_id IS NULL)"
+                params.append(act["id"])
+        cursor.execute(query, tuple(params))
         return [dict(row) for row in cursor.fetchall()]
 
 def get_teams_recent_form(limit: int = 5, division_id: int | None = None) -> dict[str, list[str]]:
@@ -1902,14 +2264,20 @@ def get_teams_recent_form(limit: int = 5, division_id: int | None = None) -> dic
                 form_map[t.lower()] = reversed_outcomes
         return form_map
 
-def has_reminder_been_sent(round_number: int, reminder_type: str) -> bool:
+def has_reminder_been_sent(round_number: int, reminder_type: str, division_id: int | None = None) -> bool:
     """Check if a specific reminder type (24h, 6h, 1h) has already been sent for a round."""
     with transaction() as conn:
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT 1 FROM round_reminders WHERE round_number = ? AND reminder_type = ?",
-            (round_number, reminder_type)
-        )
+        if division_id is not None:
+            cursor.execute(
+                "SELECT 1 FROM round_reminders WHERE round_number = ? AND reminder_type = ? AND (division_id = ? OR division_id IS NULL)",
+                (round_number, reminder_type, division_id)
+            )
+        else:
+            cursor.execute(
+                "SELECT 1 FROM round_reminders WHERE round_number = ? AND reminder_type = ?",
+                (round_number, reminder_type)
+            )
         return cursor.fetchone() is not None
 
 def clear_all_rounds_and_matches() -> None:
@@ -1923,11 +2291,12 @@ def clear_all_rounds_and_matches() -> None:
 
 def create_round(round_number: int, deadline: str = None, division_id: int | None = None) -> None:
     """Create a new round in DB if it doesn't already exist (closed by default)."""
+    div_id = division_id if division_id is not None else 1
     with transaction() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "INSERT OR IGNORE INTO rounds (round_number, is_open, deadline, division_id) VALUES (?, 0, ?, ?)",
-            (round_number, deadline, division_id)
+            "INSERT OR IGNORE INTO rounds (division_id, round_number, is_open, deadline) VALUES (?, ?, 0, ?)",
+            (div_id, round_number, deadline)
         )
 
 def create_match(round_number: int, player1_id: int, player2_id: int, division_id: int | None = None) -> int:
@@ -1948,24 +2317,52 @@ def create_match(round_number: int, player1_id: int, player2_id: int, division_i
         )
         return cursor.lastrowid
 
-def record_reminder_sent(round_number: int, reminder_type: str) -> None:
+def record_reminder_sent(round_number: int, reminder_type: str, division_id: int | None = None) -> None:
     """Mark a specific reminder type as sent for a round."""
     with transaction() as conn:
         cursor = conn.cursor()
+        div_id = division_id if division_id is not None else 1
         cursor.execute(
-            "INSERT OR REPLACE INTO round_reminders (round_number, reminder_type) VALUES (?, ?)",
-            (round_number, reminder_type)
+            "INSERT OR REPLACE INTO round_reminders (division_id, round_number, reminder_type) VALUES (?, ?, ?)",
+            (div_id, round_number, reminder_type)
         )
 
-def admin_set_match_score(match_id: int, player1_score: int, player2_score: int) -> None:
+def admin_set_match_score(match_id: int, player1_score: int, player2_score: int, admin_id: int | None = None) -> None:
     """Manually set match score and confirm it by admin, clearing any previous match events."""
+    if player1_score < 0 or player2_score < 0:
+        raise ValueError("Scores must be non-negative integers")
     with transaction() as conn:
         cursor = conn.cursor()
+        cursor.execute("SELECT player1_score, player2_score, status, division_id, season_id FROM matches WHERE id = ?", (match_id,))
+        old_m = cursor.fetchone()
+
+        is_correction = bool(old_m and old_m["status"] == "confirmed" and old_m["player1_score"] is not None and old_m["player2_score"] is not None)
+        old_score_str = f"{old_m['player1_score']}:{old_m['player2_score']}" if is_correction else None
+
         cursor.execute("DELETE FROM match_events WHERE match_id = ?", (match_id,))
         cursor.execute(
             "UPDATE matches SET player1_score = ?, player2_score = ?, status = 'confirmed', played_at = ? WHERE id = ?",
             (player1_score, player2_score, datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), match_id)
         )
+
+        if is_correction and admin_id:
+            div_id = old_m["division_id"] if old_m else None
+            s_id = old_m["season_id"] if old_m else None
+            try:
+                log_admin_action(
+                    admin_id=admin_id,
+                    action="correct_match_score",
+                    target_type="match",
+                    target_id=match_id,
+                    old_value=old_score_str,
+                    new_value=f"{player1_score}:{player2_score}",
+                    reason="Admin corrected confirmed match score",
+                    division_id=div_id,
+                    season_id=s_id
+                )
+            except Exception as e:
+                logger.warning(f"Could not log admin score correction for match {match_id}: {e}")
+
         try:
             settle_match_bets(match_id, player1_score, player2_score)
         except Exception as e:
@@ -1997,7 +2394,7 @@ DEFAULT_FEATURE_FLAGS = {
     "totw_infographics": "admin_only",
     "hype_match_posters": "admin_only",
     "match_roast_ai": "admin_only",
-    "betting_market": "disabled",
+    "betting_market": "public",
     "fantasy_league": "disabled",
     "achievements_hall_of_fame": "admin_only",
 }
@@ -2141,40 +2538,59 @@ def trim_style_samples(keep: int = 100) -> None:
         )
 
 
-def open_rounds_batch(start_round: int, end_round: int, deadline: str) -> None:
-    """Open multiple rounds and set a shared deadline."""
+def open_rounds_batch(start_round: int, end_round: int, deadline: str, division_id: int | None = None, season_id: int | None = None) -> None:
+    """Open multiple rounds and set a shared deadline, scoped by division and season."""
+    div_id = division_id if division_id is not None else 1
+    if season_id is None:
+        act = get_active_season()
+        s_id = act["id"] if act else 1
+    else:
+        s_id = season_id
+
+    act = get_season(s_id)
+    if act and act.get("status") not in ("active", None):
+        raise ValueError(f"Cannot open rounds in season #{s_id} with status '{act.get('status')}'")
+
     with transaction() as conn:
         cursor = conn.cursor()
         for r_num in range(start_round, end_round + 1):
             cursor.execute(
-                "INSERT OR IGNORE INTO rounds (round_number, is_open, deadline) VALUES (?, 0, NULL)",
-                (r_num,)
+                "INSERT OR IGNORE INTO rounds (season_id, division_id, round_number, is_open, deadline) VALUES (?, ?, ?, 0, NULL)",
+                (s_id, div_id, r_num)
             )
-        cursor.execute(
-            "UPDATE rounds SET is_open = 1, deadline = ? WHERE round_number >= ? AND round_number <= ?",
-            (deadline, start_round, end_round)
-        )
+        if division_id is not None:
+            cursor.execute(
+                "UPDATE rounds SET is_open = 1, deadline = ? WHERE (season_id = ? OR season_id IS NULL) AND division_id = ? AND round_number >= ? AND round_number <= ?",
+                (deadline, s_id, division_id, start_round, end_round)
+            )
+        else:
+            cursor.execute(
+                "UPDATE rounds SET is_open = 1, deadline = ? WHERE (season_id = ? OR season_id IS NULL) AND round_number >= ? AND round_number <= ?",
+                (deadline, s_id, start_round, end_round)
+            )
 
     # 🎰 Auto-generate betting lines for opened rounds
     for r_num in range(start_round, end_round + 1):
         try:
             from services.betting_engine import generate_round_markets
-            generate_round_markets(r_num)
-        except Exception:
-            pass
+            generate_round_markets(r_num, division_id=div_id, season_id=s_id)
+        except Exception as e:
+            logger.exception(f"Error generating round markets for round {r_num}: {e}")
 
 def get_open_pending_matches() -> list[dict]:
-    """Get all pending matches where the round is open and not extended."""
+    """Get all pending matches where the round is open and not extended, scoped by division and season."""
     with transaction() as conn:
         cursor = conn.cursor()
         cursor.execute("""
             SELECT 
-                m.id, m.round_number, u1.telegram_id AS player1_id, u2.telegram_id AS player2_id, m.status, m.is_extended,
+                m.id, m.round_number, m.division_id, m.season_id, u1.telegram_id AS player1_id, u2.telegram_id AS player2_id, m.status, m.is_extended,
                 u1.username AS player1_nickname, u1.team_name AS player1_team,
                 u2.username AS player2_nickname, u2.team_name AS player2_team,
                 r.deadline
             FROM matches m
             JOIN rounds r ON m.round_number = r.round_number
+                         AND (m.division_id = r.division_id OR (m.division_id IS NULL AND r.division_id = 1))
+                         AND (m.season_id = r.season_id OR (m.season_id IS NULL AND (r.season_id = 1 OR r.season_id IS NULL)))
             LEFT JOIN users u1 ON LOWER(m.player1_team) = LOWER(u1.team_name)
             LEFT JOIN users u2 ON LOWER(m.player2_team) = LOWER(u2.team_name)
             WHERE m.status = 'pending' 
@@ -3071,73 +3487,162 @@ def get_club_top_scorers(team_name: str) -> list[dict]:
         return [{"player_name": row["player_name"], "total": row["total"]} for row in cursor.fetchall()]
 
 
-def clear_all_matches() -> None:
-    """Clear all matches from the database."""
+def clear_all_matches(season_id: int | None = None) -> None:
+    """Clear all matches from the database for a specific season or all seasons."""
     with transaction() as conn:
-        conn.cursor().execute("DELETE FROM matches")
-        conn.cursor().execute("DELETE FROM rounds")
+        cursor = conn.cursor()
+        if season_id is not None:
+            cursor.execute("DELETE FROM matches WHERE season_id = ?", (season_id,))
+            cursor.execute("DELETE FROM rounds WHERE season_id = ?", (season_id,))
+        else:
+            cursor.execute("DELETE FROM matches")
+            cursor.execute("DELETE FROM rounds")
 
 
-def batch_insert_matches(fixtures: list[tuple[int, int, int]], division_id: int | None = None) -> None:
+def clear_matches_by_division(division_id: int, season_id: int | None = None) -> None:
+    """Clear matches and rounds for a specific division and season."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        if season_id is None:
+            act = get_active_season()
+            s_id = act["id"] if act else 1
+        else:
+            s_id = season_id
+        cursor.execute("DELETE FROM matches WHERE division_id = ? AND (season_id = ? OR season_id IS NULL)", (division_id, s_id))
+        cursor.execute("DELETE FROM rounds WHERE division_id = ? AND (season_id = ? OR season_id IS NULL)", (division_id, s_id))
+
+
+def batch_insert_matches(fixtures: list[tuple[int, int, int]], division_id: int | None = None, season_id: int | None = None) -> None:
     """Insert a list of matches. fixtures format: (round_number, p1, p2)"""
     valid_fixtures = [f for f in fixtures if f[1] != f[2]]
     if not valid_fixtures:
         return
+    if season_id is None:
+        act = get_active_season()
+        s_id = act["id"] if act else 1
+    else:
+        s_id = season_id
+
+    div_id = division_id if division_id is not None else 1
     with transaction() as conn:
         cursor = conn.cursor()
         cursor.executemany(
-            "INSERT INTO matches (round_number, player1_id, player2_id, status, division_id) VALUES (?, ?, ?, 'pending', ?)",
-            [(f[0], f[1], f[2], division_id) for f in valid_fixtures]
+            "INSERT INTO matches (round_number, player1_id, player2_id, status, division_id, season_id) VALUES (?, ?, ?, 'pending', ?, ?)",
+            [(f[0], f[1], f[2], division_id, s_id) for f in valid_fixtures]
         )
         rounds = set([f[0] for f in valid_fixtures])
         cursor.executemany(
-            "INSERT OR IGNORE INTO rounds (round_number, is_open, deadline, division_id) VALUES (?, 0, NULL, ?)",
-            [(r, division_id) for r in rounds]
+            "INSERT OR IGNORE INTO rounds (season_id, division_id, round_number, is_open, deadline) VALUES (?, ?, ?, 0, NULL)",
+            [(s_id, div_id, r) for r in rounds]
         )
 
-def get_round_info(round_number: int) -> dict | None:
+
+def get_round_info(round_number: int, division_id: int | None = None, season_id: int | None = None) -> dict | None:
     with transaction() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT round_number, is_open, deadline FROM rounds WHERE round_number = ?", (round_number,))
+        if season_id is None:
+            act = get_active_season()
+            s_id = act["id"] if act else 1
+        else:
+            s_id = season_id
+
+        if division_id is not None:
+            cursor.execute(
+                "SELECT round_number, is_open, deadline, division_id, season_id FROM rounds WHERE (season_id = ? OR season_id IS NULL) AND division_id = ? AND round_number = ?",
+                (s_id, division_id, round_number)
+            )
+        else:
+            cursor.execute(
+                "SELECT round_number, is_open, deadline, division_id, season_id FROM rounds WHERE (season_id = ? OR season_id IS NULL) AND round_number = ? LIMIT 1",
+                (s_id, round_number)
+            )
         row = cursor.fetchone()
         return dict(row) if row else None
 
-def update_round_status(round_number: int, is_open: bool, deadline: str | None = None) -> None:
+
+def update_round_status(round_number: int, is_open: bool, deadline: str | None = None, division_id: int | None = None, season_id: int | None = None) -> None:
     """Open/close a round. When opening without an explicit deadline, any stale
     stored deadline is cleared so it cannot instantly mark matches as overdue.
     Whenever the deadline is (re)set, per-round reminder flags are reset so
     the 24h/6h/1h pipeline works for the new deadline window."""
+    if season_id is None:
+        act = get_active_season()
+        s_id = act["id"] if act else 1
+    else:
+        s_id = season_id
+
+    if is_open:
+        act = get_season(s_id)
+        if act and act.get("status") not in ("active", None):
+            raise ValueError(f"Cannot open round in season #{s_id} with status '{act.get('status')}'")
+
     with transaction() as conn:
         cursor = conn.cursor()
-        if deadline is not None:
-            cursor.execute(
-                "UPDATE rounds SET is_open = ?, deadline = ? WHERE round_number = ?",
-                (1 if is_open else 0, deadline, round_number)
-            )
-        elif is_open:
-            # Re-opening without a new deadline: drop the stale one
-            cursor.execute(
-                "UPDATE rounds SET is_open = ?, deadline = NULL WHERE round_number = ?",
-                (1, round_number)
-            )
-        else:
-            cursor.execute(
-                "UPDATE rounds SET is_open = ? WHERE round_number = ?",
-                (0, round_number)
-            )
-            # 🎰 Close betting line when round is closed
-            cursor.execute("UPDATE bet_markets SET is_active = 0 WHERE tour = ?", (round_number,))
+        if is_open:
+            if division_id is not None:
+                cursor.execute(
+                    "INSERT OR IGNORE INTO rounds (season_id, division_id, round_number, is_open, deadline) VALUES (?, ?, ?, 0, NULL)",
+                    (s_id, division_id, round_number)
+                )
+            else:
+                cursor.execute(
+                    "INSERT OR IGNORE INTO rounds (season_id, division_id, round_number, is_open, deadline) VALUES (?, 1, ?, 0, NULL)",
+                    (s_id, round_number)
+                )
 
-        if deadline is not None:
-            cursor.execute("DELETE FROM round_reminders WHERE round_number = ?", (round_number,))
+        if division_id is not None:
+            if deadline is not None:
+                cursor.execute(
+                    "UPDATE rounds SET is_open = ?, deadline = ? WHERE (season_id = ? OR season_id IS NULL) AND division_id = ? AND round_number = ?",
+                    (1 if is_open else 0, deadline, s_id, division_id, round_number)
+                )
+            elif is_open:
+                cursor.execute(
+                    "UPDATE rounds SET is_open = ?, deadline = NULL WHERE (season_id = ? OR season_id IS NULL) AND division_id = ? AND round_number = ?",
+                    (1, s_id, division_id, round_number)
+                )
+            else:
+                cursor.execute(
+                    "UPDATE rounds SET is_open = ? WHERE (season_id = ? OR season_id IS NULL) AND division_id = ? AND round_number = ?",
+                    (0, s_id, division_id, round_number)
+                )
+                cursor.execute("UPDATE bet_markets SET is_active = 0 WHERE tour = ?", (round_number,))
+
+            if deadline is not None:
+                cursor.execute(
+                    "DELETE FROM round_reminders WHERE round_number = ? AND (division_id = ? OR division_id IS NULL)",
+                    (round_number, division_id)
+                )
+        else:
+            if deadline is not None:
+                cursor.execute(
+                    "UPDATE rounds SET is_open = ?, deadline = ? WHERE (season_id = ? OR season_id IS NULL) AND round_number = ?",
+                    (1 if is_open else 0, deadline, s_id, round_number)
+                )
+            elif is_open:
+                # Re-opening without a new deadline: drop the stale one
+                cursor.execute(
+                    "UPDATE rounds SET is_open = ?, deadline = NULL WHERE (season_id = ? OR season_id IS NULL) AND round_number = ?",
+                    (1, s_id, round_number)
+                )
+            else:
+                cursor.execute(
+                    "UPDATE rounds SET is_open = ? WHERE (season_id = ? OR season_id IS NULL) AND round_number = ?",
+                    (0, s_id, round_number)
+                )
+                # 🎰 Close betting line when round is closed
+                cursor.execute("UPDATE bet_markets SET is_active = 0 WHERE tour = ?", (round_number,))
+
+            if deadline is not None:
+                cursor.execute("DELETE FROM round_reminders WHERE round_number = ?", (round_number,))
 
     if is_open:
         # 🎰 Auto-generate betting line when round is opened
         try:
             from services.betting_engine import generate_round_markets
-            generate_round_markets(round_number)
-        except Exception:
-            pass
+            generate_round_markets(round_number, division_id=division_id, season_id=s_id)
+        except Exception as e:
+            logger.exception(f"Error generating betting line for round {round_number}: {e}")
 
 
 def get_all_rounds() -> list[int]:
@@ -4636,19 +5141,36 @@ def parse_flexible_datetime(dt_str: str | None) -> datetime.datetime | None:
     return None
 
 
-def get_all_unplayed_league_matches() -> list[dict]:
-    """Retrieve pending league matches that are overdue: expired deadlines or past rounds."""
+def get_all_unplayed_league_matches(division_id: int | None = None, season_id: int | None = None) -> list[dict]:
+    """Retrieve pending league matches that are overdue: expired deadlines or past rounds, optionally filtered by division and season."""
     with transaction() as conn:
         cursor = conn.cursor()
         now = datetime.datetime.now()
         start_dt = get_debt_tracking_start_datetime()
 
-        cursor.execute("SELECT round_number, is_open, deadline FROM rounds")
+        target_season_id = season_id
+        if target_season_id is None:
+            act = get_active_season()
+            target_season_id = act["id"] if act else 1
+
+        if division_id is not None:
+            cursor.execute(
+                "SELECT round_number, is_open, deadline, division_id, season_id FROM rounds WHERE (season_id = ? OR season_id IS NULL) AND division_id = ?",
+                (target_season_id, division_id)
+            )
+        else:
+            cursor.execute(
+                "SELECT round_number, is_open, deadline, division_id, season_id FROM rounds WHERE (season_id = ? OR season_id IS NULL)",
+                (target_season_id,)
+            )
         rounds_rows = cursor.fetchall()
 
         round_info_map: dict[int, dict] = {}
         max_open_round = 0
-        for r_num, is_open, dl_str in rounds_rows:
+        for row in rounds_rows:
+            r_num = row["round_number"]
+            is_open = row["is_open"]
+            dl_str = row["deadline"]
             parsed_dl = parse_flexible_datetime(dl_str)
             if is_open and r_num > max_open_round:
                 max_open_round = r_num
@@ -4657,17 +5179,33 @@ def get_all_unplayed_league_matches() -> list[dict]:
                 "deadline_dt": parsed_dl
             }
 
-        cursor.execute("""
-            SELECT 
-                m.id, m.round_number, m.player1_team, m.player2_team
-            FROM matches m
-            WHERE (m.tournament_type IS NULL OR m.tournament_type = 'league')
-              AND m.status = 'pending'
-            ORDER BY m.round_number ASC, m.id ASC
-        """)
+        if division_id is not None:
+            cursor.execute("""
+                SELECT 
+                    m.id, m.round_number, m.player1_team, m.player2_team, m.division_id, m.season_id
+                FROM matches m
+                WHERE (m.tournament_type IS NULL OR m.tournament_type = 'league')
+                  AND m.status = 'pending'
+                  AND m.division_id = ?
+                  AND (m.season_id = ? OR m.season_id IS NULL)
+                ORDER BY m.round_number ASC, m.id ASC
+            """, (division_id, target_season_id))
+        else:
+            cursor.execute("""
+                SELECT 
+                    m.id, m.round_number, m.player1_team, m.player2_team, m.division_id, m.season_id
+                FROM matches m
+                WHERE (m.tournament_type IS NULL OR m.tournament_type = 'league')
+                  AND m.status = 'pending'
+                  AND (m.season_id = ? OR m.season_id IS NULL)
+                ORDER BY m.round_number ASC, m.id ASC
+            """, (target_season_id,))
         matches = [dict(row) for row in cursor.fetchall()]
 
-        cursor.execute("SELECT telegram_id, username, team_name FROM users WHERE team_name IS NOT NULL")
+        if division_id is not None:
+            cursor.execute("SELECT telegram_id, username, team_name, division_id FROM users WHERE team_name IS NOT NULL AND (division_id = ? OR division_id IS NULL)", (division_id,))
+        else:
+            cursor.execute("SELECT telegram_id, username, team_name, division_id FROM users WHERE team_name IS NOT NULL")
         user_rows = [dict(r) for r in cursor.fetchall()]
 
         def get_team_owner(t_name: str | None) -> dict | None:
@@ -4796,26 +5334,44 @@ def get_last_debt_12h_reminder(match_id: int) -> datetime.datetime | None:
         return parse_flexible_datetime(row["sent_at"])
 
 
-def get_detailed_overdue_matches() -> list[dict]:
+def get_detailed_overdue_matches(division_id: int | None = None, season_id: int | None = None) -> list[dict]:
     """
     Retrieve all pending league matches that are legitimately overdue:
     - Round has an expired deadline (deadline_dt <= now).
     - Or round is currently open (is_open = 1) without a deadline, and start_dt <= now.
     - Or round is a past round (rn < max_open_round or is_open = 0 with unplayed matches).
     - Club participants are strictly resolved from current owners in users table.
+    - Strictly filtered by division_id and season_id.
     """
     with transaction() as conn:
         cursor = conn.cursor()
         now = datetime.datetime.now()
         start_dt = get_debt_tracking_start_datetime()
 
+        target_season_id = season_id
+        if target_season_id is None:
+            act = get_active_season()
+            target_season_id = act["id"] if act else 1
+
         # 1. Fetch rounds status
-        cursor.execute("SELECT round_number, is_open, deadline FROM rounds")
+        if division_id is not None:
+            cursor.execute(
+                "SELECT round_number, is_open, deadline, division_id, season_id FROM rounds WHERE (season_id = ? OR season_id IS NULL) AND division_id = ?",
+                (target_season_id, division_id)
+            )
+        else:
+            cursor.execute(
+                "SELECT round_number, is_open, deadline, division_id, season_id FROM rounds WHERE (season_id = ? OR season_id IS NULL)",
+                (target_season_id,)
+            )
         rounds_rows = cursor.fetchall()
 
         round_info_map: dict[int, dict] = {}
         max_open_round = 0
-        for r_num, is_open, dl_str in rounds_rows:
+        for row in rounds_rows:
+            r_num = row["round_number"]
+            is_open = row["is_open"]
+            dl_str = row["deadline"]
             parsed_dl = parse_flexible_datetime(dl_str)
             if is_open and r_num > max_open_round:
                 max_open_round = r_num
@@ -4826,21 +5382,40 @@ def get_detailed_overdue_matches() -> list[dict]:
             }
 
         # 2. Fetch pending league matches
-        cursor.execute("""
-            SELECT 
-                m.id, m.round_number, COALESCE(m.is_extended, 0) AS is_extended,
-                COALESCE(m.frozen_seconds, 0) AS frozen_seconds,
-                m.frozen_at,
-                m.player1_team, m.player2_team
-            FROM matches m
-            WHERE (m.tournament_type IS NULL OR m.tournament_type = 'league')
-              AND m.status = 'pending'
-            ORDER BY m.round_number ASC, m.id ASC
-        """)
+        if division_id is not None:
+            cursor.execute("""
+                SELECT 
+                    m.id, m.round_number, COALESCE(m.is_extended, 0) AS is_extended,
+                    COALESCE(m.frozen_seconds, 0) AS frozen_seconds,
+                    m.frozen_at,
+                    m.player1_team, m.player2_team, m.division_id, m.season_id
+                FROM matches m
+                WHERE (m.tournament_type IS NULL OR m.tournament_type = 'league')
+                  AND m.status = 'pending'
+                  AND (m.division_id = ? OR m.division_id IS NULL)
+                  AND (m.season_id = ? OR m.season_id IS NULL)
+                ORDER BY m.round_number ASC, m.id ASC
+            """, (division_id, target_season_id))
+        else:
+            cursor.execute("""
+                SELECT 
+                    m.id, m.round_number, COALESCE(m.is_extended, 0) AS is_extended,
+                    COALESCE(m.frozen_seconds, 0) AS frozen_seconds,
+                    m.frozen_at,
+                    m.player1_team, m.player2_team, m.division_id, m.season_id
+                FROM matches m
+                WHERE (m.tournament_type IS NULL OR m.tournament_type = 'league')
+                  AND m.status = 'pending'
+                  AND (m.season_id = ? OR m.season_id IS NULL)
+                ORDER BY m.round_number ASC, m.id ASC
+            """, (target_season_id,))
         matches = [dict(row) for row in cursor.fetchall()]
 
         # 3. Load all active users mapped by team
-        cursor.execute("SELECT telegram_id, username, team_name, warn_count FROM users WHERE team_name IS NOT NULL")
+        if division_id is not None:
+            cursor.execute("SELECT telegram_id, username, team_name, warn_count, division_id FROM users WHERE team_name IS NOT NULL AND (division_id = ? OR division_id IS NULL)", (division_id,))
+        else:
+            cursor.execute("SELECT telegram_id, username, team_name, warn_count, division_id FROM users WHERE team_name IS NOT NULL")
         user_rows = [dict(r) for r in cursor.fetchall()]
 
         def get_team_owner(t_name: str | None) -> dict | None:
@@ -4949,13 +5524,17 @@ def is_match_overdue(match_id: int) -> bool:
         if cursor.fetchone():
             return True
 
-        cursor.execute("SELECT round_number FROM matches WHERE id = ?", (match_id,))
+        cursor.execute("SELECT round_number, division_id FROM matches WHERE id = ?", (match_id,))
         row = cursor.fetchone()
         if not row:
             return False
         rn = row["round_number"]
+        m_div_id = row["division_id"]
 
-        cursor.execute("SELECT is_open, deadline FROM rounds WHERE round_number = ?", (rn,))
+        if m_div_id is not None:
+            cursor.execute("SELECT is_open, deadline FROM rounds WHERE division_id = ? AND round_number = ?", (m_div_id, rn))
+        else:
+            cursor.execute("SELECT is_open, deadline FROM rounds WHERE round_number = ? LIMIT 1", (rn,))
         r_row = cursor.fetchone()
         if not r_row:
             return False
@@ -4965,7 +5544,10 @@ def is_match_overdue(match_id: int) -> bool:
         start_dt = get_debt_tracking_start_datetime()
         now = datetime.datetime.now()
 
-        cursor.execute("SELECT MAX(round_number) FROM rounds WHERE is_open = 1")
+        if m_div_id is not None:
+            cursor.execute("SELECT MAX(round_number) FROM rounds WHERE is_open = 1 AND division_id = ?", (m_div_id,))
+        else:
+            cursor.execute("SELECT MAX(round_number) FROM rounds WHERE is_open = 1")
         max_row = cursor.fetchone()
         max_open = max_row[0] if max_row and max_row[0] is not None else 0
 
@@ -4982,6 +5564,28 @@ def is_match_overdue(match_id: int) -> bool:
             return now >= start_dt
 
         return False
+
+
+def division_has_played_matches(division_id: int | None = None, season_id: int | None = None) -> bool:
+    """Check if any match in the division and season has already been confirmed or completed."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        query = "SELECT 1 FROM matches WHERE status IN ('confirmed', 'completed')"
+        params = []
+        if division_id is not None:
+            query += " AND division_id = ?"
+            params.append(division_id)
+        if season_id is not None:
+            query += " AND season_id = ?"
+            params.append(season_id)
+        else:
+            act = get_active_season()
+            if act:
+                query += " AND (season_id = ? OR season_id IS NULL)"
+                params.append(act["id"])
+        query += " LIMIT 1"
+        cursor.execute(query, tuple(params))
+        return cursor.fetchone() is not None
 
 
 def find_user_by_team(team_name: str | None) -> dict | None:
@@ -5321,26 +5925,37 @@ def _parse_round_deadline(dl_str: str | None) -> datetime.datetime | None:
         return None
 
 
-def get_open_betting_tours() -> list[dict]:
+def get_open_betting_tours(division_id: int | None = None, season_id: int | None = None) -> list[dict]:
     """
     Retrieve all currently open tours that have unplayed matches
     and where the round deadline has not expired.
-    Strictly filters by rounds.is_open = 1.
+    Strictly filters by rounds.is_open = 1 and optional division_id/season_id.
     """
     with transaction() as conn:
         cursor = conn.cursor()
-        cursor.execute("""
+        query = """
             SELECT 
-                r.round_number, r.deadline,
+                r.round_number, r.deadline, r.division_id, r.season_id,
                 COUNT(m.id) as total_matches,
                 SUM(CASE WHEN m.status NOT IN ('confirmed', 'completed') THEN 1 ELSE 0 END) as unplayed_matches
             FROM rounds r
-            JOIN matches m ON r.round_number = m.round_number
+            JOIN matches m ON r.round_number = m.round_number AND (r.division_id = m.division_id OR r.division_id IS NULL OR m.division_id IS NULL)
             WHERE r.is_open = 1
-            GROUP BY r.round_number, r.deadline
+        """
+        params = []
+        if division_id is not None:
+            query += " AND (r.division_id = ? OR r.division_id IS NULL)"
+            params.append(division_id)
+        if season_id is not None:
+            query += " AND (r.season_id = ? OR r.season_id IS NULL)"
+            params.append(season_id)
+
+        query += """
+            GROUP BY r.round_number, r.deadline, r.division_id, r.season_id
             HAVING unplayed_matches > 0
             ORDER BY r.round_number ASC
-        """)
+        """
+        cursor.execute(query, params)
         rows = cursor.fetchall()
         now = datetime.datetime.now()
         open_tours = []
@@ -5356,27 +5971,32 @@ def get_open_betting_tours() -> list[dict]:
             open_tours.append({
                 "round_number": r_num,
                 "deadline": dl_str,
+                "division_id": row["division_id"],
+                "season_id": row["season_id"],
                 "total_matches": row["total_matches"],
                 "unplayed_matches": row["unplayed_matches"]
             })
         return open_tours
 
 
-def get_active_bet_markets(tour: int | None = None) -> list[dict]:
+def get_active_bet_markets(tour: int | None = None, division_id: int | None = None) -> list[dict]:
     """Retrieve open betting markets for unplayed matches strictly in open rounds."""
     with transaction() as conn:
         cursor = conn.cursor()
         query = """
-            SELECT bm.*, m.status as match_status, m.round_number, r.deadline, r.is_open
+            SELECT bm.*, m.status as match_status, m.round_number, m.division_id, r.deadline, r.is_open
             FROM bet_markets bm
             JOIN matches m ON bm.match_id = m.id
-            JOIN rounds r ON m.round_number = r.round_number
+            JOIN rounds r ON m.round_number = r.round_number AND (r.division_id = m.division_id OR r.division_id IS NULL OR m.division_id IS NULL)
             WHERE bm.is_active = 1 AND m.status NOT IN ('confirmed', 'completed') AND r.is_open = 1
         """
         params = []
         if tour is not None:
             query += " AND bm.tour = ?"
             params.append(tour)
+        if division_id is not None:
+            query += " AND (m.division_id = ? OR m.division_id IS NULL)"
+            params.append(division_id)
         query += " ORDER BY bm.tour ASC, bm.id ASC"
         cursor.execute(query, params)
         rows = cursor.fetchall()
@@ -5406,31 +6026,60 @@ def get_bet_market_by_match_id(match_id: int) -> dict | None:
         return dict(row) if row else None
 
 
+# Phase 5: Bet limits (server-side, cannot be bypassed by client)
+_MAX_BET: int = 50_000
+_MAX_PAYOUT: int = 500_000
+
+
 def place_user_bet(
     user_id: int,
     amount: int,
     selections: list[dict],
     idempotency_key: str | None = None
-) -> tuple[bool, int | str]:
+) -> tuple[bool, int | str | dict]:
     """
     Validate, deduct coins, and store user prediction coupon atomically.
     Supports single & express parlays, relational selections, and idempotency protection.
+    Phase 5: Adds MAX_BET/MAX_PAYOUT limits, ODDS_CHANGED detection, IDEMPOTENCY_KEY_REUSED.
     """
     import datetime
+    import hashlib as _hashlib
+    import json as _json
+
     if amount < 10:
         return False, "Минимальная сумма прогноза — 10 🪙."
+
+    if amount > _MAX_BET:
+        return False, {"error": "MAX_BET_EXCEEDED", "max_bet": _MAX_BET,
+                       "message": f"Максимальная сумма ставки — {_MAX_BET:,} 🪙."}
 
     if not selections or not isinstance(selections, list):
         return False, "Купон пуст."
 
+    # Compute idempotency payload hash (Phase 5)
+    _payload_for_hash = _json.dumps(
+        {"amount": amount, "sel": sorted(
+            [(s.get("match_id"), s.get("outcome") or s.get("selection_key")) for s in selections]
+        )},
+        sort_keys=True, separators=(',', ':')
+    )
+    _payload_hash = _hashlib.sha256(_payload_for_hash.encode()).hexdigest()
+
     with transaction() as conn:
         cursor = conn.cursor()
 
-        # Idempotency check
+        # Idempotency 2.0: key + payload hash check (Phase 5)
         if idempotency_key:
-            cursor.execute("SELECT id FROM user_bets WHERE idempotency_key = ?", (idempotency_key,))
+            cursor.execute(
+                "SELECT id, idempotency_payload_hash FROM user_bets WHERE user_id = ? AND idempotency_key = ?",
+                (user_id, idempotency_key)
+            )
             existing = cursor.fetchone()
             if existing:
+                existing_hash = existing["idempotency_payload_hash"]
+                if existing_hash and existing_hash != _payload_hash:
+                    return False, {"error": "IDEMPOTENCY_KEY_REUSED",
+                                   "message": "Ключ идемпотентности уже использован для другой ставки."}
                 return True, existing["id"]
 
         wallet = get_or_create_wallet(user_id)
@@ -5464,11 +6113,15 @@ def place_user_bet(
             if match_row["status"] not in ("scheduled", "pending", "live", "open"):
                 return False, f"Матч #{m_id} уже сыгран или завершен."
 
-            # Check round deadline if present
+            # Check round deadline if present (scoped by division)
             r_num = match_row["round_number"] if "round_number" in match_row.keys() else None
+            m_div_id = match_row["division_id"] if "division_id" in match_row.keys() and match_row["division_id"] is not None else 1
             if r_num:
-                cursor.execute("SELECT is_open, deadline FROM rounds WHERE round_number = ?", (r_num,))
+                cursor.execute("SELECT is_open, deadline FROM rounds WHERE division_id = ? AND round_number = ?", (m_div_id, r_num))
                 r_row = cursor.fetchone()
+                if not r_row:
+                    cursor.execute("SELECT is_open, deadline FROM rounds WHERE round_number = ? ORDER BY is_open DESC, id DESC LIMIT 1", (r_num,))
+                    r_row = cursor.fetchone()
                 if r_row:
                     if not r_row["is_open"]:
                         return False, f"Приём прогнозов на Тур {r_num} закрыт."
@@ -5490,26 +6143,34 @@ def place_user_bet(
             resolved_sel_id = sel_id
 
             if resolved_market_id and resolved_sel_id:
-                cursor.execute(
-                    "SELECT odds_value, status FROM market_selections WHERE id = ? AND market_id = ?",
-                    (resolved_sel_id, resolved_market_id)
-                )
+                cursor.execute("""
+                    SELECT ms.odds_value, ms.status as sel_status, m.status as mkt_status
+                    FROM market_selections ms
+                    JOIN markets m ON ms.market_id = m.id
+                    WHERE ms.id = ? AND ms.market_id = ?
+                """, (resolved_sel_id, resolved_market_id))
                 ms_row = cursor.fetchone()
-                if ms_row and ms_row["status"] == "active":
-                    odd_val = float(ms_row["odds_value"])
+                if ms_row:
+                    if ms_row["mkt_status"] in ("suspended", "closed", "settled") or ms_row["sel_status"] in ("locked", "suspended", "settled"):
+                        return False, f"Рынок на исход '{out_type}' временно приостановлен или закрыт."
+                    if ms_row["mkt_status"] in ("open", "active") and ms_row["sel_status"] == "active":
+                        odd_val = float(ms_row["odds_value"])
             
             if odd_val is None:
                 cursor.execute("""
-                    SELECT ms.id as sel_id, ms.market_id, ms.odds_value, ms.status, m.status as mkt_status
+                    SELECT ms.id as sel_id, ms.market_id, ms.odds_value, ms.status as sel_status, m.status as mkt_status
                     FROM market_selections ms
                     JOIN markets m ON ms.market_id = m.id
                     WHERE m.match_id = ? AND ms.selection_key = ?
                 """, (m_id, out_type))
                 ms_match = cursor.fetchone()
-                if ms_match and ms_match["mkt_status"] == "open" and ms_match["status"] == "active":
-                    odd_val = float(ms_match["odds_value"])
-                    resolved_market_id = ms_match["market_id"]
-                    resolved_sel_id = ms_match["sel_id"]
+                if ms_match:
+                    if ms_match["mkt_status"] in ("suspended", "closed", "settled") or ms_match["sel_status"] in ("locked", "suspended", "settled"):
+                        return False, f"Рынок на исход '{out_type}' временно приостановлен или закрыт."
+                    if ms_match["mkt_status"] in ("open", "active") and ms_match["sel_status"] == "active":
+                        odd_val = float(ms_match["odds_value"])
+                        resolved_market_id = ms_match["market_id"]
+                        resolved_sel_id = ms_match["sel_id"]
 
             if odd_val is None:
                 cursor.execute("SELECT * FROM bet_markets WHERE match_id = ? AND is_active = 1", (m_id,))
@@ -5534,6 +6195,21 @@ def place_user_bet(
                 return False, f"Исход '{out_type}' на матч #{m_id} недоступен или заблокирован."
 
             odd_val = round(float(odd_val), 2)
+
+            # Phase 5: ODDS_CHANGED detection — client odd vs server odd
+            client_odd = s.get("odd")
+            if client_odd is not None:
+                client_odd_rounded = round(float(client_odd), 2)
+                if abs(client_odd_rounded - odd_val) > 0.001:
+                    return False, {
+                        "error": "ODDS_CHANGED",
+                        "match_id": m_id,
+                        "outcome": out_type,
+                        "old_odd": client_odd_rounded,
+                        "new_odd": odd_val,
+                        "message": f"Коэффициент изменился: {client_odd_rounded} → {odd_val}"
+                    }
+
             total_odd *= max(1.01, odd_val)
             validated_items.append({
                 "match_id": m_id,
@@ -5547,21 +6223,29 @@ def place_user_bet(
         potential_win = int(round(amount * total_odd))
         bet_type = "single" if len(validated_items) == 1 else "express"
 
-        # 1. Deduct coins
+        # Phase 5: MAX_PAYOUT check
+        if potential_win > _MAX_PAYOUT:
+            return False, {"error": "MAX_PAYOUT_EXCEEDED", "max_payout": _MAX_PAYOUT,
+                           "message": f"Потенциальный выигрыш {potential_win:,} превышает максимум {_MAX_PAYOUT:,} 🪙."}
+
+        # 1. Deduct coins with strict balance check
         cursor.execute("""
             UPDATE user_wallets 
             SET balance = balance - ?, total_wagered = total_wagered + ?, bets_count = bets_count + 1, updated_at = CURRENT_TIMESTAMP
-            WHERE user_id = ?
-        """, (amount, amount, user_id))
+            WHERE user_id = ? AND balance >= ?
+        """, (amount, amount, user_id, amount))
+
+        if cursor.rowcount == 0:
+            return False, "Недостаточно монет на балансе."
 
         cursor.execute("SELECT balance FROM user_wallets WHERE user_id = ?", (user_id,))
         new_balance = cursor.fetchone()["balance"]
 
-        # 2. Insert user_bet
+        # 2. Insert user_bet (Phase 5: includes idempotency_payload_hash)
         cursor.execute("""
-            INSERT INTO user_bets (user_id, bet_type, amount, total_odd, potential_win, status, idempotency_key)
-            VALUES (?, ?, ?, ?, ?, 'pending', ?)
-        """, (user_id, bet_type, amount, total_odd, potential_win, idempotency_key))
+            INSERT INTO user_bets (user_id, bet_type, amount, total_odd, potential_win, status, idempotency_key, idempotency_payload_hash)
+            VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)
+        """, (user_id, bet_type, amount, total_odd, potential_win, idempotency_key, _payload_hash))
         bet_id = cursor.lastrowid
 
         # 3. Insert items
@@ -5588,7 +6272,74 @@ def place_user_bet(
         return True, bet_id
 
 
-def get_user_bets(user_id: int, status: str | None = None, limit: int = 20) -> list[dict]:
+def get_user_balance(user_id: int) -> int:
+    """Convenience getter for user wallet balance."""
+    wallet = get_or_create_wallet(user_id)
+    return wallet.get("balance", 0)
+
+
+def get_user_bet_by_id(arg1: int | None = None, arg2: int | None = None, user_id: int | None = None, bet_id: int | None = None) -> dict | None:
+    """
+    Fetch a single user prediction slip with its nested legs and status.
+    Supports:
+      - get_user_bet_by_id(user_id, bet_id)
+      - get_user_bet_by_id(bet_id, user_id)
+      - get_user_bet_by_id(user_id=user_id, bet_id=bet_id)
+      - get_user_bet_by_id(bet_id, user_id=user_id)
+    """
+    with transaction() as conn:
+        cursor = conn.cursor()
+        row = None
+        if user_id is not None and bet_id is not None:
+            cursor.execute("SELECT * FROM user_bets WHERE id = ? AND user_id = ?", (bet_id, user_id))
+            row = cursor.fetchone()
+        elif user_id is not None and arg1 is not None:
+            cursor.execute("SELECT * FROM user_bets WHERE id = ? AND user_id = ?", (arg1, user_id))
+            row = cursor.fetchone()
+        elif bet_id is not None and arg1 is not None:
+            cursor.execute("SELECT * FROM user_bets WHERE id = ? AND user_id = ?", (bet_id, arg1))
+            row = cursor.fetchone()
+        elif arg1 is not None and arg2 is not None:
+            cursor.execute("SELECT * FROM user_bets WHERE id = ? AND user_id = ?", (arg2, arg1))
+            row = cursor.fetchone()
+            if not row:
+                cursor.execute("SELECT * FROM user_bets WHERE id = ? AND user_id = ?", (arg1, arg2))
+                row = cursor.fetchone()
+        else:
+            return None
+
+        if not row:
+            return None
+        bet = dict(row)
+        target_bid = bet["id"]
+        cursor.execute(
+            """
+            SELECT bi.*, 
+                   COALESCE(m.player1_team, bm.team1_name, 'Хозяева') as team1_name,
+                   COALESCE(m.player2_team, bm.team2_name, 'Гости') as team2_name,
+                   COALESCE(m.round_number, bm.tour, 1) as tour,
+                   m.status as match_status,
+                   m.player1_score,
+                   m.player2_score,
+                   m.ht_score1,
+                   m.ht_score2,
+                   m.live_minute,
+                   mkt.market_name,
+                   ms.selection_name
+            FROM bet_items bi
+            LEFT JOIN matches m ON bi.match_id = m.id
+            LEFT JOIN bet_markets bm ON bi.match_id = bm.match_id
+            LEFT JOIN markets mkt ON bi.market_id = mkt.id
+            LEFT JOIN market_selections ms ON bi.selection_id = ms.id
+            WHERE bi.bet_id = ?
+            """,
+            (target_bid,)
+        )
+        bet["items"] = [dict(item) for item in cursor.fetchall()]
+        return bet
+
+
+def get_user_bets(user_id: int, status: str | None = None, limit: int = 20, offset: int = 0) -> list[dict]:
     """Fetch user's prediction slips with rich nested legs and match status."""
     with transaction() as conn:
         cursor = conn.cursor()
@@ -5597,8 +6348,9 @@ def get_user_bets(user_id: int, status: str | None = None, limit: int = 20) -> l
         if status and status != "all":
             query += " AND status = ?"
             params.append(status)
-        query += " ORDER BY id DESC LIMIT ?"
+        query += " ORDER BY id DESC LIMIT ? OFFSET ?"
         params.append(limit)
+        params.append(offset)
 
         cursor.execute(query, params)
         bets = [dict(r) for r in cursor.fetchall()]
@@ -5630,6 +6382,274 @@ def get_user_bets(user_id: int, status: str | None = None, limit: int = 20) -> l
             b["items"] = [dict(item) for item in cursor.fetchall()]
 
         return bets
+
+
+# ─── Phase 5: Betting Audit Log ──────────────────────────────────────────────
+
+def log_betting_audit(
+    actor_id: int,
+    action: str,
+    entity_type: str,
+    entity_id: int,
+    old_value: "dict | str | None" = None,
+    new_value: "dict | str | None" = None,
+    division_id: "int | None" = None,
+    season_id: "int | None" = None,
+) -> int:
+    """
+    Write a betting audit log entry to bet_audit_log.
+    Returns the new log entry ID.
+    """
+    import json as _json
+    old_v = _json.dumps(old_value, ensure_ascii=False) if old_value is not None else None
+    new_v = _json.dumps(new_value, ensure_ascii=False) if new_value is not None else None
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO bet_audit_log (actor_id, action, entity_type, entity_id, old_value, new_value, division_id, season_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (actor_id, action, entity_type, entity_id, old_v, new_v, division_id, season_id),
+        )
+        return cursor.lastrowid
+
+
+# Market lifecycle valid transitions (Phase 5)
+# Market lifecycle valid transitions — aligned with DB CHECK constraint:
+# markets.status IN ('open','suspended','closed','settled','voided')
+_MARKET_TRANSITIONS: dict[str, set[str]] = {
+    "open":      {"suspended", "closed"},
+    "suspended": {"open", "closed"},
+    "closed":    {"settled", "voided"},
+    "settled":   set(),   # terminal state
+    "voided":    set(),   # terminal state
+}
+
+
+def transition_market_status(market_id: int, new_status: str, actor_id: int) -> dict:
+    """
+    Atomically transition a market to a new lifecycle status.
+    Enforces the state machine: open→suspended→open→closed→settled/voided.
+    Status values must match DB CHECK: open, suspended, closed, settled, voided.
+    Returns dict with id, old_status, new_status.
+    Raises ValueError for forbidden transitions.
+    """
+    allowed_statuses = {"open", "suspended", "closed", "settled", "voided"}
+    if new_status not in allowed_statuses:
+        raise ValueError(f"Invalid market status: '{new_status}'")
+
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, status, match_id FROM markets WHERE id = ?", (market_id,))
+        row = cursor.fetchone()
+        if not row:
+            raise ValueError(f"Market #{market_id} not found.")
+
+        current_status = row["status"]
+        allowed_next = _MARKET_TRANSITIONS.get(current_status, set())
+
+        if new_status not in allowed_next:
+            raise ValueError(
+                f"Forbidden market transition: {current_status!r} → {new_status!r} for market #{market_id}."
+            )
+
+        cursor.execute(
+            "UPDATE markets SET status = ? WHERE id = ?",
+            (new_status, market_id),
+        )
+
+        # Fetch division_id via match
+        division_id = None
+        cursor.execute("SELECT division_id FROM matches WHERE id = ?", (row["match_id"],))
+        m = cursor.fetchone()
+        if m:
+            division_id = m["division_id"]
+
+    # Log outside of above transaction to avoid nested transaction issues with log_betting_audit
+    log_betting_audit(
+        actor_id=actor_id,
+        action=f"market_{new_status}",
+        entity_type="market",
+        entity_id=market_id,
+        old_value={"status": current_status},
+        new_value={"status": new_status},
+        division_id=division_id,
+    )
+
+    return {"id": market_id, "old_status": current_status, "new_status": new_status}
+
+
+def update_selection_odds(selection_id: int, new_odd: float, actor_id: int) -> dict:
+    """
+    Update a market selection's odds, increment odds_version, store previous_odds, and log audit.
+    Returns dict with selection_id, old_odd, new_odd.
+    """
+    if new_odd <= 1.00:
+        raise ValueError("Odds must be greater than 1.00.")
+
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id, odds_value, market_id FROM market_selections WHERE id = ?",
+            (selection_id,),
+        )
+        row = cursor.fetchone()
+        if not row:
+            raise ValueError(f"Selection #{selection_id} not found.")
+
+        old_odd = float(row["odds_value"])
+        new_odd = round(float(new_odd), 2)
+
+        cursor.execute(
+            """
+            UPDATE market_selections
+            SET previous_odds = odds_value,
+                odds_value = ?,
+                odds_version = odds_version + 1,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (new_odd, selection_id),
+        )
+
+        # Also record in odds_history if table exists
+        try:
+            cursor.execute(
+                """
+                INSERT INTO odds_history (selection_id, old_odds, new_odds, changed_by)
+                VALUES (?, ?, ?, ?)
+                """,
+                (selection_id, old_odd, new_odd, actor_id),
+            )
+        except Exception:
+            pass  # odds_history may have different schema — skip silently
+
+    log_betting_audit(
+        actor_id=actor_id,
+        action="odds_changed",
+        entity_type="selection",
+        entity_id=selection_id,
+        old_value={"odds_value": old_odd},
+        new_value={"odds_value": new_odd},
+    )
+
+    return {"selection_id": selection_id, "old_odd": old_odd, "new_odd": new_odd}
+
+
+def void_user_bet(bet_id: int, actor_id: int) -> dict:
+    """
+    Void a user bet and refund the stake.
+    Only pending/won/lost bets that have not already been voided can be voided.
+    Returns dict with bet_id, refunded_amount, user_id.
+    """
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM user_bets WHERE id = ?", (bet_id,))
+        bet = cursor.fetchone()
+        if not bet:
+            raise ValueError(f"Bet #{bet_id} not found.")
+
+        if bet["status"] in ("refunded", "cancelled", "void"):
+            raise ValueError(f"Bet #{bet_id} is already {bet['status']}.")
+
+        stake = bet["amount"]
+        user_id = bet["user_id"]
+
+        # Void the bet and all its items
+        cursor.execute(
+            "UPDATE user_bets SET status = 'refunded', actual_payout = ?, settled_at = CURRENT_TIMESTAMP WHERE id = ? AND settled_at IS NULL",
+            (stake, bet_id),
+        )
+        cursor.execute(
+            "UPDATE bet_items SET status = 'refunded' WHERE bet_id = ? AND status = 'pending'",
+            (bet_id,),
+        )
+
+        # Refund stake
+        get_or_create_wallet(user_id)
+        cursor.execute(
+            "UPDATE user_wallets SET balance = balance + ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?",
+            (stake, user_id),
+        )
+        cursor.execute("SELECT balance FROM user_wallets WHERE user_id = ?", (user_id,))
+        bal_after = cursor.fetchone()["balance"]
+
+        cursor.execute(
+            """
+            INSERT INTO coin_transactions (user_id, amount, transaction_type, reference_id, reference_type, balance_after)
+            VALUES (?, ?, 'admin_refund', ?, 'bet', ?)
+            """,
+            (user_id, stake, bet_id, bal_after),
+        )
+
+    log_betting_audit(
+        actor_id=actor_id,
+        action="bet_voided",
+        entity_type="bet",
+        entity_id=bet_id,
+        old_value={"status": bet["status"], "amount": stake},
+        new_value={"status": "refunded", "refund": stake},
+    )
+
+    return {"bet_id": bet_id, "user_id": user_id, "refunded_amount": stake}
+
+
+def get_betting_audit_log(
+    limit: int = 50,
+    offset: int = 0,
+    actor_id: "int | None" = None,
+    entity_type: "str | None" = None,
+    division_id: "int | None" = None,
+) -> list[dict]:
+    """Fetch betting audit log entries with optional filters."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        query = "SELECT * FROM bet_audit_log WHERE 1=1"
+        params: list = []
+        if actor_id is not None:
+            query += " AND actor_id = ?"
+            params.append(actor_id)
+        if entity_type is not None:
+            query += " AND entity_type = ?"
+            params.append(entity_type)
+        if division_id is not None:
+            query += " AND division_id = ?"
+            params.append(division_id)
+        query += " ORDER BY id DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+        cursor.execute(query, params)
+        return [dict(r) for r in cursor.fetchall()]
+
+
+def get_tournament_standings(division_id: int | None = None, season_id: int | None = None) -> list[dict]:
+    """Alias for get_standings with division/season scoping."""
+    return get_standings(division_id=division_id, season_id=season_id)
+
+
+def get_tournament_results(limit: int = 30, division_id: int | None = None, season_id: int | None = None) -> list[dict]:
+    """Retrieve finished matches archive filtered by division and season."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        query = """
+            SELECT m.*, 
+                   COALESCE(m.player1_team, 'Хозяева') as team1_name,
+                   COALESCE(m.player2_team, 'Гости') as team2_name
+            FROM matches m
+            WHERE m.status IN ('confirmed', 'completed', 'finished')
+              AND m.player1_score IS NOT NULL AND m.player2_score IS NOT NULL
+        """
+        params = []
+        if division_id is not None:
+            query += " AND m.division_id = ?"
+            params.append(division_id)
+        if season_id is not None:
+            query += " AND (m.season_id = ? OR m.season_id IS NULL)"
+            params.append(season_id)
+        query += " ORDER BY m.round_number DESC, m.id DESC LIMIT ?"
+        params.append(limit)
+        cursor.execute(query, params)
+        return [dict(r) for r in cursor.fetchall()]
 
 
 def settle_match_bets(match_id: int, score1: int, score2: int) -> list[dict]:
@@ -6024,8 +7044,23 @@ def create_division(
         return cursor.lastrowid
 
 
+def ensure_canonical_divisions() -> None:
+    """Ensure the 5 canonical divisions exist in the database."""
+    with transaction() as conn:
+        conn.cursor().execute("""
+            INSERT OR IGNORE INTO divisions (id, tournament_id, name, code, season_id, sort_order)
+            VALUES 
+                (1, 1, 'Дивизион 1', 'DIV_1', 1, 1),
+                (2, 1, 'Дивизион 2', 'DIV_2', 1, 2),
+                (3, 1, 'Дивизион 3', 'DIV_3', 1, 3),
+                (4, 1, 'Дивизион 4', 'DIV_4', 1, 4),
+                (5, 1, 'Дивизион 5', 'DIV_5', 1, 5)
+        """)
+
+
 def get_divisions(is_active: bool | None = None, only_active: bool | None = None) -> list[dict]:
     """Retrieve all divisions, optionally filtered by is_active status."""
+    ensure_canonical_divisions()
     if only_active is not None and is_active is None:
         is_active = only_active
     with transaction() as conn:
@@ -6342,25 +7377,18 @@ def unbind_division_topic(group_chat_id: int, message_thread_id: int) -> dict | 
 
 
 def get_topic_binding(group_chat_id: int | None, message_thread_id: int) -> dict | None:
-    """Retrieve full binding record for a given chat and thread."""
+    """Retrieve full binding record strictly for a given chat and thread."""
+    if group_chat_id is None:
+        return None
     with transaction() as conn:
         cursor = conn.cursor()
-        if group_chat_id is not None:
-            cursor.execute("""
-                SELECT dt.*, d.name as division_name, d.code as division_code
-                FROM division_topics dt
-                JOIN divisions d ON dt.division_id = d.id
-                WHERE (dt.group_chat_id = ? OR dt.group_chat_id IS NULL) AND dt.message_thread_id = ?
-                ORDER BY dt.group_chat_id DESC LIMIT 1
-            """, (group_chat_id, message_thread_id))
-        else:
-            cursor.execute("""
-                SELECT dt.*, d.name as division_name, d.code as division_code
-                FROM division_topics dt
-                JOIN divisions d ON dt.division_id = d.id
-                WHERE dt.message_thread_id = ?
-                LIMIT 1
-            """, (message_thread_id,))
+        cursor.execute("""
+            SELECT dt.*, d.name as division_name, d.code as division_code
+            FROM division_topics dt
+            JOIN divisions d ON dt.division_id = d.id
+            WHERE dt.group_chat_id = ? AND dt.message_thread_id = ?
+            ORDER BY dt.id DESC LIMIT 1
+        """, (group_chat_id, message_thread_id))
         row = cursor.fetchone()
         if row:
             d = dict(row)
@@ -6474,31 +7502,21 @@ def get_division_by_topic(message_thread_id: int, topic_type: str = "drafts", gr
                 JOIN division_topics dt ON d.id = dt.division_id
                 WHERE dt.message_thread_id = ? 
                   AND (dt.topic_type = ? OR dt.topic_type = ?)
-                  AND (dt.group_chat_id = ? OR dt.group_chat_id IS NULL)
-                ORDER BY dt.group_chat_id DESC LIMIT 1
+                  AND dt.group_chat_id = ?
+                LIMIT 1
             """, (message_thread_id, norm_type, topic_type, group_chat_id))
         else:
             cursor.execute("""
                 SELECT d.*
                 FROM divisions d
                 JOIN division_topics dt ON d.id = dt.division_id
-                WHERE dt.message_thread_id = ? AND (dt.topic_type = ? OR dt.topic_type = ?)
+                WHERE dt.message_thread_id = ? 
+                  AND (dt.topic_type = ? OR dt.topic_type = ?)
+                  AND dt.group_chat_id IS NULL
                 LIMIT 1
             """, (message_thread_id, norm_type, topic_type))
         row = cursor.fetchone()
         return dict(row) if row else None
-
-
-
-def clear_matches_by_division(division_id: int) -> None:
-    """
-    SAFE fixture clearance: deletes only matches belonging to a specific division.
-    Leaves legacy matches (division_id IS NULL) and other divisions intact.
-    """
-    with transaction() as conn:
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM matches WHERE division_id = ?", (division_id,))
-        cursor.execute("DELETE FROM rounds WHERE division_id = ?", (division_id,))
 
 
 

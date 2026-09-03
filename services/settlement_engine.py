@@ -42,12 +42,13 @@ def settle_match_predictions(
             logger.warning(f"Cannot settle match #{match_id}: match not found.")
             return []
 
+        target_status = "confirmed" if match_row["status"] in ("confirmed", "completed") else match_status
         cursor.execute("""
             UPDATE matches
             SET player1_score = ?, player2_score = ?, ht_score1 = ?, ht_score2 = ?,
                 status = ?, played_at = CURRENT_TIMESTAMP
             WHERE id = ?
-        """, (score1, score2, ht_score1, ht_score2, match_status, match_id))
+        """, (score1, score2, ht_score1, ht_score2, target_status, match_id))
 
         # 2. Settle relational markets & selections
         cursor.execute("SELECT * FROM markets WHERE match_id = ?", (match_id,))
@@ -67,11 +68,12 @@ def settle_match_predictions(
                     ht_score2=ht_score2
                 )
                 # Keep active/voided status or store result
+                new_sel_status = "voided" if sel_result == "voided" else "locked"
                 cursor.execute("""
                     UPDATE market_selections
                     SET status = ?
                     WHERE id = ?
-                """, (sel_result, s["id"]))
+                """, (new_sel_status, s["id"]))
 
             cursor.execute("""
                 UPDATE markets
@@ -164,6 +166,9 @@ def settle_match_predictions(
                     WHERE id = ? AND settled_at IS NULL
                 """, (stake, b_id))
 
+                if cursor.rowcount == 0:
+                    continue
+
                 database.get_or_create_wallet(u_id)
                 cursor.execute("""
                     UPDATE user_wallets
@@ -203,6 +208,9 @@ def settle_match_predictions(
                 WHERE id = ? AND settled_at IS NULL
             """, (payout, b_id))
 
+            if cursor.rowcount == 0:
+                continue
+
             database.get_or_create_wallet(u_id)
             cursor.execute("""
                 UPDATE user_wallets
@@ -240,3 +248,74 @@ def settle_match_predictions(
             })
 
     return payout_notifications
+
+
+def refund_match_bets(match_id: int) -> list[dict]:
+    """
+    Cancel/refund all pending bets for a specific match.
+    Marks bet_items as 'refunded'.
+    For single bets: marks user_bets as 'refunded', refunds full stake to user wallet.
+    """
+    refund_notifications = []
+    with database.transaction() as conn:
+        cursor = conn.cursor()
+
+        # Update matches status to cancelled
+        cursor.execute("UPDATE matches SET status = 'cancelled' WHERE id = ?", (match_id,))
+
+        # Update bet items
+        cursor.execute("UPDATE bet_items SET status = 'refunded' WHERE match_id = ? AND status = 'pending'", (match_id,))
+
+        # Find all pending user_bets that have items from this match
+        cursor.execute("""
+            SELECT DISTINCT b.*
+            FROM user_bets b
+            JOIN bet_items bi ON b.id = bi.bet_id
+            WHERE bi.match_id = ? AND b.status = 'pending'
+        """, (match_id,))
+        bets = [dict(r) for r in cursor.fetchall()]
+
+        for bet in bets:
+            b_id = bet["id"]
+            u_id = bet["user_id"]
+            stake = bet["amount"]
+
+            cursor.execute("SELECT * FROM bet_items WHERE bet_id = ?", (b_id,))
+            items = cursor.fetchall()
+            all_refunded = all(it["status"] == "refunded" for it in items)
+
+            if bet["bet_type"] == "single" or all_refunded:
+                cursor.execute("""
+                    UPDATE user_bets
+                    SET status = 'refunded', actual_payout = ?, settled_at = CURRENT_TIMESTAMP
+                    WHERE id = ? AND settled_at IS NULL
+                """, (stake, b_id))
+
+                if cursor.rowcount > 0:
+                    database.get_or_create_wallet(u_id)
+                    cursor.execute("""
+                        UPDATE user_wallets
+                        SET balance = balance + ?, updated_at = CURRENT_TIMESTAMP
+                        WHERE user_id = ?
+                    """, (stake, u_id))
+
+                    cursor.execute("SELECT balance FROM user_wallets WHERE user_id = ?", (u_id,))
+                    bal_after = cursor.fetchone()["balance"]
+
+                    cursor.execute("""
+                        INSERT INTO coin_transactions (user_id, amount, transaction_type, reference_id, reference_type, balance_after)
+                        VALUES (?, ?, 'bet_refund', ?, 'bet', ?)
+                    """, (u_id, stake, b_id, bal_after))
+
+                    refund_notifications.append({
+                        "user_id": u_id,
+                        "bet_id": b_id,
+                        "status": "refunded",
+                        "amount": stake,
+                        "payout": stake
+                    })
+
+    return refund_notifications
+
+
+settle_match_result = settle_match_predictions

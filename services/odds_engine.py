@@ -309,8 +309,12 @@ def generate_match_markets(
     """
     if standings is None:
         try:
-            standings = database.get_standings()
-        except Exception:
+            m = database.get_match(match_id)
+            m_div = m.get("division_id") if m else None
+            m_season = m.get("season_id") if m else None
+            standings = database.get_standings(division_id=m_div, season_id=m_season)
+        except Exception as e:
+            logger.warning(f"Could not load standings for match #{match_id}: {e}")
             standings = []
 
     from services.betting_engine import _get_team_strength_score

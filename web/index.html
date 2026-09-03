@@ -40,8 +40,19 @@
       <!-- Daily Bonus Banner -->
       <div id="bonus-banner-container"></div>
 
+      <!-- Division Selector Tabs -->
+      <div class="division-tabs" id="lobby-division-tabs-container"></div>
+
       <!-- Tours Selector Tabs -->
       <div class="tour-tabs" id="tour-tabs-container"></div>
+
+      <!-- Match Status Filter Pills -->
+      <div class="category-pills" id="match-status-pills-container" style="margin-bottom: 8px;">
+        <button class="category-pill active" data-status="all">⚡ Все</button>
+        <button class="category-pill" data-status="open">🔥 Открытые</button>
+        <button class="category-pill" data-status="upcoming">⏰ Скоро</button>
+        <button class="category-pill" data-status="completed">✅ Завершённые</button>
+      </div>
 
       <!-- Category Filter Pills -->
       <div class="category-pills" id="category-pills-container">
@@ -87,6 +98,9 @@
         🏆 Турнирный Центр
       </div>
 
+      <!-- Division Selector Tabs for Tournaments -->
+      <div class="division-tabs" id="tournament-division-tabs-container" style="margin-bottom: 12px;"></div>
+
       <!-- Sub-tabs: Standings / Results / Top Scorers -->
       <div class="mc-tabs" style="margin-bottom: 14px;">
         <button class="mc-tab-btn active" id="btn-tab-standings">Таблица</button>
@@ -113,6 +127,7 @@
         <button class="category-pill" data-filter="pending">⏳ В игре</button>
         <button class="category-pill" data-filter="won">🎉 Выигрыши</button>
         <button class="category-pill" data-filter="lost">❌ Проигрыши</button>
+        <button class="category-pill" data-filter="refunded">🔄 Возврат</button>
       </div>
 
       <!-- Saved Draft Coupons Section -->

@@ -5,6 +5,7 @@ Cryptographic authentication and validation for Telegram WebApp initData.
 Uses HMAC-SHA256 with the bot token according to Telegram Mini Apps specifications.
 """
 
+import os
 import hmac
 import hashlib
 import urllib.parse
@@ -54,7 +55,7 @@ def validate_telegram_init_data(init_data_str: str, bot_token: str | None = None
 
         # 5. Check freshness (auth_date must not be older than 24 hours)
         auth_date = int(parsed.get("auth_date", 0))
-        if auth_date > 0 and (time.time() - auth_date > 86400 * 3): # 3 days grace
+        if auth_date > 0 and (time.time() - auth_date > 86400): # 24 hours max
             logger.warning(f"Expired initData auth_date: {auth_date}")
             return None
 
@@ -73,12 +74,13 @@ def validate_telegram_init_data(init_data_str: str, bot_token: str | None = None
 def get_authenticated_user(init_data_str: str) -> dict | None:
     """
     Extract and authenticate user info from initData.
-    Also handles development/lab bypass if test mode is explicitly enabled.
+    Also handles development/lab bypass if ALLOW_DEV_AUTH_BYPASS is explicitly enabled.
     """
     user_info = validate_telegram_init_data(init_data_str)
     if not user_info:
-        # Dev / Sandbox Fallback for local browser testing with mock admin
-        if init_data_str and init_data_str.startswith("mock_admin_"):
+        # Dev / Sandbox Fallback for local testing, STRICTLY gated by environment flag
+        allow_dev_bypass = os.getenv("ALLOW_DEV_AUTH_BYPASS", "").strip().lower() in ("1", "true", "yes")
+        if allow_dev_bypass and init_data_str and init_data_str.startswith("mock_admin_"):
             try:
                 u_id = int(init_data_str.replace("mock_admin_", ""))
                 if is_admin(u_id):
@@ -90,12 +92,17 @@ def get_authenticated_user(init_data_str: str) -> dict | None:
     return user_info
 
 
+validate_telegram_data = validate_telegram_init_data
+
+
 def check_user_access(user_id: int) -> bool:
-    """Check if user has access to Logovo.bet (restricted to admins during Lab mode)."""
+    """Check if user has access to Logovo.bet."""
+    if not user_id or user_id <= 0:
+        return False
     if is_admin(user_id):
         return True
     try:
-        flag = database.get_feature_flag("betting_market", default="admin_only")
-        return flag == "public"
+        flag = database.get_feature_flag("betting_market", default="public")
+        return flag in ("public", "all", "enabled")
     except Exception:
-        return False
+        return True

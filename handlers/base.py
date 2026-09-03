@@ -2,12 +2,13 @@ import os
 import sys
 import io
 import datetime
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardRemove
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardRemove, WebAppInfo
 from telegram.ext import ContextTypes
 import html
 import asyncio
 import database
 import logging
+import config
 from config import ADMIN_IDS, CLUBS
 from services.graphics.table_generator import generate_league_table_image
 from services.graphics import top_stats_generator
@@ -21,15 +22,21 @@ from constants import (
 logger = logging.getLogger(__name__)
 
 def is_admin(telegram_id: int) -> bool:
-    """Check if the user is in the configured Admin IDs or has admin role in database."""
+    """Check if the user is in configured Admin IDs, has admin role, or is assigned as a division admin."""
     if not telegram_id:
         return False
-    if telegram_id in ADMIN_IDS:
+    import config
+    if telegram_id in config.ADMIN_IDS:
         return True
     try:
         user = database.get_user(telegram_id)
-        if user and user.get("role") == "admin":
+        if user and (user["role"] if "role" in user.keys() else None) in ("admin", "division_admin"):
             return True
+        with database.transaction() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT 1 FROM division_admins WHERE user_id = ?", (telegram_id,))
+            if cur.fetchone():
+                return True
     except Exception:
         pass
     return False
@@ -70,10 +77,18 @@ def admin_only(func):
 
 def get_main_inline_keyboard(telegram_id: int) -> InlineKeyboardMarkup:
     """Generate main InlineKeyboardMarkup based on the user's role (matched to screenshot)."""
-    keyboard = [
+    keyboard = []
+    
+    webapp_url = getattr(config, "WEBAPP_URL", "")
+    if webapp_url and (webapp_url.startswith("https://") or "localhost" in webapp_url):
+        keyboard.append([InlineKeyboardButton("🔥 Logovo.bet (Mini App)", web_app=WebAppInfo(url=webapp_url))])
+    elif webapp_url and webapp_url.startswith("http"):
+        keyboard.append([InlineKeyboardButton("🔥 Logovo.bet", url=webapp_url)])
+
+    keyboard.extend([
         [InlineKeyboardButton("👤 Мой Кабинет", callback_data=CB_MENU_CABINET)],
         [InlineKeyboardButton("🏆 Турниры", callback_data=CB_MENU_TOURNAMENTS)]
-    ]
+    ])
     if is_admin(telegram_id):
         keyboard.append([InlineKeyboardButton("👑 Админ-панель", callback_data=CB_ADMIN_MAIN_MENU)])
         
@@ -777,19 +792,24 @@ async def group_table_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     division_id = None
     division_name = None
 
-    # Check topic ID
+    # Check topic ID with strict chat isolation
+    chat_id = update.effective_chat.id if update.effective_chat else None
     thread_id = update.message.message_thread_id if update.message else None
-    if thread_id:
-        div_id = await asyncio.to_thread(database.get_division_by_topic, thread_id, "tables")
-        if not div_id:
-            div_id = await asyncio.to_thread(database.get_division_by_topic, thread_id, "drafts")
-        if not div_id:
-            div_id = await asyncio.to_thread(database.get_division_by_topic, thread_id, "results")
-        if div_id:
-            div = await asyncio.to_thread(database.get_division, div_id)
-            if div:
-                division_id = div["id"]
-                division_name = div["name"]
+    if thread_id and chat_id:
+        from services.topic_cache import topic_cache
+        binding = topic_cache.get_by_topic(chat_id, thread_id)
+        if not binding:
+            binding = await asyncio.to_thread(database.get_topic_binding, chat_id, thread_id)
+        if binding:
+            division_id = binding.get("division_id")
+            division_name = binding.get("division_name")
+        else:
+            for t_type in ("tables", "drafts", "results", "reports"):
+                div = await asyncio.to_thread(database.get_division_by_topic, thread_id, t_type, group_chat_id=chat_id)
+                if div:
+                    division_id = div.get("id")
+                    division_name = div.get("name")
+                    break
 
     # Check command arguments: /table [div_id_or_code]
     args = context.args or []
@@ -808,7 +828,7 @@ async def group_table_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         standings = await asyncio.to_thread(database.get_standings, division_id=division_id)
         form_map = await asyncio.to_thread(database.get_teams_recent_form, limit=5, division_id=division_id)
         img_buf = await asyncio.to_thread(generate_league_table_image, standings=standings, form_map=form_map, division_name=division_name)
-        caption = f"🏆 <b>Турнирная таблица дивизиона «{html.escape(division_name)}»</b>"
+        caption = f"🏆 <b>Турнирная таблица дивизиона «{html.escape(division_name or '')}»</b>"
         refresh_cb = f"refresh_div_table_{division_id}"
     else:
         standings = await asyncio.to_thread(database.get_standings)
@@ -861,26 +881,47 @@ async def format_league_table_text() -> str:
 
     return "\n".join(lines)
 
-async def post_league_table_to_reports(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Post or update the graphic league table in the reports topic.
-    Edits the previously posted table image (message id kept in config `league_table_msg_id`)
-    so the topic does not fill up with duplicates. Falls back to posting a new one if the old
-    message is gone. Also refreshes the saved message id after any change."""
+async def post_league_table_to_reports(context: ContextTypes.DEFAULT_TYPE, division_id: int | None = None) -> None:
+    """Post or update the graphic league table in the reports topic for a specific division or globally."""
     from telegram.error import BadRequest, TelegramError
+    from services.topic_cache import topic_cache
 
-    reports_topic_id, group_id = await asyncio.gather(
-        asyncio.to_thread(database.get_config, "reports_topic_id"),
-        asyncio.to_thread(database.get_group_id)
-    )
-    if not group_id:
-        return
+    if division_id is not None:
+        div_topic = topic_cache.get_by_division(division_id, "reports")
+        if not div_topic:
+            div_topic = topic_cache.get_by_division(division_id, "tables")
+        if not div_topic:
+            topics_map = await asyncio.to_thread(database.get_division_topics_map, division_id)
+            div_topic = topics_map.get("reports") or topics_map.get("tables")
 
-    img_buf = await asyncio.to_thread(generate_league_table_image)
-    caption = "🏆 <b>ТЕКУЩАЯ ТУРНИРНАЯ ТАБЛИЦА ЛИГИ</b>"
-    keyboard = [[InlineKeyboardButton("🔄 Обновить таблицу", callback_data="refresh_league_table_topic")]]
-    markup = InlineKeyboardMarkup(keyboard)
+        if not div_topic or not div_topic.get("group_chat_id") or not div_topic.get("message_thread_id"):
+            logger.warning(f"No reports/tables topic configured for division {division_id}; skipping table posting.")
+            return
 
-    existing_raw = await asyncio.to_thread(database.get_config, "league_table_msg_id")
+        group_id = div_topic["group_chat_id"]
+        reports_topic_id = div_topic["message_thread_id"]
+        div_record = await asyncio.to_thread(database.get_division, division_id)
+        division_name = div_record["name"] if div_record else f"Дивизион {division_id}"
+
+        standings = await asyncio.to_thread(database.get_standings, division_id=division_id)
+        form_map = await asyncio.to_thread(database.get_teams_recent_form, limit=5, division_id=division_id)
+        img_buf = await asyncio.to_thread(generate_league_table_image, standings=standings, form_map=form_map, division_name=division_name)
+        caption = f"🏆 <b>ТУРНИРНАЯ ТАБЛИЦА — {html.escape(division_name).upper()}</b>"
+        markup = InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Обновить таблицу", callback_data=f"refresh_div_table_{division_id}")]])
+        config_key = f"league_table_msg_id_div_{division_id}"
+    else:
+        reports_topic_id, group_id = await asyncio.gather(
+            asyncio.to_thread(database.get_config, "reports_topic_id"),
+            asyncio.to_thread(database.get_group_id)
+        )
+        if not group_id:
+            return
+        img_buf = await asyncio.to_thread(generate_league_table_image)
+        caption = "🏆 <b>ТЕКУЩАЯ ТУРНИРНАЯ ТАБЛИЦА ЛИГИ</b>"
+        markup = InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Обновить таблицу", callback_data="refresh_league_table_topic")]])
+        config_key = "league_table_msg_id"
+
+    existing_raw = await asyncio.to_thread(database.get_config, config_key)
     existing_id = int(existing_raw) if str(existing_raw or "").strip().isdigit() else None
 
     if existing_id:
@@ -897,14 +938,14 @@ async def post_league_table_to_reports(context: ContextTypes.DEFAULT_TYPE) -> No
             if "message is not modified" in str(e).lower():
                 return
         except (BadRequest, TelegramError):
-            pass  # Deleted / too old — repost a fresh table
+            pass  # Deleted / too old — repost fresh
 
     try:
         kwargs = {"chat_id": group_id, "photo": img_buf, "caption": caption, "parse_mode": "HTML", "reply_markup": markup}
         if reports_topic_id:
             kwargs["message_thread_id"] = int(reports_topic_id)
         msg = await context.bot.send_photo(**kwargs)
-        await asyncio.to_thread(database.set_config, "league_table_msg_id", str(msg.message_id))
+        await asyncio.to_thread(database.set_config, config_key, str(msg.message_id))
     except Exception:
         logger.exception("Failed to post graphic league table to reports topic")
 

@@ -10,7 +10,7 @@ import asyncio
 import logging
 from aiohttp import web
 
-from api.routes_wallet import handle_bootstrap, handle_claim_bonus, handle_leaderboard
+from api.routes_wallet import handle_bootstrap, handle_claim_bonus, handle_leaderboard, handle_get_wallet
 from api.routes_markets import handle_get_tours, handle_get_match_markets, handle_get_odds_history
 from api.routes_predictions import (
     handle_place_prediction,
@@ -29,6 +29,8 @@ from api.routes_matches import (
 from api.routes_tournaments import (
     handle_get_tournaments,
     handle_get_divisions,
+    handle_get_seasons,
+    handle_get_season_by_id,
     handle_get_standings,
     handle_get_results,
     handle_get_top_scorers
@@ -50,6 +52,14 @@ from api.routes_gamification import (
     handle_claim_achievement,
     handle_get_profile
 )
+from api.routes_admin_betting import (
+    handle_admin_list_markets,
+    handle_admin_transition_market,
+    handle_admin_update_odds,
+    handle_admin_list_bets,
+    handle_admin_void_bet,
+    handle_admin_audit_log,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +80,7 @@ async def cors_middleware(request: web.Request, handler):
             response = ex
 
     response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers["Access-Control-Allow-Methods"] = "GET, POST, DELETE, OPTIONS"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
     response.headers["Access-Control-Allow-Headers"] = "Content-Type, X-Telegram-Init-Data, Authorization"
     response.headers["Access-Control-Max-Age"] = "86400"
     return response
@@ -88,6 +98,7 @@ def create_app() -> web.Application:
 
     # 1. Wallet & Bootstrap
     app.router.add_get("/api/bootstrap", handle_bootstrap)
+    app.router.add_get("/api/wallet", handle_get_wallet)
     app.router.add_post("/api/bonus/claim", handle_claim_bonus)
     app.router.add_get("/api/leaderboard", handle_leaderboard)
 
@@ -110,9 +121,18 @@ def create_app() -> web.Application:
     app.router.add_get("/api/predictions/{id}", handle_get_prediction_detail)
     app.router.add_post("/api/predictions/{id}/repeat", handle_repeat_prediction)
 
-    # 5. Tournament Hub & Divisions
+    # Aliases for bets
+    app.router.add_post("/api/bets", handle_place_prediction)
+    app.router.add_get("/api/bets", handle_get_predictions)
+    app.router.add_get("/api/bets/{id}", handle_get_prediction_detail)
+
+    # 5. Tournament Hub & Divisions & Seasons
     app.router.add_get("/api/divisions", handle_get_divisions)
+    app.router.add_get("/api/seasons", handle_get_seasons)
+    app.router.add_get("/api/seasons/{id}", handle_get_season_by_id)
     app.router.add_get("/api/standings", handle_get_standings)
+    app.router.add_get("/api/table", handle_get_standings)
+    app.router.add_get("/api/results", handle_get_results)
     app.router.add_get("/api/tournaments", handle_get_tournaments)
     app.router.add_get("/api/tournaments/{id}/standings", handle_get_standings)
     app.router.add_get("/api/tournaments/{id}/results", handle_get_results)
@@ -133,7 +153,16 @@ def create_app() -> web.Application:
     app.router.add_get("/api/progression", handle_get_progression)
     app.router.add_get("/api/achievements", handle_get_achievements)
     app.router.add_post("/api/achievements/claim", handle_claim_achievement)
+    app.router.add_get("/api/profile", handle_get_profile)
     app.router.add_get("/api/profile/{user_id}", handle_get_profile)
+
+    # 8. Phase 5: Admin Betting Center
+    app.router.add_get("/api/admin/markets", handle_admin_list_markets)
+    app.router.add_post("/api/admin/markets/{id}/transition", handle_admin_transition_market)
+    app.router.add_put("/api/admin/markets/{id}/odds", handle_admin_update_odds)
+    app.router.add_get("/api/admin/bets", handle_admin_list_bets)
+    app.router.add_post("/api/admin/bets/{id}/void", handle_admin_void_bet)
+    app.router.add_get("/api/admin/audit-log", handle_admin_audit_log)
 
     # Static SPA Frontend & Assets
     app.router.add_get("/", handle_index)

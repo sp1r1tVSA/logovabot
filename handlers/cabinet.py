@@ -2791,9 +2791,38 @@ async def cb_confirm_ai_final(update: Update, context: ContextTypes.DEFAULT_TYPE
         await safe_send_notification(context.bot, p_id, opp_text)
 
     # 3. Post to Group
-    main_group_id = await asyncio.to_thread(database.get_group_id)
-    results_topic_id = (await asyncio.to_thread(database.get_config, "results_topic_id")) or (await asyncio.to_thread(database.get_config, "reports_topic_id"))
-    if main_group_id:
+    from services.topic_cache import topic_cache
+    div_id = match.get("division_id")
+    target_chat_id = None
+    target_topic_id = None
+
+    if div_id:
+        res_topic = topic_cache.get_by_division(div_id, "results")
+        if not res_topic:
+            res_topic = topic_cache.get_by_division(div_id, "reports")
+        if res_topic:
+            target_chat_id = res_topic.get("group_chat_id")
+            target_topic_id = res_topic.get("message_thread_id")
+        else:
+            topics_map = await asyncio.to_thread(database.get_division_topics_map, div_id)
+            if "results" in topics_map:
+                target_chat_id = topics_map["results"].get("group_chat_id")
+                target_topic_id = topics_map["results"].get("message_thread_id")
+            elif "reports" in topics_map:
+                target_chat_id = topics_map["reports"].get("group_chat_id")
+                target_topic_id = topics_map["reports"].get("message_thread_id")
+
+    if not target_chat_id:
+        if not div_id:
+            main_group_id = await asyncio.to_thread(database.get_group_id)
+            results_topic_id = (await asyncio.to_thread(database.get_config, "results_topic_id")) or (await asyncio.to_thread(database.get_config, "reports_topic_id"))
+            if main_group_id:
+                target_chat_id = main_group_id
+                target_topic_id = int(results_topic_id) if results_topic_id else None
+        else:
+            logger.warning(f"No results/reports topic configured for division {div_id}; skipping group result announcement.")
+
+    if target_chat_id:
         group_text = build_formatted_match_post(
             round_number=match['round_number'],
             home_team=home_team,
@@ -2811,9 +2840,9 @@ async def cb_confirm_ai_final(update: Update, context: ContextTypes.DEFAULT_TYPE
             match_id=match_id
         ) + debt_note
         try:
-            kwargs = {"chat_id": main_group_id, "caption": group_text, "parse_mode": "HTML"}
-            if results_topic_id:
-                kwargs["message_thread_id"] = int(results_topic_id)
+            kwargs = {"chat_id": target_chat_id, "caption": group_text, "parse_mode": "HTML"}
+            if target_topic_id:
+                kwargs["message_thread_id"] = int(target_topic_id)
             if photo_id:
                 await context.bot.send_photo(photo=photo_id, **kwargs)
             else:
@@ -3368,9 +3397,38 @@ async def notify_match_confirmed(context: ContextTypes.DEFAULT_TYPE, match_id: i
         p2_id=match['player2_id']
     )
 
-    results_topic_id = await asyncio.to_thread(database.get_config, "results_topic_id")
-    group_id = await asyncio.to_thread(database.get_group_id)
-    if group_id:
+    from services.topic_cache import topic_cache
+    div_id = match.get("division_id")
+    target_chat_id = None
+    target_topic_id = None
+
+    if div_id:
+        res_topic = topic_cache.get_by_division(div_id, "results")
+        if not res_topic:
+            res_topic = topic_cache.get_by_division(div_id, "reports")
+        if res_topic:
+            target_chat_id = res_topic.get("group_chat_id")
+            target_topic_id = res_topic.get("message_thread_id")
+        else:
+            topics_map = await asyncio.to_thread(database.get_division_topics_map, div_id)
+            if "results" in topics_map:
+                target_chat_id = topics_map["results"].get("group_chat_id")
+                target_topic_id = topics_map["results"].get("message_thread_id")
+            elif "reports" in topics_map:
+                target_chat_id = topics_map["reports"].get("group_chat_id")
+                target_topic_id = topics_map["reports"].get("message_thread_id")
+
+    if not target_chat_id:
+        if not div_id:
+            main_group_id = await asyncio.to_thread(database.get_group_id)
+            results_topic_id = (await asyncio.to_thread(database.get_config, "results_topic_id")) or (await asyncio.to_thread(database.get_config, "reports_topic_id"))
+            if main_group_id:
+                target_chat_id = main_group_id
+                target_topic_id = int(results_topic_id) if results_topic_id else None
+        else:
+            logger.warning(f"No results/reports topic configured for division {div_id}; skipping admin-approved group result announcement.")
+
+    if target_chat_id:
         group_text = build_formatted_match_post(
             round_number=match['round_number'],
             home_team=home_team,
@@ -3390,14 +3448,14 @@ async def notify_match_confirmed(context: ContextTypes.DEFAULT_TYPE, match_id: i
         photo_id = match.get("photo_id")
         try:
             if photo_id:
-                kwargs = {"chat_id": group_id, "photo": photo_id, "caption": group_text, "parse_mode": "HTML"}
-                if results_topic_id:
-                    kwargs["message_thread_id"] = int(results_topic_id)
+                kwargs = {"chat_id": target_chat_id, "photo": photo_id, "caption": group_text, "parse_mode": "HTML"}
+                if target_topic_id:
+                    kwargs["message_thread_id"] = int(target_topic_id)
                 await context.bot.send_photo(**kwargs)
             else:
-                kwargs = {"chat_id": group_id, "text": group_text, "parse_mode": "HTML"}
-                if results_topic_id:
-                    kwargs["message_thread_id"] = int(results_topic_id)
+                kwargs = {"chat_id": target_chat_id, "text": group_text, "parse_mode": "HTML"}
+                if target_topic_id:
+                    kwargs["message_thread_id"] = int(target_topic_id)
                 await context.bot.send_message(**kwargs)
         except Exception as e:
             logger.exception("Failed to post result to topic/group")
@@ -3483,25 +3541,46 @@ async def save_squad_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await update.message.reply_text("✅ Состав успешно сохранен!")
     await show_my_squad(update, context)
 
-    group_id = await asyncio.to_thread(database.get_group_id)
-    squad_topic_id = await asyncio.to_thread(database.get_config, "squad_topic_id")
-    if group_id and squad_topic_id:
+    db_user = await asyncio.to_thread(database.get_user, user_id)
+    u_div_id = db_user.get("division_id") if db_user else None
+    target_chat_id = None
+    target_topic_id = None
+
+    if u_div_id:
+        from services.topic_cache import topic_cache
+        squad_entry = topic_cache.get_by_division(u_div_id, "lineups")
+        if squad_entry:
+            target_chat_id = squad_entry.get("group_chat_id")
+            target_topic_id = squad_entry.get("message_thread_id")
+        else:
+            topics_map = await asyncio.to_thread(database.get_division_topics_map, u_div_id)
+            if "lineups" in topics_map:
+                target_chat_id = topics_map["lineups"].get("group_chat_id")
+                target_topic_id = topics_map["lineups"].get("message_thread_id")
+
+    if not target_chat_id and not u_div_id:
+        group_id = await asyncio.to_thread(database.get_group_id)
+        squad_topic_id = await asyncio.to_thread(database.get_config, "squad_topic_id")
+        if group_id and squad_topic_id:
+            target_chat_id = group_id
+            target_topic_id = int(squad_topic_id)
+
+    if target_chat_id and target_topic_id:
         try:
-            db_user = await asyncio.to_thread(database.get_user, user_id)
             team_name = db_user['team_name'] if db_user and db_user['team_name'] else "Неизвестный клуб"
             username = update.effective_user.username
             username_str = f"@{username}" if username else update.effective_user.first_name
             caption = f"📸 <b>Обновление состава!</b>\n\n<b>Игрок:</b> {html.escape(username_str)}\n<b>Клуб:</b> {html.escape(team_name)}"
             
             await context.bot.send_photo(
-                chat_id=group_id,
-                message_thread_id=int(squad_topic_id),
+                chat_id=target_chat_id,
+                message_thread_id=int(target_topic_id),
                 photo=photo_id,
                 caption=caption,
                 parse_mode="HTML"
             )
         except Exception as e:
-            print(f"Error sending squad photo to topic: {e}")
+            logger.exception(f"Error sending squad photo to topic: {e}")
 
     return ConversationHandler.END
 

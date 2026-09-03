@@ -153,3 +153,50 @@ async def handle_leaderboard(request: web.Request) -> web.Response:
         "leaders": leaders,
         "my_rank": my_rank
     })
+
+
+async def handle_get_wallet(request: web.Request) -> web.Response:
+    """
+    GET /api/wallet
+    Returns authenticated user's wallet info: balance, stats, and bonus cooldown.
+    """
+    init_data = request.headers.get("X-Telegram-Init-Data", "")
+    user_info = get_authenticated_user(init_data)
+
+    if not user_info or "id" not in user_info:
+        return web.json_response(
+            {"status": "error", "error": "unauthorized", "message": "Недействительные данные авторизации Telegram."},
+            status=401
+        )
+
+    user_id = user_info["id"]
+    wallet = database.get_or_create_wallet(user_id)
+
+    can_claim = True
+    cooldown_sec = 0
+    last_bonus = wallet.get("last_bonus_at")
+    if last_bonus:
+        import datetime
+        try:
+            last_dt = datetime.datetime.fromisoformat(last_bonus)
+            elapsed = (datetime.datetime.now() - last_dt).total_seconds()
+            if elapsed < 86400:
+                can_claim = False
+                cooldown_sec = int(86400 - elapsed)
+        except Exception:
+            pass
+
+    return web.json_response({
+        "status": "ok",
+        "wallet": {
+            "user_id": user_id,
+            "balance": wallet.get("balance", 1000),
+            "currency": "🪙",
+            "total_wagered": wallet.get("total_wagered", 0),
+            "total_won": wallet.get("total_won", 0),
+            "bets_count": wallet.get("bets_count", 0),
+            "bets_won": wallet.get("bets_won", 0),
+            "can_claim_bonus": can_claim,
+            "bonus_cooldown_seconds": cooldown_sec
+        }
+    })

@@ -20,8 +20,10 @@ class AppController {
     store.subscribe((state) => {
       UIRenderer.renderHeader(state.user, state.progression);
       UIRenderer.renderBonusBanner(state.bonus);
+      UIRenderer.renderDivisionTabs(state.divisions, state.selectedDivisionId, 'lobby-division-tabs-container');
+      UIRenderer.renderDivisionTabs(state.divisions, state.selectedDivisionId, 'tournament-division-tabs-container');
       UIRenderer.renderTourTabs(state.tours, state.selectedTour);
-      UIRenderer.renderMatches(state.tours, state.selectedTour, state.marketCategoryFilter, state.searchQuery);
+      UIRenderer.renderMatches(state.tours, state.selectedTour, state.marketCategoryFilter, state.searchQuery, state.matchStatusFilter, state.selectedDivisionId);
       UIRenderer.renderMatchCenter(state.matchDetail, state.matchStats, state.matchH2H, state.matchInsights, state.matchLive, state.matchMarkets, state.matchCenterSubTab);
       UIRenderer.renderTournaments(state.standings, state.results, state.topScorers, this.currentTournamentTab);
       UIRenderer.renderPredictionsHistory(state.myBets, state.myBetsFilter);
@@ -55,8 +57,21 @@ class AppController {
           return;
         }
 
-        // Fetch markets line
-        const toursData = await api.getTours();
+        // Fetch divisions
+        try {
+          const divData = await api.getDivisions();
+          if (divData.status === 'ok' && divData.divisions) {
+            store.setDivisions(divData.divisions);
+            if (divData.divisions.length > 0 && !store.state.selectedDivisionId) {
+              store.setSelectedDivisionId(divData.divisions[0].id);
+            }
+          }
+        } catch (err) {
+          console.warn("Could not load divisions:", err);
+        }
+
+        // Fetch markets line with division
+        const toursData = await api.getTours(store.state.selectedDivisionId);
         if (toursData.status === 'ok') {
           store.setTours(toursData.tours);
           // Preload first match for Match Center
@@ -68,7 +83,7 @@ class AppController {
 
         // Fetch progression, tournaments, user stats
         this.fetchProgressionData();
-        this.fetchTournamentData();
+        this.fetchTournamentData(store.state.selectedDivisionId);
         this.fetchUserExtras();
       }
     } catch (err) {
@@ -91,12 +106,13 @@ class AppController {
     }
   }
 
-  async fetchTournamentData() {
+  async fetchTournamentData(divisionId = null) {
     try {
+      const targetDiv = divisionId || store.state.selectedDivisionId || 1;
       const [stRes, resRes, topRes] = await Promise.all([
-        api.getStandings(),
-        api.getResults(),
-        api.getTopScorers()
+        api.getStandings(targetDiv),
+        api.getResults(targetDiv),
+        api.getTopScorers(targetDiv)
       ]);
       store.setTournamentData(
         stRes.status === 'ok' ? stRes.standings : [],
@@ -174,6 +190,55 @@ class AppController {
         }
       }
     });
+
+    // 2b. Division Selector Tabs (Lobby)
+    const lobbyDivTabs = document.getElementById('lobby-division-tabs-container');
+    if (lobbyDivTabs) {
+      lobbyDivTabs.addEventListener('click', async (e) => {
+        const btn = e.target.closest('.division-tab-btn');
+        if (btn && btn.dataset.divisionId) {
+          const divId = parseInt(btn.dataset.divisionId);
+          store.setSelectedDivisionId(divId);
+          tgBridge.hapticImpact('light');
+          try {
+            const toursData = await api.getTours(divId);
+            if (toursData.status === 'ok') {
+              store.setTours(toursData.tours);
+            }
+          } catch (err) {
+            console.error("Could not reload tours for division:", err);
+          }
+        }
+      });
+    }
+
+    // 2c. Division Selector Tabs (Tournaments Hub)
+    const tourDivTabs = document.getElementById('tournament-division-tabs-container');
+    if (tourDivTabs) {
+      tourDivTabs.addEventListener('click', async (e) => {
+        const btn = e.target.closest('.division-tab-btn');
+        if (btn && btn.dataset.divisionId) {
+          const divId = parseInt(btn.dataset.divisionId);
+          store.setSelectedDivisionId(divId);
+          tgBridge.hapticImpact('light');
+          await this.fetchTournamentData(divId);
+        }
+      });
+    }
+
+    // 2d. Match Status Filter Pills
+    const statusPills = document.getElementById('match-status-pills-container');
+    if (statusPills) {
+      statusPills.addEventListener('click', (e) => {
+        const btn = e.target.closest('.category-pill');
+        if (btn && btn.dataset.status) {
+          statusPills.querySelectorAll('.category-pill').forEach(p => p.classList.remove('active'));
+          btn.classList.add('active');
+          store.setMatchStatusFilter(btn.dataset.status);
+          tgBridge.hapticImpact('light');
+        }
+      });
+    }
 
     // 3. Tour Selector Tabs
     const tourTabs = document.getElementById('tour-tabs-container');
@@ -450,7 +515,7 @@ class AppController {
         }
 
         submitBtn.disabled = true;
-        submitBtn.textContent = 'Принятие...';
+        submitBtn.textContent = '⏳ ОБРАБОТКА...';
 
         try {
           const idempotencyKey = `slip-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
@@ -463,6 +528,13 @@ class AppController {
             tgBridge.hapticNotification('success');
             this.showSuccessModal('🎉 Прогноз принят!', `Сумма: ${amt} 🪙. Удачи в туре!`);
             this.fetchUserExtras();
+            // Refresh predictions history immediately
+            try {
+              const myBetsRes = await api.getPredictions();
+              if (myBetsRes.status === 'ok') store.setMyBets(myBetsRes.predictions);
+            } catch (e) {
+              console.warn("Could not refresh predictions:", e);
+            }
           }
         } catch (err) {
           tgBridge.showAlert(err.message);

@@ -51,11 +51,8 @@ class TopicCache:
                         "message_thread_id": thread_id
                     }
                     
-                    # 1. Forward topic lookup
+                    # 1. Forward topic lookup (strictly by composite key)
                     self._by_topic[(chat_id, thread_id)] = binding
-                    if chat_id is not None:
-                        # Also allow fallback if chat_id isn't provided during read
-                        self._by_topic.setdefault((None, thread_id), binding)
                     
                     # 2. Reverse lookup by (division_id, topic_type)
                     self._by_division[(div_id, top_type)] = {
@@ -71,17 +68,15 @@ class TopicCache:
 
     def get_by_topic(self, group_chat_id: int | None, message_thread_id: int) -> dict | None:
         """
-        Lookup division and topic type by (group_chat_id, message_thread_id).
+        Lookup division and topic type strictly by (group_chat_id, message_thread_id).
         Returns copy of binding dict or None.
+        If group_chat_id is None, returns None (no bare thread_id fallback).
         """
+        if group_chat_id is None:
+            return None
         with self._lock:
             self._ensure_loaded()
-            if group_chat_id is not None:
-                res = self._by_topic.get((group_chat_id, message_thread_id))
-                if res:
-                    return dict(res)
-            # Fallback to chat_id = None if not found or not provided
-            res = self._by_topic.get((None, message_thread_id))
+            res = self._by_topic.get((group_chat_id, message_thread_id))
             return dict(res) if res else None
 
     def get_by_division(self, division_id: int, topic_type: str) -> dict | None:
@@ -115,8 +110,6 @@ class TopicCache:
                 old_chat = old_div_entry.get("group_chat_id")
                 old_thread = old_div_entry.get("message_thread_id")
                 self._by_topic.pop((old_chat, old_thread), None)
-                if old_chat is not None:
-                    self._by_topic.pop((None, old_thread), None)
 
             # Remove any previous binding on this (group_chat_id, message_thread_id)
             old_topic_entry = self._by_topic.get((group_chat_id, message_thread_id))
@@ -133,7 +126,6 @@ class TopicCache:
             }
 
             self._by_topic[(group_chat_id, message_thread_id)] = binding
-            self._by_topic[(None, message_thread_id)] = binding
             self._by_division[(division_id, norm_type)] = {
                 "group_chat_id": group_chat_id,
                 "message_thread_id": message_thread_id,
@@ -146,7 +138,6 @@ class TopicCache:
         with self._lock:
             self._ensure_loaded()
             entry = self._by_topic.pop((group_chat_id, message_thread_id), None)
-            self._by_topic.pop((None, message_thread_id), None)
             if entry:
                 div_id = entry["division_id"]
                 top_type = entry["topic_type"]

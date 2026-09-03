@@ -38,7 +38,7 @@ def _get_team_strength_score(standings: list[dict], team_name: str) -> float:
     return 10.0
 
 
-def calculate_match_odds(team1: str, team2: str) -> dict:
+def calculate_match_odds(team1: str, team2: str, division_id: int | None = None, season_id: int | None = None) -> dict:
     """
     Calculate realistic European decimal odds for a fixture.
     Returns:
@@ -50,7 +50,7 @@ def calculate_match_odds(team1: str, team2: str) -> dict:
     """
     standings = []
     try:
-        standings = database.get_standings()
+        standings = database.get_standings(division_id=division_id, season_id=season_id)
     except Exception as e:
         logger.debug(f"Could not load standings for odds: {e}")
 
@@ -63,15 +63,15 @@ def calculate_match_odds(team1: str, team2: str) -> dict:
     prob_p1_raw = s1_adjusted / (s1_adjusted + s2)
     prob_p2_raw = s2 / (s1_adjusted + s2)
 
-    # Draw probability is higher when teams are evenly matched
+    # Calculate draw probability based on closeness of teams
     closeness = 1.0 - abs(prob_p1_raw - prob_p2_raw)
     prob_x_raw = 0.26 * closeness
 
-    # Normalize probabilities so P1 + X + P2 = 1.0
-    total_p = prob_p1_raw + prob_x_raw + prob_p2_raw
-    p1 = prob_p1_raw / total_p
-    px = prob_x_raw / total_p
-    p2 = prob_p2_raw / total_p
+    # Normalize probabilities to sum to 1.0
+    total_raw = prob_p1_raw + prob_x_raw + prob_p2_raw
+    p1 = prob_p1_raw / total_raw
+    px = prob_x_raw / total_raw
+    p2 = prob_p2_raw / total_raw
 
     # 2. Apply Bookmaker Margin (5.5%)
     odd_p1 = round(max(1.10, min(12.0, (1.0 / (p1 * BOOKMAKER_MARGIN)))), 2)
@@ -111,22 +111,24 @@ def calculate_match_odds(team1: str, team2: str) -> dict:
     }
 
 
-def generate_round_markets(tour: int) -> list[dict]:
+def generate_round_markets(tour: int, division_id: int | None = None, season_id: int | None = None) -> list[dict]:
     """
-    Generate or update odds markets for all unplayed matches of a tour.
+    Generate or update odds markets for all unplayed matches of a tour, optionally filtered by division and season.
     """
-    matches = database.get_matches_by_round(tour)
+    matches = database.get_matches_by_round(tour, division_id=division_id)
+    if season_id is not None:
+        matches = [m for m in matches if m.get("season_id") in (season_id, None)]
     markets = []
 
     for m in matches:
-        if m.get("status") == "completed":
+        if m.get("status") in ("completed", "confirmed"):
             continue
 
         m_id = m.get("id")
         t1 = m.get("player1_team") or m.get("team1") or "Команда 1"
         t2 = m.get("player2_team") or m.get("team2") or "Команда 2"
 
-        odds = calculate_match_odds(t1, t2)
+        odds = calculate_match_odds(t1, t2, division_id=division_id, season_id=season_id)
         database.save_bet_market(
             match_id=m_id,
             tour=tour,
@@ -148,5 +150,5 @@ def generate_round_markets(tour: int) -> list[dict]:
             **odds
         })
 
-    logger.info(f"✅ Generated Logovo.bet markets for {len(markets)} matches in Tour #{tour}")
+    logger.info(f"✅ Generated Logovo.bet markets for {len(markets)} matches in Tour #{tour} (division={division_id}, season={season_id})")
     return markets

@@ -148,6 +148,26 @@ export class UIRenderer {
     }
   }
 
+  static renderDivisionTabs(divisions, selectedDivisionId, containerId = 'lobby-division-tabs-container') {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+
+    const divs = (divisions && divisions.length > 0) ? divisions : [
+      { id: 1, name: 'Дивизион 1' },
+      { id: 2, name: 'Дивизион 2' },
+      { id: 3, name: 'Дивизион 3' },
+      { id: 4, name: 'Дивизион 4' },
+      { id: 5, name: 'Дивизион 5' }
+    ];
+
+    container.innerHTML = divs.map(d => `
+      <button class="division-tab-btn ${d.id === selectedDivisionId ? 'active' : ''}" 
+              data-division-id="${d.id}">
+        🛡️ ${d.name || `Дивизион ${d.id}`}
+      </button>
+    `).join('');
+  }
+
   static renderTourTabs(tours, selectedTour) {
     const container = document.getElementById('tour-tabs-container');
     if (!container) return;
@@ -165,7 +185,7 @@ export class UIRenderer {
     `).join('');
   }
 
-  static renderMatches(tours, selectedTour, activeCategory = 'all', searchQuery = '') {
+  static renderMatches(tours, selectedTour, activeCategory = 'all', searchQuery = '', statusFilter = 'all', selectedDivisionId = 1) {
     const container = document.getElementById('matches-list-container');
     if (!container) return;
 
@@ -183,6 +203,17 @@ export class UIRenderer {
 
     let filteredMatches = currentTour.matches;
 
+    // Filter by match status
+    if (statusFilter && statusFilter !== 'all') {
+      if (statusFilter === 'open') {
+        filteredMatches = filteredMatches.filter(m => ['open', 'scheduled', 'pending', 'live'].includes(m.status));
+      } else if (statusFilter === 'upcoming') {
+        filteredMatches = filteredMatches.filter(m => ['scheduled', 'pending'].includes(m.status));
+      } else if (statusFilter === 'completed') {
+        filteredMatches = filteredMatches.filter(m => ['confirmed', 'completed', 'finished'].includes(m.status));
+      }
+    }
+
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase().trim();
       filteredMatches = filteredMatches.filter(m => 
@@ -194,7 +225,7 @@ export class UIRenderer {
     if (filteredMatches.length === 0) {
       container.innerHTML = `
         <div style="text-align: center; padding: 40px 20px; color: var(--text-muted);">
-          Ничего не найдено по запросу «${searchQuery}»
+          Ничего не найдено в текущей категории или по запросу «${searchQuery}»
         </div>
       `;
       return;
@@ -202,16 +233,26 @@ export class UIRenderer {
 
     container.innerHTML = filteredMatches.map(m => {
       const isLive = m.status === 'live';
+      const isCompleted = ['confirmed', 'completed', 'finished'].includes(m.status);
       const tourLabel = m.tour || selectedTour;
+      const divLabel = m.division_id || selectedDivisionId || 1;
       return `
-        <div class="match-card" data-match-id="${m.match_id}">
+        <div class="match-card ${isCompleted ? 'completed' : ''}" data-match-id="${m.match_id}">
           <!-- Match Card Header -->
           <div class="match-card-header">
             <div style="display: flex; align-items: center; gap: 8px;">
+              <span class="match-division-tag" style="background: rgba(245,176,39,0.15); color: var(--accent-gold); font-size: 0.72rem; font-weight: 800; padding: 2px 6px; border-radius: 4px;">
+                Дивизион ${divLabel}
+              </span>
               <span class="match-tour-tag">Тур ${tourLabel}</span>
               ${isLive ? `
                 <span class="live-badge">
                   <span class="live-dot"></span> LIVE ${m.live_minute ? `${m.live_minute}'` : ''}
+                </span>
+              ` : ''}
+              ${isCompleted ? `
+                <span style="background: rgba(46, 204, 113, 0.15); color: #2ecc71; font-size: 0.72rem; font-weight: 800; padding: 2px 6px; border-radius: 4px;">
+                  ✅ Завершён ${m.player1_score ?? 0}:${m.player2_score ?? 0}
                 </span>
               ` : ''}
             </div>

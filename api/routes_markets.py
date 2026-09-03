@@ -33,14 +33,17 @@ async def handle_get_tours(request: web.Request) -> web.Response:
             "message": "Logovo.bet находится на закрытом тесте в Лаборатории."
         }, status=403)
 
-    open_tours = database.get_open_betting_tours()
+    division_id_param = request.query.get("division_id")
+    div_id = int(division_id_param) if division_id_param and division_id_param.isdigit() else None
+
+    open_tours = database.get_open_betting_tours(division_id=div_id)
     results = []
 
     for t in open_tours:
         r_num = t["round_number"]
         # Ensure markets are generated
-        generate_round_markets(r_num)
-        markets = database.get_active_bet_markets(r_num)
+        generate_round_markets(r_num, division_id=div_id)
+        markets = database.get_active_bet_markets(r_num, division_id=div_id)
 
         matches_list = []
         for m in markets:

@@ -40,6 +40,9 @@ class StateStore {
       streak: { streak: 1, best_streak: 1, streak_shield_count: 1 },
       achievements: [],
       profile: null,
+      divisions: [],
+      selectedDivisionId: 1,
+      matchStatusFilter: 'all', // 'all' | 'open' | 'upcoming' | 'completed'
       unclaimedAchievementsCount: 0
     };
     this.listeners = new Set();
@@ -93,6 +96,21 @@ class StateStore {
 
   setSelectedTour(tourNumber) {
     this.state.selectedTour = tourNumber;
+    this.notify();
+  }
+
+  setDivisions(divisions) {
+    this.state.divisions = divisions || [];
+    this.notify();
+  }
+
+  setSelectedDivisionId(divisionId) {
+    this.state.selectedDivisionId = divisionId ? parseInt(divisionId) : 1;
+    this.notify();
+  }
+
+  setMatchStatusFilter(status) {
+    this.state.matchStatusFilter = status || 'all';
     this.notify();
   }
 

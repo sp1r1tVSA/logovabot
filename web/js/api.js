@@ -76,13 +76,18 @@ class ApiClient {
     return this.request('/api/bonus/claim', { method: 'POST' });
   }
 
+  getWallet() {
+    return this.request('/api/wallet');
+  }
+
   getLeaderboard() {
     return this.request('/api/leaderboard');
   }
 
   // 2. Markets & Tours
-  getTours() {
-    return this.request('/api/markets/tours');
+  getTours(divisionId = null) {
+    const q = divisionId ? `?division_id=${encodeURIComponent(divisionId)}` : '';
+    return this.request(`/api/markets/tours${q}`);
   }
 
   getMatchMarkets(matchId) {
@@ -95,10 +100,12 @@ class ApiClient {
   }
 
   // 3. Match Center 3.0
-  getMatches(tour = null, status = null) {
+  getMatches(tour = null, status = null, divisionId = null, seasonId = null) {
     const params = new URLSearchParams();
     if (tour) params.append('tour', tour);
     if (status) params.append('status', status);
+    if (divisionId) params.append('division_id', divisionId);
+    if (seasonId) params.append('season_id', seasonId);
     const q = params.toString() ? `?${params.toString()}` : '';
     return this.request(`/api/matches${q}`);
   }
@@ -152,12 +159,25 @@ class ApiClient {
     return this.request('/api/tournaments');
   }
 
-  getStandings(tournamentId = 1) {
-    return this.request(`/api/tournaments/${tournamentId}/standings`);
+  getDivisions() {
+    return this.request('/api/divisions');
   }
 
-  getResults(tournamentId = 1, limit = 30) {
-    return this.request(`/api/tournaments/${tournamentId}/results?limit=${limit}`);
+  getStandings(divisionId = null, seasonId = null) {
+    const params = new URLSearchParams();
+    if (divisionId) params.append('division_id', divisionId);
+    if (seasonId) params.append('season_id', seasonId);
+    const q = params.toString() ? `?${params.toString()}` : '';
+    return this.request(`/api/standings${q}`);
+  }
+
+  getResults(divisionId = null, seasonId = null, limit = 30) {
+    const params = new URLSearchParams();
+    if (divisionId) params.append('division_id', divisionId);
+    if (seasonId) params.append('season_id', seasonId);
+    if (limit) params.append('limit', limit);
+    const q = params.toString() ? `?${params.toString()}` : '';
+    return this.request(`/api/results${q}`);
   }
 
   getTopScorers(tournamentId = 1) {

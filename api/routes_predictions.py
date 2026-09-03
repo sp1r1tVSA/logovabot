@@ -64,6 +64,32 @@ async def handle_place_prediction(request: web.Request) -> web.Response:
     )
 
     if not success:
+        # Phase 5: structured error codes
+        if isinstance(result, dict):
+            error_code = result.get("error", "")
+            if error_code == "ODDS_CHANGED":
+                return web.json_response({
+                    "status": "error",
+                    "error": "ODDS_CHANGED",
+                    "match_id": result.get("match_id"),
+                    "outcome": result.get("outcome"),
+                    "old_odd": result.get("old_odd"),
+                    "new_odd": result.get("new_odd"),
+                    "message": result.get("message", "Коэффициент изменился.")
+                }, status=409)
+            if error_code == "IDEMPOTENCY_KEY_REUSED":
+                return web.json_response({
+                    "status": "error",
+                    "error": "IDEMPOTENCY_KEY_REUSED",
+                    "message": result.get("message", "Ключ уже использован для другой ставки.")
+                }, status=409)
+            if error_code in ("MAX_BET_EXCEEDED", "MAX_PAYOUT_EXCEEDED"):
+                return web.json_response({
+                    "status": "error",
+                    "error": error_code,
+                    "message": result.get("message", "Превышен лимит ставки.")
+                }, status=400)
+            return web.json_response({"status": "error", "message": result.get("message", str(result))}, status=400)
         return web.json_response({"status": "error", "message": str(result)}, status=400)
 
     bet_id = result
@@ -111,14 +137,19 @@ async def handle_get_predictions(request: web.Request) -> web.Response:
     except Exception as e:
         logger.warning(f"Error auto-settling in get_predictions: {e}")
 
+    # Phase 5: Bet History 2.0 — support all status filters including 'cancelled'
+    VALID_STATUSES = {"pending", "won", "lost", "refunded", "cancelled", "void", "all"}
     status_filter = request.query.get("status")
+    if status_filter and status_filter not in VALID_STATUSES:
+        status_filter = None  # ignore unknown filter
     limit = min(50, int(request.query.get("limit", 30)))
 
     bets = database.get_user_bets(user_id, status=status_filter, limit=limit)
 
     return web.json_response({
         "status": "ok",
-        "bets": bets
+        "bets": bets,
+        "predictions": bets
     })
 
 
@@ -139,9 +170,7 @@ async def handle_get_prediction_detail(request: web.Request) -> web.Response:
     except (KeyError, ValueError):
         return web.json_response({"status": "error", "message": "Некорректный ID."}, status=400)
 
-    bets = database.get_user_bets(user_id, limit=100)
-    matching = next((b for b in bets if b["id"] == bet_id), None)
-
+    matching = database.get_user_bet_by_id(user_id, bet_id)
     if not matching:
         return web.json_response({"status": "error", "message": "Прогноз не найден."}, status=404)
 
@@ -168,9 +197,7 @@ async def handle_repeat_prediction(request: web.Request) -> web.Response:
     except (KeyError, ValueError):
         return web.json_response({"status": "error", "message": "Некорректный ID."}, status=400)
 
-    bets = database.get_user_bets(user_id, limit=100)
-    matching = next((b for b in bets if b["id"] == bet_id), None)
-
+    matching = database.get_user_bet_by_id(user_id, bet_id)
     if not matching:
         return web.json_response({"status": "error", "message": "Исходный прогноз не найден."}, status=404)
 

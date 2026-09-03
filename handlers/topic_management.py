@@ -252,10 +252,26 @@ async def cb_reassign_topic_confirm(update: Update, context: ContextTypes.DEFAUL
     chat_id = msg.chat.id
     thread_id = msg.message_thread_id
 
-    # RBAC валидация
-    if not database.is_division_admin(user.id, division_id):
+    # RBAC валидация:
+    # 1. Пользователь должен быть админом целевого дивизиона (или глобальным админом)
+    import config
+    user_rec = database.get_user(user.id)
+    is_global_admin = (user.id in config.ADMIN_IDS) or bool(user_rec and user_rec["role"] == "admin" and user_rec["division_id"] is None)
+    if not (is_global_admin or database.is_division_admin(user.id, division_id)):
         await query.answer("⛔️ Недостаточно прав для управления этим дивизионом!", show_alert=True)
         return
+
+    # 2. Если этот топик уже привязан к ДРУГОМУ дивизиону, только Global Admin или админ того дивизиона может его забрать
+    existing_binding = database.get_topic_binding(chat_id, thread_id)
+    if existing_binding and existing_binding.get("division_id") != division_id:
+        prev_div_id = existing_binding["division_id"]
+        if not (is_global_admin or database.is_division_admin(user.id, prev_div_id)):
+            await query.answer(
+                f"⛔️ Этот топик принадлежит дивизиону «{existing_binding.get('division_name', prev_div_id)}»! "
+                "Переназначить его может только главный администратор.",
+                show_alert=True
+            )
+            return
 
     if thread_id is None:
         await query.edit_message_text("❌ Ошибка: топик не определён.")

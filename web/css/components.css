@@ -124,6 +124,42 @@
   box-shadow: var(--shadow-gold);
 }
 
+/* ─── 2b. Division Selector Tabs ─── */
+.division-tabs {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 6px;
+  margin-bottom: 12px;
+  -webkit-overflow-scrolling: touch;
+}
+.division-tab-btn {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--text-secondary);
+  font-family: 'Outfit', sans-serif;
+  font-size: 0.85rem;
+  font-weight: 700;
+  padding: 6px 14px;
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: var(--transition-fast);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.division-tab-btn:active {
+  transform: scale(0.96);
+}
+.division-tab-btn.active {
+  background: linear-gradient(135deg, rgba(245, 176, 39, 0.25) 0%, rgba(245, 176, 39, 0.1) 100%);
+  color: var(--accent-gold);
+  border-color: var(--accent-gold);
+  font-weight: 800;
+  box-shadow: 0 0 12px rgba(245, 176, 39, 0.2);
+}
+
 /* ─── 3. Match Card ─── */
 /* ─── 3. Match Card ─── */
 .match-card {
