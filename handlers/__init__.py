@@ -249,19 +249,9 @@ from handlers.admin import (
     admin_unwarn_command,
 )
 
-from handlers.topic_management import (
-    cmd_assign_topic,
-    cmd_reassign_topic,
-    cmd_current_topic,
-    cmd_division_topics,
-    cmd_divisions_summary,
-    cmd_unbind_topic,
-    cb_set_topic,
-    cb_reassign_topic_confirm,
-    cb_unbind_topic_confirm,
-    cb_top_cancel,
-)
+from handlers.topic_management import register_topic_management_handlers
 from services.topic_cache import topic_cache
+
 
 logger = logging.getLogger(__name__)
 
@@ -620,17 +610,7 @@ def _register_admin_handlers(app: Application) -> None:
     app.add_handler(admin_div_conv)
 
     app.add_handler(CommandHandler("set_div_topic", admin_set_div_topic_cmd))
-    app.add_handler(CommandHandler(["назначить_топик", "naznachit_topik"], cmd_assign_topic))
-    app.add_handler(CommandHandler(["переназначить_топик", "perenaznachit_topik"], cmd_reassign_topic))
-    app.add_handler(CommandHandler(["текущий_топик", "tekushiy_topik"], cmd_current_topic))
-    app.add_handler(CommandHandler(["топики", "topiki"], cmd_division_topics))
-    app.add_handler(CommandHandler(["дивизионы", "diviziony"], cmd_divisions_summary))
-    app.add_handler(CommandHandler(["снять_топик", "snyat_topik"], cmd_unbind_topic))
-
-    app.add_handler(CallbackQueryHandler(cb_set_topic, pattern="^set_top:\\d+:(d|p|r|rep|l)$"))
-    app.add_handler(CallbackQueryHandler(cb_reassign_topic_confirm, pattern="^reassign_top:\\d+:(d|p|r|rep|l)$"))
-    app.add_handler(CallbackQueryHandler(cb_unbind_topic_confirm, pattern="^unbind_confirm:-?\\d+:-?\\d+$"))
-    app.add_handler(CallbackQueryHandler(cb_top_cancel, pattern="^top_cancel$"))
+    register_topic_management_handlers(app)
 
     app.add_handler(CommandHandler("set_squad_topic", admin_set_squad_topic))
     app.add_handler(CommandHandler("set_drafts_topic", admin_set_drafts_topic))

@@ -323,3 +323,21 @@ class TestTopicAssignmentSystem(unittest.TestCase):
         # Очистка легаси-матча
         with database.transaction() as conn:
             conn.execute("DELETE FROM matches WHERE id = ?", (legacy_match_id,))
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # TEST 14: Парсинг русских слеш-команд и аргументов
+    # ──────────────────────────────────────────────────────────────────────────
+    def test_14_cyrillic_command_parsing(self):
+        from handlers.topic_management import _make_cyrillic_command_handler
+        mock_func = AsyncMock()
+        h = _make_cyrillic_command_handler("назначить_топик", mock_func)
+
+        update = MagicMock()
+        update.effective_message.text = "/назначить_топик 1"
+        ctx = MagicMock()
+
+        import asyncio
+        asyncio.run(h.callback(update, ctx))
+        mock_func.assert_called_once()
+        self.assertEqual(ctx.args, ["1"])
+

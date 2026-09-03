@@ -5,8 +5,9 @@ handlers/topic_management.py
 
 import html
 import logging
+import re
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ContextTypes
+from telegram.ext import ContextTypes, MessageHandler, CommandHandler, CallbackQueryHandler, filters
 
 import database
 from services.topic_cache import topic_cache
@@ -516,3 +517,49 @@ async def cb_unbind_topic_confirm(update: Update, context: ContextTypes.DEFAULT_
         "✅ <b>Привязка топика успешно снята.</b>\nТопик больше не закреплён за дивизионом.",
         parse_mode="HTML"
     )
+
+
+def _make_cyrillic_command_handler(command_name: str, handler_func):
+    """
+    Creates a MessageHandler that responds to Cyrillic slash commands (e.g. /назначить_топик 1)
+    and populates context.args identical to CommandHandler.
+    """
+    pattern = re.compile(rf"^/{command_name}(?:@\w+)?(?:\s+(.*))?$", re.DOTALL | re.IGNORECASE)
+
+    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not update.effective_message or not update.effective_message.text:
+            return
+        text = update.effective_message.text.strip()
+        m = pattern.match(text)
+        if m:
+            args_str = m.group(1)
+            context.args = args_str.split() if args_str else []
+            return await handler_func(update, context)
+
+    return MessageHandler(filters.Regex(rf"^/{command_name}(?:@\w+)?(?:\s|$)"), wrapper)
+
+
+def register_topic_management_handlers(app) -> None:
+    """Register all topic management commands and callbacks into Telegram Application."""
+    # 1. Cyrillic Slash Commands (via Regex MessageHandler)
+    app.add_handler(_make_cyrillic_command_handler("назначить_топик", cmd_assign_topic))
+    app.add_handler(_make_cyrillic_command_handler("переназначить_топик", cmd_reassign_topic))
+    app.add_handler(_make_cyrillic_command_handler("текущий_топик", cmd_current_topic))
+    app.add_handler(_make_cyrillic_command_handler("топики", cmd_division_topics))
+    app.add_handler(_make_cyrillic_command_handler("дивизионы", cmd_divisions_summary))
+    app.add_handler(_make_cyrillic_command_handler("снять_топик", cmd_unbind_topic))
+
+    # 2. Latin / Translit Aliases (via native CommandHandler)
+    app.add_handler(CommandHandler(["naznachit_topik", "assign_topic"], cmd_assign_topic))
+    app.add_handler(CommandHandler(["perenaznachit_topik", "reassign_topic"], cmd_reassign_topic))
+    app.add_handler(CommandHandler(["tekushiy_topik", "current_topic"], cmd_current_topic))
+    app.add_handler(CommandHandler(["topiki", "topics"], cmd_division_topics))
+    app.add_handler(CommandHandler(["diviziony", "divisions"], cmd_divisions_summary))
+    app.add_handler(CommandHandler(["snyat_topik", "unbind_topic"], cmd_unbind_topic))
+
+    # 3. Callbacks
+    app.add_handler(CallbackQueryHandler(cb_set_topic, pattern="^set_top:\\d+:(d|p|r|rep|l)$"))
+    app.add_handler(CallbackQueryHandler(cb_reassign_topic_confirm, pattern="^reassign_top:\\d+:(d|p|r|rep|l)$"))
+    app.add_handler(CallbackQueryHandler(cb_unbind_topic_confirm, pattern="^unbind_confirm:-?\\d+:-?\\d+$"))
+    app.add_handler(CallbackQueryHandler(cb_top_cancel, pattern="^top_cancel$"))
+
