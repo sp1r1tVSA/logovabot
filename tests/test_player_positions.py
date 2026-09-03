@@ -6,7 +6,7 @@ from services.player_positions import (
     KNOWN_PLAYER_POSITIONS,
     VALID_POSITIONS
 )
-import fc_card_generator
+from services.graphics import fc_card_generator
 
 
 class TestPlayerPositions(unittest.TestCase):

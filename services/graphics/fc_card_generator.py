@@ -22,8 +22,9 @@ import logging
 import random
 import tempfile
 from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageChops
-import player_photos
-from table_generator import get_team_logo_filename, clean_and_prepare_logo
+from pathlib import Path
+from services.graphics import player_photos
+from services.graphics.table_generator import get_team_logo_filename, clean_and_prepare_logo
 
 try:
     import numpy as np
@@ -37,8 +38,10 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-BASE_DIR = os.path.dirname(__file__)
-LOGOS_DIR = os.path.join(BASE_DIR, "assets", "logos")
+# Project root directory (services/graphics -> services -> root)
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+BASE_DIR = str(PROJECT_ROOT)
+LOGOS_DIR = str(PROJECT_ROOT / "assets" / "logos")
 
 SCALE = 2
 WIDTH = 460 * SCALE

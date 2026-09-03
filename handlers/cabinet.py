@@ -13,12 +13,12 @@ logger = logging.getLogger(__name__)
 import asyncio
 import telegram.error
 from telegram.error import Forbidden
-import ai_recognizer
+from services.ai import ai_recognizer
 import config
 from config import MAX_WARNS_LIMIT
-import player_card_generator
-import club_card_generator
-import club_schedule_generator
+from services.graphics import player_card_generator
+from services.graphics import club_card_generator
+from services.graphics import club_schedule_generator
 
 def check_group_card_access(update: Update) -> bool:
     """

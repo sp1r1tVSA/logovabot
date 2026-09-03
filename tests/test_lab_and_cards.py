@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import database
 import config
-from fc_card_generator import calculate_fut_attributes, generate_ea_fc_card
+from services.graphics.fc_card_generator import calculate_fut_attributes, generate_ea_fc_card
 from handlers.base import is_admin
 
 

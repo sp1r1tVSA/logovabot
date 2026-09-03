@@ -88,7 +88,7 @@ async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_T
 
     if action in ("бомбардиры", "голы", "топ_голы", "scorers"):
         from telegram import InputFile
-        import top_stats_generator
+        from services.graphics import top_stats_generator
 
         args_lower = args_str.lower()
         nums = re.findall(r"\d+", args_str)
@@ -122,7 +122,7 @@ async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_T
 
     if action in ("ассистенты", "пасы", "топ_пас", "assists"):
         from telegram import InputFile
-        import top_stats_generator
+        from services.graphics import top_stats_generator
 
         args_lower = args_str.lower()
         nums = re.findall(r"\d+", args_str)
@@ -232,7 +232,7 @@ async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_T
             else:
                 stage = "final"
             
-            from table_generator import generate_cup_bracket_image
+            from services.graphics.table_generator import generate_cup_bracket_image
             img_buf = await asyncio.to_thread(generate_cup_bracket_image, stage)
             stage_title_map = {'1/8': '1/8 Финала', '1/4': '1/4 Финала', '1/2': '1/2 Финала', 'final': '🏆 Финал'}
             title = stage_title_map.get(stage, stage)
@@ -240,7 +240,7 @@ async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_T
             filename = f"cup_bracket_{stage}.png"
         else:
             # Default to full bracket graphic!
-            from services.cup_bracket_generator import generate_bracket_image
+            from services.graphics.cup_bracket_generator import generate_bracket_image
             img_buf = await asyncio.to_thread(generate_bracket_image)
             caption = "🏆 <b>КУБОК КПЛ 2026 | ПОЛНАЯ СЕТКА</b>\n<i>От 1/8 до Финала</i>"
             filename = "full_cup_bracket.png"

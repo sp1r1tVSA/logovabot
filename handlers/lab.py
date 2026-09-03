@@ -18,8 +18,8 @@ import config
 from config import CLUBS, ADMIN_IDS
 from handlers.base import admin_only, is_admin
 from handlers.cabinet import safe_edit_or_reply
-import fc_card_generator
-from media_utils import send_high_quality_animation
+from services.graphics import fc_card_generator
+from utils.media_utils import send_high_quality_animation
 
 logger = logging.getLogger(__name__)
 

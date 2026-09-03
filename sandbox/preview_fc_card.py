@@ -12,7 +12,7 @@ import time
 # Add project root to sys.path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from fc_card_generator import CARD_STYLES, generate_ea_fc_card, generate_animated_ea_fc_card
+from services.graphics.fc_card_generator import CARD_STYLES, generate_ea_fc_card, generate_animated_ea_fc_card
 
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)

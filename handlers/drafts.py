@@ -6,7 +6,7 @@ from telegram.ext import ContextTypes
 
 import database
 import config
-from ai_recognizer import recognize_match_screenshots_bytes
+from services.ai.ai_recognizer import recognize_match_screenshots_bytes
 from handlers.cabinet import match_and_enrich_squad, build_formatted_match_post
 
 logger = logging.getLogger(__name__)

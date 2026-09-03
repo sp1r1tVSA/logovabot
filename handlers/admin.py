@@ -16,8 +16,8 @@ from handlers.cabinet import notify_match_confirmed, safe_send_notification, cb_
 import config
 from config import CLUBS, MAX_WARNS_LIMIT, GROUP_ID
 
-from schedule_parser import parse_schedule_text, create_matches_from_parsed_schedule
-import player_photos
+from scripts.schedule_parser import parse_schedule_text, create_matches_from_parsed_schedule
+from services.graphics import player_photos
 import logging
 
 logger = logging.getLogger(__name__)
@@ -386,7 +386,7 @@ async def notify_cup_stage_opened(bot, stage: str) -> None:
     lines.append("\n📋 Матчи доступны для игры в вашем кабинете (раздел «Мои открытые матчи»). Удачи участникам!")
 
     try:
-        from table_generator import generate_cup_bracket_image
+        from services.graphics.table_generator import generate_cup_bracket_image
         from telegram import InputFile
         img_buf = await asyncio.to_thread(generate_cup_bracket_image, stage)
 
@@ -446,7 +446,7 @@ async def admin_test_ai(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     import socket
     import urllib.request
-    from ai_recognizer import GEMINI_MODELS, _check_proxy_alive
+    from services.ai.ai_recognizer import GEMINI_MODELS, _check_proxy_alive
     import config
 
     warp_alive = _check_proxy_alive("http://127.0.0.1:4001")
@@ -4498,7 +4498,7 @@ async def admin_ai_summary(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     top_assist = top_assists[0] if top_assists else None
 
     # Call AI
-    from ai_chat import generate_tournament_summary
+    from services.ai.ai_chat import generate_tournament_summary
     summary = await asyncio.to_thread(generate_tournament_summary, standings, top_scorer, top_assist)
     summary = html.escape(summary)
 

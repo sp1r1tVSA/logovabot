@@ -6,7 +6,7 @@ import urllib.request
 import urllib.error
 import config
 import database
-import persona_base
+from services.ai import persona_base
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +79,7 @@ def generate_chat_reply(
     
     payload_bytes = json.dumps(payload).encode('utf-8')
 
-    from ai_recognizer import _get_gemini_opener
+    from services.ai.ai_recognizer import _get_gemini_opener
     opener = _get_gemini_opener()
 
     for model_name in candidate_models:

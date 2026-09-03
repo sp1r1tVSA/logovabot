@@ -8,7 +8,7 @@ from telegram.constants import ChatAction
 from telegram.ext import ContextTypes
 from telegram.error import BadRequest
 import database
-import ai_chat
+from services.ai import ai_chat
 from handlers.text_commands import handle_temshik_command
 
 

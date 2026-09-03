@@ -1,8 +1,10 @@
 """Inspect the server DB snapshot: schema state and data relevant to debt backfill."""
 import sqlite3
 import datetime
+from pathlib import Path
 
-DB = "server_league.db"
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+DB = str(PROJECT_ROOT / "server_league.db")
 conn = sqlite3.connect(DB)
 conn.row_factory = sqlite3.Row
 

@@ -121,7 +121,7 @@ class TestClubCard(unittest.TestCase):
 
     def test_club_card_image_generator(self):
         """Test that club_card_generator.generate_club_card produces valid PNG bytes without error."""
-        import club_card_generator
+        from services.graphics import club_card_generator
         card_data = {
             "team_name": "Фейеноорд",
             "manager": {"username": "georgiy", "warn_count": 0, "telegram_id": 12345},
@@ -147,7 +147,7 @@ class TestClubCard(unittest.TestCase):
 
     def test_club_schedule_and_results_image_generator(self):
         """Test database.get_club_schedule_and_results and club_schedule_generator."""
-        import club_schedule_generator
+        from services.graphics import club_schedule_generator
         with database.transaction() as conn:
             c = conn.cursor()
             c.execute(
@@ -172,8 +172,8 @@ class TestClubCard(unittest.TestCase):
 
     def test_racing_logo_lookup(self):
         """Test that get_team_logo_filename finds racing.png for 'Расинг' case-insensitively."""
-        from table_generator import get_team_logo_filename
-        import club_card_generator
+        from services.graphics.table_generator import get_team_logo_filename
+        from services.graphics import club_card_generator
         logo = get_team_logo_filename("Расинг")
         self.assertEqual(logo, "racing.png")
         logo_lower = get_team_logo_filename("расинг")
@@ -202,7 +202,7 @@ class TestClubCard(unittest.TestCase):
 
     def test_club_schedule_cup_stage_aggregation(self):
         """Test that multiple games in a cup series are aggregated into 1 row per stage."""
-        import club_schedule_generator
+        from services.graphics import club_schedule_generator
         with database.transaction() as conn:
             c = conn.cursor()
             c.execute(
@@ -277,7 +277,7 @@ class TestClubCard(unittest.TestCase):
     def test_club_card_avatar_cropping_and_rendering(self):
         """Test generating club card with non-square custom avatar."""
         from PIL import Image
-        import club_card_generator
+        from services.graphics import club_card_generator
 
         # Create temporary non-square avatar (200x120)
         tf_av = tempfile.NamedTemporaryFile(suffix=".png", delete=False)

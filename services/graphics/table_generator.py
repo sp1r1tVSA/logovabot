@@ -3,9 +3,12 @@ import io
 import database
 from PIL import Image, ImageDraw, ImageFont
 
-# Path to club logos directory
-BASE_DIR = os.path.dirname(__file__)
-LOGOS_DIR = os.path.join(BASE_DIR, "assets", "logos")
+from pathlib import Path
+
+# Project root directory (services/graphics -> services -> root)
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+BASE_DIR = str(PROJECT_ROOT)
+LOGOS_DIR = str(PROJECT_ROOT / "assets" / "logos")
 
 # Map of Russian club names to PNG logo filenames
 TEAM_LOGO_MAP = {

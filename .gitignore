@@ -1,27 +1,92 @@
-node_modules/
+# ==============================================================================
+# Environment & Secrets
+# ==============================================================================
 .env
-npm-debug.log*
-dist/
-coverage/
+.env.*
+!.env.example
+
+# ==============================================================================
+# Python & Virtual Environments
+# ==============================================================================
 __pycache__/
+*.py[cod]
+*$py.class
 *.pyc
-state/
-artifacts/
-*.db
-league.db
+.pytest_cache/
+coverage/
+htmlcov/
+.coverage
+.coverage.*
+
 venv/
 .venv/
-.claude/
-test_*.png
+env/
+.env/
+ENV/
+
+# ==============================================================================
+# Databases (SQLite & Journal/WAL Artifacts)
+# ==============================================================================
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+*.db-wal
+*.db-shm
+league.db
+server_league.db
+
+# ==============================================================================
+# Telegram Sessions
+# ==============================================================================
+*.session
+*.session-journal
+
+# ==============================================================================
+# Logs & Text Dumps (excluding critical project configs)
+# ==============================================================================
 *.log
-chat_dump.txt
-channel_posts.txt
-telegram_dump_session.session
+*.txt
+!requirements.txt
+!requirements*.txt
+!**/LICENSE.txt
+
+# ==============================================================================
+# Root Test Media & Artifacts (preserves assets/ directory)
+# ==============================================================================
+/*.mp4
+/*.mov
+/*.avi
+/*.mkv
+/*.jpg
+/*.jpeg
+/*.png
+/*.webp
+test_*.png
+
+# Dynamic Caches & Generation Output
 assets/players/
 assets/tmp_crops/
 assets/cards_preview/
 players_cache/
 sandbox/output/
+state/
+artifacts/
 
+# ==============================================================================
+# Frontend & Build Artifacts
+# ==============================================================================
+node_modules/
+dist/
+npm-debug.log*
 
-
+# ==============================================================================
+# IDE & System Files
+# ==============================================================================
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+.claude/

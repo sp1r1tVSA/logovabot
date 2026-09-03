@@ -2,11 +2,14 @@ import os
 import io
 from PIL import Image, ImageDraw, ImageFont
 
-from table_generator import TEAM_LOGO_MAP, load_font
+from pathlib import Path
+from services.graphics.table_generator import TEAM_LOGO_MAP, load_font
 import database
 
-BASE_DIR = os.path.dirname(__file__)
-ASSETS_DIR = os.path.join(BASE_DIR, '..', 'assets')
+# Project root directory (services/graphics -> services -> root)
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+BASE_DIR = str(PROJECT_ROOT)
+ASSETS_DIR = str(PROJECT_ROOT / "assets")
 
 def get_logo_path(team_name: str) -> str | None:
     if not team_name:

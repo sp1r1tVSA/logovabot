@@ -9,8 +9,8 @@ import asyncio
 import database
 import logging
 from config import ADMIN_IDS, CLUBS
-from table_generator import generate_league_table_image
-import top_stats_generator
+from services.graphics.table_generator import generate_league_table_image
+from services.graphics import top_stats_generator
 from constants import (
     CB_MAIN_MENU, CB_MENU_CABINET, CB_MENU_TOURNAMENTS,
     CB_MENU_LEAGUE, CB_MENU_SUPPORT, CB_LEAGUE_TABLE,
@@ -557,7 +557,7 @@ async def cb_show_cup_graphic(update: Update, context: ContextTypes.DEFAULT_TYPE
     if query.data.startswith("show_cup_graphic_"):
         stage = query.data.replace("show_cup_graphic_", "")
 
-    from table_generator import generate_cup_bracket_image
+    from services.graphics.table_generator import generate_cup_bracket_image
     img_buf = await asyncio.to_thread(generate_cup_bracket_image, stage)
 
     from telegram import InputFile
@@ -576,13 +576,7 @@ async def cb_show_full_cup_bracket(update: Update, context: ContextTypes.DEFAULT
         return
     await query.answer()
 
-    # Import the new full bracket generator
-    import sys
-    import os
-    if "services" not in sys.path:
-        sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-        
-    from services.cup_bracket_generator import generate_bracket_image
+    from services.graphics.cup_bracket_generator import generate_bracket_image
     
     img_buf = await asyncio.to_thread(generate_bracket_image)
 
@@ -656,7 +650,7 @@ async def send_cup_scorers_image(update: Update, context: ContextTypes.DEFAULT_T
     if query:
         await query.answer()
 
-    import top_stats_generator
+    from services.graphics import top_stats_generator
     buf = await asyncio.to_thread(top_stats_generator.generate_top_stats_image, "goals", 10, "cup")
 
     keyboard = [
@@ -690,7 +684,7 @@ async def send_cup_assisters_image(update: Update, context: ContextTypes.DEFAULT
     if query:
         await query.answer()
 
-    import top_stats_generator
+    from services.graphics import top_stats_generator
     buf = await asyncio.to_thread(top_stats_generator.generate_top_stats_image, "assists", 10, "cup")
 
     keyboard = [

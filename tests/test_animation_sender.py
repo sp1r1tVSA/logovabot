@@ -26,7 +26,7 @@ from services.animation_sender import (
     send_high_quality_animation,
     MediaMetadata
 )
-import fc_card_generator
+from services.graphics import fc_card_generator
 
 
 class TestAnimationPipeline(unittest.TestCase):

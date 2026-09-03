@@ -1,12 +1,15 @@
 import os
 import io
 import database
-import player_photos
+from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
-from table_generator import TEAM_LOGO_MAP, load_font
+from services.graphics import player_photos
+from services.graphics.table_generator import TEAM_LOGO_MAP, load_font
 
-BASE_DIR = os.path.dirname(__file__)
-LOGOS_DIR = os.path.join(BASE_DIR, "assets", "logos")
+# Project root directory (services/graphics -> services -> root)
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+BASE_DIR = str(PROJECT_ROOT)
+LOGOS_DIR = str(PROJECT_ROOT / "assets" / "logos")
 
 # Base 2x Supersampled Canvas Dimensions
 # All coordinate math is done at SCALE = 2 for ultra-sharp Retina rendering

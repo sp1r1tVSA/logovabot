@@ -50,8 +50,8 @@ except ImportError:
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("refresh_cards")
 
-import player_photos
-import fc_card_generator
+from services.graphics import player_photos
+from services.graphics import fc_card_generator
 import database
 
 

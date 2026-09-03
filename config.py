@@ -1,8 +1,11 @@
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 
-# Load env variables
-load_dotenv()
+PROJECT_ROOT = Path(__file__).resolve().parent
+
+# Load env variables from project root
+load_dotenv(PROJECT_ROOT / ".env")
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
@@ -16,7 +19,8 @@ def _get_admin_ids() -> list[int]:
     return ids
 
 ADMIN_IDS = _get_admin_ids()
-DB_PATH = os.getenv("LEAGUE_SQLITE_PATH", "league.db")
+_env_db_path = os.getenv("LEAGUE_SQLITE_PATH", "league.db")
+DB_PATH = str(PROJECT_ROOT / _env_db_path) if not os.path.isabs(_env_db_path) else _env_db_path
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 def _get_gemini_chat_keys() -> list[str]:
     keys_raw = os.getenv("GEMINI_CHAT_API_KEY", "")

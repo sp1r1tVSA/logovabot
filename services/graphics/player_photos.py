@@ -20,8 +20,12 @@ import urllib.parse
 
 logger = logging.getLogger(__name__)
 
-BASE_DIR   = os.path.dirname(__file__)
-PHOTOS_DIR = os.path.join(BASE_DIR, "assets", "players")
+from pathlib import Path
+
+# Project root directory (services/graphics -> services -> root)
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+BASE_DIR   = str(PROJECT_ROOT)
+PHOTOS_DIR = str(PROJECT_ROOT / "assets" / "players")
 
 # Latin ligatures and special character replacement
 TRANSLIT_LATIN = {
