@@ -142,7 +142,12 @@ async def handle_get_predictions(request: web.Request) -> web.Response:
     status_filter = request.query.get("status")
     if status_filter and status_filter not in VALID_STATUSES:
         status_filter = None  # ignore unknown filter
-    limit = min(50, int(request.query.get("limit", 30)))
+
+    try:
+        raw_limit = int(request.query.get("limit", 30))
+        limit = max(1, min(50, raw_limit))
+    except (ValueError, TypeError):
+        limit = 30
 
     bets = database.get_user_bets(user_id, status=status_filter, limit=limit)
 
@@ -231,3 +236,59 @@ async def handle_repeat_prediction(request: web.Request) -> web.Response:
         "selections": cloned_selections,
         "message": f"Скопировано {len(cloned_selections)} событий в купон."
     })
+
+
+async def handle_get_cashout_quote(request: web.Request) -> web.Response:
+    """
+    GET /api/predictions/{id}/cashout-quote
+    Returns live cashout valuation.
+    """
+    init_data = request.headers.get("X-Telegram-Init-Data", "")
+    user_info = get_authenticated_user(init_data)
+    if not user_info or "id" not in user_info:
+        return web.json_response({"status": "error", "error": "unauthorized"}, status=401)
+
+    user_id = user_info["id"]
+    try:
+        bet_id = int(request.match_info["id"])
+    except (KeyError, ValueError):
+        return web.json_response({"status": "error", "message": "Некорректный ID."}, status=400)
+
+    from services.cashout_engine import quote_cashout
+    quote = quote_cashout(user_id=user_id, bet_id=bet_id)
+    return web.json_response({"status": "ok", "quote": quote})
+
+
+async def handle_execute_cashout(request: web.Request) -> web.Response:
+    """
+    POST /api/predictions/{id}/cashout
+    Executes atomic early cashout settlement.
+    """
+    init_data = request.headers.get("X-Telegram-Init-Data", "")
+    user_info = get_authenticated_user(init_data)
+    if not user_info or "id" not in user_info:
+        return web.json_response({"status": "error", "error": "unauthorized"}, status=401)
+
+    user_id = user_info["id"]
+    try:
+        bet_id = int(request.match_info["id"])
+    except (KeyError, ValueError):
+        return web.json_response({"status": "error", "message": "Некорректный ID."}, status=400)
+
+    idempotency_key = None
+    try:
+        body = await request.json()
+        idempotency_key = body.get("idempotency_key")
+    except Exception:
+        pass
+
+    from services.cashout_engine import execute_cashout
+    success, result = execute_cashout(user_id=user_id, bet_id=bet_id, idempotency_key=idempotency_key)
+    if not success:
+        return web.json_response({
+            "status": "error",
+            "error": result.get("error") if isinstance(result, dict) else "CASHOUT_FAILED",
+            "message": result.get("message") if isinstance(result, dict) else str(result)
+        }, status=400)
+
+    return web.json_response({"status": "ok", "result": result})

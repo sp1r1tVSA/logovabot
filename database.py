@@ -437,6 +437,7 @@ def init_db() -> None:
                 total_won INTEGER NOT NULL DEFAULT 0,
                 bets_count INTEGER NOT NULL DEFAULT 0,
                 bets_won INTEGER NOT NULL DEFAULT 0,
+                daily_limit INTEGER,
                 last_bonus_at TEXT,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -473,13 +474,19 @@ def init_db() -> None:
                 amount INTEGER NOT NULL,
                 total_odd REAL NOT NULL,
                 potential_win INTEGER NOT NULL,
-                status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'won', 'lost', 'refunded')),
+                status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'won', 'lost', 'refunded', 'cancelled')),
+                system_config TEXT,
+                actual_payout INTEGER DEFAULT 0,
+                idempotency_key TEXT,
+                idempotency_payload_hash TEXT,
+                cashout_at TIMESTAMP,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 settled_at TIMESTAMP
             )
         """)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_bets_user ON user_bets(user_id, status)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_bets_status ON user_bets(status)")
+        cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_user_bets_idempotency ON user_bets(user_id, idempotency_key) WHERE idempotency_key IS NOT NULL")
 
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS bet_items (
@@ -489,6 +496,9 @@ def init_db() -> None:
                 outcome_type TEXT NOT NULL,
                 odd REAL NOT NULL,
                 status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'won', 'lost', 'refunded')),
+                market_id INTEGER,
+                selection_id INTEGER,
+                odds_at_placement REAL,
                 FOREIGN KEY(bet_id) REFERENCES user_bets(id) ON DELETE CASCADE,
                 FOREIGN KEY(match_id) REFERENCES matches(id) ON DELETE CASCADE
             )
@@ -503,6 +513,8 @@ def init_db() -> None:
                 amount INTEGER NOT NULL,
                 transaction_type TEXT NOT NULL,
                 reference_id INTEGER,
+                reference_type TEXT,
+                balance_after INTEGER,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -849,6 +861,417 @@ def init_db() -> None:
 
         # (quests_catalog, user_quests, pvp_duels tables removed in v2.0 cleanup)
 
+        # ─── Phase 6: Live Match States ──────────────────────────────────────
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS live_match_states (
+                match_id INTEGER PRIMARY KEY,
+                season_id INTEGER NOT NULL DEFAULT 1,
+                division_id INTEGER NOT NULL DEFAULT 1,
+                status TEXT NOT NULL DEFAULT 'SCHEDULED',
+                period TEXT NOT NULL DEFAULT 'pre_match',
+                minute INTEGER,
+                home_score INTEGER NOT NULL DEFAULT 0,
+                away_score INTEGER NOT NULL DEFAULT 0,
+                provider TEXT NOT NULL DEFAULT 'none',
+                provider_match_id TEXT,
+                version INTEGER NOT NULL DEFAULT 1,
+                last_updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(match_id) REFERENCES matches(id) ON DELETE CASCADE
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_live_states_status ON live_match_states(status)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_live_states_div_season ON live_match_states(division_id, season_id)")
+
+        # ─── Phase 6: Live Events ────────────────────────────────────────────
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS live_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                match_id INTEGER NOT NULL,
+                provider TEXT NOT NULL,
+                provider_event_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                minute INTEGER NOT NULL,
+                added_time INTEGER,
+                team_id INTEGER,
+                team_name TEXT,
+                player_id INTEGER,
+                player_name TEXT,
+                payload TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(match_id) REFERENCES matches(id) ON DELETE CASCADE,
+                UNIQUE(provider, provider_event_id)
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_live_events_match ON live_events(match_id, minute)")
+
+        # ─── Phase 6: Live Statistics (NULL = unavailable) ───────────────────
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS live_statistics (
+                match_id INTEGER PRIMARY KEY,
+                possession_home REAL,
+                possession_away REAL,
+                shots_home INTEGER,
+                shots_away INTEGER,
+                shots_on_target_home INTEGER,
+                shots_on_target_away INTEGER,
+                corners_home INTEGER,
+                corners_away INTEGER,
+                fouls_home INTEGER,
+                fouls_away INTEGER,
+                offsides_home INTEGER,
+                offsides_away INTEGER,
+                yellow_cards_home INTEGER,
+                yellow_cards_away INTEGER,
+                red_cards_home INTEGER,
+                red_cards_away INTEGER,
+                dangerous_attacks_home INTEGER,
+                dangerous_attacks_away INTEGER,
+                attacks_home INTEGER,
+                attacks_away INTEGER,
+                passes_home INTEGER,
+                passes_away INTEGER,
+                pass_accuracy_home REAL,
+                pass_accuracy_away REAL,
+                xg_home REAL,
+                xg_away REAL,
+                saves_home INTEGER,
+                saves_away INTEGER,
+                substitutions_home INTEGER,
+                substitutions_away INTEGER,
+                provider TEXT NOT NULL DEFAULT 'none',
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(match_id) REFERENCES matches(id) ON DELETE CASCADE
+            )
+        """)
+
+        # ─── Phase 6: Odds Movement Tracking ─────────────────────────────────
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS odds_movement (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                selection_id INTEGER NOT NULL,
+                market_id INTEGER NOT NULL,
+                match_id INTEGER NOT NULL,
+                old_odds REAL NOT NULL,
+                new_odds REAL NOT NULL,
+                pct_change REAL NOT NULL,
+                direction TEXT NOT NULL CHECK(direction IN ('up', 'down', 'neutral')),
+                velocity REAL NOT NULL DEFAULT 0.0,
+                reason TEXT,
+                source TEXT NOT NULL DEFAULT 'system',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(selection_id) REFERENCES market_selections(id) ON DELETE CASCADE,
+                FOREIGN KEY(market_id) REFERENCES markets(id) ON DELETE CASCADE,
+                FOREIGN KEY(match_id) REFERENCES matches(id) ON DELETE CASCADE
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_odds_mov_sel ON odds_movement(selection_id, created_at DESC)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_odds_mov_match ON odds_movement(match_id, created_at DESC)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_odds_mov_created ON odds_movement(created_at DESC)")
+
+        # ─── Phase 6: Notification Events (Deduplicated) ─────────────────────
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS notification_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                event_type TEXT NOT NULL,
+                source_event_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                body TEXT,
+                link TEXT,
+                priority TEXT NOT NULL DEFAULT 'normal',
+                status TEXT NOT NULL DEFAULT 'pending',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                sent_at TIMESTAMP,
+                UNIQUE(user_id, event_type, source_event_id),
+                FOREIGN KEY(user_id) REFERENCES users(telegram_id) ON DELETE CASCADE
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_notif_events_user ON notification_events(user_id, status, created_at DESC)")
+
+        # ─── Phase 6: Provider Sync State ─────────────────────────────────────
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS provider_sync_state (
+                provider TEXT PRIMARY KEY,
+                last_sync_at TIMESTAMP,
+                status TEXT NOT NULL DEFAULT 'idle',
+                error_count INTEGER NOT NULL DEFAULT 0,
+                last_error TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        # ─── Phase 7: Team Elo Ratings ───────────────────────────────────────
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS team_ratings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                team_name TEXT NOT NULL,
+                division_id INTEGER NOT NULL DEFAULT 1,
+                season_id INTEGER NOT NULL DEFAULT 1,
+                elo_rating REAL NOT NULL DEFAULT 1500.0,
+                matches_counted INTEGER NOT NULL DEFAULT 0,
+                last_updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(team_name, division_id, season_id),
+                FOREIGN KEY(division_id) REFERENCES divisions(id) ON DELETE CASCADE,
+                FOREIGN KEY(season_id) REFERENCES seasons(id) ON DELETE CASCADE
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_team_ratings_div ON team_ratings(division_id, season_id)")
+
+        # ─── Phase 7: AI Predictions with Versioning & Resolution Tracking ───
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS predictions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                match_id INTEGER NOT NULL,
+                division_id INTEGER NOT NULL DEFAULT 1,
+                season_id INTEGER NOT NULL DEFAULT 1,
+                model_version TEXT NOT NULL DEFAULT 'ensemble_v1',
+                feature_version TEXT NOT NULL DEFAULT 'features_v1',
+                home_probability REAL NOT NULL,
+                draw_probability REAL NOT NULL,
+                away_probability REAL NOT NULL,
+                over_1_5_probability REAL,
+                over_2_5_probability REAL,
+                over_3_5_probability REAL,
+                btts_yes_probability REAL,
+                btts_no_probability REAL,
+                confidence REAL NOT NULL DEFAULT 0.5,
+                key_factors TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                resolved_at TIMESTAMP,
+                actual_result TEXT,
+                is_correct BOOLEAN,
+                brier_score REAL,
+                FOREIGN KEY(match_id) REFERENCES matches(id) ON DELETE CASCADE,
+                FOREIGN KEY(division_id) REFERENCES divisions(id) ON DELETE CASCADE,
+                FOREIGN KEY(season_id) REFERENCES seasons(id) ON DELETE CASCADE
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_predictions_match ON predictions(match_id, model_version)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_predictions_div_season ON predictions(division_id, season_id, created_at DESC)")
+
+        # ─── Phase 7: Live & Pre-Match Prediction Snapshots ───────────────────
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS prediction_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                match_id INTEGER NOT NULL,
+                stage TEXT NOT NULL CHECK(stage IN ('PRE_MATCH', 'LIVE', 'FINAL')),
+                minute INTEGER,
+                home_score INTEGER NOT NULL DEFAULT 0,
+                away_score INTEGER NOT NULL DEFAULT 0,
+                home_prob REAL NOT NULL,
+                draw_prob REAL NOT NULL,
+                away_prob REAL NOT NULL,
+                confidence REAL NOT NULL,
+                snapshot_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(match_id) REFERENCES matches(id) ON DELETE CASCADE
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_pred_snapshots_match ON prediction_snapshots(match_id, snapshot_at DESC)")
+
+        # ─── Phase 8: Real Sports Provider Integration & Telemetry ────────────
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS sports_providers (
+                provider_name TEXT PRIMARY KEY,
+                display_name TEXT NOT NULL,
+                is_active BOOLEAN NOT NULL DEFAULT 1,
+                base_url TEXT,
+                rate_limit_rpm INTEGER DEFAULT 60,
+                circuit_breaker_status TEXT DEFAULT 'CLOSED',
+                consecutive_failures INTEGER DEFAULT 0,
+                last_sync_at TIMESTAMP,
+                last_error TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS provider_matches (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                provider TEXT NOT NULL,
+                provider_match_id TEXT NOT NULL,
+                match_id INTEGER NOT NULL,
+                division_id INTEGER NOT NULL DEFAULT 1,
+                season_id INTEGER NOT NULL DEFAULT 1,
+                status TEXT NOT NULL DEFAULT 'SCHEDULED',
+                home_score INTEGER NOT NULL DEFAULT 0,
+                away_score INTEGER NOT NULL DEFAULT 0,
+                minute INTEGER,
+                last_update_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                payload TEXT,
+                UNIQUE(provider, provider_match_id),
+                FOREIGN KEY(match_id) REFERENCES matches(id) ON DELETE CASCADE
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_provider_matches_lookup ON provider_matches(provider, provider_match_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_provider_matches_match ON provider_matches(match_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_provider_matches_update ON provider_matches(last_update_at)")
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS provider_sync_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                provider TEXT NOT NULL,
+                endpoint TEXT NOT NULL,
+                status_code INTEGER,
+                records_count INTEGER DEFAULT 0,
+                latency_ms REAL DEFAULT 0.0,
+                error_message TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_provider_sync_log_provider ON provider_sync_log(provider, created_at DESC)")
+
+        # ─── Phase 9: Risk Engine, Centralized Limits & Alerts ──────────────
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS risk_alerts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                alert_type TEXT NOT NULL,
+                severity TEXT NOT NULL CHECK(severity IN ('low', 'medium', 'high', 'critical')),
+                division_id INTEGER,
+                match_id INTEGER,
+                market_id INTEGER,
+                selection_id INTEGER,
+                message TEXT NOT NULL,
+                details_json TEXT,
+                status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'acknowledged', 'resolved')),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                resolved_at TIMESTAMP,
+                FOREIGN KEY(division_id) REFERENCES divisions(id) ON DELETE CASCADE,
+                FOREIGN KEY(match_id) REFERENCES matches(id) ON DELETE CASCADE,
+                FOREIGN KEY(market_id) REFERENCES markets(id) ON DELETE CASCADE
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_risk_alerts_status ON risk_alerts(status, severity)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_risk_alerts_div ON risk_alerts(division_id, created_at)")
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS risk_limits_config (
+                scope_type TEXT NOT NULL,
+                scope_id INTEGER NOT NULL DEFAULT 0,
+                limit_key TEXT NOT NULL,
+                limit_value REAL NOT NULL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY(scope_type, scope_id, limit_key)
+            )
+        """)
+
+        # Performance indexes for risk and exposure aggregations
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_bets_exposure ON user_bets(status, settled_at)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_bet_items_exposure ON bet_items(market_id, selection_id, status)")
+
+        cursor.execute("""
+            INSERT OR IGNORE INTO schema_migrations (version, description)
+            VALUES ('009_phase9_risk_and_limits', 'Phase 9: Production Betting Intelligence, Risk Engine & Alerts')
+        """)
+
+        # ─── Phase 10: Economy, Ranking & Seasonal Progression ──────────────
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS season_player_stats (
+                user_id INTEGER NOT NULL,
+                season_id INTEGER NOT NULL DEFAULT 1,
+                division_id INTEGER NOT NULL DEFAULT 1,
+                rating REAL NOT NULL DEFAULT 1200.0,
+                confidence REAL NOT NULL DEFAULT 350.0,
+                season_points REAL NOT NULL DEFAULT 0.0,
+                total_bets INTEGER NOT NULL DEFAULT 0,
+                settled_bets INTEGER NOT NULL DEFAULT 0,
+                wins INTEGER NOT NULL DEFAULT 0,
+                losses INTEGER NOT NULL DEFAULT 0,
+                voids INTEGER NOT NULL DEFAULT 0,
+                win_rate REAL NOT NULL DEFAULT 0.0,
+                roi REAL NOT NULL DEFAULT 0.0,
+                total_stake INTEGER NOT NULL DEFAULT 0,
+                total_payout INTEGER NOT NULL DEFAULT 0,
+                current_streak INTEGER NOT NULL DEFAULT 0,
+                best_streak INTEGER NOT NULL DEFAULT 0,
+                value_bets_hit INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK(status IN ('ACTIVE', 'QUALIFYING', 'INACTIVE')),
+                rank INTEGER DEFAULT NULL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY(user_id, season_id, division_id)
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_sps_leaderboard ON season_player_stats(season_id, division_id, rating DESC, season_points DESC)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_sps_user ON season_player_stats(user_id)")
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS season_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                season_id INTEGER NOT NULL,
+                division_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                final_rank INTEGER NOT NULL,
+                final_rating REAL NOT NULL,
+                season_points REAL NOT NULL,
+                wins INTEGER NOT NULL,
+                losses INTEGER NOT NULL,
+                voids INTEGER NOT NULL DEFAULT 0,
+                settled_bets INTEGER NOT NULL,
+                win_rate REAL NOT NULL,
+                roi REAL NOT NULL,
+                total_stake INTEGER NOT NULL DEFAULT 0,
+                total_payout INTEGER NOT NULL DEFAULT 0,
+                best_streak INTEGER NOT NULL DEFAULT 0,
+                promotion_status TEXT NOT NULL CHECK(promotion_status IN ('PROMOTED', 'RELEGATED', 'STAY', 'INACTIVE')),
+                rewards_json TEXT DEFAULT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(season_id, division_id, user_id)
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_snapshots_season_div ON season_snapshots(season_id, division_id, final_rank)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_snapshots_user ON season_snapshots(user_id)")
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS season_rules_config (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                season_id INTEGER NOT NULL,
+                division_id INTEGER NOT NULL,
+                promotion_slots INTEGER NOT NULL DEFAULT 3,
+                relegation_slots INTEGER NOT NULL DEFAULT 3,
+                min_bets_qualification INTEGER NOT NULL DEFAULT 5,
+                min_matches_qualification INTEGER NOT NULL DEFAULT 3,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(season_id, division_id)
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS season_rewards_catalog (
+                id TEXT PRIMARY KEY,
+                season_id INTEGER,
+                division_id INTEGER,
+                name TEXT NOT NULL,
+                reward_type TEXT NOT NULL CHECK(reward_type IN ('coins', 'xp', 'badge', 'title')),
+                amount INTEGER NOT NULL DEFAULT 0,
+                badge_id TEXT DEFAULT NULL,
+                title TEXT DEFAULT NULL,
+                criteria TEXT NOT NULL CHECK(criteria IN ('CHAMPION', 'TOP_3', 'TOP_10', 'PROMOTION', 'PARTICIPATION'))
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS season_reward_ledger (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                season_id INTEGER NOT NULL,
+                division_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                reward_id TEXT NOT NULL,
+                reward_type TEXT NOT NULL,
+                coins_awarded INTEGER NOT NULL DEFAULT 0,
+                xp_awarded INTEGER NOT NULL DEFAULT 0,
+                badge_awarded TEXT DEFAULT NULL,
+                status TEXT NOT NULL DEFAULT 'PENDING' CHECK(status IN ('PENDING', 'DISTRIBUTED')),
+                distributed_at TIMESTAMP DEFAULT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(user_id, season_id, reward_id)
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_reward_ledger_user ON season_reward_ledger(user_id, season_id)")
+
+        cursor.execute("""
+            INSERT OR IGNORE INTO schema_migrations (version, description)
+            VALUES ('010_phase10_economy_and_progression', 'Phase 10: Logovo Economy, Ranking & Seasonal Progression')
+        """)
 
         # Standardize and migrate canonical team names across all tables
         migrate_team_names_canonical(cursor)
@@ -6029,6 +6452,7 @@ def get_bet_market_by_match_id(match_id: int) -> dict | None:
 # Phase 5: Bet limits (server-side, cannot be bypassed by client)
 _MAX_BET: int = 50_000
 _MAX_PAYOUT: int = 500_000
+_bet_placement_lock = threading.RLock()
 
 
 def place_user_bet(
@@ -6065,7 +6489,7 @@ def place_user_bet(
     )
     _payload_hash = _hashlib.sha256(_payload_for_hash.encode()).hexdigest()
 
-    with transaction() as conn:
+    with _bet_placement_lock, transaction() as conn:
         cursor = conn.cursor()
 
         # Idempotency 2.0: key + payload hash check (Phase 5)
@@ -6081,6 +6505,47 @@ def place_user_bet(
                     return False, {"error": "IDEMPOTENCY_KEY_REUSED",
                                    "message": "Ключ идемпотентности уже использован для другой ставки."}
                 return True, existing["id"]
+
+        # Phase 9: Risk Engine Evaluation
+        try:
+            from services.risk_engine import RiskEngine
+            first_m_id = selections[0].get("match_id") if selections else None
+            div_id = None
+            if first_m_id:
+                cursor.execute("SELECT division_id FROM matches WHERE id = ?", (first_m_id,))
+                m_r = cursor.fetchone()
+                div_id = m_r["division_id"] if m_r and "division_id" in m_r.keys() else None
+
+            risk_decision = RiskEngine.evaluate_bet(
+                user_id=user_id,
+                amount=amount,
+                selections=selections,
+                division_id=div_id
+            )
+            if not risk_decision.allowed:
+                if risk_decision.reason == "MIN_STAKE":
+                    return False, "Минимальная сумма прогноза — 10 🪙."
+                if risk_decision.reason == "MAX_STAKE":
+                    return False, {"error": "MAX_BET_EXCEEDED", "max_bet": _MAX_BET,
+                                   "message": f"Максимальная сумма ставки — {_MAX_BET:,} 🪙."}
+                if risk_decision.reason == "MAX_PAYOUT":
+                    return False, {"error": "MAX_PAYOUT_EXCEEDED", "max_payout": _MAX_PAYOUT,
+                                   "message": f"Потенциальный выигрыш превышает максимум {_MAX_PAYOUT:,} 🪙."}
+                if risk_decision.reason == "INSUFFICIENT_BALANCE":
+                    wallet = get_or_create_wallet(user_id)
+                    return False, f"Недостаточно монет на балансе (Баланс: {wallet['balance']} 🪙)."
+                if risk_decision.reason in ("MARKET_SUSPENDED", "INVALID_MARKET"):
+                    return False, risk_decision.message or "Рынок на данный исход временно приостановлен или закрыт."
+
+                err_dict = {
+                    "error": risk_decision.reason,
+                    "message": risk_decision.message,
+                }
+                if risk_decision.max_allowed_stake is not None:
+                    err_dict["max_allowed_stake"] = risk_decision.max_allowed_stake
+                return False, err_dict
+        except Exception as e:
+            logger.debug(f"RiskEngine evaluation fallback: {e}")
 
         wallet = get_or_create_wallet(user_id)
         if wallet["balance"] < amount:
@@ -6197,8 +6662,11 @@ def place_user_bet(
             odd_val = round(float(odd_val), 2)
 
             # Phase 5: ODDS_CHANGED detection — client odd vs server odd
+            # Only trigger ODDS_CHANGED if client explicitly references a specific market selection
+            # (relational betting via selection_id or market_id). Legacy bets without selection_id
+            # have client odds safely ignored and overridden by server odds.
             client_odd = s.get("odd")
-            if client_odd is not None:
+            if (s.get("selection_id") is not None or s.get("market_id") is not None) and client_odd is not None:
                 client_odd_rounded = round(float(client_odd), 2)
                 if abs(client_odd_rounded - odd_val) > 0.001:
                     return False, {
@@ -6242,11 +6710,22 @@ def place_user_bet(
         new_balance = cursor.fetchone()["balance"]
 
         # 2. Insert user_bet (Phase 5: includes idempotency_payload_hash)
-        cursor.execute("""
-            INSERT INTO user_bets (user_id, bet_type, amount, total_odd, potential_win, status, idempotency_key, idempotency_payload_hash)
-            VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)
-        """, (user_id, bet_type, amount, total_odd, potential_win, idempotency_key, _payload_hash))
-        bet_id = cursor.lastrowid
+        try:
+            cursor.execute("""
+                INSERT INTO user_bets (user_id, bet_type, amount, total_odd, potential_win, status, idempotency_key, idempotency_payload_hash)
+                VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)
+            """, (user_id, bet_type, amount, total_odd, potential_win, idempotency_key, _payload_hash))
+            bet_id = cursor.lastrowid
+        except sqlite3.IntegrityError:
+            if idempotency_key:
+                cursor.execute(
+                    "SELECT id, idempotency_payload_hash FROM user_bets WHERE user_id = ? AND idempotency_key = ?",
+                    (user_id, idempotency_key)
+                )
+                existing = cursor.fetchone()
+                if existing:
+                    return True, existing["id"]
+            raise
 
         # 3. Insert items
         for item in validated_items:
@@ -6270,6 +6749,105 @@ def place_user_bet(
         """, (user_id, -amount, bet_id, new_balance))
 
         return True, bet_id
+
+
+def execute_cashout(
+    user_id: int,
+    bet_id: int,
+    idempotency_key: str | None = None
+) -> tuple[bool, dict | str]:
+    """
+    Execute atomic early cashout settlement (Phase 9).
+    1. Check if bet is pending and not yet settled (settled_at IS NULL).
+    2. Verify matches/markets are still active.
+    3. Calculate cashout offer.
+    4. Atomically update user_bets (actual_payout = offer, cashout_at = CURRENT_TIMESTAMP, settled_at = CURRENT_TIMESTAMP, status = 'won').
+    5. Credit user_wallets and record coin_transactions with transaction_type = 'cashout'.
+    """
+    with _bet_placement_lock, transaction() as conn:
+        cursor = conn.cursor()
+
+        # 1. Fetch bet
+        cursor.execute("SELECT * FROM user_bets WHERE id = ? AND user_id = ?", (bet_id, user_id))
+        bet = cursor.fetchone()
+        if not bet:
+            return False, {"error": "BET_NOT_FOUND", "message": f"Ставка #{bet_id} не найдена."}
+
+        if bet["settled_at"] is not None or bet["status"] != "pending":
+            return False, {"error": "ALREADY_SETTLED", "message": "Ставка уже рассчитана или закрыта."}
+
+        # 2. Fetch bet items
+        cursor.execute("""
+            SELECT bi.*,
+                   ms.odds_value as current_odd,
+                   ms.status as sel_status,
+                   m.status as market_status,
+                   mat.status as match_status
+            FROM bet_items bi
+            LEFT JOIN market_selections ms ON bi.selection_id = ms.id
+            LEFT JOIN markets m ON bi.market_id = m.id
+            LEFT JOIN matches mat ON bi.match_id = mat.id
+            WHERE bi.bet_id = ?
+        """, (bet_id,))
+        items = [dict(r) for r in cursor.fetchall()]
+
+        for it in items:
+            if it.get("match_status") in ("completed", "confirmed", "cancelled"):
+                return False, {"error": "MATCH_TERMINAL", "message": "Один или несколько матчей уже завершены."}
+            if it.get("market_status") in ("suspended", "closed", "settled") or it.get("sel_status") in ("suspended", "locked", "settled"):
+                return False, {"error": "MARKET_UNAVAILABLE", "message": "Рынок временно приостановлен или закрыт."}
+
+        # 3. Calculate cashout offer
+        from services.cashout_engine import calculate_cashout_offer
+        available, offer, reason = calculate_cashout_offer(
+            stake=bet["amount"],
+            potential_win=bet["potential_win"],
+            items=items
+        )
+
+        if not available or offer <= 0:
+            return False, {"error": "CASHOUT_UNAVAILABLE", "reason": reason, "message": "Cashout временно недоступен для данного купона."}
+
+        # 4. Atomically settle bet as cashout
+        cursor.execute("""
+            UPDATE user_bets
+            SET status = 'won',
+                actual_payout = ?,
+                cashout_at = CURRENT_TIMESTAMP,
+                settled_at = CURRENT_TIMESTAMP
+            WHERE id = ? AND settled_at IS NULL AND status = 'pending'
+        """, (offer, bet_id))
+
+        if cursor.rowcount == 0:
+            return False, {"error": "ALREADY_SETTLED", "message": "Ставка уже рассчитана другим процессом."}
+
+        # 5. Credit user wallet
+        get_or_create_wallet(user_id)
+        cursor.execute("""
+            UPDATE user_wallets
+            SET balance = balance + ?,
+                total_won = total_won + ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE user_id = ?
+        """, (offer, offer, user_id))
+
+        cursor.execute("SELECT balance FROM user_wallets WHERE user_id = ?", (user_id,))
+        new_balance = cursor.fetchone()["balance"]
+
+        # 6. Record transaction
+        cursor.execute("""
+            INSERT INTO coin_transactions (user_id, amount, transaction_type, reference_id, reference_type, balance_after)
+            VALUES (?, ?, 'cashout', ?, 'bet', ?)
+        """, (user_id, offer, bet_id, new_balance))
+
+        return True, {
+            "bet_id": bet_id,
+            "status": "cashed_out",
+            "cashout_payout": offer,
+            "payout": offer,
+            "balance": new_balance,
+            "message": f"✅ Ставка #{bet_id} успешно закрыта досрочно (+{offer} 🪙)"
+        }
 
 
 def get_user_balance(user_id: int) -> int:
@@ -6415,6 +6993,9 @@ def log_betting_audit(
         return cursor.lastrowid
 
 
+write_bet_audit_log = log_betting_audit
+
+
 # Market lifecycle valid transitions (Phase 5)
 # Market lifecycle valid transitions — aligned with DB CHECK constraint:
 # markets.status IN ('open','suspended','closed','settled','voided')
@@ -6550,17 +7131,20 @@ def void_user_bet(bet_id: int, actor_id: int) -> dict:
         if not bet:
             raise ValueError(f"Bet #{bet_id} not found.")
 
-        if bet["status"] in ("refunded", "cancelled", "void"):
-            raise ValueError(f"Bet #{bet_id} is already {bet['status']}.")
+        if bet["status"] != "pending":
+            raise ValueError(f"Bet #{bet_id} cannot be voided because it is already {bet['status']}.")
 
         stake = bet["amount"]
         user_id = bet["user_id"]
 
         # Void the bet and all its items
         cursor.execute(
-            "UPDATE user_bets SET status = 'refunded', actual_payout = ?, settled_at = CURRENT_TIMESTAMP WHERE id = ? AND settled_at IS NULL",
+            "UPDATE user_bets SET status = 'refunded', actual_payout = ?, settled_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'pending' AND settled_at IS NULL",
             (stake, bet_id),
         )
+        if cursor.rowcount == 0:
+            raise ValueError(f"Bet #{bet_id} could not be voided (already settled or refunded).")
+
         cursor.execute(
             "UPDATE bet_items SET status = 'refunded' WHERE bet_id = ? AND status = 'pending'",
             (bet_id,),
@@ -6711,7 +7295,18 @@ def seed_gamification_catalog(cursor) -> None:
         ("ACH_LOGIN_7", "🔥 Неделя в строю", "Заходить в игру 7 дней подряд", "loyalty", "rare", 800, 1500, "🔥"),
         ("ACH_LOGIN_30", "🐺 Вожак Стаи", "Заходить в игру 30 дней подряд", "loyalty", "legendary", 4000, 10000, "🐺"),
         ("ACH_TB_SPECIALIST", "⚽ Голевой Маньяк", "Выиграть 5 прогнозов на Тотал Больше 2.5", "markets", "rare", 500, 1000, "⚽"),
-        ("ACH_BTTS_MASTER", "🤝 Обе Забьют", "Выиграть 5 прогнозов на Обе Забьют", "markets", "rare", 500, 1000, "🤝")
+        ("ACH_BTTS_MASTER", "🤝 Обе Забьют", "Выиграть 5 прогнозов на Обе Забьют", "markets", "rare", 500, 1000, "🤝"),
+        # Phase 10 Competitive & Seasonal Achievements
+        ("ACH_10_WINS", "🎯 10 Побед", "Выиграть 10 любых прогнозов", "volume", "common", 400, 800, "🎯"),
+        ("ACH_50_WINS", "🏆 50 Побед", "Выиграть 50 любых прогнозов", "volume", "rare", 1500, 3000, "🏆"),
+        ("ACH_100_WINS", "👑 100 Побед", "Выиграть 100 любых прогнозов", "volume", "legendary", 3500, 7000, "👑"),
+        ("ACH_POSITIVE_ROI", "📈 В Плюсе", "Достичь положительного ROI при 10+ прогнозах", "skill", "rare", 800, 1500, "📈"),
+        ("ACH_VALUE_HUNTER", "💎 Охотник за Валуем", "Выиграть 5 валуйных прогнозов с перевесом", "skill", "epic", 1200, 2500, "💎"),
+        ("ACH_HOT_STREAK", "🔥 Горячая Серия", "Оформить серию из 5 побед подряд", "streaks", "rare", 750, 1500, "🔥"),
+        ("ACH_NO_LOSS_STREAK", "🛡 Без Поражений", "Оформить серию из 7 побед подряд без поражений", "streaks", "epic", 1800, 3500, "🛡"),
+        ("ACH_SEASON_TOP_10", "🌟 Топ-10 Сезона", "Завершить сезон в топ-10 своего дивизиона", "seasonal", "epic", 2000, 4000, "🌟"),
+        ("ACH_SEASON_CHAMPION", "🥇 Чемпион Сезона", "Занять 1-е место в дивизионе по итогам сезона", "seasonal", "legendary", 5000, 10000, "🥇"),
+        ("ACH_PROMOTED", "🚀 Повышение в Классе", "Заработать повышение в высший дивизион", "seasonal", "rare", 1000, 2000, "🚀")
     ]
     for ach in achievements:
         cursor.execute("""
@@ -6727,7 +7322,33 @@ def seed_gamification_catalog(cursor) -> None:
                 badge_icon = excluded.badge_icon
         """, ach)
 
-    # Quest catalog removed in v2.0 — no quest seeding
+    # Phase 10: Seed default season rewards
+    default_rewards = [
+        ("REW_CHAMPION", None, None, "Чемпион Дивизиона", "coins", 10000, "BADGE_CHAMPION", "Чемпион Дивизиона 👑", "CHAMPION"),
+        ("REW_TOP_3", None, None, "Призер Сезона (Топ-3)", "coins", 5000, "BADGE_TOP_3", "Призер Сезона 🥈", "TOP_3"),
+        ("REW_TOP_10", None, None, "Элита Дивизиона (Топ-10)", "coins", 2500, "BADGE_TOP_10", "Топ-10 🌟", "TOP_10"),
+        ("REW_PROMOTION", None, None, "Награда за Повышение", "coins", 3000, "BADGE_PROMOTED", "Повышен в классе 🚀", "PROMOTION"),
+        ("REW_PARTICIPATION", None, None, "Участник Сезона", "xp", 500, None, None, "PARTICIPATION"),
+    ]
+    for rew in default_rewards:
+        cursor.execute("""
+            INSERT INTO season_rewards_catalog (id, season_id, division_id, name, reward_type, amount, badge_id, title, criteria)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                name = excluded.name,
+                reward_type = excluded.reward_type,
+                amount = excluded.amount,
+                badge_id = excluded.badge_id,
+                title = excluded.title,
+                criteria = excluded.criteria
+        """, rew)
+
+    # Phase 10: Seed default division rules
+    for div_id in range(1, 6):
+        cursor.execute("""
+            INSERT OR IGNORE INTO season_rules_config (season_id, division_id, promotion_slots, relegation_slots, min_bets_qualification, min_matches_qualification)
+            VALUES (1, ?, 3, 3, 5, 3)
+        """, (div_id,))
 
 
 def get_or_create_progression(user_id: int) -> dict:
@@ -6927,10 +7548,14 @@ def claim_achievement_reward(user_id: int, achievement_id: str) -> tuple[bool, s
 
         if not row:
             return False, "Достижение ещё не разблокировано.", {}
-        if row["is_claimed"]:
+        cursor.execute("""
+            UPDATE user_achievements
+            SET is_claimed = 1
+            WHERE user_id = ? AND achievement_id = ? AND is_claimed = 0
+        """, (user_id, achievement_id))
+        if cursor.rowcount == 0:
             return False, "Награда за достижение уже получена.", {}
 
-        cursor.execute("UPDATE user_achievements SET is_claimed = 1 WHERE user_id = ? AND achievement_id = ?", (user_id, achievement_id))
         xp_res = add_user_xp(user_id, row["reward_xp"])
         add_coins(user_id, row["reward_coins"], tx_type="achievement_reward")
 
@@ -7014,15 +7639,433 @@ def get_public_gamer_profile(user_id: int) -> dict:
             "frame": prog["equipped_frame"],
             "streak": prog["current_streak"],
             "best_streak": prog["best_streak"],
-            "balance": wallet["balance"],
-            "total_wagered": wallet["total_wagered"],
-            "total_won": wallet["total_won"],
             "bets_count": wallet["bets_count"],
             "bets_won": wallet["bets_won"],
             "win_rate": win_rate,
             "unlocked_achievements_count": len(unlocked_ach),
             "achievements": unlocked_ach[:6]
         }
+
+
+# ─── Phase 10: Competitive Profile, Season Stats & Career History ───────────
+
+def get_user_favorite_stats(user_id: int) -> dict:
+    """Analyze settled user bets to determine favorite markets, teams, prediction accuracy, and value hit rate."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT bi.market_id, bi.selection_id, bi.status, bi.odd,
+                   m.market_key, m.match_id,
+                   mat.player1_team, mat.player2_team
+            FROM bet_items bi
+            JOIN user_bets ub ON bi.bet_id = ub.id
+            LEFT JOIN markets m ON bi.market_id = m.id
+            LEFT JOIN matches mat ON bi.match_id = mat.id
+            WHERE ub.user_id = ? AND bi.status IN ('won', 'lost')
+        """, (user_id,))
+        items = cursor.fetchall()
+
+        if not items:
+            return {
+                "favorite_markets": [],
+                "favorite_teams": [],
+                "prediction_accuracy": 0.0,
+                "value_hit_rate": 0.0
+            }
+
+        market_counts = {}
+        team_counts = {}
+        won_count = 0
+        value_bets_count = 0
+        value_won_count = 0
+
+        for r in items:
+            m_key = r["market_key"] or "1x2"
+            market_counts[m_key] = market_counts.get(m_key, 0) + 1
+
+            t1 = r["player1_team"]
+            t2 = r["player2_team"]
+            if t1:
+                team_counts[t1] = team_counts.get(t1, 0) + 1
+            if t2:
+                team_counts[t2] = team_counts.get(t2, 0) + 1
+
+            is_win = (r["status"] == "won")
+            if is_win:
+                won_count += 1
+
+            odd = float(r["odd"] or 1.0)
+            if odd >= 2.0:
+                value_bets_count += 1
+                if is_win:
+                    value_won_count += 1
+
+        sorted_markets = sorted(market_counts.keys(), key=lambda k: market_counts[k], reverse=True)[:3]
+        sorted_teams = sorted(team_counts.keys(), key=lambda k: team_counts[k], reverse=True)[:3]
+        accuracy = round((won_count / len(items)) * 100, 1)
+        val_hit_rate = round((value_won_count / max(1, value_bets_count)) * 100, 1) if value_bets_count > 0 else 0.0
+
+        return {
+            "favorite_markets": sorted_markets,
+            "favorite_teams": sorted_teams,
+            "prediction_accuracy": accuracy,
+            "value_hit_rate": val_hit_rate
+        }
+
+
+def get_or_create_season_stats(user_id: int, season_id: int | None = None, division_id: int | None = None) -> dict:
+    """Fetch or initialize player's season-scoped stats record."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+
+        target_s_id = season_id
+        if target_s_id is None:
+            act = get_active_season()
+            target_s_id = act["id"] if act else 1
+
+        target_d_id = division_id
+        if target_d_id is None:
+            cursor.execute("SELECT division_id FROM users WHERE telegram_id = ?", (user_id,))
+            u_row = cursor.fetchone()
+            target_d_id = (u_row["division_id"] if u_row and u_row["division_id"] else 1)
+
+        cursor.execute("""
+            SELECT * FROM season_player_stats
+            WHERE user_id = ? AND season_id = ? AND division_id = ?
+        """, (user_id, target_s_id, target_d_id))
+        row = cursor.fetchone()
+        if row:
+            return dict(row)
+
+        cursor.execute("""
+            INSERT OR IGNORE INTO season_player_stats (user_id, season_id, division_id, rating, confidence, season_points, status)
+            VALUES (?, ?, ?, 1200.0, 350.0, 0.0, 'QUALIFYING')
+        """, (user_id, target_s_id, target_d_id))
+
+        cursor.execute("""
+            SELECT * FROM season_player_stats
+            WHERE user_id = ? AND season_id = ? AND division_id = ?
+        """, (user_id, target_s_id, target_d_id))
+        return dict(cursor.fetchone())
+
+
+def update_season_player_stats(user_id: int, season_id: int, division_id: int, **kwargs) -> None:
+    """Safely update dynamic season player stats fields."""
+    if not kwargs:
+        return
+    with transaction() as conn:
+        cursor = conn.cursor()
+        # Ensure row exists
+        get_or_create_season_stats(user_id, season_id, division_id)
+
+        set_clauses = []
+        params = []
+        for k, v in kwargs.items():
+            set_clauses.append(f"{k} = ?")
+            params.append(v)
+        set_clauses.append("updated_at = CURRENT_TIMESTAMP")
+
+        params.extend([user_id, season_id, division_id])
+        sql = f"UPDATE season_player_stats SET {', '.join(set_clauses)} WHERE user_id = ? AND season_id = ? AND division_id = ?"
+        cursor.execute(sql, tuple(params))
+
+
+def get_player_season_stats(user_id: int, season_id: int | None = None, division_id: int | None = None) -> dict:
+    """Retrieve player season stats."""
+    return get_or_create_season_stats(user_id, season_id, division_id)
+
+
+def get_player_career_stats(user_id: int) -> dict:
+    """Aggregate career-wide metrics across all completed and active seasons."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT
+                COUNT(id) as total_bets,
+                SUM(CASE WHEN status = 'won' THEN 1 ELSE 0 END) as career_wins,
+                SUM(CASE WHEN status = 'lost' THEN 1 ELSE 0 END) as career_losses,
+                SUM(amount) as career_stake,
+                SUM(CASE WHEN status = 'won' THEN actual_payout ELSE 0 END) as career_payout
+            FROM user_bets
+            WHERE user_id = ? AND status IN ('won', 'lost')
+        """, (user_id,))
+        b_row = cursor.fetchone()
+
+        total_bets = b_row["total_bets"] or 0
+        career_wins = b_row["career_wins"] or 0
+        career_losses = b_row["career_losses"] or 0
+        career_stake = b_row["career_stake"] or 0
+        career_payout = b_row["career_payout"] or 0
+
+        career_roi = round(((career_payout - career_stake) / max(1, career_stake)) * 100, 1) if career_stake > 0 else 0.0
+        career_acc = round((career_wins / max(1, total_bets)) * 100, 1) if total_bets > 0 else 0.0
+
+        cursor.execute("SELECT COUNT(DISTINCT season_id) as seasons_played FROM season_player_stats WHERE user_id = ?", (user_id,))
+        s_played = cursor.fetchone()["seasons_played"] or 0
+
+        cursor.execute("""
+            SELECT
+                SUM(CASE WHEN final_rank = 1 THEN 1 ELSE 0 END) as seasons_won,
+                SUM(CASE WHEN promotion_status = 'PROMOTED' THEN 1 ELSE 0 END) as promotions,
+                SUM(CASE WHEN promotion_status = 'RELEGATED' THEN 1 ELSE 0 END) as relegations,
+                MIN(final_rank) as best_finish,
+                MAX(best_streak) as longest_streak
+            FROM season_snapshots
+            WHERE user_id = ?
+        """, (user_id,))
+        snap_row = cursor.fetchone()
+
+        prog = get_or_create_progression(user_id)
+        ach = get_user_achievements(user_id)
+
+        longest = max(prog.get("best_streak", 0), snap_row["longest_streak"] or 0)
+
+        return {
+            "user_id": user_id,
+            "career_bets": total_bets,
+            "career_wins": career_wins,
+            "career_losses": career_losses,
+            "career_roi": career_roi,
+            "career_accuracy": career_acc,
+            "seasons_played": max(1, s_played),
+            "seasons_won": snap_row["seasons_won"] or 0,
+            "promotions": snap_row["promotions"] or 0,
+            "relegations": snap_row["relegations"] or 0,
+            "achievements_count": sum(1 for a in ach if a["is_unlocked"]),
+            "best_finish": snap_row["best_finish"] or 1,
+            "longest_streak": longest
+        }
+
+
+def get_public_player_profile(user_id: int, season_id: int | None = None, division_id: int | None = None) -> dict:
+    """
+    Assemble strictly PUBLIC player profile 2.0.
+    CRITICAL: Never reveals wallet balance, coin totals, or private betting transactions.
+    """
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM users WHERE telegram_id = ?", (user_id,))
+        user_row = cursor.fetchone()
+
+        prog = get_or_create_progression(user_id)
+        s_stats = get_or_create_season_stats(user_id, season_id, division_id)
+        fav = get_user_favorite_stats(user_id)
+        achievements = get_user_achievements(user_id)
+        unlocked_ach = [a for a in achievements if a["is_unlocked"]]
+
+        # Calculate rank dynamically if not frozen
+        cursor.execute("""
+            SELECT COUNT(*) + 1 as rank
+            FROM season_player_stats
+            WHERE season_id = ? AND division_id = ? AND (rating > ? OR (rating = ? AND season_points > ?))
+        """, (s_stats["season_id"], s_stats["division_id"], s_stats["rating"], s_stats["rating"], s_stats["season_points"]))
+        curr_rank = cursor.fetchone()["rank"]
+
+        return {
+            "user_id": user_id,
+            "username": user_row["username"] if user_row and user_row["username"] else f"Каппер #{user_id}",
+            "team_name": user_row["team_name"] if user_row and user_row["team_name"] else "Свободный игрок",
+            "division_id": s_stats["division_id"],
+            "season_id": s_stats["season_id"],
+            "rating": round(float(s_stats["rating"]), 1),
+            "rank": curr_rank,
+            "level": prog["level"],
+            "current_xp": prog["current_xp"],
+            "total_xp": prog["total_xp_earned"],
+            "experience": prog["total_xp_earned"],
+            "tier": ("MASTER" if s_stats["rating"] >= 1600 else "ELITE" if s_stats["rating"] >= 1450 else "PRO" if s_stats["rating"] >= 1300 else "RISING" if s_stats["rating"] >= 1150 else "ROOKIE"),
+            "title": prog["equipped_title"],
+            "frame": prog["equipped_frame"],
+            "season_points": round(float(s_stats["season_points"]), 1),
+            "total_bets": s_stats["total_bets"],
+            "settled_bets": s_stats["settled_bets"],
+            "wins": s_stats["wins"],
+            "losses": s_stats["losses"],
+            "win_rate": round(float(s_stats["win_rate"]), 1),
+            "roi": round(float(s_stats["roi"]), 1),
+            "best_streak": s_stats["best_streak"],
+            "current_streak": s_stats["current_streak"],
+            "favorite_markets": fav["favorite_markets"],
+            "favorite_teams": fav["favorite_teams"],
+            "prediction_accuracy": fav["prediction_accuracy"],
+            "value_hit_rate": fav["value_hit_rate"],
+            "status": s_stats["status"],
+            "unlocked_achievements_count": len(unlocked_ach),
+            "achievements": unlocked_ach[:6]
+        }
+
+
+def get_private_player_profile(user_id: int, season_id: int | None = None, division_id: int | None = None) -> dict:
+    """
+    Assemble PRIVATE player profile for authenticated user only.
+    Contains wallet, stake volume, and financial metrics.
+    """
+    pub = get_public_player_profile(user_id, season_id, division_id)
+    with transaction() as conn:
+        cursor = conn.cursor()
+        wallet = get_or_create_wallet(user_id)
+        s_stats = get_player_season_stats(user_id, season_id, division_id)
+        career = get_player_career_stats(user_id)
+
+        pub.update({
+            "balance": wallet["balance"],
+            "wallet": wallet,
+            "total_stake": s_stats["total_stake"],
+            "total_payout": s_stats["total_payout"],
+            "career": career
+        })
+        return pub
+
+
+def create_season_snapshot(
+    season_id: int,
+    division_id: int,
+    user_id: int,
+    final_rank: int,
+    final_rating: float,
+    season_points: float,
+    wins: int,
+    losses: int,
+    voids: int,
+    settled_bets: int,
+    win_rate: float,
+    roi: float,
+    total_stake: int,
+    total_payout: int,
+    best_streak: int,
+    promotion_status: str,
+    rewards_json: str | None = None
+) -> int:
+    """Create an immutable historical snapshot for a player upon season completion."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO season_snapshots (
+                season_id, division_id, user_id, final_rank, final_rating, season_points,
+                wins, losses, voids, settled_bets, win_rate, roi, total_stake, total_payout,
+                best_streak, promotion_status, rewards_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(season_id, division_id, user_id) DO NOTHING
+        """, (
+            season_id, division_id, user_id, final_rank, final_rating, season_points,
+            wins, losses, voids, settled_bets, win_rate, roi, total_stake, total_payout,
+            best_streak, promotion_status, rewards_json
+        ))
+        return cursor.lastrowid or 0
+
+
+def get_season_snapshots(season_id: int, division_id: int | None = None) -> list[dict]:
+    """Retrieve immutable snapshots for a finished season."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        if division_id is not None:
+            cursor.execute("""
+                SELECT ss.*, u.username, u.team_name
+                FROM season_snapshots ss
+                LEFT JOIN users u ON ss.user_id = u.telegram_id
+                WHERE ss.season_id = ? AND ss.division_id = ?
+                ORDER BY ss.final_rank ASC
+            """, (season_id, division_id))
+        else:
+            cursor.execute("""
+                SELECT ss.*, u.username, u.team_name
+                FROM season_snapshots ss
+                LEFT JOIN users u ON ss.user_id = u.telegram_id
+                WHERE ss.season_id = ?
+                ORDER BY ss.division_id ASC, ss.final_rank ASC
+            """, (season_id,))
+        return [dict(r) for r in cursor.fetchall()]
+
+
+def get_season_rules(season_id: int, division_id: int) -> dict:
+    """Retrieve promotion/relegation and qualification rules for division in season."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT * FROM season_rules_config
+            WHERE season_id = ? AND division_id = ?
+        """, (season_id, division_id))
+        row = cursor.fetchone()
+        if row:
+            return dict(row)
+        # Default fallback
+        return {
+            "season_id": season_id,
+            "division_id": division_id,
+            "promotion_slots": 3,
+            "relegation_slots": 3,
+            "min_bets_qualification": 5,
+            "min_matches_qualification": 3
+        }
+
+
+def set_season_rules(
+    season_id: int,
+    division_id: int,
+    promotion_slots: int = 3,
+    relegation_slots: int = 3,
+    min_bets_qualification: int = 5,
+    min_matches_qualification: int = 3
+) -> None:
+    """Configure or update promotion, relegation, and qualification thresholds."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO season_rules_config (
+                season_id, division_id, promotion_slots, relegation_slots,
+                min_bets_qualification, min_matches_qualification
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(season_id, division_id) DO UPDATE SET
+                promotion_slots = excluded.promotion_slots,
+                relegation_slots = excluded.relegation_slots,
+                min_bets_qualification = excluded.min_bets_qualification,
+                min_matches_qualification = excluded.min_matches_qualification
+        """, (season_id, division_id, promotion_slots, relegation_slots, min_bets_qualification, min_matches_qualification))
+
+
+def record_season_reward_in_ledger(
+    season_id: int,
+    division_id: int,
+    user_id: int,
+    reward_id: str,
+    reward_type: str,
+    coins_awarded: int = 0,
+    xp_awarded: int = 0,
+    badge_awarded: str | None = None
+) -> bool:
+    """
+    Idempotently record a season reward.
+    Returns True if newly recorded, False if already recorded.
+    """
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO season_reward_ledger (
+                season_id, division_id, user_id, reward_id, reward_type,
+                coins_awarded, xp_awarded, badge_awarded, status, distributed_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'DISTRIBUTED', CURRENT_TIMESTAMP)
+            ON CONFLICT(user_id, season_id, reward_id) DO NOTHING
+        """, (season_id, division_id, user_id, reward_id, reward_type, coins_awarded, xp_awarded, badge_awarded))
+        return cursor.rowcount > 0
+
+
+def get_user_season_rewards(user_id: int, season_id: int | None = None) -> list[dict]:
+    """List claimed or distributed season rewards for a user."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        if season_id is not None:
+            cursor.execute("""
+                SELECT * FROM season_reward_ledger
+                WHERE user_id = ? AND season_id = ?
+                ORDER BY created_at DESC
+            """, (user_id, season_id))
+        else:
+            cursor.execute("""
+                SELECT * FROM season_reward_ledger
+                WHERE user_id = ?
+                ORDER BY created_at DESC
+            """, (user_id,))
+        return [dict(r) for r in cursor.fetchall()]
 
 
 # ─── LOGOVO: Division Management & Multi-Topic Routing ──────────────────────
@@ -7049,7 +8092,7 @@ def ensure_canonical_divisions() -> None:
     with transaction() as conn:
         conn.cursor().execute("""
             INSERT OR IGNORE INTO divisions (id, tournament_id, name, code, season_id, sort_order)
-            VALUES 
+            VALUES
                 (1, 1, 'Дивизион 1', 'DIV_1', 1, 1),
                 (2, 1, 'Дивизион 2', 'DIV_2', 1, 2),
                 (3, 1, 'Дивизион 3', 'DIV_3', 1, 3),
@@ -7519,4 +8562,404 @@ def get_division_by_topic(message_thread_id: int, topic_type: str = "drafts", gr
         return dict(row) if row else None
 
 
+# ─── Phase 7: AI & Sports Intelligence Database Helpers ──────────────────────
 
+def get_team_elo(team_name: str, division_id: int = 1, season_id: int = 1) -> float:
+    """Retrieve persisted Elo rating for a team, defaulting to 1500.0 if not tracked."""
+    if not team_name:
+        return 1500.0
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT elo_rating FROM team_ratings
+            WHERE LOWER(team_name) = LOWER(?) AND division_id = ? AND season_id = ?
+        """, (team_name, division_id, season_id))
+        row = cursor.fetchone()
+        return float(row["elo_rating"]) if row else 1500.0
+
+
+def update_team_elo(
+    team_name: str,
+    division_id: int,
+    season_id: int,
+    new_elo: float,
+    matches_counted: int | None = None
+) -> None:
+    """Upsert persisted Elo rating for a team within a division and season."""
+    if not team_name:
+        return
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, matches_counted FROM team_ratings
+            WHERE LOWER(team_name) = LOWER(?) AND division_id = ? AND season_id = ?
+        """, (team_name, division_id, season_id))
+        existing = cursor.fetchone()
+
+        if existing:
+            cnt = matches_counted if matches_counted is not None else (existing["matches_counted"] + 1)
+            cursor.execute("""
+                UPDATE team_ratings
+                SET elo_rating = ?, matches_counted = ?, last_updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+            """, (round(float(new_elo), 2), cnt, existing["id"]))
+        else:
+            cnt = matches_counted if matches_counted is not None else 1
+            cursor.execute("""
+                INSERT INTO team_ratings (team_name, division_id, season_id, elo_rating, matches_counted)
+                VALUES (?, ?, ?, ?, ?)
+            """, (team_name, division_id, season_id, round(float(new_elo), 2), cnt))
+
+
+def save_ai_prediction(
+    match_id: int,
+    division_id: int,
+    season_id: int,
+    model_version: str,
+    feature_version: str,
+    home_prob: float,
+    draw_prob: float,
+    away_prob: float,
+    confidence: float,
+    over_1_5: float | None = None,
+    over_2_5: float | None = None,
+    over_3_5: float | None = None,
+    btts_yes: float | None = None,
+    btts_no: float | None = None,
+    key_factors: list[str] | None = None
+) -> int:
+    """Persist an AI model prediction record."""
+    import json as _json
+    factors_json = _json.dumps(key_factors or [], ensure_ascii=False)
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO predictions (
+                match_id, division_id, season_id, model_version, feature_version,
+                home_probability, draw_probability, away_probability,
+                over_1_5_probability, over_2_5_probability, over_3_5_probability,
+                btts_yes_probability, btts_no_probability,
+                confidence, key_factors
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            match_id, division_id, season_id, model_version, feature_version,
+            round(home_prob, 4), round(draw_prob, 4), round(away_prob, 4),
+            round(over_1_5, 4) if over_1_5 is not None else None,
+            round(over_2_5, 4) if over_2_5 is not None else None,
+            round(over_3_5, 4) if over_3_5 is not None else None,
+            round(btts_yes, 4) if btts_yes is not None else None,
+            round(btts_no, 4) if btts_no is not None else None,
+            round(confidence, 4), factors_json
+        ))
+        return cursor.lastrowid
+
+
+def get_ai_prediction(match_id: int, model_version: str = "ensemble_v1") -> dict | None:
+    """Retrieve latest stored AI prediction for a match."""
+    import json as _json
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT * FROM predictions
+            WHERE match_id = ? AND model_version = ?
+            ORDER BY id DESC LIMIT 1
+        """, (match_id, model_version))
+        row = cursor.fetchone()
+        if not row:
+            return None
+        res = dict(row)
+        if res.get("key_factors"):
+            try:
+                res["key_factors"] = _json.loads(res["key_factors"])
+            except Exception:
+                res["key_factors"] = []
+        return res
+
+
+def save_prediction_snapshot(
+    match_id: int,
+    stage: str,
+    minute: int | None,
+    home_score: int,
+    away_score: int,
+    home_prob: float,
+    draw_prob: float,
+    away_prob: float,
+    confidence: float
+) -> int:
+    """Save temporal snapshot of prediction at a given game state."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO prediction_snapshots (
+                match_id, stage, minute, home_score, away_score,
+                home_prob, draw_prob, away_prob, confidence
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            match_id, stage, minute, home_score, away_score,
+            round(home_prob, 4), round(draw_prob, 4), round(away_prob, 4),
+            round(confidence, 4)
+        ))
+        return cursor.lastrowid
+
+
+def get_prediction_snapshots(match_id: int, limit: int = 20) -> list[dict]:
+    """Retrieve chronological snapshots for a match."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT * FROM prediction_snapshots
+            WHERE match_id = ?
+            ORDER BY id ASC LIMIT ?
+        """, (match_id, limit))
+        return [dict(r) for r in cursor.fetchall()]
+
+
+def resolve_ai_predictions(match_id: int, home_score: int, away_score: int) -> int:
+    """
+    Resolve pending predictions after confirmed match result.
+    Calculates Brier Score: (p_home - y_home)^2 + (p_draw - y_draw)^2 + (p_away - y_away)^2.
+    """
+    if home_score is None or away_score is None:
+        return 0
+
+    try:
+        home_score = int(home_score)
+        away_score = int(away_score)
+    except (ValueError, TypeError):
+        return 0
+
+    if home_score > away_score:
+        actual_result = "home"
+        y = (1.0, 0.0, 0.0)
+    elif home_score == away_score:
+        actual_result = "draw"
+        y = (0.0, 1.0, 0.0)
+    else:
+        actual_result = "away"
+        y = (0.0, 0.0, 1.0)
+
+    resolved_count = 0
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, home_probability, draw_probability, away_probability
+            FROM predictions
+            WHERE match_id = ? AND resolved_at IS NULL
+        """, (match_id,))
+        preds = cursor.fetchall()
+
+        for p in preds:
+            p_h = float(p["home_probability"])
+            p_d = float(p["draw_probability"])
+            p_a = float(p["away_probability"])
+
+            # Multiclass Brier score
+            brier = round(((p_h - y[0]) ** 2 + (p_d - y[1]) ** 2 + (p_a - y[2]) ** 2) / 2.0, 4)
+
+            # Determine is_correct
+            highest_prob = max(p_h, p_d, p_a)
+            predicted_outcome = "home" if highest_prob == p_h else ("draw" if highest_prob == p_d else "away")
+            is_correct = (predicted_outcome == actual_result)
+
+            cursor.execute("""
+                UPDATE predictions
+                SET resolved_at = CURRENT_TIMESTAMP, actual_result = ?, is_correct = ?, brier_score = ?
+                WHERE id = ?
+            """, (actual_result, 1 if is_correct else 0, brier, p["id"]))
+            resolved_count += 1
+
+    return resolved_count
+
+
+def correct_ai_predictions(match_id: int, new_home_score: int, new_away_score: int) -> int:
+    """
+    Recalculate and correct AI prediction accuracy when a confirmed match result
+    undergoes administrative or official score correction.
+    Strict Invariant: Re-evaluates AI analytical records without triggering bet settlement or wallet adjustments.
+    """
+    if new_home_score is None or new_away_score is None:
+        return 0
+
+    try:
+        new_home_score = int(new_home_score)
+        new_away_score = int(new_away_score)
+    except (ValueError, TypeError):
+        return 0
+
+    if new_home_score > new_away_score:
+        actual_result = "home"
+        y = (1.0, 0.0, 0.0)
+    elif new_home_score == new_away_score:
+        actual_result = "draw"
+        y = (0.0, 1.0, 0.0)
+    else:
+        actual_result = "away"
+        y = (0.0, 0.0, 1.0)
+
+    updated_count = 0
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, home_probability, draw_probability, away_probability
+            FROM predictions
+            WHERE match_id = ?
+        """, (match_id,))
+        preds = cursor.fetchall()
+
+        for p in preds:
+            p_h = float(p["home_probability"])
+            p_d = float(p["draw_probability"])
+            p_a = float(p["away_probability"])
+
+            brier = round(((p_h - y[0]) ** 2 + (p_d - y[1]) ** 2 + (p_a - y[2]) ** 2) / 2.0, 4)
+            highest_prob = max(p_h, p_d, p_a)
+            predicted_outcome = "home" if highest_prob == p_h else ("draw" if highest_prob == p_d else "away")
+            is_correct = (predicted_outcome == actual_result)
+
+            cursor.execute("""
+                UPDATE predictions
+                SET resolved_at = CURRENT_TIMESTAMP, actual_result = ?, is_correct = ?, brier_score = ?
+                WHERE id = ?
+            """, (actual_result, 1 if is_correct else 0, brier, p["id"]))
+            updated_count += 1
+
+    return updated_count
+
+
+# ─── Phase 8: Real Sports Provider Repository Helpers ─────────────────────────
+
+def record_provider_sync_log(
+    provider: str,
+    endpoint: str,
+    status_code: int,
+    records_count: int = 0,
+    latency_ms: float = 0.0,
+    error_message: str | None = None
+) -> int:
+    """Record an audit entry in provider_sync_log."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO provider_sync_log (
+                provider, endpoint, status_code, records_count, latency_ms, error_message
+            ) VALUES (?, ?, ?, ?, ?, ?)
+        """, (provider, endpoint, status_code, records_count, round(latency_ms, 2), error_message))
+        return cursor.lastrowid
+
+
+def link_provider_match(
+    provider: str,
+    provider_match_id: str,
+    match_id: int,
+    division_id: int = 1,
+    season_id: int = 1,
+    status: str = "SCHEDULED",
+    home_score: int = 0,
+    away_score: int = 0,
+    minute: int | None = None,
+    payload: dict | None = None
+) -> int:
+    """Link an external provider match identifier to an internal match entity."""
+    import json as _json
+    payload_str = _json.dumps(payload, ensure_ascii=False) if payload else None
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO provider_matches (
+                provider, provider_match_id, match_id, division_id, season_id,
+                status, home_score, away_score, minute, payload, last_update_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(provider, provider_match_id) DO UPDATE SET
+                status = excluded.status,
+                home_score = excluded.home_score,
+                away_score = excluded.away_score,
+                minute = excluded.minute,
+                payload = excluded.payload,
+                last_update_at = CURRENT_TIMESTAMP
+        """, (provider, str(provider_match_id), match_id, division_id, season_id, status, home_score, away_score, minute, payload_str))
+        return cursor.lastrowid
+
+
+def get_provider_match(provider: str, provider_match_id: str) -> dict | None:
+    """Retrieve internal match link for given provider fixture."""
+    import json as _json
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT * FROM provider_matches
+            WHERE provider = ? AND provider_match_id = ?
+            LIMIT 1
+        """, (provider, str(provider_match_id)))
+        row = cursor.fetchone()
+        if not row:
+            return None
+        res = dict(row)
+        if res.get("payload"):
+            try:
+                res["payload"] = _json.loads(res["payload"])
+            except Exception:
+                pass
+        return res
+
+
+def get_provider_match_by_internal_id(match_id: int) -> dict | None:
+    """Retrieve external provider details for given internal match_id."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT * FROM provider_matches
+            WHERE match_id = ?
+            ORDER BY id DESC LIMIT 1
+        """, (match_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+
+def update_provider_health_state(
+    provider_name: str,
+    status: str,
+    consecutive_failures: int = 0,
+    last_error: str | None = None
+) -> None:
+    """Update circuit breaker and connectivity status for a sports provider."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO sports_providers (
+                provider_name, display_name, circuit_breaker_status, consecutive_failures, last_sync_at, last_error
+            ) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
+            ON CONFLICT(provider_name) DO UPDATE SET
+                circuit_breaker_status = excluded.circuit_breaker_status,
+                consecutive_failures = excluded.consecutive_failures,
+                last_sync_at = CURRENT_TIMESTAMP,
+                last_error = excluded.last_error,
+                updated_at = CURRENT_TIMESTAMP
+        """, (provider_name, provider_name.upper(), status, consecutive_failures, last_error))
+
+
+def get_provider_health_state(provider_name: str) -> dict | None:
+    """Fetch stored health state of a sports provider."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT * FROM sports_providers
+            WHERE provider_name = ?
+            LIMIT 1
+        """, (provider_name,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+
+def get_stale_provider_matches_count(stale_threshold_seconds: int = 120) -> int:
+    """Count number of currently open/live matches that haven't received updates within threshold."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT COUNT(*) as cnt
+            FROM live_match_states
+            WHERE status IN ('LIVE', 'HALFTIME')
+              AND (julianday('now') - julianday(last_updated_at)) * 86400 > ?
+        """, (stale_threshold_seconds,))
+        row = cursor.fetchone()
+        return row["cnt"] if row else 0

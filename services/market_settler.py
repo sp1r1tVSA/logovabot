@@ -33,7 +33,7 @@ def evaluate_market_selection(
     tot = s1 + s2
 
     # 1. 1X2 (Match Winner)
-    if market_key in ("1x2", "match_winner", "outcome"):
+    if market_key in ("1x2", "match_winner", "outcome", "match_result"):
         if selection_key in ("p1", "1", "home"):
             return "won" if s1 > s2 else "lost"
         if selection_key in ("x", "draw"):
@@ -51,7 +51,7 @@ def evaluate_market_selection(
             return "won" if s2 >= s1 else "lost"
 
     # 3. Total Goals (0.5, 1.5, 2.5, 3.5, 4.5, 5.5)
-    elif market_key in ("total_goals", "totals"):
+    elif market_key in ("total_goals", "totals", "over_under"):
         # Legacy support
         if selection_key in ("tb25", "over_2.5"):
             return "won" if tot > 2.5 else "lost"
@@ -66,7 +66,7 @@ def evaluate_market_selection(
             return "won" if tot < threshold else "lost"
 
     # 4. Both Teams to Score (BTTS)
-    elif market_key == "btts":
+    elif market_key in ("btts", "both_teams_to_score"):
         if selection_key in ("btts_yes", "yes"):
             return "won" if (s1 > 0 and s2 > 0) else "lost"
         if selection_key in ("btts_no", "no"):
@@ -117,15 +117,58 @@ def evaluate_market_selection(
         return "won" if actual_score == expected_score else "lost"
 
     # 10. Half-Time Result
-    elif market_key == "ht_result":
+    elif market_key in ("ht_result", "first_half", "1st_half"):
         if ht_score1 is None or ht_score2 is None:
             return "voided"
-        if selection_key == "ht_p1":
+        if selection_key in ("ht_p1", "p1", "1"):
             return "won" if ht_score1 > ht_score2 else "lost"
-        if selection_key == "ht_x":
+        if selection_key in ("ht_x", "x", "draw"):
             return "won" if ht_score1 == ht_score2 else "lost"
-        if selection_key == "ht_p2":
+        if selection_key in ("ht_p2", "p2", "2"):
             return "won" if ht_score2 > ht_score1 else "lost"
+
+    # 11. Second-Half Result
+    elif market_key in ("second_half", "2nd_half_result"):
+        if ht_score1 is None or ht_score2 is None:
+            return "voided"
+        sh1 = s1 - ht_score1
+        sh2 = s2 - ht_score2
+        if selection_key in ("sh_p1", "p1", "1"):
+            return "won" if sh1 > sh2 else "lost"
+        if selection_key in ("sh_x", "x", "draw"):
+            return "won" if sh1 == sh2 else "lost"
+        if selection_key in ("sh_p2", "p2", "2"):
+            return "won" if sh2 > sh1 else "lost"
+
+    # 12. Next Goal
+    elif market_key == "next_goal":
+        if selection_key in ("no_goal", "none"):
+            return "won" if (s1 + s2) == 0 else "lost"
+        if selection_key in ("next_team1", "team1", "p1"):
+            return "won" if s1 > 0 else "lost"
+        if selection_key in ("next_team2", "team2", "p2"):
+            return "won" if s2 > 0 else "lost"
+
+    # 13. Corners Total (over / under)
+    elif market_key == "corners":
+        if selection_key.startswith("over_"):
+            try:
+                thresh = float(selection_key.replace("over_", ""))
+                # If match statistics corners unavailable, fail-safe to voided
+                return "voided"
+            except ValueError:
+                return "voided"
+        if selection_key.startswith("under_"):
+            try:
+                thresh = float(selection_key.replace("under_", ""))
+                return "voided"
+            except ValueError:
+                return "voided"
+
+    # 14. Cards Total (over / under)
+    elif market_key == "cards":
+        if selection_key.startswith("over_") or selection_key.startswith("under_"):
+            return "voided"
 
     # Unknown market/outcome type -> fail safe to void
     return "voided"

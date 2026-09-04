@@ -53,9 +53,23 @@ def validate_telegram_init_data(init_data_str: str, bot_token: str | None = None
             logger.warning("Invalid initData hash signature.")
             return None
 
-        # 5. Check freshness (auth_date must not be older than 24 hours)
-        auth_date = int(parsed.get("auth_date", 0))
-        if auth_date > 0 and (time.time() - auth_date > 86400): # 24 hours max
+        # 5. Check freshness (auth_date must be present, positive, not future-dated, and not older than 24 hours)
+        if "auth_date" not in parsed:
+            logger.warning("Missing auth_date in initData.")
+            return None
+
+        try:
+            auth_date = int(parsed["auth_date"])
+        except (ValueError, TypeError):
+            logger.warning("Invalid auth_date in initData.")
+            return None
+
+        now = time.time()
+        if auth_date <= 0 or auth_date > now + 300:  # Allow max 5 min clock skew into future
+            logger.warning(f"Future or non-positive initData auth_date: {auth_date} (now: {now})")
+            return None
+
+        if (now - auth_date) > 86400:  # 24 hours max
             logger.warning(f"Expired initData auth_date: {auth_date}")
             return None
 

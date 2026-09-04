@@ -62,6 +62,19 @@ def register_jobs(application: Application) -> None:
     # Run automated debt lifecycle tracker (reminders + auto-warns + auto-kick) every 30 minutes
     application.job_queue.run_repeating(job_debt_lifecycle_tracker, interval=1800, first=90)
 
+    # Phase 6: Live provider sync, intelligence cache & smart notifications
+    try:
+        from services.background_sync import (
+            sync_live_provider_job,
+            sync_intelligence_cache_job,
+            process_notification_queue_job,
+        )
+        application.job_queue.run_repeating(sync_live_provider_job, interval=45, first=15)
+        application.job_queue.run_repeating(sync_intelligence_cache_job, interval=300, first=45)
+        application.job_queue.run_repeating(process_notification_queue_job, interval=15, first=20)
+    except Exception as e:
+        logger.warning(f"Could not register Phase 6 background jobs: {e}")
+
 def main() -> None:
     """Initialize and run the Telegram bot application."""
     if not TOKEN:

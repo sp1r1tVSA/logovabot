@@ -43,7 +43,19 @@ class StateStore {
       divisions: [],
       selectedDivisionId: 1,
       matchStatusFilter: 'all', // 'all' | 'open' | 'upcoming' | 'completed'
-      unclaimedAchievementsCount: 0
+      unclaimedAchievementsCount: 0,
+      // Phase 6: Live Center & Sports Intelligence State
+      liveMatches: [],
+      selectedLiveMatchId: null,
+      liveMatchDetail: null,
+      liveMatchEvents: [],
+      liveMatchStats: null,
+      liveMatchMarkets: [],
+      liveMatchIntelligence: null,
+      oddsMovers: [],
+      hotMatches: [],
+      recommendations: [],
+      capperLeaderboard: []
     };
     this.listeners = new Set();
   }
@@ -266,6 +278,42 @@ class StateStore {
 
   isSelectionActive(matchId, outcome) {
     return this.state.slip.some(s => s.match_id === matchId && s.outcome === outcome);
+  }
+
+  // --- Phase 6: Live Center & Intelligence Setters ---
+  setLiveMatches(matches) {
+    this.state.liveMatches = matches || [];
+    this.notify();
+  }
+
+  setLiveMatchData(id, detail, events, stats, markets, intelligence) {
+    this.state.selectedLiveMatchId = id;
+    if (detail !== undefined) this.state.liveMatchDetail = detail;
+    if (events !== undefined) this.state.liveMatchEvents = events || [];
+    if (stats !== undefined) this.state.liveMatchStats = stats;
+    if (markets !== undefined) this.state.liveMatchMarkets = markets || [];
+    if (intelligence !== undefined) this.state.liveMatchIntelligence = intelligence;
+    this.notify();
+  }
+
+  setOddsMovers(movers) {
+    this.state.oddsMovers = movers || [];
+    this.notify();
+  }
+
+  setHotMatches(matches) {
+    this.state.hotMatches = matches || [];
+    this.notify();
+  }
+
+  setRecommendations(recs) {
+    this.state.recommendations = recs || [];
+    this.notify();
+  }
+
+  setCapperLeaderboard(leaderboard) {
+    this.state.capperLeaderboard = leaderboard || [];
+    this.notify();
   }
 }
 

@@ -401,3 +401,51 @@ async def handle_get_match_live(request: web.Request) -> web.Response:
         "score2": m["player2_score"] or 0,
         "events": events
     })
+
+
+async def handle_get_hot_matches(request: web.Request) -> web.Response:
+    """
+    GET /api/matches/hot
+    Returns matches ranked by multi-factor hotness score (live, odds movement, volume, H2H).
+    """
+    division_id_str = request.query.get("division_id")
+    season_id_str = request.query.get("season_id")
+    limit_str = request.query.get("limit", "10")
+
+    div_id = int(division_id_str) if division_id_str and division_id_str.isdigit() else None
+    season_id = int(season_id_str) if season_id_str and season_id_str.isdigit() else None
+    limit = int(limit_str) if limit_str and limit_str.isdigit() else 10
+
+    from services.recommendation_engine import get_hot_matches
+    hot_matches = get_hot_matches(division_id=div_id, season_id=season_id, limit=limit)
+    return web.json_response({
+        "status": "ok",
+        "count": len(hot_matches),
+        "matches": hot_matches
+    })
+
+
+async def handle_get_recommendations(request: web.Request) -> web.Response:
+    """
+    GET /api/recommendations
+    Returns personalized, explainable recommendations for authenticated user.
+    """
+    init_data = request.headers.get("X-Telegram-Init-Data", "")
+    user_info = get_authenticated_user(init_data)
+    if not user_info or "id" not in user_info:
+        return web.json_response({"status": "error", "error": "unauthorized"}, status=401)
+
+    user_id = user_info["id"]
+    limit_str = request.query.get("limit", "5")
+    limit = int(limit_str) if limit_str and limit_str.isdigit() else 5
+    limit = max(1, min(limit, 50))
+    risk_profile = request.query.get("risk_profile", "balanced")
+
+    from services.recommendation_engine import get_user_recommendations
+    recs = get_user_recommendations(user_id=user_id, limit=limit, risk_profile=risk_profile)
+    return web.json_response({
+        "status": "ok",
+        "user_id": user_id,
+        "count": len(recs),
+        "recommendations": recs
+    })

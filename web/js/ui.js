@@ -553,19 +553,46 @@ export class UIRenderer {
           ` : ''}
         </div>
       ` : `
-        <!-- AI Insights Menu -->
+        <!-- AI Insights & Preview Menu -->
         <div class="match-insights-container">
           <div class="market-group-card">
-            <div class="market-group-title">🔥 Инсайты от ИИ «Темшик»</div>
-            ${(insights?.insights && insights.insights.length > 0) ? insights.insights.map(txt => `
-              <div class="insight-card">
-                <span>${txt}</span>
+            <div class="market-group-title" style="display:flex; justify-content:space-between; align-items:center;">
+              <span>🧠 Прогноз ИИ «Темшик»</span>
+              <span class="badge" style="background:rgba(59,130,246,0.15); color:#60a5fa; font-size:0.75rem; padding:2px 8px; border-radius:12px;">Ensemble v1</span>
+            </div>
+
+            ${insights?.probabilities ? `
+              <div style="margin: 12px 0 8px 0;">
+                <div style="display:flex; justify-content:space-between; font-size:0.8rem; font-weight:700; margin-bottom:4px;">
+                  <span style="color:#60a5fa;">П1: ${Math.round(insights.probabilities.home * 100)}%</span>
+                  <span style="color:#9ca3af;">Х: ${Math.round(insights.probabilities.draw * 100)}%</span>
+                  <span style="color:#f87171;">П2: ${Math.round(insights.probabilities.away * 100)}%</span>
+                </div>
+                <div class="h2h-progress-bar" style="height:8px; border-radius:4px; overflow:hidden; display:flex;">
+                  <div style="background:#3b82f6; width:${insights.probabilities.home * 100}%;"></div>
+                  <div style="background:#6b7280; width:${insights.probabilities.draw * 100}%;"></div>
+                  <div style="background:#ef4444; width:${insights.probabilities.away * 100}%;"></div>
+                </div>
+                <div style="display:flex; justify-content:space-between; font-size:0.75rem; color:var(--text-muted); margin-top:4px;">
+                  <span>Уверенность модели: ${Math.round((insights.confidence || 0.6) * 100)}%</span>
+                  ${insights.elo ? `<span>Elo: ${insights.elo.rating_t1} vs ${insights.elo.rating_t2}</span>` : ''}
+                </div>
               </div>
-            `).join('') : `
-              <div style="color: var(--text-muted); font-size: 0.85rem; padding: 10px 0;">
-                💡 ${t1} в последних встречах демонстрирует открытый атакующий футбол. Рекомендуется обратить внимание на ТБ 2.5.
-              </div>
-            `}
+            ` : ''}
+
+            <!-- Key Factors ("Why?") -->
+            <div style="margin-top: 10px; border-top: 1px solid var(--border-subtle); padding-top: 10px;">
+              <div style="font-size:0.8rem; font-weight:700; color:var(--text-secondary); margin-bottom:6px;">💡 Ключевые факторы модели (Why?):</div>
+              ${((insights?.key_factors && insights.key_factors.length > 0) ? insights.key_factors : (insights?.insights || [])).map(txt => `
+                <div class="insight-card" style="padding:6px 10px; margin-bottom:6px; font-size:0.8rem; background:rgba(255,255,255,0.03); border-left:3px solid var(--primary-accent); border-radius:4px;">
+                  <span>${txt}</span>
+                </div>
+              `).join('')}
+            </div>
+
+            <div style="margin-top:12px; font-size:0.7rem; color:var(--text-muted); text-align:center; font-style:italic;">
+              ⚠️ Прогноз AI — аналитическая оценка, а не гарантия результата.
+            </div>
           </div>
         </div>
       `}
@@ -687,7 +714,11 @@ export class UIRenderer {
 
     let filtered = bets || [];
     if (filter !== 'all') {
-      filtered = filtered.filter(b => b.status === filter);
+      if (filter === 'cancelled') {
+        filtered = filtered.filter(b => ['cancelled', 'voided', 'void', 'refunded'].includes(b.status));
+      } else {
+        filtered = filtered.filter(b => b.status === filter);
+      }
     }
 
     if (filtered.length === 0) {
@@ -705,32 +736,43 @@ export class UIRenderer {
       const isLost = b.status === 'lost';
       const isPending = b.status === 'pending';
       const isRefunded = b.status === 'refunded';
+      const isCancelled = ['cancelled', 'voided', 'void'].includes(b.status);
 
-      const statusBadge = isWon 
+      const isCashedOut = !!b.cashout_at;
+      const statusBadge = isCashedOut
+        ? '<span style="color: #60a5fa; font-weight: 800;">💰 CASHOUT</span>'
+        : isWon
         ? '<span style="color: var(--color-success); font-weight: 800;">🎉 ВЫИГРЫШ</span>'
-        : isLost 
+        : isLost
         ? '<span style="color: var(--color-danger); font-weight: 800;">❌ ПРОИГРЫШ</span>'
-        : isRefunded 
+        : isRefunded
         ? '<span style="color: var(--color-warning); font-weight: 800;">↩️ ВОЗВРАТ</span>'
+        : isCancelled
+        ? '<span style="color: var(--text-muted); font-weight: 800;">🚫 ОТМЕНА</span>'
         : '<span style="color: var(--accent-gold); font-weight: 800;">⏳ В ИГРЕ</span>';
 
       return `
-        <div style="background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 14px; margin-bottom: 12px; box-shadow: var(--shadow-card);">
+        <div class="bet-history-card" data-bet-id="${b.id}" style="background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 14px; margin-bottom: 12px; box-shadow: var(--shadow-card);">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 8px;">
             <div style="display: flex; align-items: center; gap: 6px;">
               <span style="font-size: 0.75rem; font-weight: 800; background: var(--bg-tertiary); padding: 3px 8px; border-radius: var(--radius-xs); color: #fff;">
                 ${b.bet_type === 'express' ? '⚡ ЭКСПРЕСС' : 'ОДИНАР'}
               </span>
-              <span style="font-size: 0.78rem; color: var(--text-muted);">${b.created_at || ''}</span>
+              <span style="font-size: 0.75rem; font-weight: 700; color: var(--accent-gold);">#${b.id}</span>
+              <span style="font-size: 0.78rem; color: var(--text-muted);">${b.created_at ? b.created_at.substring(0, 16) : ''}</span>
             </div>
             <div>${statusBadge}</div>
           </div>
 
           <!-- Items in Slip -->
           <div style="margin-bottom: 10px;">
-            ${(b.items || []).map(it => `
+            ${(b.items || []).map(it => {
+              const acceptedOdd = Number(it.odds_at_placement || it.odd || 1.0).toFixed(2);
+              const divTag = it.division_id ? `<span style="font-size: 0.7rem; color: var(--text-muted); margin-right: 4px;">[Д${it.division_id}]</span>` : '';
+              return `
               <div style="display: flex; justify-content: space-between; align-items: center; padding: 6px 0; font-size: 0.82rem; border-bottom: 1px dashed rgba(255,255,255,0.04);">
                 <div style="display: flex; align-items: center; gap: 6px; color: #fff; font-weight: 600;">
+                  ${divTag}
                   ${renderTeamLogoHtml(it.team1_name, 18)}
                   <span>${it.team1_name}</span>
                   <span style="color: var(--text-muted); font-size: 0.75rem;">vs</span>
@@ -739,14 +781,14 @@ export class UIRenderer {
                 </div>
                 <div style="display: flex; align-items: center; gap: 6px;">
                   <span style="background: rgba(245,176,39,0.15); color: var(--accent-gold); padding: 2px 6px; border-radius: 4px; font-weight: 700;">
-                    ${OUTCOME_NAMES[it.outcome_type] || it.outcome_type} @ ${Number(it.odd || it.odds_at_placement || 1.0).toFixed(2)}
+                    ${OUTCOME_NAMES[it.outcome_type] || it.outcome_type} @ ${acceptedOdd}
                   </span>
                   <span style="font-size: 0.75rem;">
                     ${it.status === 'won' ? '✅' : it.status === 'lost' ? '❌' : it.status === 'refunded' ? '↩️' : '⏳'}
                   </span>
                 </div>
               </div>
-            `).join('')}
+            `;}).join('')}
           </div>
 
           <!-- Payout Summary -->
@@ -759,14 +801,19 @@ export class UIRenderer {
             </div>
             <div>
               <span style="color: var(--text-muted);">Выплата: </span>
-              <span style="font-weight: 900; color: ${isWon ? 'var(--color-success)' : '#fff'};">
-                ${isWon ? (b.actual_payout || b.potential_win) : isPending ? b.potential_win : 0} 🪙
+              <span style="font-weight: 900; color: ${isWon || isCashedOut ? 'var(--color-success)' : '#fff'};">
+                ${isCashedOut ? b.actual_payout : isWon ? (b.actual_payout || b.potential_win) : isPending ? b.potential_win : 0} 🪙
               </span>
             </div>
           </div>
 
-          <!-- Repeat Prediction CTA -->
-          <div style="margin-top: 10px; text-align: right;">
+          <!-- Card Actions (Cashout & Repeat) -->
+          <div style="margin-top: 10px; display: flex; justify-content: flex-end; gap: 8px;">
+            ${isPending ? `
+              <button class="btn-cashout" data-bet-id="${b.id}" style="background: rgba(59,130,246,0.15); border: 1px solid rgba(59,130,246,0.3); color: #60a5fa; font-size: 0.75rem; font-weight: 700; padding: 5px 10px; border-radius: var(--radius-sm); cursor: pointer;">
+                💰 Cashout
+              </button>
+            ` : ''}
             <button class="btn-repeat-bet" data-bet-id="${b.id}" style="background: transparent; border: 1px solid var(--border-subtle); color: var(--text-secondary); font-size: 0.75rem; font-weight: 700; padding: 5px 10px; border-radius: var(--radius-sm); cursor: pointer;">
               🔄 Повторить прогноз
             </button>
@@ -774,6 +821,48 @@ export class UIRenderer {
         </div>
       `;
     }).join('');
+  }
+
+  static showOddsChangedModal(oldOdd, newOdd, onAccept, onReject) {
+    const modal = document.getElementById('odds-changed-modal');
+    const desc = document.getElementById('odds-changed-modal-desc');
+    const acceptBtn = document.getElementById('btn-accept-odds-change');
+    const rejectBtn = document.getElementById('btn-reject-odds-change');
+
+    if (!modal) return;
+
+    if (desc) {
+      desc.innerHTML = `Коэффициент одного из исходов изменился: <b style="color: var(--text-muted); text-decoration: line-through;">${Number(oldOdd).toFixed(2)}</b> → <b style="color: var(--accent-gold);">${Number(newOdd).toFixed(2)}</b>.<br>Принять новые условия?`;
+    }
+
+    const cleanup = () => {
+      modal.classList.remove('active');
+    };
+
+    const handleAccept = (e) => {
+      e.stopPropagation();
+      cleanup();
+      if (typeof onAccept === 'function') onAccept();
+    };
+
+    const handleReject = (e) => {
+      e.stopPropagation();
+      cleanup();
+      if (typeof onReject === 'function') onReject();
+    };
+
+    if (acceptBtn) {
+      const newAccept = acceptBtn.cloneNode(true);
+      acceptBtn.parentNode.replaceChild(newAccept, acceptBtn);
+      newAccept.addEventListener('click', handleAccept);
+    }
+    if (rejectBtn) {
+      const newReject = rejectBtn.cloneNode(true);
+      rejectBtn.parentNode.replaceChild(newReject, rejectBtn);
+      newReject.addEventListener('click', handleReject);
+    }
+
+    modal.classList.add('active');
   }
 
   static renderSavedCoupons(savedCoupons) {
@@ -984,5 +1073,294 @@ export class UIRenderer {
         </div>
       `).join('');
     }
+  }
+
+  // ─── Phase 6: Live Center & Sports Intelligence ───────────────────────────
+
+  static renderLiveCenter(liveMatches, selectedMatchId, liveDetail, liveEvents, liveStats, liveMarkets, liveIntelligence) {
+    const listEl = document.getElementById('live-matches-list-container');
+    const detailEl = document.getElementById('live-match-detail-container');
+    const statusEl = document.getElementById('live-provider-status-container');
+
+    if (!listEl) return;
+
+    if (statusEl) {
+      statusEl.innerHTML = `
+        <div style="background: rgba(255, 71, 87, 0.08); border: 1px solid rgba(255, 71, 87, 0.25); border-radius: var(--radius-sm); padding: 8px 12px; display: flex; justify-content: space-between; align-items: center; font-size: 0.8rem;">
+          <span style="color: #ff4757; font-weight: 800;">⚡ IN-PLAY FEED: АКТИВЕН</span>
+          <span style="color: var(--text-muted);">Матчей в игре: <b>${liveMatches ? liveMatches.length : 0}</b></span>
+        </div>
+      `;
+    }
+
+    if (!liveMatches || liveMatches.length === 0) {
+      listEl.innerHTML = `
+        <div style="text-align: center; padding: 48px 20px; background: var(--bg-secondary); border: 1px dashed var(--border-subtle); border-radius: var(--radius-md);">
+          <div style="font-size: 2.5rem; margin-bottom: 10px;">📡</div>
+          <div style="font-family: 'Outfit', sans-serif; font-size: 1.1rem; font-weight: 800; color: #fff; margin-bottom: 6px;">
+            НЕТ АКТИВНЫХ ЛАЙВ-МАТЧЕЙ
+          </div>
+          <div style="font-size: 0.82rem; color: var(--text-muted); max-width: 320px; margin: 0 auto; line-height: 1.45;">
+            Внешний спорт-провайдер в режиме ожидания (LIVE DATA UNAVAILABLE). Лайв-трансляции и счет активируются в начале матчей тура.
+          </div>
+        </div>
+      `;
+      if (detailEl) detailEl.style.display = 'none';
+      return;
+    }
+
+    // Render matches list
+    listEl.innerHTML = liveMatches.map(m => {
+      const isSelected = m.id === selectedMatchId;
+      const hScore = m.home_score !== undefined ? m.home_score : 0;
+      const aScore = m.away_score !== undefined ? m.away_score : 0;
+      const min = m.minute ? `${m.minute}'` : 'LIVE';
+
+      const freshnessBadge = m.freshness && m.freshness.badge ? m.freshness.badge : '';
+
+      return `
+        <div class="match-card ${isSelected ? 'live-selected' : ''}" style="margin-bottom: 12px; border-left: 3px solid #ff4757;">
+          <div class="match-card-header" style="display: flex; justify-content: space-between; align-items: center;">
+            <div style="display: flex; align-items: center; gap: 6px;">
+              <span class="live-pulse-dot" style="width: 8px; height: 8px; background: #ff4757; border-radius: 50%; display: inline-block;"></span>
+              <span style="font-weight: 800; color: #ff4757; font-size: 0.82rem;">${min}</span>
+              <span style="font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase;">${m.period || 'Основное время'}</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 8px;">
+              ${freshnessBadge ? `<span style="font-size: 0.72rem; font-weight: 700;">${freshnessBadge}</span>` : ''}
+              <span style="font-size: 0.75rem; color: var(--accent-gold); font-weight: 700;">Дивизион ${m.division_id || 1}</span>
+            </div>
+          </div>
+
+          <div class="match-card-teams" style="display: flex; justify-content: space-between; align-items: center; padding: 12px 0;">
+            <div style="flex: 1; text-align: left; display: flex; align-items: center; gap: 8px;">
+              ${renderTeamLogoHtml(m.player1_team, 28)}
+              <span style="font-weight: 800; font-size: 0.95rem; color: #fff;">${m.player1_team}</span>
+            </div>
+            <div style="padding: 4px 12px; background: var(--bg-tertiary); border-radius: var(--radius-sm); font-size: 1.25rem; font-weight: 900; color: #ff4757; letter-spacing: 2px;">
+              ${hScore} : ${aScore}
+            </div>
+            <div style="flex: 1; text-align: right; display: flex; align-items: center; justify-content: flex-end; gap: 8px;">
+              <span style="font-weight: 800; font-size: 0.95rem; color: #fff;">${m.player2_team}</span>
+              ${renderTeamLogoHtml(m.player2_team, 28)}
+            </div>
+          </div>
+
+          <div style="display: flex; justify-content: flex-end; gap: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.05);">
+            <button class="btn-open-live-detail" data-match-id="${m.id}" style="background: linear-gradient(135deg, #ff4757, #ff6b81); color: #fff; border: none; padding: 6px 14px; border-radius: var(--radius-sm); font-size: 0.8rem; font-weight: 800; cursor: pointer;">
+              ⚡ Лайв Центр 2.0
+            </button>
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    // Render detailed match center 2.0 if match selected
+    if (detailEl && selectedMatchId && liveDetail) {
+      detailEl.style.display = 'block';
+      const m = liveDetail;
+      const hScore = m.home_score !== undefined ? m.home_score : 0;
+      const aScore = m.away_score !== undefined ? m.away_score : 0;
+
+      // Statistics bars (strictly preserves NULL without fake 0s)
+      let statsHtml = '';
+      if (liveStats && liveStats.statistics) {
+        const s = liveStats.statistics;
+        const metrics = [
+          { key: 'possession', label: 'Владение мячом', unit: '%' },
+          { key: 'shots', label: 'Удары по воротам', unit: '' },
+          { key: 'shots_on_target', label: 'Удары в створ', unit: '' },
+          { key: 'corners', label: 'Угловые', unit: '' },
+          { key: 'fouls', label: 'Фолы', unit: '' },
+          { key: 'yellow_cards', label: 'Желтые карточки', unit: '' },
+          { key: 'red_cards', label: 'Красные карточки', unit: '' },
+          { key: 'xg', label: 'Ожидаемые голы (xG)', unit: '' },
+        ];
+
+        const validMetrics = metrics.filter(met => s[met.key] && (s[met.key].home !== null || s[met.key].away !== null));
+        if (validMetrics.length > 0) {
+          statsHtml = `
+            <div style="margin-top: 16px; background: var(--bg-secondary); padding: 14px; border-radius: var(--radius-md); border: 1px solid var(--border-subtle);">
+              <div style="font-weight: 800; font-size: 0.92rem; color: #fff; margin-bottom: 12px;">📊 Лайв-Статистика Матча</div>
+              ${validMetrics.map(met => {
+                const hVal = s[met.key].home !== null ? s[met.key].home : '—';
+                const aVal = s[met.key].away !== null ? s[met.key].away : '—';
+                return `
+                  <div style="margin-bottom: 10px;">
+                    <div style="display: flex; justify-content: space-between; font-size: 0.78rem; font-weight: 700; margin-bottom: 4px;">
+                      <span style="color: var(--accent-gold);">${hVal}${met.unit}</span>
+                      <span style="color: var(--text-muted);">${met.label}</span>
+                      <span style="color: var(--accent-cyan);">${aVal}${met.unit}</span>
+                    </div>
+                  </div>
+                `;
+              }).join('')}
+            </div>
+          `;
+        }
+      }
+
+      // Timeline events
+      let eventsHtml = '';
+      if (liveEvents && liveEvents.length > 0) {
+        eventsHtml = `
+          <div style="margin-top: 16px; background: var(--bg-secondary); padding: 14px; border-radius: var(--radius-md); border: 1px solid var(--border-subtle);">
+            <div style="font-weight: 800; font-size: 0.92rem; color: #fff; margin-bottom: 12px;">⏱ Хроника Событий</div>
+            <div style="display: flex; flex-direction: column; gap: 8px;">
+              ${liveEvents.map(ev => {
+                const icon = ev.event_type === 'goal' ? '⚽' : ev.event_type === 'yellow_card' ? '🟨' : ev.event_type === 'red_card' ? '🟥' : ev.event_type === 'substitution' ? '🔄' : '📌';
+                return `
+                  <div style="display: flex; align-items: center; gap: 10px; font-size: 0.82rem; padding: 6px 8px; background: var(--bg-tertiary); border-radius: var(--radius-sm);">
+                    <span style="font-weight: 900; color: #ff4757; min-width: 28px;">${ev.minute}'</span>
+                    <span>${icon}</span>
+                    <span style="font-weight: 700; color: #fff;">${ev.event_type.toUpperCase()}</span>
+                    <span style="color: var(--text-secondary); margin-left: auto;">${ev.player_id || ''}</span>
+                  </div>
+                `;
+              }).join('')}
+            </div>
+          </div>
+        `;
+      }
+
+      detailEl.innerHTML = `
+        <div style="background: var(--bg-secondary); border: 1px solid var(--border-active); border-radius: var(--radius-md); padding: 16px; margin-bottom: 14px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span style="font-size: 0.8rem; font-weight: 800; color: #ff4757;">🔴 В ЭФИРЕ: ${m.minute ? m.minute + "'" : 'LIVE'}</span>
+              <span style="font-size: 0.72rem; font-weight: 700;">${m.freshness && m.freshness.badge ? m.freshness.badge : '🟢 LIVE DATA FRESH'}</span>
+            </div>
+            <span style="font-size: 0.75rem; color: var(--text-muted);">${m.provider || 'Официальный поток'}</span>
+          </div>
+
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <div style="flex: 1; text-align: center;">
+              ${renderTeamLogoHtml(m.player1_team, 40)}
+              <div style="font-weight: 800; font-size: 0.95rem; color: #fff; margin-top: 6px;">${m.player1_team}</div>
+            </div>
+            <div style="font-family: 'Outfit', sans-serif; font-size: 2rem; font-weight: 900; color: #ff4757; padding: 0 16px;">
+              ${hScore} : ${aScore}
+            </div>
+            <div style="flex: 1; text-align: center;">
+              ${renderTeamLogoHtml(m.player2_team, 40)}
+              <div style="font-weight: 800; font-size: 0.95rem; color: #fff; margin-top: 6px;">${m.player2_team}</div>
+            </div>
+          </div>
+        </div>
+
+        ${eventsHtml}
+        ${statsHtml}
+      `;
+    }
+  }
+
+  static renderHotMatches(hotMatches) {
+    const el = document.getElementById('hot-matches-container');
+    if (!el) return;
+
+    if (!hotMatches || hotMatches.length === 0) {
+      el.innerHTML = '';
+      return;
+    }
+
+    el.innerHTML = `
+      <div style="margin-bottom: 14px;">
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+          <span style="font-size: 0.95rem; font-weight: 800; color: #fff; display: flex; align-items: center; gap: 6px;">
+            🔥 Топ Горячих Матчей
+          </span>
+          <span style="font-size: 0.75rem; color: var(--accent-gold); font-weight: 700;">Scoring Engine</span>
+        </div>
+        <div style="display: flex; gap: 10px; overflow-x: auto; padding-bottom: 6px; -webkit-overflow-scrolling: touch;">
+          ${hotMatches.slice(0, 5).map(m => `
+            <div style="min-width: 220px; background: var(--bg-secondary); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 10px; flex-shrink: 0;">
+              <div style="display: flex; justify-content: space-between; font-size: 0.72rem; color: var(--text-muted); margin-bottom: 6px;">
+                <span>Тур ${m.round_number || 1}</span>
+                <span style="color: #ff4757; font-weight: 800;">🔥 ${m.hot_score} pts</span>
+              </div>
+              <div style="font-size: 0.85rem; font-weight: 800; color: #fff; margin-bottom: 6px;">
+                ${m.player1_team} — ${m.player2_team}
+              </div>
+              <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.78rem;">
+                <span style="color: var(--text-secondary);">${m.reasons ? m.reasons[0] : 'Высокий интерес'}</span>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    `;
+  }
+
+  static renderOddsMovers(oddsMovers) {
+    const el = document.getElementById('odds-movers-container');
+    if (!el) return;
+
+    if (!oddsMovers || oddsMovers.length === 0) {
+      el.innerHTML = '';
+      return;
+    }
+
+    el.innerHTML = `
+      <div style="margin-bottom: 14px;">
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+          <span style="font-size: 0.95rem; font-weight: 800; color: #fff; display: flex; align-items: center; gap: 6px;">
+            📈 Движение Коэффициентов
+          </span>
+          <span style="font-size: 0.75rem; color: var(--accent-cyan); font-weight: 700;">Live Volatility</span>
+        </div>
+        <div style="display: flex; gap: 8px; overflow-x: auto; padding-bottom: 6px; -webkit-overflow-scrolling: touch;">
+          ${oddsMovers.slice(0, 6).map(mov => {
+            const isDrop = mov.direction === 'down';
+            const arrow = isDrop ? '▼' : '▲';
+            const color = isDrop ? 'var(--color-success)' : 'var(--color-danger)';
+            return `
+              <div style="min-width: 170px; background: var(--bg-secondary); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 8px 10px; flex-shrink: 0;">
+                <div style="font-size: 0.72rem; color: var(--text-muted);">${mov.player1_team} - ${mov.player2_team}</div>
+                <div style="font-size: 0.8rem; font-weight: 800; color: #fff; margin: 3px 0;">${mov.selection_name || mov.outcome_type || 'Исход'}</div>
+                <div style="display: flex; align-items: center; gap: 6px; font-size: 0.78rem; font-weight: 800;">
+                  <span style="color: var(--text-muted); text-decoration: line-through;">${mov.previous_odds ? mov.previous_odds.toFixed(2) : ''}</span>
+                  <span style="color: #fff;">${mov.current_odds.toFixed(2)}</span>
+                  <span style="color: ${color};">${arrow} ${Math.abs(mov.pct_change).toFixed(1)}%</span>
+                </div>
+              </div>
+            `;
+          }).join('')}
+        </div>
+      </div>
+    `;
+  }
+
+  static renderRecommendations(recommendations) {
+    const el = document.getElementById('recommendations-container');
+    if (!el) return;
+
+    if (!recommendations || recommendations.length === 0) {
+      el.innerHTML = '';
+      return;
+    }
+
+    el.innerHTML = `
+      <div style="margin-bottom: 14px;">
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+          <span style="font-size: 0.95rem; font-weight: 800; color: #fff; display: flex; align-items: center; gap: 6px;">
+            💡 Рекомендации для вас
+          </span>
+          <span style="font-size: 0.75rem; color: var(--accent-gold); font-weight: 700;">Personalized</span>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 6px;">
+          ${recommendations.slice(0, 3).map(rec => `
+            <div style="background: var(--bg-secondary); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 10px 12px; display: flex; justify-content: space-between; align-items: center;">
+              <div>
+                <div style="font-weight: 800; font-size: 0.85rem; color: #fff;">${rec.player1_team} — ${rec.player2_team}</div>
+                <div style="font-size: 0.75rem; color: var(--text-gold); margin-top: 2px;">${rec.reason || 'Высокий интерес'}</div>
+              </div>
+              <button class="btn-open-match-center" data-match-id="${rec.match_id}" style="background: var(--bg-tertiary); border: 1px solid var(--border-subtle); color: var(--accent-gold); border-radius: var(--radius-sm); padding: 5px 10px; font-size: 0.75rem; font-weight: 800; cursor: pointer;">
+                Аналитика →
+              </button>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    `;
   }
 }

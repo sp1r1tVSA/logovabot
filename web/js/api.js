@@ -44,7 +44,11 @@ class ApiClient {
         });
         const data = await res.json();
         if (!res.ok) {
-          throw new Error(data.message || data.error || 'Ошибка запроса к серверу');
+          const err = new Error(data.message || data.error || 'Ошибка запроса к серверу');
+          err.status = res.status;
+          err.data = data;
+          err.code = data.error;
+          throw err;
         }
         if (isGet) {
           this.cache.set(cacheKey, { data, timestamp: Date.now() });
@@ -245,6 +249,179 @@ class ApiClient {
 
   getProfile(userId) {
     return this.request(`/api/profile/${userId}`);
+  }
+
+  // 8. Phase 6: Live Center & Sports Intelligence
+  getLiveMatches() {
+    return this.request('/api/live');
+  }
+
+  getLiveMatch(id) {
+    return this.request(`/api/live/${id}`);
+  }
+
+  getLiveEvents(id) {
+    return this.request(`/api/live/${id}/events`);
+  }
+
+  getLiveStats(id) {
+    return this.request(`/api/live/${id}/stats`);
+  }
+
+  getLiveMarkets(id) {
+    return this.request(`/api/live/${id}/markets`);
+  }
+
+  getLiveIntelligence(id) {
+    return this.request(`/api/live/${id}/intelligence`);
+  }
+
+  getOddsMovers() {
+    return this.request('/api/odds/movers');
+  }
+
+  getHotMatches() {
+    return this.request('/api/matches/hot');
+  }
+
+  getRecommendations() {
+    return this.request('/api/recommendations');
+  }
+
+  getProfileAnalytics() {
+    return this.request('/api/profile/analytics');
+  }
+
+  getDivisionLeaderboard(divisionId) {
+    return this.request(`/api/leaderboard/division/${encodeURIComponent(divisionId)}`);
+  }
+
+  // Phase 7: AI & Sports Intelligence
+  getIntelligenceMatches(divisionId = null, seasonId = null) {
+    const p = new URLSearchParams();
+    if (divisionId) p.append('division_id', divisionId);
+    if (seasonId) p.append('season_id', seasonId);
+    const q = p.toString() ? `?${p.toString()}` : '';
+    return this.request(`/api/intelligence/matches${q}`);
+  }
+
+  getIntelligencePreview(matchId) {
+    return this.request(`/api/intelligence/matches/${matchId}/preview`);
+  }
+
+  getIntelligencePrediction(matchId) {
+    return this.request(`/api/intelligence/matches/${matchId}/prediction`);
+  }
+
+  getValueRadar(divisionId = null, seasonId = null, minEdge = 3.0) {
+    const p = new URLSearchParams();
+    if (divisionId) p.append('division_id', divisionId);
+    if (seasonId) p.append('season_id', seasonId);
+    if (minEdge) p.append('min_edge', minEdge);
+    const q = p.toString() ? `?${p.toString()}` : '';
+    return this.request(`/api/intelligence/value${q}`);
+  }
+
+  getIntelligencePerformance(divisionId = null, seasonId = null) {
+    const p = new URLSearchParams();
+    if (divisionId) p.append('division_id', divisionId);
+    if (seasonId) p.append('season_id', seasonId);
+    const q = p.toString() ? `?${p.toString()}` : '';
+    return this.request(`/api/intelligence/performance${q}`);
+  }
+
+  // Phase 9: Cashout & Risk Management
+  getCashoutQuote(betId) {
+    return this.request(`/api/predictions/${betId}/cashout-quote`);
+  }
+
+  executeCashout(betId, idempotencyKey = null) {
+    return this.request(`/api/predictions/${betId}/cashout`, {
+      method: 'POST',
+      body: JSON.stringify({ idempotency_key: idempotencyKey })
+    });
+  }
+
+  getRiskExposure(params = {}) {
+    const p = new URLSearchParams();
+    if (params.division_id) p.append('division_id', params.division_id);
+    if (params.market_id) p.append('market_id', params.market_id);
+    if (params.season_id) p.append('season_id', params.season_id);
+    const q = p.toString() ? `?${p.toString()}` : '';
+    return this.request(`/api/admin/risk/exposure${q}`);
+  }
+
+  getRiskAlerts(params = {}) {
+    const p = new URLSearchParams();
+    if (params.division_id) p.append('division_id', params.division_id);
+    if (params.status) p.append('status', params.status);
+    if (params.severity) p.append('severity', params.severity);
+    const q = p.toString() ? `?${p.toString()}` : '';
+    return this.request(`/api/admin/risk/alerts${q}`);
+  }
+
+  getRiskLimits(divisionId = null) {
+    const q = divisionId ? `?division_id=${divisionId}` : '';
+    return this.request(`/api/admin/risk/limits${q}`);
+  }
+
+  // Phase 10: Profile 2.0, Fair Leaderboard & Seasonal Progression
+  getPublicPlayerProfile(userId) {
+    return this.request(`/api/player/${userId}/public`);
+  }
+
+  getProfileStats() {
+    return this.request('/api/profile/stats');
+  }
+
+  getLeaderboard(params = {}) {
+    const p = new URLSearchParams();
+    if (params.page) p.append('page', params.page);
+    if (params.limit) p.append('limit', params.limit);
+    if (params.metric) p.append('metric', params.metric);
+    if (params.period) p.append('period', params.period);
+    if (params.season_id) p.append('season_id', params.season_id);
+    const q = p.toString() ? `?${p.toString()}` : '';
+    return this.request(`/api/leaderboard${q}`);
+  }
+
+  getDivisionLeaderboard(params = {}) {
+    const p = new URLSearchParams();
+    if (params.division_id) p.append('division_id', params.division_id);
+    if (params.page) p.append('page', params.page);
+    if (params.limit) p.append('limit', params.limit);
+    if (params.metric) p.append('metric', params.metric);
+    const q = p.toString() ? `?${p.toString()}` : '';
+    return this.request(`/api/leaderboard/division${q}`);
+  }
+
+  getSeasonLeaderboard(params = {}) {
+    const p = new URLSearchParams();
+    if (params.season_id) p.append('season_id', params.season_id);
+    if (params.page) p.append('page', params.page);
+    if (params.limit) p.append('limit', params.limit);
+    if (params.metric) p.append('metric', params.metric);
+    const q = p.toString() ? `?${p.toString()}` : '';
+    return this.request(`/api/leaderboard/season${q}`);
+  }
+
+  getSeasonInfo() {
+    return this.request('/api/season');
+  }
+
+  getSeasonRewards() {
+    return this.request('/api/season/rewards');
+  }
+
+  getAdminSeason() {
+    return this.request('/api/admin/season');
+  }
+
+  finalizeSeason(seasonId) {
+    return this.request('/api/admin/season/finalize', {
+      method: 'POST',
+      body: JSON.stringify({ season_id: seasonId, confirm: true })
+    });
   }
 }
 

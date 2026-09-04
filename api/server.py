@@ -10,13 +10,30 @@ import asyncio
 import logging
 from aiohttp import web
 
-from api.routes_wallet import handle_bootstrap, handle_claim_bonus, handle_leaderboard, handle_get_wallet
+from api.routes_wallet import (
+    handle_bootstrap,
+    handle_claim_bonus,
+    handle_leaderboard,
+    handle_get_division_leaderboard,
+    handle_get_wallet,
+)
 from api.routes_markets import handle_get_tours, handle_get_match_markets, handle_get_odds_history
 from api.routes_predictions import (
     handle_place_prediction,
     handle_get_predictions,
     handle_get_prediction_detail,
-    handle_repeat_prediction
+    handle_repeat_prediction,
+    handle_get_cashout_quote,
+    handle_execute_cashout
+)
+from api.routes_admin_risk import (
+    handle_admin_get_exposure,
+    handle_admin_get_risk_alerts,
+    handle_admin_ack_alert,
+    handle_admin_resolve_alert,
+    handle_admin_get_limits,
+    handle_admin_set_limits,
+    handle_admin_emergency_suspend
 )
 from api.routes_matches import (
     handle_get_matches,
@@ -24,7 +41,9 @@ from api.routes_matches import (
     handle_get_match_stats,
     handle_get_match_h2h,
     handle_get_match_insights,
-    handle_get_match_live
+    handle_get_match_live,
+    handle_get_hot_matches,
+    handle_get_recommendations,
 )
 from api.routes_tournaments import (
     handle_get_tournaments,
@@ -37,6 +56,7 @@ from api.routes_tournaments import (
 )
 from api.routes_user_extras import (
     handle_get_my_stats,
+    handle_get_profile_analytics,
     handle_save_coupon,
     handle_get_saved_coupons,
     handle_delete_saved_coupon,
@@ -50,7 +70,20 @@ from api.routes_gamification import (
     handle_get_progression,
     handle_get_achievements,
     handle_claim_achievement,
-    handle_get_profile
+    handle_get_profile,
+    handle_get_player_public,
+    handle_get_profile_stats,
+    handle_get_leaderboard,
+    handle_get_leaderboard_division,
+    handle_get_leaderboard_season,
+    handle_get_season,
+    handle_get_season_rewards,
+)
+from api.routes_admin_season import (
+    handle_admin_get_season,
+    handle_admin_create_season,
+    handle_admin_finalize_season,
+    handle_admin_season_rewards,
 )
 from api.routes_admin_betting import (
     handle_admin_list_markets,
@@ -59,6 +92,38 @@ from api.routes_admin_betting import (
     handle_admin_list_bets,
     handle_admin_void_bet,
     handle_admin_audit_log,
+)
+from api.routes_live import (
+    handle_get_live_matches,
+    handle_get_live_match_detail,
+    handle_get_live_events,
+    handle_get_live_stats,
+    handle_get_live_markets,
+    handle_get_odds_movers,
+    handle_get_live_intelligence,
+)
+from api.routes_admin_live import (
+    handle_admin_live_overview,
+    handle_admin_suspend_market,
+    handle_admin_resume_market,
+    handle_admin_close_market,
+    handle_admin_void_market,
+    handle_admin_match_correction,
+    handle_admin_refresh_match,
+    handle_admin_sports_health,
+)
+from api.routes_intelligence import (
+    handle_get_intelligence_matches,
+    handle_get_intelligence_match_detail,
+    handle_get_intelligence_preview,
+    handle_get_intelligence_prediction,
+    handle_get_intelligence_insights,
+    handle_get_value_radar,
+    handle_get_hot_matches_v2,
+    handle_get_intelligence_movers,
+    handle_get_intelligence_history,
+    handle_get_intelligence_performance,
+    handle_admin_intelligence_overview,
 )
 
 logger = logging.getLogger(__name__)
@@ -100,7 +165,7 @@ def create_app() -> web.Application:
     app.router.add_get("/api/bootstrap", handle_bootstrap)
     app.router.add_get("/api/wallet", handle_get_wallet)
     app.router.add_post("/api/bonus/claim", handle_claim_bonus)
-    app.router.add_get("/api/leaderboard", handle_leaderboard)
+    app.router.add_get("/api/leaderboard/division/{division_id}", handle_get_division_leaderboard)
 
     # 2. Markets & Odds
     app.router.add_get("/api/markets/tours", handle_get_tours)
@@ -109,6 +174,8 @@ def create_app() -> web.Application:
 
     # 3. Match Center 3.0
     app.router.add_get("/api/matches", handle_get_matches)
+    app.router.add_get("/api/matches/hot", handle_get_hot_matches)
+    app.router.add_get("/api/recommendations", handle_get_recommendations)
     app.router.add_get("/api/matches/{id}", handle_get_match_detail)
     app.router.add_get("/api/matches/{id}/stats", handle_get_match_stats)
     app.router.add_get("/api/matches/{id}/h2h", handle_get_match_h2h)
@@ -120,6 +187,8 @@ def create_app() -> web.Application:
     app.router.add_get("/api/predictions", handle_get_predictions)
     app.router.add_get("/api/predictions/{id}", handle_get_prediction_detail)
     app.router.add_post("/api/predictions/{id}/repeat", handle_repeat_prediction)
+    app.router.add_get("/api/predictions/{id}/cashout-quote", handle_get_cashout_quote)
+    app.router.add_post("/api/predictions/{id}/cashout", handle_execute_cashout)
 
     # Aliases for bets
     app.router.add_post("/api/bets", handle_place_prediction)
@@ -140,6 +209,7 @@ def create_app() -> web.Application:
 
     # 6. User Stats, Saved Coupons, Favorites & Notifications
     app.router.add_get("/api/stats/me", handle_get_my_stats)
+    app.router.add_get("/api/profile/analytics", handle_get_profile_analytics)
     app.router.add_post("/api/saved-coupons", handle_save_coupon)
     app.router.add_get("/api/saved-coupons", handle_get_saved_coupons)
     app.router.add_delete("/api/saved-coupons/{id}", handle_delete_saved_coupon)
@@ -149,12 +219,25 @@ def create_app() -> web.Application:
     app.router.add_get("/api/notifications", handle_get_notifications)
     app.router.add_post("/api/notifications/read", handle_mark_notifications_read)
 
-    # 7. Secondary Gamification (Progression, Achievements & Profile)
+    # 7. Phase 10: Gamification, Profile 2.0, Fair Leaderboard & Seasonal Progression
     app.router.add_get("/api/progression", handle_get_progression)
     app.router.add_get("/api/achievements", handle_get_achievements)
     app.router.add_post("/api/achievements/claim", handle_claim_achievement)
     app.router.add_get("/api/profile", handle_get_profile)
+    app.router.add_get("/api/profile/stats", handle_get_profile_stats)
     app.router.add_get("/api/profile/{user_id}", handle_get_profile)
+    app.router.add_get("/api/player/{id}/public", handle_get_player_public)
+    app.router.add_get("/api/leaderboard", handle_get_leaderboard)
+    app.router.add_get("/api/leaderboard/division", handle_get_leaderboard_division)
+    app.router.add_get("/api/leaderboard/season", handle_get_leaderboard_season)
+    app.router.add_get("/api/season", handle_get_season)
+    app.router.add_get("/api/season/rewards", handle_get_season_rewards)
+
+    # Admin Season Center
+    app.router.add_get("/api/admin/season", handle_admin_get_season)
+    app.router.add_post("/api/admin/season", handle_admin_create_season)
+    app.router.add_post("/api/admin/season/finalize", handle_admin_finalize_season)
+    app.router.add_post("/api/admin/season/rewards", handle_admin_season_rewards)
 
     # 8. Phase 5: Admin Betting Center
     app.router.add_get("/api/admin/markets", handle_admin_list_markets)
@@ -163,6 +246,47 @@ def create_app() -> web.Application:
     app.router.add_get("/api/admin/bets", handle_admin_list_bets)
     app.router.add_post("/api/admin/bets/{id}/void", handle_admin_void_bet)
     app.router.add_get("/api/admin/audit-log", handle_admin_audit_log)
+
+    # 9. Phase 6: Live Match Center & Odds Movers
+    app.router.add_get("/api/live", handle_get_live_matches)
+    app.router.add_get("/api/live/{id}", handle_get_live_match_detail)
+    app.router.add_get("/api/live/{id}/events", handle_get_live_events)
+    app.router.add_get("/api/live/{id}/stats", handle_get_live_stats)
+    app.router.add_get("/api/live/{id}/markets", handle_get_live_markets)
+    app.router.add_get("/api/live/{id}/intelligence", handle_get_live_intelligence)
+    app.router.add_get("/api/odds/movers", handle_get_odds_movers)
+
+    # Phase 6: Admin Live Center & Safety Controls
+    app.router.add_get("/api/admin/live/overview", handle_admin_live_overview)
+    app.router.add_post("/api/admin/live/markets/{id}/suspend", handle_admin_suspend_market)
+    app.router.add_post("/api/admin/live/markets/{id}/resume", handle_admin_resume_market)
+    app.router.add_post("/api/admin/live/markets/{id}/close", handle_admin_close_market)
+    app.router.add_post("/api/admin/live/markets/{id}/void", handle_admin_void_market)
+    app.router.add_post("/api/admin/live/matches/{id}/correction", handle_admin_match_correction)
+    app.router.add_post("/api/admin/live/matches/{id}/refresh", handle_admin_refresh_match)
+    app.router.add_get("/api/admin/sports/health", handle_admin_sports_health)
+
+    # 10. Phase 7: AI & Advanced Sports Intelligence
+    app.router.add_get("/api/intelligence/matches", handle_get_intelligence_matches)
+    app.router.add_get("/api/intelligence/matches/{id}", handle_get_intelligence_match_detail)
+    app.router.add_get("/api/intelligence/matches/{id}/preview", handle_get_intelligence_preview)
+    app.router.add_get("/api/intelligence/matches/{id}/prediction", handle_get_intelligence_prediction)
+    app.router.add_get("/api/intelligence/matches/{id}/insights", handle_get_intelligence_insights)
+    app.router.add_get("/api/intelligence/value", handle_get_value_radar)
+    app.router.add_get("/api/intelligence/hot", handle_get_hot_matches_v2)
+    app.router.add_get("/api/intelligence/movers", handle_get_intelligence_movers)
+    app.router.add_get("/api/intelligence/history", handle_get_intelligence_history)
+    app.router.add_get("/api/intelligence/performance", handle_get_intelligence_performance)
+    app.router.add_get("/api/admin/intelligence/overview", handle_admin_intelligence_overview)
+
+    # 11. Phase 9: Admin Risk Center & Exposure Controls
+    app.router.add_get("/api/admin/risk/exposure", handle_admin_get_exposure)
+    app.router.add_get("/api/admin/risk/alerts", handle_admin_get_risk_alerts)
+    app.router.add_post("/api/admin/risk/alerts/{id}/ack", handle_admin_ack_alert)
+    app.router.add_post("/api/admin/risk/alerts/{id}/resolve", handle_admin_resolve_alert)
+    app.router.add_get("/api/admin/risk/limits", handle_admin_get_limits)
+    app.router.add_post("/api/admin/risk/limits", handle_admin_set_limits)
+    app.router.add_post("/api/admin/risk/suspend", handle_admin_emergency_suspend)
 
     # Static SPA Frontend & Assets
     app.router.add_get("/", handle_index)

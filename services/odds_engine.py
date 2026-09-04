@@ -117,6 +117,21 @@ def set_odds(
                 VALUES (?, ?, ?, ?, ?)
             """, (sel_id, old_value, new_value, admin_id, reason or "odds_update"))
 
+            # Phase 6: Odds Movement Tracking
+            try:
+                cursor.execute("SELECT match_id FROM markets WHERE id = ?", (market_id,))
+                mkt_row = cursor.fetchone()
+                if mkt_row:
+                    match_id = mkt_row["match_id"]
+                    pct_change = round(((new_value - old_value) / max(0.01, old_value)) * 100, 2)
+                    direction = "up" if new_value > old_value else "down"
+                    cursor.execute("""
+                        INSERT INTO odds_movement (selection_id, market_id, match_id, old_odds, new_odds, pct_change, direction, velocity, reason, source)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, 0.0, ?, ?)
+                    """, (sel_id, market_id, match_id, old_value, new_value, pct_change, direction, reason or "odds_update", f"admin:{admin_id}" if admin_id else "system"))
+            except Exception as e:
+                logger.warning(f"Failed to record odds_movement: {e}")
+
         cursor.execute("SELECT * FROM market_selections WHERE id = ?", (sel_id,))
         return dict(cursor.fetchone())
 

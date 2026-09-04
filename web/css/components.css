@@ -1577,4 +1577,55 @@
   cursor: pointer;
 }
 
+/* ─── 19. Phase 6: Live Center & In-Play Components ─── */
+.live-pulse-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: rgba(255, 71, 87, 0.15);
+  border: 1px solid rgba(255, 71, 87, 0.4);
+  color: #ff4757;
+  font-size: 0.72rem;
+  font-weight: 800;
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  letter-spacing: 0.5px;
+  animation: liveBadgePulse 2s infinite ease-in-out;
+}
 
+@keyframes liveBadgePulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.75; transform: scale(0.97); }
+}
+
+.live-pulse-dot {
+  width: 7px;
+  height: 7px;
+  background: #ff4757;
+  border-radius: 50%;
+  box-shadow: 0 0 8px #ff4757;
+  animation: dotFlash 1.2s infinite;
+}
+
+@keyframes dotFlash {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+.match-card.live-selected {
+  border: 1px solid #ff4757 !important;
+  box-shadow: 0 0 16px rgba(255, 71, 87, 0.25);
+}
+
+.nav-item-live {
+  position: relative;
+}
+
+.nav-item-live .nav-icon {
+  animation: fireFlicker 1.8s infinite alternate ease-in-out;
+}
+
+@keyframes fireFlicker {
+  0% { transform: scale(1); filter: drop-shadow(0 0 2px #ff4757); }
+  100% { transform: scale(1.15); filter: drop-shadow(0 0 8px #ff4757); }
+}

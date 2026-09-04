@@ -121,7 +121,7 @@ async def handle_claim_bonus(request: web.Request) -> web.Response:
 async def handle_leaderboard(request: web.Request) -> web.Response:
     """
     GET /api/leaderboard
-    Get top bettors ranking by coin balance.
+    Get top bettors ranking. Supports ?division_id=X&season_id=Y&min_bets=Z query parameters.
     """
     init_data = request.headers.get("X-Telegram-Init-Data", "")
     user_info = get_authenticated_user(init_data)
@@ -133,12 +133,23 @@ async def handle_leaderboard(request: web.Request) -> web.Response:
             "message": "Logovo.bet находится на закрытом тесте в Лаборатории."
         }, status=403)
 
-    leaders = database.get_top_bettors(20)
+    division_id_str = request.query.get("division_id")
+    season_id_str = request.query.get("season_id")
+    min_bets_str = request.query.get("min_bets")
+
+    div_id = int(division_id_str) if division_id_str and division_id_str.isdigit() else None
+    season_id = int(season_id_str) if season_id_str and season_id_str.isdigit() else None
+    min_bets = int(min_bets_str) if min_bets_str and min_bets_str.isdigit() else 5
+
+    from services.analytics_service import get_capper_leaderboard
+    capper_leaders = get_capper_leaderboard(division_id=div_id, season_id=season_id, min_bets=min_bets)
+
+    # Legacy coin leaders for backward compatibility
+    coin_leaders = database.get_top_bettors(20)
 
     my_rank = None
-    if user_info and "id" in user_info:
-        user_id = user_info["id"]
-        for idx, item in enumerate(leaders, 1):
+    if user_id:
+        for idx, item in enumerate(coin_leaders, 1):
             if item["user_id"] == user_id:
                 my_rank = {
                     "rank": idx,
@@ -150,8 +161,38 @@ async def handle_leaderboard(request: web.Request) -> web.Response:
 
     return web.json_response({
         "status": "ok",
-        "leaders": leaders,
+        "leaders": coin_leaders,
+        "capper_leaders": capper_leaders,
         "my_rank": my_rank
+    })
+
+
+async def handle_get_division_leaderboard(request: web.Request) -> web.Response:
+    """
+    GET /api/leaderboard/division/{division_id}
+    Returns division-scoped capper leaderboard with ROI, win rate, and min bets filtering.
+    """
+    try:
+        division_id = int(request.match_info["division_id"])
+    except (KeyError, ValueError):
+        return web.json_response({"status": "error", "message": "Некорректный ID дивизиона."}, status=400)
+
+    season_id_str = request.query.get("season_id")
+    season_id = int(season_id_str) if season_id_str and season_id_str.isdigit() else None
+    min_bets_str = request.query.get("min_bets", "5")
+    min_bets = int(min_bets_str) if min_bets_str and min_bets_str.isdigit() else 5
+    limit_str = request.query.get("limit", "20")
+    limit = int(limit_str) if limit_str and limit_str.isdigit() else 20
+
+    from services.analytics_service import get_capper_leaderboard
+    leaders = get_capper_leaderboard(division_id=division_id, season_id=season_id, min_bets=min_bets, limit=limit)
+
+    return web.json_response({
+        "status": "ok",
+        "division_id": division_id,
+        "season_id": season_id,
+        "count": len(leaders),
+        "leaders": leaders
     })
 
 

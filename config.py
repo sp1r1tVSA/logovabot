@@ -28,7 +28,20 @@ def _get_gemini_chat_keys() -> list[str]:
 
 GEMINI_CHAT_API_KEYS = _get_gemini_chat_keys()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite").strip()
-APISPORTS_KEY = os.getenv("APISPORTS_KEY", "").strip()
+# ─── Phase 8: Real Sports Provider Configuration ──────────────────────────────
+SPORTS_PROVIDER = os.getenv("SPORTS_PROVIDER", "auto").strip()
+SPORTS_API_KEY = os.getenv("SPORTS_API_KEY", os.getenv("APISPORTS_KEY", "")).strip()
+APISPORTS_KEY = SPORTS_API_KEY  # Backward compatibility
+SPORTS_API_BASE_URL = os.getenv("SPORTS_API_BASE_URL", "https://v3.football.api-sports.io").strip()
+SPORTS_TIMEOUT_SECONDS = float(os.getenv("SPORTS_TIMEOUT_SECONDS", "10.0"))
+SPORTS_CACHE_TTL_SECONDS = int(os.getenv("SPORTS_CACHE_TTL_SECONDS", "30"))
+SPORTS_LIVE_POLL_SECONDS = int(os.getenv("SPORTS_LIVE_POLL_SECONDS", "15"))
+SPORTS_MAX_RETRIES = int(os.getenv("SPORTS_MAX_RETRIES", "3"))
+SPORTS_RATE_LIMIT_RPM = int(os.getenv("SPORTS_RATE_LIMIT_RPM", "60"))
+
+# Stale data protection thresholds
+LIVE_DATA_STALE_AFTER_SECONDS = int(os.getenv("LIVE_DATA_STALE_AFTER_SECONDS", "120"))
+LIVE_DATA_EXPIRED_AFTER_SECONDS = int(os.getenv("LIVE_DATA_EXPIRED_AFTER_SECONDS", "300"))
 
 def _get_group_id() -> int | None:
     group_raw = os.getenv("TELEGRAM_GROUP_ID", "").strip()

@@ -12,6 +12,7 @@ import { ParticleEffects } from './effects.js';
 class AppController {
   constructor() {
     this.currentTournamentTab = 'standings';
+    this.livePollTimer = null;
     this.init();
   }
 
@@ -23,7 +24,19 @@ class AppController {
       UIRenderer.renderDivisionTabs(state.divisions, state.selectedDivisionId, 'lobby-division-tabs-container');
       UIRenderer.renderDivisionTabs(state.divisions, state.selectedDivisionId, 'tournament-division-tabs-container');
       UIRenderer.renderTourTabs(state.tours, state.selectedTour);
+      UIRenderer.renderHotMatches(state.hotMatches);
+      UIRenderer.renderOddsMovers(state.oddsMovers);
+      UIRenderer.renderRecommendations(state.recommendations);
       UIRenderer.renderMatches(state.tours, state.selectedTour, state.marketCategoryFilter, state.searchQuery, state.matchStatusFilter, state.selectedDivisionId);
+      UIRenderer.renderLiveCenter(
+        state.liveMatches,
+        state.selectedLiveMatchId,
+        state.liveMatchDetail,
+        state.liveMatchEvents,
+        state.liveMatchStats,
+        state.liveMatchMarkets,
+        state.liveMatchIntelligence
+      );
       UIRenderer.renderMatchCenter(state.matchDetail, state.matchStats, state.matchH2H, state.matchInsights, state.matchLive, state.matchMarkets, state.matchCenterSubTab);
       UIRenderer.renderTournaments(state.standings, state.results, state.topScorers, this.currentTournamentTab);
       UIRenderer.renderPredictionsHistory(state.myBets, state.myBetsFilter);
@@ -81,13 +94,80 @@ class AppController {
           }
         }
 
-        // Fetch progression, tournaments, user stats
+        // Fetch progression, tournaments, user stats & intelligence hub
         this.fetchProgressionData();
         this.fetchTournamentData(store.state.selectedDivisionId);
         this.fetchUserExtras();
+        this.fetchIntelligenceHub();
       }
     } catch (err) {
       console.error("Failed to bootstrap app:", err);
+    }
+  }
+
+  async fetchIntelligenceHub() {
+    try {
+      const [hotRes, moversRes, recsRes] = await Promise.all([
+        api.getHotMatches(),
+        api.getOddsMovers(),
+        api.getRecommendations()
+      ]);
+      if (hotRes.status === 'ok') store.setHotMatches(hotRes.hot_matches);
+      if (moversRes.status === 'ok') store.setOddsMovers(moversRes.movers);
+      if (recsRes.status === 'ok') store.setRecommendations(recsRes.recommendations);
+    } catch (e) {
+      console.warn("Could not load intelligence hub:", e);
+    }
+  }
+
+  startLivePolling() {
+    this.stopLivePolling();
+    this.fetchLiveMatches();
+    this.livePollTimer = setInterval(() => {
+      this.fetchLiveMatches();
+    }, 10000);
+  }
+
+  stopLivePolling() {
+    if (this.livePollTimer) {
+      clearInterval(this.livePollTimer);
+      this.livePollTimer = null;
+    }
+  }
+
+  async fetchLiveMatches() {
+    try {
+      const res = await api.getLiveMatches();
+      if (res.status === 'ok') {
+        store.setLiveMatches(res.live_matches);
+        if (store.state.selectedLiveMatchId) {
+          this.loadLiveMatchDetail(store.state.selectedLiveMatchId);
+        }
+      }
+    } catch (e) {
+      console.warn("Could not fetch live matches:", e);
+    }
+  }
+
+  async loadLiveMatchDetail(matchId) {
+    try {
+      const [detailRes, eventsRes, statsRes, mktsRes, intRes] = await Promise.all([
+        api.getLiveMatch(matchId),
+        api.getLiveEvents(matchId),
+        api.getLiveStats(matchId),
+        api.getLiveMarkets(matchId),
+        api.getLiveIntelligence(matchId)
+      ]);
+      store.setLiveMatchData(
+        matchId,
+        detailRes.status === 'ok' ? detailRes.match : null,
+        eventsRes.status === 'ok' ? eventsRes.events : [],
+        statsRes.status === 'ok' ? statsRes : null,
+        mktsRes.status === 'ok' ? mktsRes.markets : [],
+        intRes.status === 'ok' ? intRes : null
+      );
+    } catch (e) {
+      console.warn("Could not load live match detail:", e);
     }
   }
 
@@ -143,7 +223,7 @@ class AppController {
         api.getMatchDetail(matchId),
         api.getMatchStats(matchId),
         api.getMatchH2H(matchId),
-        api.getMatchInsights(matchId),
+        api.getIntelligencePreview(matchId).catch(() => api.getMatchInsights(matchId)),
         api.getMatchLive(matchId),
         api.getMatchMarkets(matchId)
       ]);
@@ -448,6 +528,24 @@ class AppController {
       }
     });
 
+    // 13b. Phase 6: Live Center Events
+    document.addEventListener('click', (e) => {
+      const btn = e.target.closest('.btn-open-live-detail');
+      if (btn && btn.dataset.matchId) {
+        const mId = parseInt(btn.dataset.matchId);
+        this.loadLiveMatchDetail(mId);
+        tgBridge.hapticImpact('light');
+      }
+    });
+
+    const btnRefreshLive = document.getElementById('btn-refresh-live');
+    if (btnRefreshLive) {
+      btnRefreshLive.addEventListener('click', () => {
+        this.fetchLiveMatches();
+        tgBridge.hapticImpact('light');
+      });
+    }
+
     // 14. Bet Slip Drawer Controls
     const slipBar = document.getElementById('slip-bar-collapsed');
     if (slipBar) {
@@ -537,6 +635,30 @@ class AppController {
             }
           }
         } catch (err) {
+          if (err.data && err.data.error === 'ODDS_CHANGED') {
+            const { old_odd, new_odd, match_id, outcome } = err.data;
+            UIRenderer.showOddsChangedModal(
+              old_odd,
+              new_odd,
+              () => {
+                // User accepted new odds
+                const item = store.state.slip.find(s => s.match_id === match_id && s.outcome === outcome);
+                if (item) {
+                  item.odd = parseFloat(new_odd);
+                  store.notify();
+                }
+                tgBridge.hapticImpact('medium');
+                // Allow UI to re-enable before triggering re-submission
+                setTimeout(() => {
+                  submitBtn.click();
+                }, 100);
+              },
+              () => {
+                tgBridge.hapticImpact('light');
+              }
+            );
+            return;
+          }
           tgBridge.showAlert(err.message);
         } finally {
           submitBtn.disabled = false;
@@ -623,6 +745,12 @@ class AppController {
     });
 
     // On-demand view refresh
+    if (viewName === 'live') {
+      this.startLivePolling();
+    } else {
+      this.stopLivePolling();
+    }
+
     if (viewName === 'history') {
       api.getPredictions().then(res => {
         if (res.status === 'ok') store.setMyBets(res.bets);

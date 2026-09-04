@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 async def handle_get_my_stats(request: web.Request) -> web.Response:
     """
     GET /api/stats/me
-    Calculates detailed betting statistics: ROI %, Win Rate %, Average Odds, Favorite Market.
+    Calculates detailed betting statistics using analytics service.
     """
     init_data = request.headers.get("X-Telegram-Init-Data", "")
     user_info = get_authenticated_user(init_data)
@@ -24,59 +24,32 @@ async def handle_get_my_stats(request: web.Request) -> web.Response:
         return web.json_response({"status": "error", "error": "unauthorized"}, status=401)
 
     user_id = user_info["id"]
-
-    with database.transaction() as conn:
-        cursor = conn.cursor()
-        wallet = database.get_or_create_wallet(user_id)
-        prog = database.get_or_create_progression(user_id)
-
-        wagered = wallet["total_wagered"]
-        won = wallet["total_won"]
-        bets_count = wallet["bets_count"]
-        bets_won = wallet["bets_won"]
-
-        win_rate = round((bets_won / max(1, bets_count)) * 100, 1)
-        net_profit = won - wagered
-        roi = round((net_profit / max(1, wagered)) * 100, 1) if wagered > 0 else 0.0
-
-        # Average Odds
-        cursor.execute("SELECT AVG(total_odd) as avg_odd, MAX(potential_win) as max_win FROM user_bets WHERE user_id = ?", (user_id,))
-        stats_row = cursor.fetchone()
-        avg_odd = round(float(stats_row["avg_odd"] or 1.0), 2)
-        best_win = int(stats_row["max_win"] or 0)
-
-        # Favorite Market Pick
-        cursor.execute("""
-            SELECT outcome_type, COUNT(*) as cnt
-            FROM bet_items bi
-            JOIN user_bets ub ON bi.bet_id = ub.id
-            WHERE ub.user_id = ?
-            GROUP BY outcome_type
-            ORDER BY cnt DESC
-            LIMIT 1
-        """, (user_id,))
-        fav_row = cursor.fetchone()
-        favorite_market = fav_row["outcome_type"].upper() if fav_row else "П1"
+    from services.analytics_service import get_user_betting_analytics
+    stats = get_user_betting_analytics(user_id)
 
     return web.json_response({
         "status": "ok",
-        "stats": {
-            "balance": wallet["balance"],
-            "total_wagered": wagered,
-            "total_won": won,
-            "net_profit": net_profit,
-            "roi_pct": roi,
-            "win_rate_pct": win_rate,
-            "total_predictions": bets_count,
-            "won_predictions": bets_won,
-            "average_odds": avg_odd,
-            "best_win": best_win,
-            "current_streak": prog["current_streak"],
-            "best_streak": prog["best_streak"],
-            "favorite_market": favorite_market,
-            "level": prog["level"],
-            "xp": prog["current_xp"]
-        }
+        "stats": stats
+    })
+
+
+async def handle_get_profile_analytics(request: web.Request) -> web.Response:
+    """
+    GET /api/profile/analytics
+    Comprehensive bettor analytics with strict ROI (NULL on 0 stake) and market statistics.
+    """
+    init_data = request.headers.get("X-Telegram-Init-Data", "")
+    user_info = get_authenticated_user(init_data)
+    if not user_info or "id" not in user_info:
+        return web.json_response({"status": "error", "error": "unauthorized"}, status=401)
+
+    user_id = user_info["id"]
+    from services.analytics_service import get_user_betting_analytics
+    stats = get_user_betting_analytics(user_id)
+
+    return web.json_response({
+        "status": "ok",
+        "analytics": stats
     })
 
 

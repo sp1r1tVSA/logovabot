@@ -152,6 +152,19 @@ def settle_match_predictions(
                     SET status = 'lost', actual_payout = 0, settled_at = CURRENT_TIMESTAMP
                     WHERE id = ? AND settled_at IS NULL
                 """, (b_id,))
+                if cursor.rowcount > 0:
+                    try:
+                        from services.player_rating import PlayerRatingEngine
+                        from services.streak_engine import StreakEngine
+                        from services.leaderboard_service import invalidate_leaderboard_cache
+                        PlayerRatingEngine.process_bet_settlement(
+                            user_id=u_id, outcome="lost", total_odd=float(bet["total_odd"] or 1.0),
+                            stake=stake, payout=0
+                        )
+                        StreakEngine.process_bet_outcome(u_id, "lost")
+                        invalidate_leaderboard_cache()
+                    except Exception as e:
+                        logger.warning(f"Error updating loss rating/streak for user #{u_id}: {e}")
                 continue
 
             if has_pending:
@@ -183,6 +196,19 @@ def settle_match_predictions(
                     INSERT INTO coin_transactions (user_id, amount, transaction_type, reference_id, reference_type, balance_after)
                     VALUES (?, ?, 'refund', ?, 'bet', ?)
                 """, (u_id, stake, b_id, bal_after))
+
+                try:
+                    from services.player_rating import PlayerRatingEngine
+                    from services.streak_engine import StreakEngine
+                    from services.leaderboard_service import invalidate_leaderboard_cache
+                    PlayerRatingEngine.process_bet_settlement(
+                        user_id=u_id, outcome="refunded", total_odd=float(bet["total_odd"] or 1.0),
+                        stake=stake, payout=stake
+                    )
+                    StreakEngine.process_bet_outcome(u_id, "refunded")
+                    invalidate_leaderboard_cache()
+                except Exception as e:
+                    logger.warning(f"Error updating refund rating/streak for user #{u_id}: {e}")
 
                 payout_notifications.append({
                     "user_id": u_id,
@@ -229,10 +255,19 @@ def settle_match_predictions(
                 VALUES (?, ?, 'bet_won', ?, 'bet', ?)
             """, (u_id, payout, b_id, bal_after))
 
-            # Trigger progression & achievement hooks
+            # Trigger progression, streak, rating & achievement hooks
             try:
+                from services.player_rating import PlayerRatingEngine
+                from services.streak_engine import StreakEngine
+                from services.leaderboard_service import invalidate_leaderboard_cache
                 database.add_user_xp(u_id, 100)
                 database.evaluate_betting_achievements(u_id, dict(bet))
+                PlayerRatingEngine.process_bet_settlement(
+                    user_id=u_id, outcome="won", total_odd=effective_odd,
+                    stake=stake, payout=payout
+                )
+                StreakEngine.process_bet_outcome(u_id, "won")
+                invalidate_leaderboard_cache()
             except Exception as e:
                 logger.warning(f"Error triggering win hooks for user #{u_id}: {e}")
 

@@ -68,6 +68,11 @@
         <input type="text" id="match-search-input" class="match-search-input" placeholder="Поиск матча или команды...">
       </div>
 
+      <!-- Phase 6: Hot Matches, Odds Movers & Recommendations Hub -->
+      <div id="hot-matches-container"></div>
+      <div id="odds-movers-container"></div>
+      <div id="recommendations-container"></div>
+
       <!-- Match Cards List -->
       <div id="matches-list-container">
         <div style="text-align: center; padding: 40px 20px; color: var(--text-muted);">
@@ -75,6 +80,31 @@
           <div>Загрузка линии матчей...</div>
         </div>
       </div>
+    </section>
+
+    <!-- 1b. Phase 6: Live Center & In-Play Match Center View -->
+    <section id="view-live" class="view-section">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <span style="font-size: 1.15rem; font-weight: 900; color: #fff;">🔥 LIVE Матч-Центр</span>
+          <span class="live-pulse-badge">● IN-PLAY</span>
+        </div>
+        <button id="btn-refresh-live" class="btn-live-refresh" title="Обновить лайв" style="background: var(--bg-tertiary); border: 1px solid var(--border-subtle); color: #fff; border-radius: var(--radius-sm); padding: 5px 10px; cursor: pointer; font-size: 0.82rem; font-weight: 700;">🔄 Обновить</button>
+      </div>
+
+      <!-- Live Provider Status Indicator -->
+      <div id="live-provider-status-container" style="margin-bottom: 12px;"></div>
+
+      <!-- Live Matches List -->
+      <div id="live-matches-list-container">
+        <div style="text-align: center; padding: 40px 20px; color: var(--text-muted);">
+          <div style="font-size: 2rem; margin-bottom: 8px;">⏳</div>
+          <div>Загрузка лайв-матчей...</div>
+        </div>
+      </div>
+
+      <!-- Live Match In-Play Center Container (Timeline, Stats, Markets, Intelligence) -->
+      <div id="live-match-detail-container" style="display: none; margin-top: 16px;"></div>
     </section>
 
     <!-- 2. Match Center & Analytics View -->
@@ -128,6 +158,7 @@
         <button class="category-pill" data-filter="won">🎉 Выигрыши</button>
         <button class="category-pill" data-filter="lost">❌ Проигрыши</button>
         <button class="category-pill" data-filter="refunded">🔄 Возврат</button>
+        <button class="category-pill" data-filter="cancelled">🚫 Отменённые</button>
       </div>
 
       <!-- Saved Draft Coupons Section -->
@@ -251,6 +282,10 @@
       <span class="nav-icon">⚽</span>
       <span>Линия</span>
     </button>
+    <button class="nav-item nav-item-live" data-view="live" style="position: relative;">
+      <span class="nav-icon">🔥</span>
+      <span style="color: #ff4757; font-weight: 800;">LIVE</span>
+    </button>
     <button class="nav-item" data-view="match_center">
       <span class="nav-icon">📊</span>
       <span>Центр</span>
@@ -302,6 +337,21 @@
       <div class="modal-title" id="success-modal-title">Успешно!</div>
       <div class="modal-desc" id="success-modal-desc">Операция выполнена успешно.</div>
       <button class="btn-modal-close">Отлично</button>
+    </div>
+  </div>
+
+  <!-- Odds Changed Confirmation Modal (Phase 5) -->
+  <div class="modal-overlay" id="odds-changed-modal">
+    <div class="modal-content" style="text-align: center;">
+      <div class="modal-icon" style="font-size: 2.2rem; margin-bottom: 8px;">⚠️</div>
+      <div class="modal-title" style="font-size: 1.15rem; font-weight: 800; color: #fff;">Коэффициент изменился</div>
+      <div class="modal-desc" id="odds-changed-modal-desc" style="margin: 12px 0; font-size: 0.95rem; color: var(--text-secondary); line-height: 1.4;">
+        Котировка была обновлена. Принять новые условия?
+      </div>
+      <div style="display: flex; gap: 10px; margin-top: 16px;">
+        <button class="btn-secondary" id="btn-reject-odds-change" style="flex: 1; padding: 10px; border-radius: var(--radius-sm); font-weight: 700; background: var(--bg-tertiary); color: #fff; border: 1px solid var(--border-subtle); cursor: pointer;">Отмена</button>
+        <button class="btn-primary" id="btn-accept-odds-change" style="flex: 1; padding: 10px; border-radius: var(--radius-sm); font-weight: 700; background: var(--accent-gold); color: #000; border: none; cursor: pointer;">Принять</button>
+      </div>
     </div>
   </div>
 

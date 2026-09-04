@@ -39,7 +39,7 @@ def _get_division_admin_divisions(actor_id: int) -> list[int]:
         with database.transaction() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT division_id FROM division_admins WHERE telegram_id = ?",
+                "SELECT division_id FROM division_admins WHERE user_id = ?",
                 (actor_id,)
             )
             return [r["division_id"] for r in cursor.fetchall()]
