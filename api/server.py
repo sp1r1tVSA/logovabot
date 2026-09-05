@@ -125,6 +125,26 @@ from api.routes_intelligence import (
     handle_get_intelligence_performance,
     handle_admin_intelligence_overview,
 )
+from api.routes_lab import (
+    handle_lab_status,
+    handle_lab_create_season,
+    handle_lab_reset_season,
+    handle_lab_teams,
+    handle_lab_matches,
+    handle_lab_match_detail,
+    handle_lab_prepare_match,
+    handle_lab_transition_match,
+    handle_lab_live_event,
+    handle_lab_match_result,
+    handle_lab_scenarios,
+    handle_lab_apply_scenario,
+    handle_lab_step_tracker,
+    handle_lab_bets,
+    handle_lab_financial,
+    handle_lab_season_control,
+    handle_lab_round_action,
+    handle_lab_settings_user,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -208,6 +228,14 @@ async def handle_index(request: web.Request) -> web.FileResponse:
     """Serve SPA index.html."""
     index_path = os.path.join(WEB_DIR, "index.html")
     return web.FileResponse(index_path)
+
+
+async def handle_lab_index(request: web.Request) -> web.FileResponse:
+    """Serve Laboratory SPA lab.html."""
+    lab_path = os.path.join(WEB_DIR, "lab.html")
+    if os.path.exists(lab_path):
+        return web.FileResponse(lab_path)
+    return web.FileResponse(os.path.join(WEB_DIR, "index.html"))
 
 
 def create_app() -> web.Application:
@@ -341,9 +369,30 @@ def create_app() -> web.Application:
     app.router.add_post("/api/admin/risk/limits", handle_admin_set_limits)
     app.router.add_post("/api/admin/risk/suspend", handle_admin_emergency_suspend)
 
+    # 12. 🧪 ЛАБОРАТОРИЯ (Logovo Lab) Endpoints
+    app.router.add_get("/api/lab/status", handle_lab_status)
+    app.router.add_post("/api/lab/season/create", handle_lab_create_season)
+    app.router.add_post("/api/lab/season/reset", handle_lab_reset_season)
+    app.router.add_get("/api/lab/teams", handle_lab_teams)
+    app.router.add_get("/api/lab/matches", handle_lab_matches)
+    app.router.add_get("/api/lab/matches/{id}", handle_lab_match_detail)
+    app.router.add_post("/api/lab/matches/{id}/prepare", handle_lab_prepare_match)
+    app.router.add_post("/api/lab/matches/{id}/status", handle_lab_transition_match)
+    app.router.add_post("/api/lab/matches/{id}/live-event", handle_lab_live_event)
+    app.router.add_post("/api/lab/matches/{id}/result", handle_lab_match_result)
+    app.router.add_get("/api/lab/scenarios", handle_lab_scenarios)
+    app.router.add_post("/api/lab/scenarios/{id}/apply", handle_lab_apply_scenario)
+    app.router.add_get("/api/lab/step-tracker", handle_lab_step_tracker)
+    app.router.add_get("/api/lab/bets", handle_lab_bets)
+    app.router.add_get("/api/lab/financial", handle_lab_financial)
+    app.router.add_get("/api/lab/season/control", handle_lab_season_control)
+    app.router.add_post("/api/lab/season/rounds/{round}/action", handle_lab_round_action)
+    app.router.add_post("/api/lab/settings/user", handle_lab_settings_user)
+
     # Static SPA Frontend & Assets
     app.router.add_get("/", handle_index)
     app.router.add_get("/app", handle_index)
+    app.router.add_get("/lab", handle_lab_index)
     if os.path.exists(WEB_DIR):
         app.router.add_static("/static/", WEB_DIR, show_index=True)
         app.router.add_static("/css/", os.path.join(WEB_DIR, "css"))

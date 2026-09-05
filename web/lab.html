@@ -1,0 +1,1629 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>🧪 LOGOVO LAB — Safe Sportsbook Sandbox</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Outfit:wght@500;600;700;800;900&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-base: #080b11;
+      --bg-surface: #0f1523;
+      --bg-card: #151d30;
+      --bg-card-hover: #1c263e;
+      --border-color: rgba(255, 255, 255, 0.08);
+      --border-highlight: rgba(56, 189, 248, 0.3);
+      
+      --accent-green: #10b981;
+      --accent-green-bg: rgba(16, 185, 129, 0.12);
+      --accent-gold: #f5b027;
+      --accent-gold-bg: rgba(245, 176, 39, 0.12);
+      --accent-blue: #38bdf8;
+      --accent-blue-bg: rgba(56, 189, 248, 0.12);
+      --accent-red: #ef4444;
+      --accent-red-bg: rgba(239, 68, 68, 0.12);
+      --accent-purple: #a855f7;
+      --accent-purple-bg: rgba(168, 85, 247, 0.12);
+      
+      --text-main: #ffffff;
+      --text-secondary: #94a3b8;
+      --text-muted: #64748b;
+      
+      --radius-sm: 8px;
+      --radius-md: 12px;
+      --radius-lg: 16px;
+      --radius-pill: 9999px;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg-base);
+      color: var(--text-main);
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow-x: hidden;
+    }
+
+    /* Top Nav Bar */
+    .lab-header {
+      background: rgba(15, 21, 35, 0.85);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border-color);
+      padding: 12px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      position: sticky;
+      top: 0;
+      z-index: 50;
+    }
+
+    .brand-group {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .brand-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: linear-gradient(135deg, rgba(168, 85, 247, 0.2), rgba(56, 189, 248, 0.2));
+      border: 1px solid rgba(168, 85, 247, 0.4);
+      padding: 6px 12px;
+      border-radius: var(--radius-pill);
+      font-family: 'Outfit', sans-serif;
+      font-weight: 900;
+      font-size: 0.95rem;
+      color: #fff;
+      letter-spacing: 0.05em;
+    }
+    .env-tag {
+      font-size: 0.72rem;
+      background: rgba(245, 176, 39, 0.15);
+      border: 1px solid rgba(245, 176, 39, 0.3);
+      color: var(--accent-gold);
+      padding: 3px 8px;
+      border-radius: 6px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .user-pill {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-color);
+      padding: 6px 14px;
+      border-radius: var(--radius-pill);
+      font-size: 0.82rem;
+      font-weight: 600;
+    }
+    .balance-pill {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      background: var(--accent-gold-bg);
+      border: 1px solid rgba(245, 176, 39, 0.35);
+      color: var(--accent-gold);
+      padding: 6px 14px;
+      border-radius: var(--radius-pill);
+      font-family: 'Outfit', sans-serif;
+      font-weight: 800;
+      font-size: 0.9rem;
+    }
+    .btn-open-app {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: linear-gradient(135deg, #10b981, #059669);
+      color: #fff;
+      text-decoration: none;
+      font-weight: 700;
+      font-size: 0.82rem;
+      padding: 7px 14px;
+      border-radius: var(--radius-pill);
+      transition: 0.15s ease;
+    }
+    .btn-open-app:hover { opacity: 0.9; transform: translateY(-1px); }
+
+    /* Layout: Sidebar + Main Area */
+    .lab-layout {
+      display: flex;
+      flex: 1;
+      min-height: calc(100vh - 61px);
+    }
+
+    /* Sidebar */
+    .lab-sidebar {
+      width: 240px;
+      background: var(--bg-surface);
+      border-right: 1px solid var(--border-color);
+      display: flex;
+      flex-direction: column;
+      padding: 16px 10px;
+      gap: 6px;
+    }
+    .nav-btn {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 14px;
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: var(--radius-md);
+      color: var(--text-secondary);
+      font-size: 0.85rem;
+      font-weight: 600;
+      cursor: pointer;
+      text-align: left;
+      transition: all 0.15s ease;
+    }
+    .nav-btn:hover {
+      background: rgba(255, 255, 255, 0.04);
+      color: #fff;
+    }
+    .nav-btn.active {
+      background: rgba(56, 189, 248, 0.12);
+      border-color: rgba(56, 189, 248, 0.25);
+      color: var(--accent-blue);
+      font-weight: 700;
+    }
+    .nav-btn-icon { font-size: 1.1rem; }
+
+    /* Content Area */
+    .lab-content {
+      flex: 1;
+      padding: 24px;
+      max-width: 1400px;
+      margin: 0 auto;
+      width: 100%;
+    }
+
+    .tab-section {
+      display: none;
+    }
+    .tab-section.active {
+      display: block;
+      animation: fadeIn 0.15s ease-out;
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* Common Card Styles */
+    .lab-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-lg);
+      padding: 20px;
+      margin-bottom: 20px;
+    }
+    .card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 16px;
+    }
+    .card-title {
+      font-family: 'Outfit', sans-serif;
+      font-size: 1.1rem;
+      font-weight: 800;
+      color: #fff;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .card-desc {
+      font-size: 0.82rem;
+      color: var(--text-muted);
+      margin-top: 2px;
+    }
+
+    /* KPI Grid */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 14px;
+      margin-bottom: 20px;
+    }
+    .stat-box {
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-md);
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .stat-label {
+      font-size: 0.72rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--text-muted);
+      font-weight: 600;
+    }
+    .stat-value {
+      font-family: 'Outfit', sans-serif;
+      font-size: 1.4rem;
+      font-weight: 900;
+      color: #fff;
+    }
+    .stat-value.gold { color: var(--accent-gold); }
+    .stat-value.green { color: var(--accent-green); }
+    .stat-value.blue { color: var(--accent-blue); }
+    .stat-value.red { color: var(--accent-red); }
+
+    /* Step Tracker Component */
+    .step-tracker-card {
+      background: linear-gradient(135deg, rgba(21, 29, 48, 0.9), rgba(15, 21, 35, 0.9));
+      border: 1px solid rgba(56, 189, 248, 0.25);
+      box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4);
+    }
+    .step-progress-bar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 16px 0;
+      overflow-x: auto;
+      padding-bottom: 6px;
+    }
+    .step-node {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 12px;
+      border-radius: var(--radius-pill);
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid var(--border-color);
+      font-size: 0.75rem;
+      font-weight: 700;
+      color: var(--text-muted);
+      white-space: nowrap;
+    }
+    .step-node.completed {
+      background: var(--accent-green-bg);
+      border-color: rgba(16, 185, 129, 0.3);
+      color: var(--accent-green);
+    }
+    .step-node.active {
+      background: var(--accent-gold-bg);
+      border-color: rgba(245, 176, 39, 0.4);
+      color: var(--accent-gold);
+    }
+    .step-arrow { color: var(--text-muted); font-size: 0.7rem; }
+
+    .step-instruction-box {
+      background: rgba(56, 189, 248, 0.06);
+      border: 1px solid rgba(56, 189, 248, 0.2);
+      border-radius: var(--radius-md);
+      padding: 14px 16px;
+      margin-top: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .step-instruction-text {
+      font-size: 0.88rem;
+      font-weight: 600;
+      color: #e2e8f0;
+      line-height: 1.4;
+    }
+
+    /* Scenario Pills */
+    .scenarios-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 10px;
+      margin-top: 12px;
+    }
+    .scenario-btn {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-md);
+      padding: 12px 14px;
+      text-align: left;
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      transition: all 0.15s ease;
+    }
+    .scenario-btn:hover {
+      background: var(--bg-card-hover);
+      border-color: var(--border-highlight);
+      transform: translateY(-2px);
+    }
+    .scenario-btn.active {
+      border-color: var(--accent-purple);
+      background: var(--accent-purple-bg);
+    }
+    .sc-badge {
+      display: inline-block;
+      font-size: 0.75rem;
+      font-weight: 800;
+      color: #fff;
+    }
+    .sc-title { font-family: 'Outfit', sans-serif; font-weight: 800; font-size: 0.95rem; color: #fff; }
+    .sc-sub { font-size: 0.72rem; color: var(--text-muted); line-height: 1.3; }
+
+    /* Tables */
+    .lab-table-wrapper {
+      overflow-x: auto;
+      border-radius: var(--radius-md);
+      border: 1px solid var(--border-color);
+    }
+    .lab-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.82rem;
+      text-align: left;
+    }
+    .lab-table th {
+      background: rgba(15, 21, 35, 0.8);
+      color: var(--text-muted);
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--border-color);
+    }
+    .lab-table td {
+      padding: 12px 14px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+      color: #cbd5e1;
+    }
+    .lab-table tr:hover td {
+      background: rgba(255, 255, 255, 0.02);
+    }
+
+    /* Buttons */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 8px 16px;
+      border-radius: var(--radius-md);
+      font-size: 0.82rem;
+      font-weight: 700;
+      cursor: pointer;
+      border: 1px solid transparent;
+      transition: all 0.15s ease;
+    }
+    .btn-primary {
+      background: var(--accent-blue);
+      color: #080b11;
+    }
+    .btn-primary:hover { opacity: 0.9; }
+    .btn-success {
+      background: var(--accent-green);
+      color: #080b11;
+    }
+    .btn-warning {
+      background: var(--accent-gold);
+      color: #080b11;
+    }
+    .btn-danger {
+      background: var(--accent-red);
+      color: #fff;
+    }
+    .btn-outline {
+      background: transparent;
+      border-color: var(--border-color);
+      color: var(--text-secondary);
+    }
+    .btn-outline:hover {
+      border-color: #fff;
+      color: #fff;
+    }
+    .btn-sm {
+      padding: 5px 10px;
+      font-size: 0.74rem;
+      border-radius: 6px;
+    }
+
+    /* Status Pills */
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 3px 8px;
+      border-radius: 6px;
+      font-size: 0.72rem;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+    .status-pill.open { background: var(--accent-green-bg); color: var(--accent-green); border: 1px solid rgba(16, 185, 129, 0.3); }
+    .status-pill.live { background: rgba(239, 68, 68, 0.15); color: #ff4757; border: 1px solid rgba(239, 68, 68, 0.35); }
+    .status-pill.scheduled { background: rgba(148, 163, 184, 0.1); color: #94a3b8; border: 1px solid rgba(148, 163, 184, 0.2); }
+    .status-pill.completed { background: rgba(56, 189, 248, 0.12); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.3); }
+
+    /* Live Scoreboard Component */
+    .live-scoreboard {
+      background: radial-gradient(circle at center, #1b253d 0%, #0d121f 100%);
+      border: 1px solid rgba(56, 189, 248, 0.3);
+      border-radius: var(--radius-lg);
+      padding: 24px;
+      text-align: center;
+      margin-bottom: 20px;
+    }
+    .live-match-teams {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 24px;
+      font-family: 'Outfit', sans-serif;
+      font-size: 1.4rem;
+      font-weight: 900;
+      color: #fff;
+    }
+    .live-score-big {
+      font-size: 2.8rem;
+      color: var(--accent-gold);
+      letter-spacing: 0.05em;
+    }
+    .live-minute-badge {
+      display: inline-block;
+      margin-top: 8px;
+      background: rgba(239, 68, 68, 0.2);
+      border: 1px solid rgba(239, 68, 68, 0.4);
+      color: #ff4757;
+      padding: 4px 12px;
+      border-radius: var(--radius-pill);
+      font-weight: 800;
+      font-size: 0.8rem;
+    }
+    .live-actions-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      justify-content: center;
+      margin-top: 20px;
+    }
+
+    /* Reconciliation Formula Box */
+    .recon-box {
+      background: rgba(15, 21, 35, 0.6);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-lg);
+      padding: 20px;
+      margin-bottom: 20px;
+    }
+    .recon-formula-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 12px;
+      font-family: 'Outfit', sans-serif;
+      font-size: 1.05rem;
+      font-weight: 700;
+      padding: 14px;
+      background: rgba(255, 255, 255, 0.02);
+      border-radius: var(--radius-md);
+    }
+    .recon-item { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+    .recon-item span:first-child { font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; }
+    .recon-operator { font-size: 1.3rem; color: var(--text-muted); }
+
+    /* Responsive */
+    @media (max-width: 900px) {
+      .lab-layout { flex-direction: column; }
+      .lab-sidebar {
+        width: 100%;
+        flex-direction: row;
+        overflow-x: auto;
+        border-right: none;
+        border-bottom: 1px solid var(--border-color);
+        padding: 10px;
+      }
+      .nav-btn { padding: 8px 12px; white-space: nowrap; }
+      .lab-content { padding: 14px; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Header -->
+  <header class="lab-header">
+    <div class="brand-group">
+      <div class="brand-badge">🧪 LOGOVO LAB</div>
+      <div class="env-tag">TEST ENVIRONMENT</div>
+    </div>
+    <div class="header-actions">
+      <div class="user-pill">
+        <span>👤</span>
+        <span id="header-user-label">Test Player (999999999)</span>
+      </div>
+      <div class="balance-pill">
+        <span>🪙</span>
+        <span id="header-balance-val">100,000</span>
+      </div>
+      <a href="/" target="_blank" class="btn-open-app">
+        <span>🎰</span>
+        <span>Открыть Logovo.bet</span>
+      </a>
+    </div>
+  </header>
+
+  <div class="lab-layout">
+    <!-- Sidebar Nav -->
+    <nav class="lab-sidebar">
+      <button class="nav-btn active" data-tab="dashboard">
+        <span class="nav-btn-icon">📊</span>
+        <span>Дашборд</span>
+      </button>
+      <button class="nav-btn" data-tab="matches">
+        <span class="nav-btn-icon">🎮</span>
+        <span>Управление матчами</span>
+      </button>
+      <button class="nav-btn" data-tab="live">
+        <span class="nav-btn-icon">⚡</span>
+        <span>Live Control</span>
+      </button>
+      <button class="nav-btn" data-tab="season">
+        <span class="nav-btn-icon">🏆</span>
+        <span>Сезон & Туры</span>
+      </button>
+      <button class="nav-btn" data-tab="teams">
+        <span class="nav-btn-icon">⚽</span>
+        <span>Команды</span>
+      </button>
+      <button class="nav-btn" data-tab="bets">
+        <span class="nav-btn-icon">📜</span>
+        <span>Мои тест-ставки</span>
+      </button>
+      <button class="nav-btn" data-tab="financial">
+        <span class="nav-btn-icon">💰</span>
+        <span>Финансовый аудит</span>
+      </button>
+      <button class="nav-btn" data-tab="settings">
+        <span class="nav-btn-icon">⚙️</span>
+        <span>Настройки & Reset</span>
+      </button>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="lab-content">
+
+      <!-- ════════ 1. DASHBOARD TAB ════════ -->
+      <section id="tab-dashboard" class="tab-section active">
+        <!-- Top Metrics Cards -->
+        <div class="stats-grid">
+          <div class="stat-box">
+            <span class="stat-label">Тестовый сезон</span>
+            <span class="stat-value blue" id="dash-season-name">...</span>
+          </div>
+          <div class="stat-box">
+            <span class="stat-label">Текущий тур</span>
+            <span class="stat-value" id="dash-round-prog">1 / 30</span>
+          </div>
+          <div class="stat-box">
+            <span class="stat-label">Сыграно матчей</span>
+            <span class="stat-value" id="dash-matches-prog">0 / 240</span>
+          </div>
+          <div class="stat-box">
+            <span class="stat-label">Баланс игрока</span>
+            <span class="stat-value gold" id="dash-balance">100,000 🪙</span>
+          </div>
+          <div class="stat-box">
+            <span class="stat-label">Мои ставки</span>
+            <span class="stat-value" id="dash-total-bets">0</span>
+          </div>
+          <div class="stat-box">
+            <span class="stat-label">Выигрыши / Проигрыши</span>
+            <span class="stat-value green" id="dash-wins-losses">0 / 0</span>
+          </div>
+        </div>
+
+        <!-- Interactive Next Test Step Card -->
+        <div class="lab-card step-tracker-card">
+          <div class="card-header">
+            <div>
+              <div class="card-title">🚀 NEXT TEST STEP — Помощник ручного тестирования</div>
+              <div class="card-desc">Лаборатория готовит матч, а вы вручную делаете ставку в Logovo.bet. Ставка фиксируется автоматически!</div>
+            </div>
+            <button class="btn btn-outline btn-sm" id="btn-refresh-step">🔄 Проверить ставку</button>
+          </div>
+
+          <div class="step-progress-bar" id="step-progress-bar">
+            <!-- Rendered dynamically -->
+          </div>
+
+          <div class="step-instruction-box">
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <span style="font-size: 1.4rem;">💡</span>
+              <div class="step-instruction-text" id="step-instruction-text">
+                Загрузка текущего шага...
+              </div>
+            </div>
+            <div id="step-quick-actions"></div>
+          </div>
+        </div>
+
+        <!-- Quick Scenarios (Готовые тесты) -->
+        <div class="lab-card">
+          <div class="card-header">
+            <div>
+              <div class="card-title">⚡ QUICK TESTS — Готовые сценарии тестирования</div>
+              <div class="card-desc">Нажмите на любой сценарий, чтобы подготовить матч в линии для ручной ставки. Никаких авто-ставок!</div>
+            </div>
+          </div>
+          <div class="scenarios-grid" id="scenarios-grid">
+            <!-- Rendered dynamically -->
+          </div>
+        </div>
+
+        <!-- Fast Actions Panel -->
+        <div class="lab-card">
+          <div class="card-header">
+            <div class="card-title">⚡ Быстрые действия лаборатории</div>
+          </div>
+          <div style="display: flex; flex-wrap: wrap; gap: 10px;">
+            <button class="btn btn-primary" id="dash-btn-create-season">🪄 Пересоздать сезон</button>
+            <button class="btn btn-outline" id="dash-btn-open-tour">🔓 Открыть Тур 1</button>
+            <button class="btn btn-outline" id="dash-btn-goto-matches">🎮 Перейти к матчам</button>
+            <button class="btn btn-outline" id="dash-btn-goto-bets">📜 Мои ставки</button>
+            <button class="btn btn-danger" id="dash-btn-reset-lab">⚠️ Сбросить тест-данные</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ════════ 2. MATCH CONTROL TAB ════════ -->
+      <section id="tab-matches" class="tab-section">
+        <div class="lab-card">
+          <div class="card-header">
+            <div>
+              <div class="card-title">🎮 MATCH CONTROL — Управление матчами</div>
+              <div class="card-desc">Пошаговое проведение матчей по официальному жизненному циклу Logovo.bet.</div>
+            </div>
+            <!-- Filters -->
+            <div style="display: flex; gap: 10px;">
+              <select id="match-filter-round" class="btn btn-outline btn-sm">
+                <option value="all">Все туры</option>
+              </select>
+              <select id="match-filter-status" class="btn btn-outline btn-sm">
+                <option value="all">Все статусы</option>
+                <option value="scheduled">Scheduled</option>
+                <option value="open">Open</option>
+                <option value="live">Live</option>
+                <option value="finished">Finished</option>
+                <option value="completed">Completed</option>
+              </select>
+              <button class="btn btn-primary btn-sm" id="btn-refresh-matches">🔄 Обновить</button>
+            </div>
+          </div>
+
+          <div class="lab-table-wrapper">
+            <table class="lab-table">
+              <thead>
+                <tr>
+                  <th>Тур</th>
+                  <th>Матч</th>
+                  <th>Статус</th>
+                  <th>Счет</th>
+                  <th>Кэфы (1 / X / 2)</th>
+                  <th>Ожидаемый</th>
+                  <th>Действия</th>
+                </tr>
+              </thead>
+              <tbody id="matches-table-body">
+                <tr><td colspan="7" style="text-align: center; padding: 30px;">Загрузка матчей...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ════════ 3. LIVE CONTROL TAB ════════ -->
+      <section id="tab-live" class="tab-section">
+        <div class="lab-card">
+          <div class="card-header">
+            <div>
+              <div class="card-title">⚡ LIVE CONTROL — Симулятор прямого эфира</div>
+              <div class="card-desc">Отправка голов, карточек и свистков через существующий live pipeline.</div>
+            </div>
+            <div>
+              <select id="live-match-selector" class="btn btn-outline btn-sm" style="min-width: 260px;">
+                <option value="">Выберите матч для Live...</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Scoreboard -->
+          <div class="live-scoreboard" id="live-scoreboard-box">
+            <div class="live-match-teams">
+              <span id="live-team1-name">Хозяева</span>
+              <span class="live-score-big" id="live-score-display">0 : 0</span>
+              <span id="live-team2-name">Гости</span>
+            </div>
+            <div class="live-minute-badge" id="live-minute-display">15' (1-й тайм)</div>
+
+            <div class="live-actions-row">
+              <button class="btn btn-success" id="btn-live-goal-home">⚽ + Гол (Home)</button>
+              <button class="btn btn-success" id="btn-live-goal-away">⚽ + Гол (Away)</button>
+              <button class="btn btn-warning" id="btn-live-yellow-home">🟨 Желтая (Home)</button>
+              <button class="btn btn-warning" id="btn-live-yellow-away">🟨 Желтая (Away)</button>
+              <button class="btn btn-danger" id="btn-live-red-home">🟥 Красная (Home)</button>
+              <button class="btn btn-danger" id="btn-live-red-away">🟥 Красная (Away)</button>
+              <button class="btn btn-outline" id="btn-live-halftime">⏸️ Half Time</button>
+              <button class="btn btn-primary" id="btn-live-fulltime">🏁 Full Time</button>
+            </div>
+          </div>
+
+          <!-- Live Event Feed -->
+          <div class="card-title" style="font-size: 0.95rem; margin-bottom: 10px;">📜 Лента событий матча</div>
+          <div class="lab-table-wrapper">
+            <table class="lab-table">
+              <thead>
+                <tr>
+                  <th>Минута</th>
+                  <th>Событие</th>
+                  <th>Команда</th>
+                  <th>Статус применения</th>
+                </tr>
+              </thead>
+              <tbody id="live-events-table-body">
+                <tr><td colspan="4" style="text-align: center;">Событий пока нет.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ════════ 4. SEASON CONTROL TAB ════════ -->
+      <section id="tab-season" class="tab-section">
+        <!-- Generator Form -->
+        <div class="lab-card">
+          <div class="card-header">
+            <div>
+              <div class="card-title">🪄 Мастер создания сезона (Season Generator)</div>
+              <div class="card-desc">Автоматическая генерация календаря double round-robin, 16 команд и 240 матчей.</div>
+            </div>
+          </div>
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; margin-bottom: 16px;">
+            <div>
+              <label style="font-size: 0.75rem; color: var(--text-muted); font-weight: 700;">Название сезона</label>
+              <input type="text" id="gen-season-name" class="btn btn-outline" style="width: 100%; text-align: left; margin-top: 4px;" value="LOGOVO TEST SEASON 2026">
+            </div>
+            <div>
+              <label style="font-size: 0.75rem; color: var(--text-muted); font-weight: 700;">Название дивизиона</label>
+              <input type="text" id="gen-div-name" class="btn btn-outline" style="width: 100%; text-align: left; margin-top: 4px;" value="LOGOVO TEST LEAGUE">
+            </div>
+            <div>
+              <label style="font-size: 0.75rem; color: var(--text-muted); font-weight: 700;">Количество команд</label>
+              <input type="number" id="gen-teams-cnt" class="btn btn-outline" style="width: 100%; text-align: left; margin-top: 4px;" value="16" readonly>
+            </div>
+            <div>
+              <label style="font-size: 0.75rem; color: var(--text-muted); font-weight: 700;">Количество туров</label>
+              <input type="number" id="gen-rounds-cnt" class="btn btn-outline" style="width: 100%; text-align: left; margin-top: 4px;" value="30" readonly>
+            </div>
+            <div>
+              <label style="font-size: 0.75rem; color: var(--text-muted); font-weight: 700;">Seed генерации</label>
+              <input type="number" id="gen-seed" class="btn btn-outline" style="width: 100%; text-align: left; margin-top: 4px;" value="20260905">
+            </div>
+          </div>
+          <button class="btn btn-primary" id="btn-submit-create-season">✨ СОЗДАТЬ ТЕСТОВЫЙ СЕЗОН</button>
+        </div>
+
+        <!-- 30 Rounds Overview -->
+        <div class="lab-card">
+          <div class="card-header">
+            <div class="card-title">📅 Все 30 туров чемпионата</div>
+          </div>
+          <div class="lab-table-wrapper">
+            <table class="lab-table">
+              <thead>
+                <tr>
+                  <th>Тур</th>
+                  <th>Матчей</th>
+                  <th>Завершено</th>
+                  <th>Live</th>
+                  <th>Открыто</th>
+                  <th>Статус тура</th>
+                  <th>Управление</th>
+                </tr>
+              </thead>
+              <tbody id="season-rounds-table-body">
+                <tr><td colspan="7" style="text-align: center;">Загрузка туров...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ════════ 5. TEAMS TAB ════════ -->
+      <section id="tab-teams" class="tab-section">
+        <div class="lab-card">
+          <div class="card-header">
+            <div>
+              <div class="card-title">⚽ Турнирная таблица 16 синтетических команд</div>
+              <div class="card-desc">Динамический пересчет очков и разницы голов по результатам сыгранных матчей.</div>
+            </div>
+            <button class="btn btn-outline btn-sm" id="btn-refresh-teams">🔄 Обновить</button>
+          </div>
+          <div class="lab-table-wrapper">
+            <table class="lab-table">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Команда</th>
+                  <th>Игры</th>
+                  <th>В</th>
+                  <th>Н</th>
+                  <th>П</th>
+                  <th>ЗБ</th>
+                  <th>ПР</th>
+                  <th>РГ</th>
+                  <th>Очки</th>
+                </tr>
+              </thead>
+              <tbody id="teams-table-body">
+                <tr><td colspan="10" style="text-align: center;">Загрузка таблицы...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ════════ 6. MY TEST BETS TAB ════════ -->
+      <section id="tab-bets" class="tab-section">
+        <!-- Current Test Slip Card -->
+        <div class="lab-card" id="current-test-card" style="border-color: rgba(245, 176, 39, 0.3);">
+          <div class="card-header">
+            <div class="card-title">🎯 CURRENT TEST — Текущий тестируемый купон</div>
+            <span class="status-pill open" id="cur-test-status">Ожидание ставки</span>
+          </div>
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px;">
+            <div>
+              <div style="font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase;">Матч</div>
+              <div style="font-weight: 700; margin-top: 2px;" id="cur-test-match">—</div>
+            </div>
+            <div>
+              <div style="font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase;">Мой выбор</div>
+              <div style="font-weight: 700; color: var(--accent-blue); margin-top: 2px;" id="cur-test-selection">—</div>
+            </div>
+            <div>
+              <div style="font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase;">Коэффициент</div>
+              <div style="font-weight: 800; color: var(--accent-gold); margin-top: 2px;" id="cur-test-odds">—</div>
+            </div>
+            <div>
+              <div style="font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase;">Сумма ставки</div>
+              <div style="font-weight: 800; margin-top: 2px;" id="cur-test-stake">—</div>
+            </div>
+            <div>
+              <div style="font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase;">Ожидаемый результат</div>
+              <div style="font-weight: 700; color: var(--accent-green); margin-top: 2px;" id="cur-test-exp-score">—</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- My Bets History Table -->
+        <div class="lab-card">
+          <div class="card-header">
+            <div class="card-title">📜 История ставок игрока (Test Player)</div>
+            <button class="btn btn-outline btn-sm" id="btn-refresh-bets">🔄 Обновить</button>
+          </div>
+          <div class="lab-table-wrapper">
+            <table class="lab-table">
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Тип</th>
+                  <th>Матч / События</th>
+                  <th>Ставка</th>
+                  <th>Кэф</th>
+                  <th>Выплата</th>
+                  <th>Статус</th>
+                  <th>Дата</th>
+                </tr>
+              </thead>
+              <tbody id="bets-table-body">
+                <tr><td colspan="8" style="text-align: center;">Ставок пока нет.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ════════ 7. FINANCIAL RECONCILIATION TAB ════════ -->
+      <section id="tab-financial" class="tab-section">
+        <!-- Balance Audit Box -->
+        <div class="recon-box">
+          <div class="card-header">
+            <div class="card-title">💰 FINANCIAL CHECK — Математическая сверка баланса</div>
+            <span class="status-pill open" id="recon-status-badge">🟢 BALANCE OK</span>
+          </div>
+
+          <div class="recon-formula-row">
+            <div class="recon-item">
+              <span>Стартовый баланс</span>
+              <span id="recon-initial">100,000</span>
+            </div>
+            <span class="recon-operator">−</span>
+            <div class="recon-item">
+              <span>Сумма ставок</span>
+              <span id="recon-stakes">0</span>
+            </div>
+            <span class="recon-operator">+</span>
+            <div class="recon-item">
+              <span>Выплаты выигрышей</span>
+              <span id="recon-payouts">0</span>
+            </div>
+            <span class="recon-operator">+</span>
+            <div class="recon-item">
+              <span>Возвраты</span>
+              <span id="recon-refunds">0</span>
+            </div>
+            <span class="recon-operator">+</span>
+            <div class="recon-item">
+              <span>Кэшаут</span>
+              <span id="recon-cashout">0</span>
+            </div>
+            <span class="recon-operator">=</span>
+            <div class="recon-item">
+              <span>Ожидаемый баланс</span>
+              <span id="recon-expected" style="color: var(--accent-gold);">100,000</span>
+            </div>
+          </div>
+
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 16px; padding: 0 4px;">
+            <div>
+              <span style="color: var(--text-muted); font-size: 0.85rem;">Фактический баланс в БД: </span>
+              <strong id="recon-actual" style="font-size: 1.1rem; color: #fff;">100,000 🪙</strong>
+            </div>
+            <div>
+              <span style="color: var(--text-muted); font-size: 0.85rem;">Расхождение (Difference): </span>
+              <strong id="recon-diff" style="font-size: 1.1rem; color: var(--accent-green);">0 🪙</strong>
+            </div>
+          </div>
+        </div>
+
+        <!-- Transactions Table -->
+        <div class="lab-card">
+          <div class="card-header">
+            <div class="card-title">📜 Журнал финансовых транзакций тестового кошелька</div>
+          </div>
+          <div class="lab-table-wrapper">
+            <table class="lab-table">
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Тип операции</th>
+                  <th>Сумма (🪙)</th>
+                  <th>Баланс после</th>
+                  <th>Дата</th>
+                </tr>
+              </thead>
+              <tbody id="transactions-table-body">
+                <tr><td colspan="5" style="text-align: center;">Транзакций пока нет.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ════════ 8. SETTINGS & RESET TAB ════════ -->
+      <section id="tab-settings" class="tab-section">
+        <!-- Test User Configuration -->
+        <div class="lab-card">
+          <div class="card-header">
+            <div class="card-title">👤 Настройки тестового аккаунта</div>
+            <div class="card-desc">Вы можете тестировать под системным аккаунтом Test Player или указать свой личный Telegram ID.</div>
+          </div>
+          <div style="display: flex; gap: 12px; align-items: flex-end; max-width: 500px;">
+            <div style="flex: 1;">
+              <label style="font-size: 0.75rem; color: var(--text-muted); font-weight: 700;">Test Player Telegram ID</label>
+              <input type="number" id="settings-user-id" class="btn btn-outline" style="width: 100%; text-align: left; margin-top: 4px;" value="999999999">
+            </div>
+            <button class="btn btn-primary" id="btn-save-user-id">Применить ID</button>
+            <button class="btn btn-outline" id="btn-reset-user-wallet">Баланс 100,000</button>
+          </div>
+        </div>
+
+        <!-- Reset Lab Danger Zone -->
+        <div class="lab-card" style="border-color: rgba(239, 68, 68, 0.4); background: rgba(239, 68, 68, 0.04);">
+          <div class="card-header">
+            <div>
+              <div class="card-title" style="color: var(--accent-red);">⚠️ RESET TEST LAB — Полная очистка синтетики</div>
+              <div class="card-desc">Удалит только синтетический сезон, дивизион, 240 матчей, рынки, тестовые купоны и транзакции. Продакшн данные НЕ затрагиваются.</div>
+            </div>
+          </div>
+          <p style="font-size: 0.82rem; color: #cbd5e1; margin-bottom: 16px; line-height: 1.5;">
+            После нажатия кнопки система вернет баланс тестового игрока к 100,000 🪙 и сбросит все шаги тестирования в исходное состояние.
+          </p>
+          <button class="btn btn-danger" id="btn-execute-reset">💥 ПОДТВЕРДИТЬ И СБРОСИТЬ ТЕСТОВУЮ ЛАБОРАТОРИЮ</button>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <!-- Interactive Result Modal -->
+  <div id="result-modal" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 100; align-items: center; justify-content: center;">
+    <div style="background: var(--bg-card); border: 1px solid var(--border-color); border-radius: var(--radius-lg); padding: 24px; max-width: 400px; width: 90%;">
+      <h3 style="font-family: 'Outfit', sans-serif; font-size: 1.1rem; margin-bottom: 12px;" id="modal-match-title">Установка счета</h3>
+      <div style="display: flex; align-items: center; justify-content: space-around; margin: 20px 0;">
+        <div style="text-align: center;">
+          <div style="font-size: 0.8rem; color: var(--text-muted);" id="modal-home-team">Хозяева</div>
+          <input type="number" id="modal-score1" value="2" style="font-size: 1.8rem; font-weight: 800; width: 60px; text-align: center; background: var(--bg-surface); border: 1px solid var(--border-color); color: #fff; border-radius: 8px; padding: 6px;">
+        </div>
+        <span style="font-size: 1.8rem; font-weight: 800; color: var(--text-muted);">:</span>
+        <div style="text-align: center;">
+          <div style="font-size: 0.8rem; color: var(--text-muted);" id="modal-away-team">Гости</div>
+          <input type="number" id="modal-score2" value="0" style="font-size: 1.8rem; font-weight: 800; width: 60px; text-align: center; background: var(--bg-surface); border: 1px solid var(--border-color); color: #fff; border-radius: 8px; padding: 6px;">
+        </div>
+      </div>
+      <div style="display: flex; gap: 10px;">
+        <button class="btn btn-outline" style="flex: 1;" id="modal-btn-cancel">Отмена</button>
+        <button class="btn btn-success" style="flex: 1;" id="modal-btn-settle">Рассчитать (Settle)</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ─── Client State & Core API Calls ──────────────────────────────────────
+    const state = {
+      user_id: 999999999,
+      status: null,
+      matches: [],
+      current_tab: 'dashboard',
+      selected_live_match_id: null,
+      prepared_match_id: null,
+    };
+
+    // Navigation Switcher
+    document.querySelectorAll('.nav-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const tab = btn.dataset.tab;
+        switchTab(tab);
+      });
+    });
+
+    function switchTab(tabName) {
+      state.current_tab = tabName;
+      document.querySelectorAll('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === tabName));
+      document.querySelectorAll('.tab-section').forEach(s => s.classList.toggle('active', s.id === `tab-${tabName}`));
+
+      if (tabName === 'dashboard') loadDashboardStatus();
+      if (tabName === 'matches') loadMatches();
+      if (tabName === 'live') loadLiveSection();
+      if (tabName === 'season') loadSeasonControl();
+      if (tabName === 'teams') loadTeams();
+      if (tabName === 'bets') loadBets();
+      if (tabName === 'financial') loadFinancial();
+    }
+
+    // API Helper
+    async function apiCall(endpoint, method = 'GET', body = null) {
+      const headers = { 'Content-Type': 'application/json', 'X-Test-User-Id': String(state.user_id) };
+      const opts = { method, headers };
+      if (body) opts.body = JSON.stringify(body);
+      try {
+        const res = await fetch(endpoint, opts);
+        return await res.json();
+      } catch (err) {
+        console.error(`API Error ${endpoint}:`, err);
+        return { status: 'error', message: err.message };
+      }
+    }
+
+    // ─── 1. Dashboard & Step Tracker ────────────────────────────────────────
+    async function loadDashboardStatus() {
+      const res = await apiCall('/api/lab/status');
+      if (res.status !== 'ok') return;
+
+      state.status = res;
+      state.prepared_match_id = res.step_tracker?.prepared_match?.id || null;
+
+      // Header pills
+      document.getElementById('header-user-label').textContent = `${res.test_user.name} (${res.test_user.id})`;
+      document.getElementById('header-balance-val').textContent = res.test_user.balance.toLocaleString() + ' 🪙';
+
+      // KPI boxes
+      document.getElementById('dash-season-name').textContent = res.active_test_environment.season_name;
+      document.getElementById('dash-round-prog').textContent = `${res.progress.current_round} / ${res.progress.total_rounds}`;
+      document.getElementById('dash-matches-prog').textContent = `${res.progress.matches_completed} / ${res.progress.matches_total}`;
+      document.getElementById('dash-balance').textContent = res.test_user.balance.toLocaleString() + ' 🪙';
+      document.getElementById('dash-total-bets').textContent = res.betting_stats.total_bets;
+      document.getElementById('dash-wins-losses').textContent = `${res.betting_stats.wins} / ${res.betting_stats.losses}`;
+
+      // Render Step Tracker
+      renderStepTracker(res.step_tracker);
+      renderScenarios();
+    }
+
+    function renderStepTracker(tracker) {
+      if (!tracker) return;
+      const bar = document.getElementById('step-progress-bar');
+      bar.innerHTML = '';
+
+      tracker.steps.forEach((st, idx) => {
+        const node = document.createElement('div');
+        node.className = `step-node ${st.completed ? 'completed' : ''} ${st.num === tracker.current_step ? 'active' : ''}`;
+        node.innerHTML = `<span>${st.completed ? '✅' : (st.num === tracker.current_step ? '⏳' : '⚪')}</span> <span>${st.num}. ${st.title}</span>`;
+        bar.appendChild(node);
+        if (idx < tracker.steps.length - 1) {
+          const arrow = document.createElement('span');
+          arrow.className = 'step-arrow';
+          arrow.textContent = '→';
+          bar.appendChild(arrow);
+        }
+      });
+
+      document.getElementById('step-instruction-text').textContent = tracker.instruction;
+
+      // Quick action next to instruction
+      const actContainer = document.getElementById('step-quick-actions');
+      actContainer.innerHTML = '';
+      if (tracker.current_step === 1) {
+        actContainer.innerHTML = `<button class="btn btn-primary btn-sm" onclick="createSeasonHandler()">🪄 Создать сезон</button>`;
+      } else if (tracker.current_step === 3 && tracker.prepared_match) {
+        const m = tracker.prepared_match;
+        actContainer.innerHTML = `
+          <a href="/?division_id=${m.division_id}&match_id=${m.id}" target="_blank" class="btn btn-warning btn-sm">
+            🎰 Поставить в приложении
+          </a>
+        `;
+      } else if (tracker.current_step === 5 || tracker.current_step === 6) {
+        const mid = tracker.prepared_match?.id;
+        if (mid) {
+          actContainer.innerHTML = `<button class="btn btn-success btn-sm" onclick="openResultModal(${mid}, '${tracker.prepared_match.player1_team}', '${tracker.prepared_match.player2_team}')">🏆 Завершить и рассчитать</button>`;
+        }
+      }
+    }
+
+    async function renderScenarios() {
+      const res = await apiCall('/api/lab/scenarios');
+      if (res.status !== 'ok') return;
+      const grid = document.getElementById('scenarios-grid');
+      grid.innerHTML = '';
+
+      res.scenarios.forEach(sc => {
+        const card = document.createElement('div');
+        card.className = `scenario-btn ${state.status?.active_scenario === sc.id ? 'active' : ''}`;
+        card.innerHTML = `
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <span class="sc-badge">${sc.badge}</span>
+            <span style="font-size: 0.7rem; color: var(--accent-gold); font-weight: 800;">@ ${sc.target_odds.toFixed(2)}</span>
+          </div>
+          <div class="sc-title">${sc.title}</div>
+          <div class="sc-sub">${sc.description}</div>
+          <div style="margin-top: 6px; font-size: 0.72rem; color: var(--accent-blue); font-weight: 700;">
+            ${sc.home_team} — ${sc.away_team}
+          </div>
+        `;
+        card.onclick = () => applyScenarioHandler(sc.id);
+        grid.appendChild(card);
+      });
+    }
+
+    async function applyScenarioHandler(scId) {
+      const res = await apiCall(`/api/lab/scenarios/${scId}/apply`, 'POST');
+      if (res.status === 'ok') {
+        alert(res.instructions);
+        loadDashboardStatus();
+      } else {
+        alert(`Ошибка: ${res.message}`);
+      }
+    }
+
+    // ─── 2. Matches Tab ─────────────────────────────────────────────────────
+    async function loadMatches() {
+      const round = document.getElementById('match-filter-round').value;
+      const status = document.getElementById('match-filter-status').value;
+      let url = '/api/lab/matches?limit=100';
+      if (round !== 'all') url += `&round=${round}`;
+      if (status !== 'all') url += `&status=${status}`;
+
+      const res = await apiCall(url);
+      const tbody = document.getElementById('matches-table-body');
+      tbody.innerHTML = '';
+
+      if (res.status !== 'ok' || !res.matches || res.matches.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="7" style="text-align: center; padding: 30px;">Матчи не найдены. Создайте сезон.</td></tr>`;
+        return;
+      }
+
+      // Populate round dropdown if empty
+      const roundSelect = document.getElementById('match-filter-round');
+      if (roundSelect.options.length <= 1) {
+        for (let r = 1; r <= 30; r++) {
+          const opt = document.createElement('option');
+          opt.value = r;
+          opt.textContent = `Тур ${r}`;
+          roundSelect.appendChild(opt);
+        }
+      }
+
+      res.matches.forEach(m => {
+        const tr = document.createElement('tr');
+        const scoreStr = (m.player1_score !== null && m.player2_score !== null) ? `${m.player1_score} : ${m.player2_score}` : '—';
+        const oddsP1 = m.odds?.p1 ? m.odds.p1.toFixed(2) : '1.90';
+        const oddsX = m.odds?.x ? m.odds.x.toFixed(2) : '3.20';
+        const oddsP2 = m.odds?.p2 ? m.odds.p2.toFixed(2) : '2.10';
+
+        tr.innerHTML = `
+          <td><strong>Тур ${m.round_number}</strong></td>
+          <td>
+            <div style="font-weight: 700;">${m.team1_name} — ${m.team2_name}</div>
+            <div style="font-size: 0.7rem; color: var(--text-muted);">Match #${m.id}</div>
+          </td>
+          <td><span class="status-pill ${m.status}">${m.status}</span></td>
+          <td style="font-weight: 800; color: var(--accent-gold);">${scoreStr}</td>
+          <td style="font-family: 'Outfit', sans-serif; font-weight: 700; font-size: 0.78rem;">
+            ${oddsP1} / ${oddsX} / ${oddsP2}
+          </td>
+          <td style="color: var(--accent-green); font-weight: 700;">${m.expected_score || '—'}</td>
+          <td>
+            <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+              <button class="btn btn-outline btn-sm" onclick="prepareMatchHandler(${m.id})">Подготовить</button>
+              <button class="btn btn-primary btn-sm" onclick="openResultModal(${m.id}, '${m.team1_name}', '${m.team2_name}')">Счет/Расчет</button>
+              <a href="/?division_id=${m.division_id}&match_id=${m.id}" target="_blank" class="btn btn-warning btn-sm" title="Открыть в приложении">
+                🎰 В UI
+              </a>
+            </div>
+          </td>
+        `;
+        tbody.appendChild(tr);
+      });
+    }
+
+    async function prepareMatchHandler(matchId) {
+      const res = await apiCall(`/api/lab/matches/${matchId}/prepare`, 'POST', {});
+      if (res.status === 'ok') {
+        alert(`Матч #${matchId} открыт для ставок! Теперь сделайте ставку руками в приложении.`);
+        loadMatches();
+        loadDashboardStatus();
+      } else {
+        alert(`Ошибка: ${res.message}`);
+      }
+    }
+
+    // ─── 3. Live Control ────────────────────────────────────────────────────
+    async function loadLiveSection() {
+      const res = await apiCall('/api/lab/matches?limit=240');
+      if (res.status !== 'ok') return;
+
+      const sel = document.getElementById('live-match-selector');
+      sel.innerHTML = '<option value="">Выберите матч для Live...</option>';
+
+      res.matches.forEach(m => {
+        const opt = document.createElement('option');
+        opt.value = m.id;
+        opt.textContent = `Тур ${m.round_number}: ${m.team1_name} vs ${m.team2_name} [${m.status.toUpperCase()}]`;
+        if (state.selected_live_match_id === m.id) opt.selected = true;
+        sel.appendChild(opt);
+      });
+
+      if (!state.selected_live_match_id && res.matches.length > 0) {
+        state.selected_live_match_id = res.matches[0].id;
+        sel.value = res.matches[0].id;
+      }
+
+      refreshLiveMatchDisplay();
+    }
+
+    document.getElementById('live-match-selector').addEventListener('change', (e) => {
+      state.selected_live_match_id = parseInt(e.target.value) || null;
+      refreshLiveMatchDisplay();
+    });
+
+    async function refreshLiveMatchDisplay() {
+      if (!state.selected_live_match_id) return;
+      const res = await apiCall(`/api/lab/matches/${state.selected_live_match_id}`);
+      if (res.status !== 'ok' || !res.match) return;
+
+      const m = res.match;
+      document.getElementById('live-team1-name').textContent = m.player1_team;
+      document.getElementById('live-team2-name').textContent = m.player2_team;
+      document.getElementById('live-score-display').textContent = `${m.player1_score || 0} : ${m.player2_score || 0}`;
+      document.getElementById('live-minute-display').textContent = `${m.live_minute || 15}' [${m.status.toUpperCase()}]`;
+
+      // Live events feed
+      const tbody = document.getElementById('live-events-table-body');
+      tbody.innerHTML = '';
+      if (!m.live_events || m.live_events.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="4" style="text-align: center;">Событий пока нет. Нажмите кнопку выше.</td></tr>`;
+      } else {
+        m.live_events.forEach(ev => {
+          const tr = document.createElement('tr');
+          tr.innerHTML = `
+            <td><strong>${ev.minute}'</strong></td>
+            <td style="text-transform: uppercase; font-weight: 700;">${ev.event_type}</td>
+            <td>${ev.team_name || '—'}</td>
+            <td><span class="status-pill open">APPLIED</span></td>
+          `;
+          tbody.appendChild(tr);
+        });
+      }
+    }
+
+    async function sendLiveAction(action, side = 'home') {
+      if (!state.selected_live_match_id) {
+        alert("Сначала выберите матч.");
+        return;
+      }
+      const res = await apiCall(`/api/lab/matches/${state.selected_live_match_id}/live-event`, 'POST', { action, side });
+      if (res.status === 'ok') {
+        refreshLiveMatchDisplay();
+      } else {
+        alert(`Ошибка: ${res.message}`);
+      }
+    }
+
+    document.getElementById('btn-live-goal-home').onclick = () => sendLiveAction('goal', 'home');
+    document.getElementById('btn-live-goal-away').onclick = () => sendLiveAction('goal', 'away');
+    document.getElementById('btn-live-yellow-home').onclick = () => sendLiveAction('yellow_card', 'home');
+    document.getElementById('btn-live-yellow-away').onclick = () => sendLiveAction('yellow_card', 'away');
+    document.getElementById('btn-live-red-home').onclick = () => sendLiveAction('red_card', 'home');
+    document.getElementById('btn-live-red-away').onclick = () => sendLiveAction('red_card', 'away');
+    document.getElementById('btn-live-halftime').onclick = () => sendLiveAction('halftime');
+    document.getElementById('btn-live-fulltime').onclick = () => sendLiveAction('fulltime');
+
+    // ─── 4. Season & Rounds Tab ─────────────────────────────────────────────
+    async function loadSeasonControl() {
+      const res = await apiCall('/api/lab/season/control');
+      const tbody = document.getElementById('season-rounds-table-body');
+      tbody.innerHTML = '';
+
+      if (res.status !== 'ok' || !res.rounds || res.rounds.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="7" style="text-align: center;">Сезон не создан.</td></tr>`;
+        return;
+      }
+
+      res.rounds.forEach(r => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td><strong>Тур ${r.round_number}</strong></td>
+          <td>${r.matches_count}</td>
+          <td style="color: var(--accent-green); font-weight: 700;">${r.completed}</td>
+          <td style="color: #ff4757; font-weight: 700;">${r.live}</td>
+          <td style="color: var(--accent-blue); font-weight: 700;">${r.open}</td>
+          <td>
+            <span class="status-pill ${r.is_open ? 'open' : 'scheduled'}">
+              ${r.is_open ? 'ОТКРЫТ' : 'ЗАКРЫТ'}
+            </span>
+          </td>
+          <td>
+            <div style="display: flex; gap: 6px;">
+              <button class="btn btn-outline btn-sm" onclick="roundActionHandler(${r.round_number}, '${r.is_open ? 'close' : 'open'}')">
+                ${r.is_open ? 'Закрыть' : 'Открыть'}
+              </button>
+              <button class="btn btn-primary btn-sm" onclick="roundActionHandler(${r.round_number}, 'complete')">
+                Завершить тур
+              </button>
+            </div>
+          </td>
+        `;
+        tbody.appendChild(tr);
+      });
+    }
+
+    async function roundActionHandler(roundNum, action) {
+      const res = await apiCall(`/api/lab/season/rounds/${roundNum}/action`, 'POST', { action });
+      if (res.status === 'ok') {
+        loadSeasonControl();
+        loadDashboardStatus();
+      } else {
+        alert(`Ошибка: ${res.message}`);
+      }
+    }
+
+    async function createSeasonHandler() {
+      const season_name = document.getElementById('gen-season-name').value;
+      const division_name = document.getElementById('gen-div-name').value;
+      const seed = parseInt(document.getElementById('gen-seed').value) || 20260905;
+
+      const res = await apiCall('/api/lab/season/create', 'POST', { season_name, division_name, seed });
+      if (res.status === 'ok') {
+        alert(`Сезон успешно создан! 16 команд, 30 туров, 240 матчей.`);
+        switchTab('dashboard');
+      } else {
+        alert(`Ошибка: ${res.message}`);
+      }
+    }
+    document.getElementById('btn-submit-create-season').onclick = createSeasonHandler;
+    document.getElementById('dash-btn-create-season').onclick = createSeasonHandler;
+
+    // ─── 5. Teams Standings Tab ─────────────────────────────────────────────
+    async function loadTeams() {
+      const res = await apiCall('/api/lab/teams');
+      const tbody = document.getElementById('teams-table-body');
+      tbody.innerHTML = '';
+
+      if (res.status !== 'ok' || !res.standings || res.standings.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="10" style="text-align: center;">Таблица пуста. Создайте сезон.</td></tr>`;
+        return;
+      }
+
+      res.standings.forEach(t => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td><strong>${t.rank}</strong></td>
+          <td style="font-weight: 700; color: #fff;">${t.team}</td>
+          <td>${t.played}</td>
+          <td style="color: var(--accent-green);">${t.wins}</td>
+          <td style="color: var(--accent-gold);">${t.draws}</td>
+          <td style="color: var(--accent-red);">${t.losses}</td>
+          <td>${t.gf}</td>
+          <td>${t.ga}</td>
+          <td style="font-weight: 700;">${t.gd > 0 ? '+' + t.gd : t.gd}</td>
+          <td style="font-family: 'Outfit', sans-serif; font-size: 1rem; font-weight: 900; color: var(--accent-gold);">${t.points}</td>
+        `;
+        tbody.appendChild(tr);
+      });
+    }
+
+    // ─── 6. Bets Tab ────────────────────────────────────────────────────────
+    async function loadBets() {
+      const res = await apiCall('/api/lab/bets');
+      const tbody = document.getElementById('bets-table-body');
+      tbody.innerHTML = '';
+
+      if (res.status !== 'ok' || !res.bets || res.bets.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="8" style="text-align: center;">Ставок нет. Сделайте ставку в приложении!</td></tr>`;
+      } else {
+        res.bets.forEach(b => {
+          const tr = document.createElement('tr');
+          const legsStr = (b.items || []).map(i => `${i.team1_name || 'Хозяева'} vs ${i.team2_name || 'Гости'} (${i.outcome_type} @ ${Number(i.odd).toFixed(2)})`).join('<br>');
+          const statusClass = b.status === 'won' ? 'open' : (b.status === 'lost' ? 'live' : 'scheduled');
+          tr.innerHTML = `
+            <td>#${b.id}</td>
+            <td style="text-transform: uppercase; font-weight: 700;">${b.bet_type}</td>
+            <td>${legsStr || '—'}</td>
+            <td style="font-weight: 800;">${b.amount} 🪙</td>
+            <td style="font-family: 'Outfit', sans-serif; color: var(--accent-gold); font-weight: 800;">${Number(b.total_odd).toFixed(2)}</td>
+            <td style="font-weight: 800; color: ${b.status === 'won' ? 'var(--accent-green)' : '#fff'};">${b.actual_payout || b.potential_win} 🪙</td>
+            <td><span class="status-pill ${statusClass}">${b.status}</span></td>
+            <td style="font-size: 0.72rem; color: var(--text-muted);">${(b.created_at || '').substring(0, 19)}</td>
+          `;
+          tbody.appendChild(tr);
+        });
+      }
+
+      // Update Current Test Card
+      const trackerRes = await apiCall('/api/lab/step-tracker');
+      if (trackerRes.status === 'ok' && trackerRes.detected_bet) {
+        const db = trackerRes.detected_bet;
+        document.getElementById('cur-test-status').textContent = db.status.toUpperCase();
+        document.getElementById('cur-test-match').textContent = db.match;
+        document.getElementById('cur-test-selection').textContent = db.selection.toUpperCase();
+        document.getElementById('cur-test-odds').textContent = `@ ${db.odds.toFixed(2)}`;
+        document.getElementById('cur-test-stake').textContent = `${db.stake} 🪙`;
+        document.getElementById('cur-test-exp-score').textContent = trackerRes.prepared_match?.stadium || '2:0';
+      }
+    }
+
+    // ─── 7. Financial Audit Tab ─────────────────────────────────────────────
+    async function loadFinancial() {
+      const res = await apiCall('/api/lab/financial');
+      if (res.status !== 'ok') return;
+
+      document.getElementById('recon-status-badge').textContent = res.badge;
+      document.getElementById('recon-status-badge').className = `status-pill ${res.status === 'ok' ? 'open' : 'live'}`;
+
+      document.getElementById('recon-initial').textContent = res.initial_balance.toLocaleString();
+      document.getElementById('recon-stakes').textContent = res.total_stakes.toLocaleString();
+      document.getElementById('recon-payouts').textContent = res.total_payouts.toLocaleString();
+      document.getElementById('recon-refunds').textContent = res.total_refunds.toLocaleString();
+      document.getElementById('recon-cashout').textContent = res.total_cashouts.toLocaleString();
+      document.getElementById('recon-expected').textContent = res.expected_balance.toLocaleString() + ' 🪙';
+
+      document.getElementById('recon-actual').textContent = res.actual_balance.toLocaleString() + ' 🪙';
+      document.getElementById('recon-diff').textContent = res.difference.toLocaleString() + ' 🪙';
+      document.getElementById('recon-diff').style.color = res.difference === 0 ? 'var(--accent-green)' : 'var(--accent-red)';
+
+      // Transactions
+      const tbody = document.getElementById('transactions-table-body');
+      tbody.innerHTML = '';
+      if (!res.recent_transactions || res.recent_transactions.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="5" style="text-align: center;">Транзакций нет.</td></tr>`;
+      } else {
+        res.recent_transactions.forEach(tx => {
+          const tr = document.createElement('tr');
+          tr.innerHTML = `
+            <td>#${tx.id}</td>
+            <td style="font-weight: 700; text-transform: uppercase;">${tx.transaction_type}</td>
+            <td style="font-weight: 800; color: ${tx.amount >= 0 ? 'var(--accent-green)' : 'var(--accent-red)'};">${tx.amount > 0 ? '+' : ''}${tx.amount} 🪙</td>
+            <td style="color: var(--accent-gold); font-weight: 800;">${tx.balance_after !== null ? tx.balance_after.toLocaleString() : '—'} 🪙</td>
+            <td style="font-size: 0.72rem; color: var(--text-muted);">${(tx.created_at || '').substring(0, 19)}</td>
+          `;
+          tbody.appendChild(tr);
+        });
+      }
+    }
+
+    // ─── 8. Settings & Reset Tab ────────────────────────────────────────────
+    document.getElementById('btn-save-user-id').onclick = async () => {
+      const uid = parseInt(document.getElementById('settings-user-id').value) || 999999999;
+      state.user_id = uid;
+      const res = await apiCall('/api/lab/settings/user', 'POST', { user_id: uid });
+      alert(res.message);
+      loadDashboardStatus();
+    };
+
+    document.getElementById('btn-reset-user-wallet').onclick = async () => {
+      const res = await apiCall('/api/lab/settings/user', 'POST', { user_id: state.user_id, balance: 100000 });
+      alert("Баланс установлен на 100,000 🪙");
+      loadDashboardStatus();
+    };
+
+    document.getElementById('btn-execute-reset').onclick = async () => {
+      if (!confirm("ВНИМАНИЕ! Это действие удалит все синтетические матчи, команды, ставки и вернет баланс Test Player к 100,000 🪙. Продолжить?")) {
+        return;
+      }
+      const res = await apiCall('/api/lab/season/reset', 'POST');
+      if (res.status === 'ok') {
+        alert(res.message);
+        switchTab('dashboard');
+      } else {
+        alert(`Ошибка: ${res.message}`);
+      }
+    };
+    document.getElementById('dash-btn-reset-lab').onclick = () => {
+      document.getElementById('btn-execute-reset').click();
+    };
+
+    // ─── Result / Settle Modal ──────────────────────────────────────────────
+    let activeModalMatchId = null;
+    function openResultModal(mid, t1, t2) {
+      activeModalMatchId = mid;
+      document.getElementById('modal-match-title').textContent = `Завершение матча #${mid}`;
+      document.getElementById('modal-home-team').textContent = t1 || 'Хозяева';
+      document.getElementById('modal-away-team').textContent = t2 || 'Гости';
+      document.getElementById('result-modal').style.display = 'flex';
+    }
+
+    document.getElementById('modal-btn-cancel').onclick = () => {
+      document.getElementById('result-modal').style.display = 'none';
+    };
+
+    document.getElementById('modal-btn-settle').onclick = async () => {
+      if (!activeModalMatchId) return;
+      const s1 = parseInt(document.getElementById('modal-score1').value) || 0;
+      const s2 = parseInt(document.getElementById('modal-score2').value) || 0;
+
+      const res = await apiCall(`/api/lab/matches/${activeModalMatchId}/result`, 'POST', { score1: s1, score2: s2, settle: true });
+      document.getElementById('result-modal').style.display = 'none';
+
+      if (res.status === 'ok') {
+        alert(`Матч #${activeModalMatchId} рассчитан со счетом ${s1}:${s2}!\nВыплат обработано: ${res.payouts_count}.`);
+        loadDashboardStatus();
+        if (state.current_tab === 'matches') loadMatches();
+        if (state.current_tab === 'bets') loadBets();
+      } else {
+        alert(`Ошибка расчета: ${res.message}`);
+      }
+    };
+
+    // Quick Action Listeners
+    document.getElementById('btn-refresh-step').onclick = loadDashboardStatus;
+    document.getElementById('btn-refresh-matches').onclick = loadMatches;
+    document.getElementById('btn-refresh-teams').onclick = loadTeams;
+    document.getElementById('btn-refresh-bets').onclick = loadBets;
+    document.getElementById('dash-btn-open-tour').onclick = () => roundActionHandler(1, 'open');
+    document.getElementById('dash-btn-goto-matches').onclick = () => switchTab('matches');
+    document.getElementById('dash-btn-goto-bets').onclick = () => switchTab('bets');
+
+    // Init on load
+    window.addEventListener('DOMContentLoaded', () => {
+      loadDashboardStatus();
+    });
+  </script>
+</body>
+</html>

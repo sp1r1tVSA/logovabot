@@ -82,12 +82,20 @@ class AppController {
           return;
         }
 
+        // Parse URL query parameters (e.g. from Logovo Lab deep links)
+        const urlParams = new URLSearchParams(window.location.search);
+        const targetDivId = urlParams.get('division_id');
+        const targetMatchId = urlParams.get('match_id');
+        const targetTour = urlParams.get('tour');
+
         // Fetch divisions
         try {
           const divData = await api.getDivisions();
           if (divData.status === 'ok' && divData.divisions) {
             store.setDivisions(divData.divisions);
-            if (divData.divisions.length > 0 && !store.state.selectedDivisionId) {
+            if (targetDivId) {
+              store.setSelectedDivisionId(parseInt(targetDivId));
+            } else if (divData.divisions.length > 0 && !store.state.selectedDivisionId) {
               store.setSelectedDivisionId(divData.divisions[0].id);
             }
           }
@@ -99,8 +107,14 @@ class AppController {
         const toursData = await api.getTours(store.state.selectedDivisionId);
         if (toursData.status === 'ok') {
           store.setTours(toursData.tours);
-          // Preload first match for Match Center
-          if (toursData.tours.length > 0 && toursData.tours[0].matches?.length > 0) {
+          if (targetTour) {
+            store.setSelectedTour(parseInt(targetTour));
+          }
+          if (targetMatchId) {
+            const mId = parseInt(targetMatchId);
+            this.loadMatchCenter(mId);
+            this.switchView('match_center');
+          } else if (toursData.tours.length > 0 && toursData.tours[0].matches?.length > 0) {
             const firstMatch = toursData.tours[0].matches[0];
             this.loadMatchCenter(firstMatch.match_id);
           }
