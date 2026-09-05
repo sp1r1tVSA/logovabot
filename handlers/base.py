@@ -42,6 +42,39 @@ def is_admin(telegram_id: int) -> bool:
     return False
 
 
+def is_global_admin(telegram_id: int) -> bool:
+    """Check if the user is a superadmin/global admin, excluding division-scoped admins."""
+    if not telegram_id:
+        return False
+    import config
+    if telegram_id in config.ADMIN_IDS:
+        return True
+    try:
+        user = database.get_user(telegram_id)
+        if user:
+            u_dict = dict(user)
+            role = u_dict.get("role")
+            if role == "division_admin" or u_dict.get("division_id"):
+                return False
+            if role == "admin":
+                return True
+    except Exception:
+        pass
+
+    # Check division_admins table: if assigned to a division, user is not global
+    try:
+        with database.transaction() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT 1 FROM division_admins WHERE user_id = ?", (telegram_id,))
+            if cur.fetchone():
+                return False
+    except Exception:
+        pass
+
+    # Fallback to is_admin check (supports test suite mocks while preserving division isolation)
+    return is_admin(telegram_id)
+
+
 from functools import wraps
 from telegram.ext import ConversationHandler
 

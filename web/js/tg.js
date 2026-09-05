@@ -58,6 +58,28 @@ class TelegramBridge {
     }
   }
 
+  showAlert(message, callback = null) {
+    try {
+      if (this.tg?.showAlert) {
+        this.tg.showAlert(String(message), callback || (() => {}));
+        return;
+      }
+    } catch (e) {}
+    alert(message);
+    if (typeof callback === 'function') callback();
+  }
+
+  showConfirm(message, callback = null) {
+    try {
+      if (this.tg?.showConfirm) {
+        this.tg.showConfirm(String(message), callback || (() => {}));
+        return;
+      }
+    } catch (e) {}
+    const res = confirm(message);
+    if (typeof callback === 'function') callback(res);
+  }
+
   close() {
     try {
       this.tg?.close();

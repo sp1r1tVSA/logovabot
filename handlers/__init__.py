@@ -30,6 +30,7 @@ from handlers.lab import (
     cb_lab_card_generate_player,
     cb_lab_player_anim_styles,
     cb_lab_player_anim,
+    cb_lab_ovr_calc_demo,
 )
 
 # Import base handlers
@@ -459,7 +460,6 @@ def _register_cabinet_handlers(app: Application) -> None:
 
     app.add_handler(CallbackQueryHandler(show_club_stats, pattern="^cabinet_club_stats$"))
     app.add_handler(CallbackQueryHandler(show_my_squad, pattern="^cabinet_my_squad$"))
-    app.add_handler(CallbackQueryHandler(show_game_history, pattern="^cabinet_game_history$"))
     app.add_handler(CallbackQueryHandler(show_player_card, pattern="^(player_card|pcard)_.+$"))
 
 def _register_admin_handlers(app: Application) -> None:
@@ -638,7 +638,7 @@ def _register_admin_handlers(app: Application) -> None:
     app.add_handler(CallbackQueryHandler(admin_edit_div_execute, pattern="^admin_ediv_-?\\d+_(\\d+|none)$"))
     app.add_handler(CallbackQueryHandler(admin_div_players_menu, pattern="^admin_div_players_menu$"))
     app.add_handler(CallbackQueryHandler(admin_list_div_players, pattern="^admin_list_div_players_"))
-    app.add_handler(CallbackQueryHandler(admin_delete_player_confirm, pattern="^admin_delete_player_confirm_-?\\d+$"))
+    app.add_handler(CallbackQueryHandler(admin_confirm_delete_player, pattern="^(admin_confirm_delete_player|admin_delete_player_confirm)_-?\\d+$"))
     app.add_handler(CallbackQueryHandler(admin_delete_player_execute, pattern="^admin_delete_player_execute_-?\\d+$"))
     app.add_handler(CallbackQueryHandler(admin_manage_round, pattern="^admin_manage_round_\\d+$"))
     app.add_handler(CallbackQueryHandler(admin_close_round, pattern="^admin_close_round_\\d+$"))
@@ -660,7 +660,6 @@ def _register_admin_handlers(app: Application) -> None:
     app.add_handler(CallbackQueryHandler(admin_delete_options, pattern="^admin_delete_options_-?\\d+$"))
     app.add_handler(CallbackQueryHandler(admin_confirm_wipe_player, pattern="^admin_confirm_wipe_player_-?\\d+$"))
     app.add_handler(CallbackQueryHandler(admin_wipe_player_execute, pattern="^admin_wipe_player_execute_-?\\d+$"))
-    app.add_handler(CallbackQueryHandler(admin_manage_players_menu, pattern="^admin_manage_players$"))
     app.add_handler(CallbackQueryHandler(admin_manage_squads, pattern="^admin_manage_squads$"))
     app.add_handler(CallbackQueryHandler(admin_view_squad, pattern="^admin_squad_view_.*$"))
     app.add_handler(CallbackQueryHandler(admin_squad_rm_menu, pattern="^admin_squad_rm_menu_.*$"))
@@ -711,6 +710,7 @@ def _register_admin_handlers(app: Application) -> None:
     app.add_handler(CallbackQueryHandler(cb_lab_card_generate_player, pattern="^lab_gen_card_.*$"))
     app.add_handler(CallbackQueryHandler(cb_lab_player_anim_styles, pattern="^lab_p_styles_.*$"))
     app.add_handler(CallbackQueryHandler(cb_lab_player_anim, pattern="^lab_p_anim_.*$"))
+    app.add_handler(CallbackQueryHandler(cb_lab_ovr_calc_demo, pattern="^lab_ovr_calc_demo$"))
 
 def register_all_handlers(application: Application) -> None:
     """Register all command, message, and callback handlers to the application."""

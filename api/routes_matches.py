@@ -64,14 +64,36 @@ async def handle_get_matches(request: web.Request) -> web.Response:
         matches = []
         for r in raw_rows:
             m_dict = dict(r)
+            m_id = m_dict["id"]
+            # Check canonical market_selections for the match first
+            cursor.execute("""
+                SELECT ms.selection_key, ms.odds_value
+                FROM market_selections ms
+                JOIN markets mkt ON ms.market_id = mkt.id
+                WHERE mkt.match_id = ? AND ms.status = 'active'
+            """, (m_id,))
+            rel_odds = {row["selection_key"]: float(row["odds_value"]) for row in cursor.fetchall()}
+
+            odd_p1 = rel_odds.get("p1") or m_dict.pop("odd_p1") or 1.90
+            odd_x = rel_odds.get("x") or m_dict.pop("odd_x") or 3.20
+            odd_p2 = rel_odds.get("p2") or m_dict.pop("odd_p2") or 2.10
+            odd_tb25 = rel_odds.get("over_2.5") or rel_odds.get("tb25") or m_dict.pop("odd_tb25") or 1.85
+            odd_tm25 = rel_odds.get("under_2.5") or rel_odds.get("tm25") or m_dict.pop("odd_tm25") or 1.85
+            odd_btts_yes = rel_odds.get("btts_yes") or m_dict.pop("odd_btts_yes") or 1.75
+            odd_btts_no = rel_odds.get("btts_no") or m_dict.pop("odd_btts_no") or 1.95
+
+            # Clean any remaining pop targets if they were shadowed
+            for k in ("odd_p1", "odd_x", "odd_p2", "odd_tb25", "odd_tm25", "odd_btts_yes", "odd_btts_no"):
+                m_dict.pop(k, None)
+
             m_dict["odds"] = {
-                "p1": round(m_dict.pop("odd_p1") or 1.90, 2),
-                "x": round(m_dict.pop("odd_x") or 3.20, 2),
-                "p2": round(m_dict.pop("odd_p2") or 2.10, 2),
-                "tb25": round(m_dict.pop("odd_tb25") or 1.85, 2),
-                "tm25": round(m_dict.pop("odd_tm25") or 1.85, 2),
-                "btts_yes": round(m_dict.pop("odd_btts_yes") or 1.75, 2),
-                "btts_no": round(m_dict.pop("odd_btts_no") or 1.95, 2),
+                "p1": round(float(odd_p1), 2),
+                "x": round(float(odd_x), 2),
+                "p2": round(float(odd_p2), 2),
+                "tb25": round(float(odd_tb25), 2),
+                "tm25": round(float(odd_tm25), 2),
+                "btts_yes": round(float(odd_btts_yes), 2),
+                "btts_no": round(float(odd_btts_no), 2),
             }
             matches.append(m_dict)
 

@@ -2081,6 +2081,7 @@ def get_standings(division_id: int | None = None, season_id: int | None = None) 
                 WHERE m.status = 'confirmed' 
                   AND (m.tournament_type IS NULL OR m.tournament_type = 'league')
                   AND (m.season_id = ? OR m.season_id IS NULL)
+                  AND (m.division_id = 1 OR m.division_id IS NULL)
             """, (target_season_id,))
         
         matches = cursor.fetchall()
@@ -6697,19 +6698,7 @@ def place_user_bet(
                            "message": f"Потенциальный выигрыш {potential_win:,} превышает максимум {_MAX_PAYOUT:,} 🪙."}
 
         # 1. Deduct coins with strict balance check
-        cursor.execute("""
-            UPDATE user_wallets 
-            SET balance = balance - ?, total_wagered = total_wagered + ?, bets_count = bets_count + 1, updated_at = CURRENT_TIMESTAMP
-            WHERE user_id = ? AND balance >= ?
-        """, (amount, amount, user_id, amount))
-
-        if cursor.rowcount == 0:
-            return False, "Недостаточно монет на балансе."
-
-        cursor.execute("SELECT balance FROM user_wallets WHERE user_id = ?", (user_id,))
-        new_balance = cursor.fetchone()["balance"]
-
-        # 2. Insert user_bet (Phase 5: includes idempotency_payload_hash)
+        # 1. Insert user_bet with idempotency check (Phase 5: includes idempotency_payload_hash)
         try:
             cursor.execute("""
                 INSERT INTO user_bets (user_id, bet_type, amount, total_odd, potential_win, status, idempotency_key, idempotency_payload_hash)
@@ -6724,8 +6713,26 @@ def place_user_bet(
                 )
                 existing = cursor.fetchone()
                 if existing:
+                    existing_hash = existing["idempotency_payload_hash"]
+                    if existing_hash and existing_hash != _payload_hash:
+                        return False, {"error": "IDEMPOTENCY_KEY_REUSED",
+                                       "message": "Ключ идемпотентности уже использован для другой ставки."}
                     return True, existing["id"]
             raise
+
+        # 2. Deduct coins with strict balance check
+        cursor.execute("""
+            UPDATE user_wallets 
+            SET balance = balance - ?, total_wagered = total_wagered + ?, bets_count = bets_count + 1, updated_at = CURRENT_TIMESTAMP
+            WHERE user_id = ? AND balance >= ?
+        """, (amount, amount, user_id, amount))
+
+        if cursor.rowcount == 0:
+            conn.rollback()
+            return False, "Недостаточно монет на балансе."
+
+        cursor.execute("SELECT balance FROM user_wallets WHERE user_id = ?", (user_id,))
+        new_balance = cursor.fetchone()["balance"]
 
         # 3. Insert items
         for item in validated_items:
@@ -6790,6 +6797,36 @@ def execute_cashout(
             WHERE bi.bet_id = ?
         """, (bet_id,))
         items = [dict(r) for r in cursor.fetchall()]
+
+        # Resolve current odds fallback if selection_id is NULL
+        for it in items:
+            if it.get("current_odd") is None:
+                cursor.execute("""
+                    SELECT ms.odds_value, ms.status as sel_status, m.status as market_status
+                    FROM market_selections ms
+                    JOIN markets m ON ms.market_id = m.id
+                    WHERE m.match_id = ? AND ms.selection_key = ?
+                """, (it["match_id"], it["outcome_type"]))
+                ms_r = cursor.fetchone()
+                if ms_r:
+                    it["current_odd"] = float(ms_r["odds_value"])
+                    it["sel_status"] = ms_r["sel_status"]
+                    it["market_status"] = ms_r["market_status"]
+                else:
+                    cursor.execute("SELECT * FROM bet_markets WHERE match_id = ? AND is_active = 1", (it["match_id"],))
+                    bm_r = cursor.fetchone()
+                    if bm_r:
+                        bm_map = {
+                            "p1": "odd_p1", "x": "odd_x", "p2": "odd_p2",
+                            "over_2.5": "odd_tb25", "tb25": "odd_tb25",
+                            "under_2.5": "odd_tm25", "tm25": "odd_tm25",
+                            "btts_yes": "odd_btts_yes", "btts_no": "odd_btts_no"
+                        }
+                        col = bm_map.get(it["outcome_type"])
+                        if col and bm_r[col]:
+                            it["current_odd"] = float(bm_r[col])
+                            it["sel_status"] = "active"
+                            it["market_status"] = "open"
 
         for it in items:
             if it.get("match_status") in ("completed", "confirmed", "cancelled"):

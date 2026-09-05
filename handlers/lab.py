@@ -697,3 +697,35 @@ async def cmd_test_anim(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     except Exception as e:
         logger.exception(f"Error in /test_anim: {e}")
         await status_msg.edit_text(f"❌ Ошибка генерации анимации: {e}")
+
+
+@admin_only
+async def cb_lab_ovr_calc_demo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show interactive explanation and calculator for player OVR formula."""
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+
+    text = (
+        "📊 <b>Калькулятор и формула OVR (EA FC / КПЛ)</b>\n\n"
+        "Рейтинг OVR игрока рассчитывается на основе турнирной статистики:\n\n"
+        "• <b>Базовый рейтинг:</b> <code>75 OVR</code>\n"
+        "• <b>Голы:</b> <code>+1.5 OVR</code> за каждый забитый мяч (макс. +12)\n"
+        "• <b>Ассисты:</b> <code>+1.0 OVR</code> за каждую голевую передачу (макс. +8)\n"
+        "• <b>Матчи 'на ноль' (Clean Sheet):</b> <code>+2.0 OVR</code> (вратари/защитники)\n"
+        "• <b>MVP тура / Игрок матча:</b> <code>+1.0 OVR</code>\n"
+        "• <b>Винрейт команды:</b> <code>до +4.0 OVR</code> при победной серии\n\n"
+        "🏆 <b>Тиры карточек КПЛ:</b>\n"
+        "• <b>Gold / Base:</b> 75 – 84 OVR\n"
+        "• <b>Rare Gold:</b> 85 – 89 OVR\n"
+        "• <b>Team of the Week (TOTW):</b> 90 – 93 OVR\n"
+        "• <b>Prime Icon / TOTS:</b> 94 – 99 OVR\n\n"
+        "<i>Калькулятор формулы верифицирован турнирным движком лиги.</i>"
+    )
+    keyboard = [
+        [InlineKeyboardButton("🃏 Перейти к тесту карточек", callback_data="lab_card_menu")],
+        [InlineKeyboardButton("« Назад в Лабораторию", callback_data="admin_lab_menu")]
+    ]
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+

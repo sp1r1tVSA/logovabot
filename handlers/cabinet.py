@@ -474,7 +474,8 @@ async def show_player_card(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         else:
             team_name = "—"
 
-    keyboard = [[InlineKeyboardButton("« Назад", callback_data="cabinet_club_stats")]]
+    back_cb = context.user_data.get("club_stats_back_cb") or (f"clsquad_{team_name}" if team_name and team_name != "—" else "cabinet_club_stats")
+    keyboard = [[InlineKeyboardButton("« Назад", callback_data=back_cb)]]
     markup = InlineKeyboardMarkup(keyboard)
 
     # Fetch stats from DB in a thread
@@ -1237,8 +1238,7 @@ async def cabinet_view_match(update: Update, context: ContextTypes.DEFAULT_TYPE)
     keyboard = []
     
     keyboard.append([
-        InlineKeyboardButton("👀 Состав", callback_data=f"cabinet_view_squad_{opp_id}"), 
-        InlineKeyboardButton("🕵️‍♂️ Скаут", callback_data="stub")
+        InlineKeyboardButton("👀 Состав соперника", callback_data=f"cabinet_view_squad_{opp_id}")
     ])
 
     if m['status'] == 'pending':
@@ -1400,7 +1400,7 @@ async def cb_request_admin_result(update: Update, context: ContextTypes.DEFAULT_
                 new_row = []
                 for btn in row:
                     if btn.callback_data == query.data:
-                        new_row.append(InlineKeyboardButton("⏳ Запрос отправлен", callback_data="ignore"))
+                        new_row.append(InlineKeyboardButton("⏳ Запрос отправлен", callback_data="noop"))
                     else:
                         new_row.append(btn)
                 new_keyboard.append(new_row)
@@ -1668,7 +1668,7 @@ async def save_custom_match_time(update: Update, context: ContextTypes.DEFAULT_T
 
         opp_id = m_info['player2_id'] if m_info['player1_id'] == user_id else m_info['player1_id']
         kb_match = [
-            [InlineKeyboardButton("👀 Состав", callback_data=f"cabinet_view_squad_{opp_id}"), InlineKeyboardButton("🕵️‍♂️ Скаут", callback_data="stub")],
+            [InlineKeyboardButton("👀 Состав соперника", callback_data=f"cabinet_view_squad_{opp_id}")],
             [InlineKeyboardButton("✏️ Изменить предложенное время", callback_data=f"cb_propose_time_prompt_{match_id}")],
             [InlineKeyboardButton("🔙 К списку матчей", callback_data="cabinet_my_matches")]
         ]

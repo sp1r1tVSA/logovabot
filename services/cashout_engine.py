@@ -99,6 +99,36 @@ def quote_cashout(user_id: int, bet_id: int) -> dict[str, Any]:
         """, (bet_id,))
         items = [dict(r) for r in cursor.fetchall()]
 
+        # Resolve current odds fallback if selection_id is NULL
+        for it in items:
+            if it.get("current_odd") is None:
+                cursor.execute("""
+                    SELECT ms.odds_value, ms.status as sel_status, m.status as market_status
+                    FROM market_selections ms
+                    JOIN markets m ON ms.market_id = m.id
+                    WHERE m.match_id = ? AND ms.selection_key = ?
+                """, (it["match_id"], it["outcome_type"]))
+                ms_r = cursor.fetchone()
+                if ms_r:
+                    it["current_odd"] = float(ms_r["odds_value"])
+                    it["sel_status"] = ms_r["sel_status"]
+                    it["market_status"] = ms_r["market_status"]
+                else:
+                    cursor.execute("SELECT * FROM bet_markets WHERE match_id = ? AND is_active = 1", (it["match_id"],))
+                    bm_r = cursor.fetchone()
+                    if bm_r:
+                        bm_map = {
+                            "p1": "odd_p1", "x": "odd_x", "p2": "odd_p2",
+                            "over_2.5": "odd_tb25", "tb25": "odd_tb25",
+                            "under_2.5": "odd_tm25", "tm25": "odd_tm25",
+                            "btts_yes": "odd_btts_yes", "btts_no": "odd_btts_no"
+                        }
+                        col = bm_map.get(it["outcome_type"])
+                        if col and bm_r[col]:
+                            it["current_odd"] = float(bm_r[col])
+                            it["sel_status"] = "active"
+                            it["market_status"] = "open"
+
         # Check for completed or terminal matches
         for it in items:
             if it.get("match_status") in ("completed", "confirmed", "cancelled"):

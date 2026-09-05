@@ -117,7 +117,7 @@ def set_odds(
                 VALUES (?, ?, ?, ?, ?)
             """, (sel_id, old_value, new_value, admin_id, reason or "odds_update"))
 
-            # Phase 6: Odds Movement Tracking
+            # Phase 6: Odds Movement Tracking & Canonical Sync
             try:
                 cursor.execute("SELECT match_id FROM markets WHERE id = ?", (market_id,))
                 mkt_row = cursor.fetchone()
@@ -129,8 +129,19 @@ def set_odds(
                         INSERT INTO odds_movement (selection_id, market_id, match_id, old_odds, new_odds, pct_change, direction, velocity, reason, source)
                         VALUES (?, ?, ?, ?, ?, ?, ?, 0.0, ?, ?)
                     """, (sel_id, market_id, match_id, old_value, new_value, pct_change, direction, reason or "odds_update", f"admin:{admin_id}" if admin_id else "system"))
+
+                    # Synchronize bet_markets for canonical consistency
+                    bm_col_map = {
+                        "p1": "odd_p1", "x": "odd_x", "p2": "odd_p2",
+                        "over_2.5": "odd_tb25", "tb25": "odd_tb25",
+                        "under_2.5": "odd_tm25", "tm25": "odd_tm25",
+                        "btts_yes": "odd_btts_yes", "btts_no": "odd_btts_no"
+                    }
+                    col_name = bm_col_map.get(selection_key)
+                    if col_name:
+                        cursor.execute(f"UPDATE bet_markets SET {col_name} = ? WHERE match_id = ?", (new_value, match_id))
             except Exception as e:
-                logger.warning(f"Failed to record odds_movement: {e}")
+                logger.warning(f"Failed to record odds_movement/sync: {e}")
 
         cursor.execute("SELECT * FROM market_selections WHERE id = ?", (sel_id,))
         return dict(cursor.fetchone())

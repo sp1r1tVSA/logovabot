@@ -376,6 +376,14 @@ async def cb_bet_view_slip(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 async def cb_bet_place_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Execute bet placement with selected amount."""
     query = update.callback_query
+    if not query:
+        return
+
+    # In-flight guard to prevent duplicate concurrent placement on rapid double tap
+    if context.user_data.get("_bet_in_flight"):
+        await query.answer()
+        return
+
     amount = int(query.data.replace("bet_place_", ""))
     user_id = update.effective_user.id
 
@@ -383,34 +391,53 @@ async def cb_bet_place_amount(update: Update, context: ContextTypes.DEFAULT_TYPE
         await query.answer("❌ Баланс пуст!", show_alert=True)
         return
 
-    slip = _get_slip(context)
+    slip = context.user_data.get("bet_slip", [])
     if not slip:
         await query.answer("❌ Купон пуст!", show_alert=True)
         return
 
-    success, res = await asyncio.to_thread(database.place_user_bet, user_id, amount, slip)
-    if not success:
-        await query.answer(f"❌ Ошибка: {res}", show_alert=True)
-        return
-
-    # Clear coupon on success
+    # Atomically extract coupon and lock placement in-flight
     context.user_data["bet_slip"] = []
-    wallet = await asyncio.to_thread(database.get_or_create_wallet, user_id)
+    context.user_data["_bet_in_flight"] = True
 
-    text = (
-        f"✅ <b>Ставка #{res} успешно принята!</b>\n\n"
-        f"💵 <b>Сумма ставки:</b> <code>{amount:,} 🪙</code>\n"
-        f"🪙 <b>Остаток на балансе:</b> <code>{wallet['balance']:,} 🪙</code>\n\n"
-        f"<i>Темшик следит за матчами. Как только игра завершится, выигрыш будет зачислен автоматически!</i>"
-    )
+    try:
+        success, res = await asyncio.to_thread(database.place_user_bet, user_id, amount, slip)
+        if not success:
+            # Restore coupon if placement could not be completed
+            context.user_data["bet_slip"] = slip
+            err_msg = str(res)
+            if isinstance(res, dict):
+                err_code = res.get("error", "")
+                if err_code == "INSUFFICIENT_FUNDS":
+                    err_msg = "Недостаточно монет на балансе!"
+                elif err_code == "MAX_BET_EXCEEDED":
+                    err_msg = f"Превышена максимальная сумма ставки ({res.get('max_bet', 1000)} 🪙)!"
+                elif err_code == "MAX_PAYOUT_EXCEEDED":
+                    err_msg = f"Превышена максимальная выплата ({res.get('max_payout', 10000)} 🪙)!"
+                else:
+                    err_msg = res.get("message", err_code)
+            await query.answer(f"❌ {err_msg}", show_alert=True)
+            return
 
-    kb = [
-        [InlineKeyboardButton("📜 Мои Ставки", callback_data="bet_my_history")],
-        [InlineKeyboardButton("📋 В Линию", callback_data="bet_view_tours")],
-        [InlineKeyboardButton("🔙 Главное Меню", callback_data="bet_menu_main")]
-    ]
+        await query.answer()
+        wallet = await asyncio.to_thread(database.get_or_create_wallet, user_id)
 
-    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="HTML")
+        text = (
+            f"✅ <b>Ставка #{res} успешно принята!</b>\n\n"
+            f"💵 <b>Сумма ставки:</b> <code>{amount:,} 🪙</code>\n"
+            f"🪙 <b>Остаток на балансе:</b> <code>{wallet['balance']:,} 🪙</code>\n\n"
+            f"<i>Темшик следит за матчами. Как только игра завершится, выигрыш будет зачислен автоматически!</i>"
+        )
+
+        kb = [
+            [InlineKeyboardButton("📜 Мои Ставки", callback_data="bet_my_history")],
+            [InlineKeyboardButton("📋 В Линию", callback_data="bet_view_tours")],
+            [InlineKeyboardButton("🔙 Главное Меню", callback_data="bet_menu_main")]
+        ]
+
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="HTML")
+    finally:
+        context.user_data["_bet_in_flight"] = False
 
 
 async def cb_bet_clear_slip(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

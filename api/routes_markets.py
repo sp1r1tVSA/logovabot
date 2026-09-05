@@ -123,6 +123,12 @@ async def handle_get_match_markets(request: web.Request) -> web.Response:
         # Generate on the fly if not existing
         markets = odds_engine.generate_match_markets(match_id, t1, t2)
 
+    # Normalize field name: alias odds_value -> current_odd for frontend consistency
+    for mkt in markets:
+        for sel in mkt.get("selections", []):
+            if "current_odd" not in sel:
+                sel["current_odd"] = sel.get("odds_value", 1.90)
+
     return web.json_response({
         "status": "ok",
         "match_id": match_id,

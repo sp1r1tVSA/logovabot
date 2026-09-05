@@ -11,7 +11,7 @@ from telegram.error import BadRequest, TelegramError, Forbidden
 from telegram.ext import ContextTypes, ConversationHandler
 import html
 import database
-from handlers.base import is_admin, admin_only, post_league_table_to_reports
+from handlers.base import is_admin, is_global_admin, admin_only, post_league_table_to_reports
 from handlers.cabinet import notify_match_confirmed, safe_send_notification, cb_report_choice_manual, safe_edit_or_reply
 import config
 from config import CLUBS, MAX_WARNS_LIMIT, GROUP_ID
@@ -885,6 +885,11 @@ async def admin_gen_div_select(update: Update, context: ContextTypes.DEFAULT_TYP
     target_raw = query.data.replace("admin_gen_div_", "")
     div_id = None if target_raw == "none" else int(target_raw)
 
+    user_id = query.from_user.id
+    if not (is_global_admin(user_id) or (div_id is not None and database.is_division_admin(user_id, div_id))):
+        await query.answer("❌ У вас нет прав для управления расписанием этого дивизиона!", show_alert=True)
+        return
+
     div_title = "Без дивизиона / Общий"
     if div_id is not None:
         d = await asyncio.to_thread(database.get_division, div_id)
@@ -942,7 +947,7 @@ async def admin_generate_matches_execute(update: Update, context: ContextTypes.D
             div_title = d["name"]
 
     # RBAC: caller must be Global Admin or assigned Division Admin for this division
-    if not (is_admin(user_id) or (div_id is not None and database.is_division_admin(user_id, div_id))):
+    if not (is_global_admin(user_id) or (div_id is not None and database.is_division_admin(user_id, div_id))):
         await query.answer("❌ У вас нет прав для управления расписанием этого дивизиона!", show_alert=True)
         return
 

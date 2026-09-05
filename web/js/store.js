@@ -9,7 +9,6 @@ class StateStore {
   constructor() {
     this.state = {
       user: null,
-      bonus: { can_claim: false, cooldown_seconds: 0, reward_amount: 250 },
       tours: [],
       selectedTour: null,
       marketCategoryFilter: 'all',
@@ -75,9 +74,8 @@ class StateStore {
     }
   }
 
-  setUser(user, bonus) {
+  setUser(user) {
     this.state.user = user;
-    if (bonus) this.state.bonus = bonus;
     this.notify();
   }
 

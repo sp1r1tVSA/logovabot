@@ -76,10 +76,6 @@ class ApiClient {
     return this.request('/api/bootstrap');
   }
 
-  claimBonus() {
-    return this.request('/api/bonus/claim', { method: 'POST' });
-  }
-
   getWallet() {
     return this.request('/api/wallet');
   }
@@ -292,10 +288,6 @@ class ApiClient {
     return this.request('/api/profile/analytics');
   }
 
-  getDivisionLeaderboard(divisionId) {
-    return this.request(`/api/leaderboard/division/${encodeURIComponent(divisionId)}`);
-  }
-
   // Phase 7: AI & Sports Intelligence
   getIntelligenceMatches(divisionId = null, seasonId = null) {
     const p = new URLSearchParams();
@@ -387,10 +379,14 @@ class ApiClient {
 
   getDivisionLeaderboard(params = {}) {
     const p = new URLSearchParams();
-    if (params.division_id) p.append('division_id', params.division_id);
-    if (params.page) p.append('page', params.page);
-    if (params.limit) p.append('limit', params.limit);
-    if (params.metric) p.append('metric', params.metric);
+    if (typeof params === 'number' || typeof params === 'string') {
+      p.append('division_id', params);
+    } else if (params && typeof params === 'object') {
+      if (params.division_id) p.append('division_id', params.division_id);
+      if (params.page) p.append('page', params.page);
+      if (params.limit) p.append('limit', params.limit);
+      if (params.metric) p.append('metric', params.metric);
+    }
     const q = p.toString() ? `?${p.toString()}` : '';
     return this.request(`/api/leaderboard/division${q}`);
   }

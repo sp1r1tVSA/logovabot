@@ -20,7 +20,6 @@ class AppController {
     // 1. Subscribe UI renderer to reactive store changes
     store.subscribe((state) => {
       UIRenderer.renderHeader(state.user, state.progression);
-      UIRenderer.renderBonusBanner(state.bonus);
       UIRenderer.renderDivisionTabs(state.divisions, state.selectedDivisionId, 'lobby-division-tabs-container');
       UIRenderer.renderDivisionTabs(state.divisions, state.selectedDivisionId, 'tournament-division-tabs-container');
       UIRenderer.renderTourTabs(state.tours, state.selectedTour);
@@ -56,7 +55,7 @@ class AppController {
     try {
       const data = await api.getBootstrap();
       if (data.status === 'ok') {
-        store.setUser(data.user, data.bonus);
+        store.setUser(data.user);
 
         if (!data.user.has_access) {
           const lockScreen = document.getElementById('lab-lock-screen');
@@ -251,26 +250,6 @@ class AppController {
       });
     });
 
-    // 2. Daily Bonus Claim
-    document.addEventListener('click', async (e) => {
-      if (e.target.closest('#btn-claim-daily-bonus')) {
-        try {
-          const res = await api.claimBonus();
-          if (res.status === 'ok') {
-            store.setUser(
-              { ...store.state.user, balance: res.new_balance },
-              { can_claim: false, cooldown_seconds: 86400 }
-            );
-            ParticleEffects.confetti();
-            tgBridge.hapticNotification('success');
-            this.showSuccessModal('🎁 Бонус получен!', `На ваш баланс начислено +${res.claimed_amount} 🪙`);
-          }
-        } catch (err) {
-          tgBridge.showAlert(err.message);
-        }
-      }
-    });
-
     // 2b. Division Selector Tabs (Lobby)
     const lobbyDivTabs = document.getElementById('lobby-division-tabs-container');
     if (lobbyDivTabs) {
@@ -281,7 +260,10 @@ class AppController {
           store.setSelectedDivisionId(divId);
           tgBridge.hapticImpact('light');
           try {
-            const toursData = await api.getTours(divId);
+            const [toursData] = await Promise.all([
+              api.getTours(divId),
+              this.fetchTournamentData(divId)
+            ]);
             if (toursData.status === 'ok') {
               store.setTours(toursData.tours);
             }
@@ -699,19 +681,80 @@ class AppController {
     document.addEventListener('click', async (e) => {
       const btn = e.target.closest('.btn-claim-ach');
       if (btn && btn.dataset.achId) {
+        btn.disabled = true;
         try {
-          const res = await api.claimAchievement(parseInt(btn.dataset.achId));
+          const achId = String(btn.dataset.achId).trim();
+          const res = await api.claimAchievement(achId);
           if (res.status === 'ok') {
-            store.setUser({ ...store.state.user, balance: res.new_balance });
+            const addedCoins = (res.reward && res.reward.coins) ? Number(res.reward.coins) : 0;
+            const currentBal = Number(store.state.user?.balance || 0);
+            store.setUser({ ...store.state.user, balance: currentBal + addedCoins });
             this.fetchProgressionData();
             ParticleEffects.confetti();
             tgBridge.hapticNotification('success');
+            tgBridge.showAlert(res.message || "Награда успешно получена!");
           }
         } catch (err) {
           tgBridge.showAlert(err.message);
+        } finally {
+          btn.disabled = false;
         }
       }
     });
+
+    // 18. Early Cashout Settlement
+    document.addEventListener('click', async (e) => {
+      const btn = e.target.closest('.btn-cashout');
+      if (btn && btn.dataset.betId) {
+        const betId = parseInt(btn.dataset.betId);
+        btn.disabled = true;
+        try {
+          const quoteRes = await api.getCashoutQuote(betId);
+          if (quoteRes.status !== 'ok' || !quoteRes.cashout_available) {
+            tgBridge.showAlert(quoteRes.message || "Кэшаут в данный момент недоступен для этого прогноза.");
+            return;
+          }
+          const quoteAmount = quoteRes.amount;
+          tgBridge.showConfirm(
+            `💰 Досрочный расчет (Cashout)\n\nВы получите ${quoteAmount} 🪙 немедленно. Завершить ставку?`,
+            async (confirmed) => {
+              if (!confirmed) return;
+              try {
+                const idempotencyKey = `co-${betId}-${Date.now()}`;
+                const execRes = await api.executeCashout(betId, idempotencyKey);
+                if (execRes.status === 'ok') {
+                  const newBal = execRes.new_balance;
+                  store.setUser({ ...store.state.user, balance: newBal });
+                  tgBridge.hapticNotification('success');
+                  this.showSuccessModal('💰 Кэшаут выполнен!', `Зачислено: +${execRes.payout} 🪙.`);
+                  try {
+                    const myBetsRes = await api.getPredictions();
+                    if (myBetsRes.status === 'ok') store.setMyBets(myBetsRes.predictions);
+                  } catch (err2) {
+                    console.warn("Could not refresh predictions after cashout:", err2);
+                  }
+                  this.fetchUserExtras();
+                }
+              } catch (execErr) {
+                tgBridge.showAlert(execErr.message || "Не удалось выполнить кэшаут.");
+              }
+            }
+          );
+        } catch (err) {
+          tgBridge.showAlert(err.message || "Ошибка получения котировки кэшаута.");
+        } finally {
+          btn.disabled = false;
+        }
+      }
+    });
+
+    // 19. Close Locked App screen
+    const btnCloseLocked = document.getElementById('btn-close-locked-app');
+    if (btnCloseLocked) {
+      btnCloseLocked.addEventListener('click', () => {
+        tgBridge.close();
+      });
+    }
   }
 
   toggleSlipDrawer(forceOpen = null) {
@@ -753,7 +796,7 @@ class AppController {
 
     if (viewName === 'history') {
       api.getPredictions().then(res => {
-        if (res.status === 'ok') store.setMyBets(res.bets);
+        if (res.status === 'ok') store.setMyBets(res.predictions || res.bets || []);
       }).catch(() => {});
     } else if (viewName === 'profile') {
       this.fetchUserExtras();

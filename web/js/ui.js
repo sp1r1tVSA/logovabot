@@ -67,6 +67,7 @@ export function renderTeamLogoHtml(teamName, size = 28, extraClass = '') {
 }
 
 const OUTCOME_NAMES = {
+  // Legacy / client-side keys (kept for bet slip display of old bets)
   p1: 'П1',
   x: 'Х',
   p2: 'П2',
@@ -82,7 +83,23 @@ const OUTCOME_NAMES = {
   over_25: 'ТБ 2.5',
   under_25: 'ТМ 2.5',
   over_35: 'ТБ 3.5',
-  under_35: 'ТМ 3.5'
+  under_35: 'ТМ 3.5',
+  // DB-side selection_key values (from odds_engine.py)
+  '1x': '1X',
+  '12': '12',
+  'x2': 'X2',
+  'over_1.5': 'ТБ 1.5',
+  'under_1.5': 'ТМ 1.5',
+  'over_2.5': 'ТБ 2.5',
+  'under_2.5': 'ТМ 2.5',
+  'over_3.5': 'ТБ 3.5',
+  'under_3.5': 'ТМ 3.5',
+  'h1_minus_1.5': 'Фора 1 (-1.5)',
+  'h2_plus_1.5': 'Фора 2 (+1.5)',
+  'it1_over_1.5': 'ИТБ1 (1.5)',
+  'it1_under_1.5': 'ИТМ1 (1.5)',
+  'it2_over_1.5': 'ИТБ2 (1.5)',
+  'it2_under_1.5': 'ИТМ2 (1.5)'
 };
 
 export class UIRenderer {
@@ -107,45 +124,10 @@ export class UIRenderer {
     }
   }
 
-  static renderBonusBanner(bonus) {
+  static renderBonusBanner(_bonus) {
+    // Daily Bonus removed — backend retained for compatibility, UI disabled.
     const bannerEl = document.getElementById('bonus-banner-container');
-    if (!bannerEl) return;
-
-    if (!bonus) {
-      bannerEl.innerHTML = '';
-      return;
-    }
-
-    if (bonus.can_claim) {
-      bannerEl.innerHTML = `
-        <div class="bonus-banner">
-          <div class="bonus-banner-left">
-            <div class="bonus-banner-icon">🎁</div>
-            <div>
-              <div class="bonus-banner-title">Ежедневный Бонус</div>
-              <div class="bonus-banner-subtitle">+250 🪙 ждут тебя прямо сейчас!</div>
-            </div>
-          </div>
-          <button class="btn-bonus-claim" id="btn-claim-daily-bonus">Забрать</button>
-        </div>
-      `;
-    } else {
-      const hours = Math.ceil(bonus.cooldown_seconds / 3600);
-      bannerEl.innerHTML = `
-        <div class="bonus-banner" style="background: rgba(18, 22, 31, 0.7); border-color: rgba(255,255,255,0.08);">
-          <div class="bonus-banner-left">
-            <div class="bonus-banner-icon" style="filter: grayscale(1);">⏳</div>
-            <div>
-              <div class="bonus-banner-title">Ежедневный Бонус</div>
-              <div class="bonus-banner-subtitle">Следующий через ~${hours} ч.</div>
-            </div>
-          </div>
-          <span style="font-size: 0.8rem; color: var(--text-muted); font-weight: 700; padding: 6px 12px; background: rgba(255,255,255,0.05); border-radius: var(--radius-sm);">
-            Забрано
-          </span>
-        </div>
-      `;
-    }
+    if (bannerEl) bannerEl.innerHTML = '';
   }
 
   static renderDivisionTabs(divisions, selectedDivisionId, containerId = 'lobby-division-tabs-container') {
@@ -407,105 +389,118 @@ export class UIRenderer {
 
       <!-- Sub-Tab Content -->
       ${activeSubTab === 'markets' ? `
-        <!-- Betting Markets Menu -->
+        <!-- Betting Markets (server-authoritative odds) -->
         <div class="match-markets-container">
-          <!-- 1X2 Main Outcomes -->
-          <div class="market-group-card">
-            <div class="market-group-title">⚡ Основные исходы (1X2)</div>
-            <div class="odds-grid-3col">
-              <div class="odd-btn ${store.isSelectionActive(matchId, 'p1') ? 'selected' : ''}" 
-                   data-match-id="${matchId}" data-outcome="p1" data-odd="1.95">
-                <span class="odd-label">П1 (${t1})</span>
-                <span class="odd-val">1.95</span>
-              </div>
-              <div class="odd-btn ${store.isSelectionActive(matchId, 'x') ? 'selected' : ''}" 
-                   data-match-id="${matchId}" data-outcome="x" data-odd="3.20">
-                <span class="odd-label">Ничья (X)</span>
-                <span class="odd-val">3.20</span>
-              </div>
-              <div class="odd-btn ${store.isSelectionActive(matchId, 'p2') ? 'selected' : ''}" 
-                   data-match-id="${matchId}" data-outcome="p2" data-odd="2.35">
-                <span class="odd-label">П2 (${t2})</span>
-                <span class="odd-val">2.35</span>
-              </div>
-            </div>
-          </div>
+          ${(() => {
+            // Helper: find a market by key from the markets array
+            const findMkt = (key) => (markets || []).find(m => m.market_key === key);
+            const renderSelBtn = (mkt, selKey, labelFallback, oddFallback) => {
+              if (!mkt) {
+                // Fallback tile if market not generated yet
+                return `
+                  <div class="odd-btn" data-match-id="${matchId}" data-outcome="${selKey}" data-odd="${oddFallback}">
+                    <span class="odd-label">${labelFallback}</span>
+                    <span class="odd-val">${Number(oddFallback).toFixed(2)}</span>
+                  </div>`;
+              }
+              const sel = (mkt.selections || []).find(s => s.selection_key === selKey);
+              if (!sel) return '';
+              const odd = sel.current_odd || sel.odds_value || oddFallback;
+              const isSelected = store.isSelectionActive(matchId, selKey);
+              return `
+                <div class="odd-btn ${isSelected ? 'selected' : ''}"
+                     data-match-id="${matchId}"
+                     data-outcome="${selKey}"
+                     data-odd="${odd}"
+                     data-market-id="${mkt.id || ''}"
+                     data-selection-id="${sel.id || ''}"
+                     data-selection-name="${sel.selection_name || labelFallback}">
+                  <span class="odd-label">${sel.selection_name || labelFallback}</span>
+                  <span class="odd-val">${Number(odd).toFixed(2)}</span>
+                </div>`;
+            };
+            const mkt1x2 = findMkt('1x2');
+            const mktDC  = findMkt('double_chance');
+            const mktTot = findMkt('total_goals');
+            const mktBTTS = findMkt('btts');
+            const mktHcp = findMkt('handicap');
+            const mktIT1 = findMkt('individual_total_1');
+            const mktIT2 = findMkt('individual_total_2');
 
-          <!-- Double Chance -->
-          <div class="market-group-card">
-            <div class="market-group-title">🔄 Двойной шанс</div>
-            <div class="odds-grid-3col">
-              <div class="odd-btn ${store.isSelectionActive(matchId, 'dc_1x') ? 'selected' : ''}" 
-                   data-match-id="${matchId}" data-outcome="dc_1x" data-odd="1.30">
-                <span class="odd-label">1X</span>
-                <span class="odd-val">1.30</span>
-              </div>
-              <div class="odd-btn ${store.isSelectionActive(matchId, 'dc_12') ? 'selected' : ''}" 
-                   data-match-id="${matchId}" data-outcome="dc_12" data-odd="1.25">
-                <span class="odd-label">12</span>
-                <span class="odd-val">1.25</span>
-              </div>
-              <div class="odd-btn ${store.isSelectionActive(matchId, 'dc_x2') ? 'selected' : ''}" 
-                   data-match-id="${matchId}" data-outcome="dc_x2" data-odd="1.45">
-                <span class="odd-label">X2</span>
-                <span class="odd-val">1.45</span>
-              </div>
-            </div>
-          </div>
+            const noMarketsNote = (!markets || markets.length === 0)
+              ? `<div style="text-align:center; padding:20px; color:var(--text-muted); font-size:0.85rem;">⏳ Рынки формируются...</div>`
+              : '';
 
-          <!-- Over / Under Totals -->
-          <div class="market-group-card">
-            <div class="market-group-title">⚽ Тоталы матча</div>
-            <div class="odds-grid-2col">
-              <div class="odd-btn ${store.isSelectionActive(matchId, 'over_15') ? 'selected' : ''}" 
-                   data-match-id="${matchId}" data-outcome="over_15" data-odd="1.28">
-                <span class="odd-label">ТБ 1.5</span>
-                <span class="odd-val">1.28</span>
+            return `
+              ${noMarketsNote}
+              <!-- 1X2 Main Outcomes -->
+              <div class="market-group-card">
+                <div class="market-group-title">⚡ Основные исходы (1X2)</div>
+                <div class="odds-grid-3col">
+                  ${renderSelBtn(mkt1x2, 'p1', `П1 (${t1})`, 1.90)}
+                  ${renderSelBtn(mkt1x2, 'x', 'Ничья (X)', 3.20)}
+                  ${renderSelBtn(mkt1x2, 'p2', `П2 (${t2})`, 2.10)}
+                </div>
               </div>
-              <div class="odd-btn ${store.isSelectionActive(matchId, 'under_15') ? 'selected' : ''}" 
-                   data-match-id="${matchId}" data-outcome="under_15" data-odd="3.40">
-                <span class="odd-label">ТМ 1.5</span>
-                <span class="odd-val">3.40</span>
-              </div>
-              <div class="odd-btn ${store.isSelectionActive(matchId, 'tb25') ? 'selected' : ''}" 
-                   data-match-id="${matchId}" data-outcome="tb25" data-odd="1.80">
-                <span class="odd-label">ТБ 2.5</span>
-                <span class="odd-val">1.80</span>
-              </div>
-              <div class="odd-btn ${store.isSelectionActive(matchId, 'tm25') ? 'selected' : ''}" 
-                   data-match-id="${matchId}" data-outcome="tm25" data-odd="1.95">
-                <span class="odd-label">ТМ 2.5</span>
-                <span class="odd-val">1.95</span>
-              </div>
-              <div class="odd-btn ${store.isSelectionActive(matchId, 'over_35') ? 'selected' : ''}" 
-                   data-match-id="${matchId}" data-outcome="over_35" data-odd="2.85">
-                <span class="odd-label">ТБ 3.5</span>
-                <span class="odd-val">2.85</span>
-              </div>
-              <div class="odd-btn ${store.isSelectionActive(matchId, 'under_35') ? 'selected' : ''}" 
-                   data-match-id="${matchId}" data-outcome="under_35" data-odd="1.38">
-                <span class="odd-label">ТМ 3.5</span>
-                <span class="odd-val">1.38</span>
-              </div>
-            </div>
-          </div>
 
-          <!-- Both Teams To Score -->
-          <div class="market-group-card">
-            <div class="market-group-title">🥅 Обе команды забьют</div>
-            <div class="odds-grid-2col">
-              <div class="odd-btn ${store.isSelectionActive(matchId, 'btts_yes') ? 'selected' : ''}" 
-                   data-match-id="${matchId}" data-outcome="btts_yes" data-odd="1.68">
-                <span class="odd-label">ОЗ: Да</span>
-                <span class="odd-val">1.68</span>
-              </div>
-              <div class="odd-btn ${store.isSelectionActive(matchId, 'btts_no') ? 'selected' : ''}" 
-                   data-match-id="${matchId}" data-outcome="btts_no" data-odd="2.05">
-                <span class="odd-label">ОЗ: Нет</span>
-                <span class="odd-val">2.05</span>
-              </div>
-            </div>
-          </div>
+              <!-- Double Chance -->
+              ${mktDC ? `
+              <div class="market-group-card">
+                <div class="market-group-title">🔄 Двойной шанс</div>
+                <div class="odds-grid-3col">
+                  ${renderSelBtn(mktDC, '1x', '1X', 1.30)}
+                  ${renderSelBtn(mktDC, '12', '12', 1.25)}
+                  ${renderSelBtn(mktDC, 'x2', 'X2', 1.45)}
+                </div>
+              </div>` : ''}
+
+              <!-- Over / Under Totals -->
+              ${mktTot ? `
+              <div class="market-group-card">
+                <div class="market-group-title">⚽ Тоталы матча</div>
+                <div class="odds-grid-2col">
+                  ${renderSelBtn(mktTot, 'over_1.5', 'ТБ 1.5', 1.28)}
+                  ${renderSelBtn(mktTot, 'under_1.5', 'ТМ 1.5', 3.40)}
+                  ${renderSelBtn(mktTot, 'over_2.5', 'ТБ 2.5', 1.80)}
+                  ${renderSelBtn(mktTot, 'under_2.5', 'ТМ 2.5', 1.95)}
+                  ${renderSelBtn(mktTot, 'over_3.5', 'ТБ 3.5', 2.85)}
+                  ${renderSelBtn(mktTot, 'under_3.5', 'ТМ 3.5', 1.38)}
+                </div>
+              </div>` : ''}
+
+              <!-- Both Teams To Score -->
+              ${mktBTTS ? `
+              <div class="market-group-card">
+                <div class="market-group-title">🥅 Обе команды забьют</div>
+                <div class="odds-grid-2col">
+                  ${renderSelBtn(mktBTTS, 'btts_yes', 'ОЗ: Да', 1.68)}
+                  ${renderSelBtn(mktBTTS, 'btts_no', 'ОЗ: Нет', 2.05)}
+                </div>
+              </div>` : ''}
+
+              <!-- Handicap -->
+              ${mktHcp ? `
+              <div class="market-group-card">
+                <div class="market-group-title">↔️ Фора (±1.5)</div>
+                <div class="odds-grid-2col">
+                  ${renderSelBtn(mktHcp, 'h1_minus_1.5', 'Фора 1 (-1.5)', 2.20)}
+                  ${renderSelBtn(mktHcp, 'h2_plus_1.5', 'Фора 2 (+1.5)', 1.60)}
+                </div>
+              </div>` : ''}
+
+              <!-- Individual Totals -->
+              ${(mktIT1 || mktIT2) ? `
+              <div class="market-group-card">
+                <div class="market-group-title">🎯 Индивидуальные тоталы</div>
+                <div class="odds-grid-2col">
+                  ${mktIT1 ? renderSelBtn(mktIT1, 'it1_over_1.5', `ИТБ1 (1.5)`, 1.85) : ''}
+                  ${mktIT1 ? renderSelBtn(mktIT1, 'it1_under_1.5', `ИТМ1 (1.5)`, 1.85) : ''}
+                  ${mktIT2 ? renderSelBtn(mktIT2, 'it2_over_1.5', `ИТБ2 (1.5)`, 1.85) : ''}
+                  ${mktIT2 ? renderSelBtn(mktIT2, 'it2_under_1.5', `ИТМ2 (1.5)`, 1.85) : ''}
+                </div>
+              </div>` : ''}
+            `;
+          })()}
         </div>
       ` : activeSubTab === 'stats' ? `
         <!-- Statistics & H2H Menu -->
