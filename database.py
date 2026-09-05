@@ -556,13 +556,13 @@ def init_db() -> None:
                 tournament_id INTEGER NOT NULL DEFAULT 1,
                 name TEXT NOT NULL,
                 code TEXT NOT NULL UNIQUE,
-                season_id INTEGER NOT NULL DEFAULT 1,
+                season_id INTEGER DEFAULT NULL,
                 topic_id INTEGER DEFAULT NULL,
                 is_active BOOLEAN DEFAULT 1,
                 sort_order INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY(tournament_id) REFERENCES tournaments(id),
-                FOREIGN KEY(season_id) REFERENCES seasons(id)
+                FOREIGN KEY(season_id) REFERENCES seasons(id) ON DELETE SET NULL
             )
         """)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_divisions_active ON divisions(is_active, sort_order)")
