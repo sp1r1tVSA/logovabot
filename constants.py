@@ -4,6 +4,7 @@
 CB_MAIN_MENU = "main_menu"
 CB_MENU_CABINET = "menu_cabinet"
 CB_MENU_TOURNAMENTS = "menu_tournaments"
+CB_MENU_DIVISIONS = "menu_divisions"
 CB_MENU_LEAGUE = "menu_league"
 CB_MENU_SUPPORT = "menu_support"
 

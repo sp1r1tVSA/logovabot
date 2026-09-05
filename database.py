@@ -4,6 +4,7 @@ import datetime
 import re
 import difflib
 import threading
+import asyncio
 from typing import Generator
 from contextlib import contextmanager
 from config import DB_PATH
@@ -1886,17 +1887,75 @@ def get_season(season_id: int) -> dict | None:
         return dict(row) if row else None
 
 
-def get_active_season() -> dict | None:
-    """Retrieve the currently active season (strictly ignoring synthetic/test seasons)."""
+class SeasonInt(int):
+    """Integer season_id that supports dict-like subscripting and methods for backwards compatibility."""
+    def __new__(cls, val, data=None):
+        inst = super().__new__(cls, int(val))
+        inst._data = data or {}
+        return inst
+
+    def __getitem__(self, item):
+        return self._data[item]
+
+    def get(self, item, default=None):
+        return self._data.get(item, default)
+
+    def __contains__(self, item):
+        return item in self._data
+
+    def __iter__(self):
+        return iter(self._data)
+
+    def keys(self):
+        return self._data.keys()
+
+    def values(self):
+        return self._data.values()
+
+    def items(self):
+        return self._data.items()
+
+
+def get_active_season() -> int | None:
+    """Retrieve the currently active season ID (returns SeasonInt which acts as both int and dict)."""
     with transaction() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM seasons WHERE status = 'active' AND name NOT LIKE '%TEST%' AND name NOT LIKE '%LAB%' ORDER BY id DESC LIMIT 1")
         row = cursor.fetchone()
         if row:
-            return dict(row)
+            return SeasonInt(row["id"], dict(row))
         cursor.execute("SELECT * FROM seasons WHERE name NOT LIKE '%TEST%' AND name NOT LIKE '%LAB%' ORDER BY id DESC LIMIT 1")
         row = cursor.fetchone()
-        return dict(row) if row else None
+        return SeasonInt(row["id"], dict(row)) if row else None
+
+
+def get_active_divisions(season_id: int | None = None) -> list[dict]:
+    """Retrieve active divisions for the season (list of dicts [{'id': 1, 'name': 'Дивизион 1'}, ...])."""
+    ensure_canonical_divisions()
+    with transaction() as conn:
+        cursor = conn.cursor()
+        if season_id is not None:
+            cursor.execute(
+                "SELECT id, name, code, sort_order FROM divisions WHERE is_active = 1 AND (season_id = ? OR season_id IS NULL) ORDER BY sort_order ASC, id ASC",
+                (int(season_id),)
+            )
+            rows = cursor.fetchall()
+            if rows:
+                return [{"id": r["id"], "name": r["name"], "code": r["code"]} for r in rows]
+        cursor.execute(
+            "SELECT id, name, code, sort_order FROM divisions WHERE is_active = 1 ORDER BY sort_order ASC, id ASC"
+        )
+        return [{"id": r["id"], "name": r["name"], "code": r["code"]} for r in cursor.fetchall()]
+
+
+async def async_get_active_season() -> int | None:
+    """Asynchronous wrapper for get_active_season."""
+    return await asyncio.to_thread(get_active_season)
+
+
+async def async_get_active_divisions(season_id: int) -> list[dict]:
+    """Asynchronous wrapper for get_active_divisions."""
+    return await asyncio.to_thread(get_active_divisions, season_id)
 
 
 def list_seasons(status: str | None = None) -> list[dict]:

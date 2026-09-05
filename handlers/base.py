@@ -14,7 +14,7 @@ from services.graphics.table_generator import generate_league_table_image
 from services.graphics import top_stats_generator
 from constants import (
     CB_MAIN_MENU, CB_MENU_CABINET, CB_MENU_TOURNAMENTS,
-    CB_MENU_LEAGUE, CB_MENU_SUPPORT, CB_LEAGUE_TABLE,
+    CB_MENU_DIVISIONS, CB_MENU_LEAGUE, CB_MENU_SUPPORT, CB_LEAGUE_TABLE,
     CB_LEAGUE_SCORERS, CB_LEAGUE_ASSISTS, CB_REFRESH_LEAGUE_TABLE,
     CB_ADMIN_MAIN_MENU
 )
@@ -143,7 +143,7 @@ def get_main_inline_keyboard(telegram_id: int) -> InlineKeyboardMarkup:
         keyboard.append([InlineKeyboardButton("👑 Админ-панель", callback_data=CB_ADMIN_MAIN_MENU)])
         
     keyboard.extend([
-        [InlineKeyboardButton("🏆 Лига", callback_data=CB_MENU_LEAGUE)],
+        [InlineKeyboardButton("🏆 Дивизионы", callback_data=CB_MENU_DIVISIONS)],
         [InlineKeyboardButton("🆘 Поддержка", callback_data=CB_MENU_SUPPORT)]
     ])
     return InlineKeyboardMarkup(keyboard)
@@ -245,8 +245,11 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 pass
             await context.bot.send_message(chat_id=user.id, text=welcome_text, reply_markup=get_main_inline_keyboard(user.id), parse_mode="HTML")
 
-async def show_league_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Sub-menu for League section: Table, Top Scorers, Top Assists."""
+DIV_EMOJIS = {1: "🥇", 2: "🥈", 3: "🥉", 4: "🎖️", 5: "🏅"}
+
+
+async def show_divisions_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Sub-menu displaying the list of active divisions for the current season."""
     query = update.callback_query
     if query:
         try:
@@ -254,17 +257,84 @@ async def show_league_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         except Exception:
             pass
 
+    season_id = await asyncio.to_thread(database.get_active_season)
+    if season_id is None:
+        text = "🏆 <b>Дивизионы</b>\n\nСейчас нет активного сезона."
+        keyboard = [[InlineKeyboardButton("« Назад в меню", callback_data=CB_MAIN_MENU)]]
+    else:
+        divisions = await asyncio.to_thread(database.get_active_divisions, int(season_id))
+        keyboard = []
+        for div in divisions:
+            d_id = div["id"]
+            d_name = div.get("name") or f"Дивизион {d_id}"
+            emoji = DIV_EMOJIS.get(d_id, "⚽")
+            keyboard.append([
+                InlineKeyboardButton(f"{emoji} {d_name}", callback_data=f"division_view:{int(season_id)}:{d_id}")
+            ])
+        keyboard.append([InlineKeyboardButton("« Назад в меню", callback_data=CB_MAIN_MENU)])
+        text = (
+            "🏆 <b>Дивизионы</b>\n\n"
+            "Выберите интересующий дивизион для просмотра турнирной таблицы и статистики:"
+        )
+
+    markup = InlineKeyboardMarkup(keyboard)
+
+    if query:
+        target_chat_id = query.message.chat_id if query.message else (update.effective_chat.id if update.effective_chat else update.effective_user.id)
+        thread_id = query.message.message_thread_id if query.message and query.message.is_topic_message else None
+        if query.message and query.message.photo:
+            try:
+                await query.message.delete()
+            except Exception:
+                pass
+            await context.bot.send_message(chat_id=target_chat_id, message_thread_id=thread_id, text=text, reply_markup=markup, parse_mode="HTML")
+        else:
+            try:
+                await query.edit_message_text(text, reply_markup=markup, parse_mode="HTML")
+            except Exception:
+                try:
+                    await query.message.delete()
+                except Exception:
+                    pass
+                await context.bot.send_message(chat_id=target_chat_id, message_thread_id=thread_id, text=text, reply_markup=markup, parse_mode="HTML")
+    elif update.message:
+        await update.message.reply_text(text, reply_markup=markup, parse_mode="HTML")
+
+
+async def show_division_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Display the menu for a specific division (Table, Scorers, Assists)."""
+    query = update.callback_query
+    if query:
+        try:
+            await query.answer()
+        except Exception:
+            pass
+
+    season_id = 1
+    division_id = 1
+    if context.matches:
+        season_id = int(context.matches[0].group(1))
+        division_id = int(context.matches[0].group(2))
+    elif query and query.data:
+        parts = query.data.split(":")
+        if len(parts) >= 3:
+            season_id = int(parts[1])
+            division_id = int(parts[2])
+
+    div_info = await asyncio.to_thread(database.get_division, division_id)
+    div_name = div_info["name"] if div_info and "name" in div_info else f"Дивизион {division_id}"
+    emoji = DIV_EMOJIS.get(division_id, "🏆")
+
     text = (
-        "🏆 <b>Раздел «Лига»</b>\n\n"
-        "Выберите интересующий вас раздел:"
+        f"{emoji} <b>{html.escape(div_name)}</b>\n\n"
+        "Выберите интересующий раздел:"
     )
 
     keyboard = [
-        [InlineKeyboardButton("📊 Таблица лиги", callback_data="league_table")],
-        [InlineKeyboardButton("🏛 Карточки клубов", callback_data="cb_clubs_catalog")],
-        [InlineKeyboardButton("⚽ Бомбардиры", callback_data="league_scorers")],
-        [InlineKeyboardButton("🎯 Ассисты", callback_data="league_assists")],
-        [InlineKeyboardButton("« Назад в меню", callback_data="main_menu")]
+        [InlineKeyboardButton("📋 Турнирная таблица", callback_data=f"division_table:{season_id}:{division_id}")],
+        [InlineKeyboardButton("⚽ Бомбардиры", callback_data=f"division_scorers:{season_id}:{division_id}")],
+        [InlineKeyboardButton("🎯 Ассистенты", callback_data=f"division_assists:{season_id}:{division_id}")],
+        [InlineKeyboardButton("« Назад к дивизионам", callback_data=CB_MENU_DIVISIONS)]
     ]
     markup = InlineKeyboardMarkup(keyboard)
 
@@ -288,6 +358,10 @@ async def show_league_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 await context.bot.send_message(chat_id=target_chat_id, message_thread_id=thread_id, text=text, reply_markup=markup, parse_mode="HTML")
     elif update.message:
         await update.message.reply_text(text, reply_markup=markup, parse_mode="HTML")
+
+
+# Backward compatibility alias
+show_league_menu = show_divisions_list
 
 async def show_top_scorers(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show Top 20 goalscorers leaderboard."""

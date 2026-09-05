@@ -46,6 +46,8 @@ from handlers.base import (
     show_cup_stats,
     show_league_table,
     show_league_menu,
+    show_divisions_list,
+    show_division_menu,
     show_top_scorers,
     show_top_assists,
     send_top_scorers_image,
@@ -378,7 +380,8 @@ def _register_user_handlers(app: Application) -> None:
     app.add_handler(CallbackQueryHandler(cb_refresh_league_table_topic, pattern="^(refresh_league_table_topic|refresh_div_table_\\d+)$"))
     app.add_handler(CallbackQueryHandler(show_cabinet, pattern="^menu_cabinet$"))
     app.add_handler(CallbackQueryHandler(show_tournaments, pattern="^menu_tournaments$"))
-    app.add_handler(CallbackQueryHandler(show_league_menu, pattern="^menu_league$"))
+    app.add_handler(CallbackQueryHandler(show_divisions_list, pattern="^(menu_divisions|menu_league)$"))
+    app.add_handler(CallbackQueryHandler(show_division_menu, pattern=r"^division_view:(\d+):(\d+)$"))
     app.add_handler(CallbackQueryHandler(show_league_table, pattern="^(league_table|menu_ratings)$"))
     app.add_handler(CallbackQueryHandler(show_top_scorers, pattern="^league_scorers$"))
     app.add_handler(CallbackQueryHandler(show_top_assists, pattern="^league_assists$"))
