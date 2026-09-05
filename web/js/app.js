@@ -51,6 +51,19 @@ class AppController {
     await this.loadInitialData();
   }
 
+  showLockdownScreen() {
+    const lockScreen = document.getElementById('app-lockdown-screen');
+    if (lockScreen) lockScreen.style.display = 'flex';
+    const nav = document.querySelector('.bottom-nav');
+    if (nav) nav.style.display = 'none';
+    const drawer = document.getElementById('slip-drawer');
+    if (drawer) drawer.style.display = 'none';
+    const views = document.querySelector('.views-container');
+    if (views) views.style.display = 'none';
+    const header = document.querySelector('.app-header');
+    if (header) header.style.display = 'none';
+  }
+
   async loadInitialData() {
     try {
       const data = await api.getBootstrap();
@@ -100,6 +113,10 @@ class AppController {
         this.fetchIntelligenceHub();
       }
     } catch (err) {
+      if (err.status === 403 || err.code === 'LOGOVO_LOCKDOWN' || (err.data && err.data.error === 'LOGOVO_LOCKDOWN')) {
+        this.showLockdownScreen();
+        return;
+      }
       console.error("Failed to bootstrap app:", err);
     }
   }
@@ -753,6 +770,18 @@ class AppController {
     if (btnCloseLocked) {
       btnCloseLocked.addEventListener('click', () => {
         tgBridge.close();
+      });
+    }
+
+    // 20. Close Global Lockdown App screen
+    const btnCloseLockdown = document.getElementById('btn-close-lockdown-app');
+    if (btnCloseLockdown) {
+      btnCloseLockdown.addEventListener('click', () => {
+        try {
+          tgBridge.close();
+        } catch (e) {
+          window.close();
+        }
       });
     }
   }

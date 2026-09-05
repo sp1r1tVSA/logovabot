@@ -14,7 +14,8 @@ import time
 import logging
 import database
 import config
-from handlers.base import is_admin
+from config import is_global_lockdown_enabled, is_lockdown_enabled
+from handlers.base import is_admin, is_global_admin, is_admin_user, is_logovo_access_allowed
 
 logger = logging.getLogger(__name__)
 
@@ -113,6 +114,8 @@ def check_user_access(user_id: int) -> bool:
     """Check if user has access to Logovo.bet."""
     if not user_id or user_id <= 0:
         return False
+    if not is_logovo_access_allowed(user_id):
+        return False
     if is_admin(user_id):
         return True
     try:
@@ -120,3 +123,4 @@ def check_user_access(user_id: int) -> bool:
         return flag in ("public", "all", "enabled")
     except Exception:
         return True
+

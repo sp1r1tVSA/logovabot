@@ -72,6 +72,12 @@ def quote_cashout(user_id: int, bet_id: int) -> dict[str, Any]:
     """
     Generate live cashout quotation for an active bet slip.
     """
+    from config import is_global_lockdown_enabled
+    if is_global_lockdown_enabled():
+        from handlers.base import is_global_admin
+        if not is_global_admin(user_id):
+            return {"available": False, "reason": "LOGOVO_LOCKDOWN", "offer": 0}
+
     with database.transaction() as conn:
         cursor = conn.cursor()
 

@@ -151,6 +151,59 @@ async def cors_middleware(request: web.Request, handler):
     return response
 
 
+@web.middleware
+async def lockdown_middleware(request: web.Request, handler):
+    """
+    Global Server-Side Lockdown Middleware for REST API endpoints.
+    Enforces that during LOGOVO_LOCKDOWN, only Global Admins can access API resources.
+    Follows strict authentication order:
+    1. Validate Telegram initData (returns 401 if invalid/missing).
+    2. Extract user_id.
+    3. Check Global Admin privilege.
+    4. If not Global Admin during lockdown -> returns 403 LOGOVO_LOCKDOWN.
+    5. If Global Admin -> proceeds to normal handler.
+    """
+    if request.method == "OPTIONS":
+        return await handler(request)
+
+    if not request.path.startswith("/api/"):
+        return await handler(request)
+
+    from config import is_global_lockdown_enabled
+    if not is_global_lockdown_enabled():
+        return await handler(request)
+
+    from api.auth import get_authenticated_user
+    from handlers.base import is_global_admin
+
+    init_data = request.headers.get("X-Telegram-Init-Data", "")
+    if not init_data:
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("tma "):
+            init_data = auth_header[4:]
+        elif auth_header.startswith("Bearer "):
+            init_data = auth_header[7:]
+
+    user_info = get_authenticated_user(init_data)
+    if not user_info or "id" not in user_info:
+        return web.json_response(
+            {"status": "error", "error": "unauthorized", "message": "Недействительные данные авторизации Telegram."},
+            status=401
+        )
+
+    user_id = user_info["id"]
+    if not is_global_admin(user_id):
+        return web.json_response(
+            {
+                "error": "LOGOVO_LOCKDOWN",
+                "message": "Logovo.bet временно закрыт для пользователей"
+            },
+            status=403
+        )
+
+    return await handler(request)
+
+
 async def handle_index(request: web.Request) -> web.FileResponse:
     """Serve SPA index.html."""
     index_path = os.path.join(WEB_DIR, "index.html")
@@ -159,7 +212,7 @@ async def handle_index(request: web.Request) -> web.FileResponse:
 
 def create_app() -> web.Application:
     """Construct and configure the aiohttp Application."""
-    app = web.Application(middlewares=[cors_middleware])
+    app = web.Application(middlewares=[cors_middleware, lockdown_middleware])
 
     # 1. Wallet & Bootstrap
     app.router.add_get("/api/bootstrap", handle_bootstrap)

@@ -31,7 +31,10 @@ OUTCOME_TITLES = {
 
 
 def _check_betting_access(user_id: int) -> bool:
-    """Check if Logovo.bet is accessible to the user (admin_only while in Lab)."""
+    """Check if Logovo.bet is accessible to the user (admin_only while in Lab or Lockdown)."""
+    from handlers.base import is_logovo_access_allowed
+    if not is_logovo_access_allowed(user_id):
+        return False
     if is_admin(user_id):
         return True
     try:

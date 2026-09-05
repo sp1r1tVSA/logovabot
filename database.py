@@ -6229,6 +6229,12 @@ def claim_daily_bonus(user_id: int, bonus_amount: int = 250) -> tuple[bool, int,
     Claim daily bonus once every 24 hours.
     Returns (success, new_balance_or_remaining_hours, message).
     """
+    from config import is_global_lockdown_enabled
+    if is_global_lockdown_enabled():
+        from handlers.base import is_global_admin
+        if not is_global_admin(user_id):
+            return False, 0, "Logovo.bet временно закрыт для пользователей."
+
     with transaction() as conn:
         cursor = conn.cursor()
         wallet = get_or_create_wallet(user_id)
@@ -6467,6 +6473,12 @@ def place_user_bet(
     Supports single & express parlays, relational selections, and idempotency protection.
     Phase 5: Adds MAX_BET/MAX_PAYOUT limits, ODDS_CHANGED detection, IDEMPOTENCY_KEY_REUSED.
     """
+    from config import is_global_lockdown_enabled
+    if is_global_lockdown_enabled():
+        from handlers.base import is_global_admin
+        if not is_global_admin(user_id):
+            return False, {"error": "LOGOVO_LOCKDOWN", "message": "Logovo.bet временно закрыт для пользователей"}
+
     import datetime
     import hashlib as _hashlib
     import json as _json
@@ -6771,6 +6783,12 @@ def execute_cashout(
     4. Atomically update user_bets (actual_payout = offer, cashout_at = CURRENT_TIMESTAMP, settled_at = CURRENT_TIMESTAMP, status = 'won').
     5. Credit user_wallets and record coin_transactions with transaction_type = 'cashout'.
     """
+    from config import is_global_lockdown_enabled
+    if is_global_lockdown_enabled():
+        from handlers.base import is_global_admin
+        if not is_global_admin(user_id):
+            return False, {"error": "LOGOVO_LOCKDOWN", "message": "Logovo.bet временно закрыт для пользователей"}
+
     with _bet_placement_lock, transaction() as conn:
         cursor = conn.cursor()
 
@@ -7573,6 +7591,12 @@ def get_user_achievements(user_id: int) -> list[dict]:
 
 def claim_achievement_reward(user_id: int, achievement_id: str) -> tuple[bool, str, dict]:
     """Claim reward for an unlocked achievement."""
+    from config import is_global_lockdown_enabled
+    if is_global_lockdown_enabled():
+        from handlers.base import is_global_admin
+        if not is_global_admin(user_id):
+            return False, "Logovo.bet временно закрыт для пользователей.", {}
+
     with transaction() as conn:
         cursor = conn.cursor()
         cursor.execute("""

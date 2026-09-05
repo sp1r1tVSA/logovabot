@@ -5,6 +5,8 @@ from telegram.ext import (
     MessageHandler,
     CallbackQueryHandler,
     ConversationHandler,
+    TypeHandler,
+    ApplicationHandlerStop,
     filters,
     ContextTypes,
 )
@@ -12,6 +14,7 @@ import asyncio
 import database
 import logging
 import telegram.error
+from handlers.base import is_global_admin, is_logovo_access_allowed
 
 from handlers.chat import handle_ai_chat
 from handlers.lab import (
@@ -255,6 +258,63 @@ from services.topic_cache import topic_cache
 
 
 logger = logging.getLogger(__name__)
+
+LOCKDOWN_BOT_MESSAGE = "🔒 <b>Logovo.bet временно закрыт.</b>\n\nДоступ разрешён только администраторам."
+LOCKDOWN_ALERT_MESSAGE = "🔒 Logovo.bet временно закрыт.\n\nДоступ разрешён только администраторам."
+
+async def global_lockdown_guard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    High-priority guard (group -1) that stops all non-admin interactions during LOGOVO_LOCKDOWN.
+    """
+    from config import is_global_lockdown_enabled
+    if not is_global_lockdown_enabled():
+        return
+
+    user = update.effective_user
+    user_id = user.id if user else None
+
+    # Global admins bypass lockdown completely
+    if user_id and is_global_admin(user_id):
+        return
+
+    # User is not a global admin -> BLOCK!
+    if update.callback_query:
+        try:
+            await update.callback_query.answer(
+                LOCKDOWN_ALERT_MESSAGE,
+                show_alert=True
+            )
+        except Exception as e:
+            logger.debug(f"Failed to answer callback query in lockdown guard: {e}")
+        raise ApplicationHandlerStop()
+
+    if update.effective_message:
+        msg = update.effective_message
+        chat = update.effective_chat
+        is_private = bool(chat and chat.type == "private")
+        is_command = bool(msg.text and msg.text.startswith("/"))
+        bot_username = (context.bot.username or "").lower() if context.bot else ""
+        is_bot_mention = bool(
+            msg.text and bot_username and f"@{bot_username}" in msg.text.lower()
+        )
+        is_reply_to_bot = bool(
+            msg.reply_to_message
+            and msg.reply_to_message.from_user
+            and msg.reply_to_message.from_user.is_bot
+            and (not bot_username or (msg.reply_to_message.from_user.username or "").lower() == bot_username)
+        )
+
+        if is_private or is_command or is_bot_mention or is_reply_to_bot:
+            try:
+                await msg.reply_text(LOCKDOWN_BOT_MESSAGE, parse_mode="HTML")
+            except Exception as e:
+                logger.debug(f"Failed to reply lockdown text: {e}")
+
+        raise ApplicationHandlerStop()
+
+    # Any other update type from non-admin during lockdown is halted
+    raise ApplicationHandlerStop()
+
 
 async def handle_placeholders(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
@@ -714,6 +774,9 @@ def _register_admin_handlers(app: Application) -> None:
 
 def register_all_handlers(application: Application) -> None:
     """Register all command, message, and callback handlers to the application."""
+    # 0. Global lockdown guard at group -1 (runs before all standard handlers)
+    application.add_handler(TypeHandler(Update, global_lockdown_guard), group=-1)
+
     application.add_handler(MessageHandler(filters.ChatType.GROUPS, track_group_id), group=1)
     
     # 1. Сначала регистрируем кнопки и основные команды

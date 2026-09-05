@@ -92,3 +92,12 @@ MAX_MATCH_GOALS = 50
 WEBAPP_URL = os.getenv("WEBAPP_URL", "http://localhost:8080").strip()
 API_PORT = int(os.getenv("API_PORT", "8080"))
 API_HOST = os.getenv("API_HOST", "0.0.0.0").strip()
+
+# Global Lockdown Mode: true = accessible only to Global Admins; false = regular operation
+def is_global_lockdown_enabled() -> bool:
+    """Return True if global lockdown mode is enabled via LOGOVO_LOCKDOWN environment variable."""
+    return os.getenv("LOGOVO_LOCKDOWN", "false").strip().lower() in ("true", "1", "yes")
+
+is_lockdown_enabled = is_global_lockdown_enabled
+LOGOVO_LOCKDOWN = is_global_lockdown_enabled()
+

@@ -48,6 +48,18 @@ class ApiClient {
           err.status = res.status;
           err.data = data;
           err.code = data.error;
+          if (data.error === 'LOGOVO_LOCKDOWN') {
+            const lockScreen = document.getElementById('app-lockdown-screen');
+            if (lockScreen) lockScreen.style.display = 'flex';
+            const nav = document.querySelector('.bottom-nav');
+            if (nav) nav.style.display = 'none';
+            const drawer = document.getElementById('slip-drawer');
+            if (drawer) drawer.style.display = 'none';
+            const views = document.querySelector('.views-container');
+            if (views) views.style.display = 'none';
+            const header = document.querySelector('.app-header');
+            if (header) header.style.display = 'none';
+          }
           throw err;
         }
         if (isGet) {

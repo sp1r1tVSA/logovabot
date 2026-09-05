@@ -75,6 +75,23 @@ def is_global_admin(telegram_id: int) -> bool:
     return is_admin(telegram_id)
 
 
+def is_admin_user(user_id: int) -> bool:
+    """Check if the user has global admin privileges (excluding division-only admins)."""
+    return is_global_admin(user_id)
+
+
+def is_logovo_access_allowed(user_id: int) -> bool:
+    """
+    Check if a user is permitted to access Logovo.bet.
+    If LOGOVO_LOCKDOWN=true: only Global Admins are allowed.
+    If LOGOVO_LOCKDOWN=false: regular access rules apply.
+    """
+    import config
+    if config.is_global_lockdown_enabled():
+        return is_admin_user(user_id)
+    return True
+
+
 from functools import wraps
 from telegram.ext import ConversationHandler
 
