@@ -308,27 +308,27 @@ def create_test_season(
     with database.transaction() as conn:
         cursor = conn.cursor()
 
-        # 1. Create or get season
+        # 1. Create or get season (status is 'draft' so it never hijacks get_active_season)
         cursor.execute("SELECT * FROM seasons WHERE name = ?", (season_name,))
         season_row = cursor.fetchone()
         if season_row:
             season_id = season_row["id"]
-            cursor.execute("UPDATE seasons SET status = 'active' WHERE id = ?", (season_id,))
+            cursor.execute("UPDATE seasons SET status = 'draft' WHERE id = ?", (season_id,))
         else:
             cursor.execute("""
                 INSERT INTO seasons (name, status, created_at, started_at)
-                VALUES (?, 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                VALUES (?, 'draft', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
             """, (season_name,))
             season_id = cursor.lastrowid
 
-        # 2. Create or get division
+        # 2. Create or get division (isolated code = TEST_LEAGUE)
         cursor.execute("SELECT * FROM divisions WHERE code = ?", (TEST_DIVISION_CODE,))
         div_row = cursor.fetchone()
         if div_row:
             division_id = div_row["id"]
             cursor.execute("""
                 UPDATE divisions
-                SET name = ?, season_id = ?, is_active = 1
+                SET name = ?, season_id = ?, is_active = 1, tournament_id = 1
                 WHERE id = ?
             """, (division_name, season_id, division_id))
         else:
@@ -597,6 +597,14 @@ def reset_test_lab(user_id: Optional[int] = None) -> dict[str, Any]:
             ub_placeholders = ",".join("?" for _ in user_bet_ids)
             cursor.execute(f"DELETE FROM bet_items WHERE bet_id IN ({ub_placeholders})", tuple(user_bet_ids))
             cursor.execute(f"DELETE FROM user_bets WHERE id IN ({ub_placeholders})", tuple(user_bet_ids))
+
+        # Reset progression, seasonal stats, and achievements for test user
+        cursor.execute("DELETE FROM user_progression WHERE user_id = ?", (target_uid,))
+        cursor.execute("DELETE FROM user_achievements WHERE user_id = ?", (target_uid,))
+        try:
+            cursor.execute("DELETE FROM user_season_stats WHERE user_id = ?", (target_uid,))
+        except Exception:
+            pass
 
         # Reset test user wallet & transactions
         cursor.execute("DELETE FROM coin_transactions WHERE user_id = ?", (target_uid,))
@@ -1273,7 +1281,14 @@ def get_financial_reconciliation(user_id: Optional[int] = None) -> dict[str, Any
         """, (target_uid,))
         total_cashouts = cursor.fetchone()["cashouts"]
 
-        expected_balance = initial_balance - total_stakes + total_payouts + total_refunds + total_cashouts
+        cursor.execute("""
+            SELECT COALESCE(SUM(amount), 0) as rewards
+            FROM coin_transactions
+            WHERE user_id = ? AND transaction_type IN ('level_up_reward', 'achievement_reward', 'daily_bonus', 'airdrop')
+        """, (target_uid,))
+        total_rewards = cursor.fetchone()["rewards"]
+
+        expected_balance = initial_balance - total_stakes + total_payouts + total_refunds + total_cashouts + total_rewards
         difference = actual_balance - expected_balance
 
         cursor.execute("""

@@ -1887,14 +1887,14 @@ def get_season(season_id: int) -> dict | None:
 
 
 def get_active_season() -> dict | None:
-    """Retrieve the currently active season."""
+    """Retrieve the currently active season (strictly ignoring synthetic/test seasons)."""
     with transaction() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM seasons WHERE status = 'active' ORDER BY id DESC LIMIT 1")
+        cursor.execute("SELECT * FROM seasons WHERE status = 'active' AND name NOT LIKE '%TEST%' AND name NOT LIKE '%LAB%' ORDER BY id DESC LIMIT 1")
         row = cursor.fetchone()
         if row:
             return dict(row)
-        cursor.execute("SELECT * FROM seasons ORDER BY id DESC LIMIT 1")
+        cursor.execute("SELECT * FROM seasons WHERE name NOT LIKE '%TEST%' AND name NOT LIKE '%LAB%' ORDER BY id DESC LIMIT 1")
         row = cursor.fetchone()
         return dict(row) if row else None
 
@@ -3109,6 +3109,8 @@ def get_matches_by_round(round_number: int, division_id: int | None = None) -> l
                 ORDER BY m.id ASC
             """, (round_number, division_id))
         else:
+            act = get_active_season()
+            s_id = act["id"] if act else 1
             cursor.execute("""
                 SELECT 
                     m.id, m.round_number, m.division_id, u1.telegram_id AS player1_id, u2.telegram_id AS player2_id,
@@ -3119,8 +3121,10 @@ def get_matches_by_round(round_number: int, division_id: int | None = None) -> l
                 LEFT JOIN users u1 ON LOWER(m.player1_team) = LOWER(u1.team_name)
                 LEFT JOIN users u2 ON LOWER(m.player2_team) = LOWER(u2.team_name)
                 WHERE m.round_number = ?
+                  AND (m.season_id = ? OR m.season_id IS NULL)
+                  AND (m.division_id = 1 OR m.division_id IS NULL)
                 ORDER BY m.id ASC
-            """, (round_number,))
+            """, (round_number, s_id))
         return [dict(row) for row in cursor.fetchall()]
 
 def get_admins() -> list[dict]:
@@ -4070,9 +4074,22 @@ def update_round_status(round_number: int, is_open: bool, deadline: str | None =
 
 
 def get_all_rounds() -> list[int]:
-    """Get a list of all round numbers present in the database."""
+    """Get a list of all round numbers present in the database for the active season / main league."""
     with transaction() as conn:
         cursor = conn.cursor()
+        act = get_active_season()
+        s_id = act["id"] if act else 1
+        cursor.execute("""
+            SELECT DISTINCT round_number 
+            FROM matches 
+            WHERE round_number > 0 
+              AND (season_id = ? OR season_id IS NULL) 
+              AND (division_id = 1 OR division_id IS NULL)
+            ORDER BY round_number ASC
+        """, (s_id,))
+        rows = cursor.fetchall()
+        if rows:
+            return [row["round_number"] for row in rows]
         cursor.execute("SELECT DISTINCT round_number FROM matches WHERE round_number > 0 ORDER BY round_number ASC")
         return [row["round_number"] for row in cursor.fetchall()]
 
