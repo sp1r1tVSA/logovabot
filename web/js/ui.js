@@ -17,6 +17,9 @@ export const TEAM_LOGO_MAP = {
   'бока хуниорс': 'boca_juniors.png',
   'boca juniors': 'boca_juniors.png',
   'бока': 'boca_juniors.png',
+  'boca': 'boca_juniors.png',
+  'бока хун': 'boca_juniors.png',
+  'бока хун.': 'boca_juniors.png',
   'бенфика': 'benfica.png',
   'benfica': 'benfica.png',
   'псв': 'psv.png',
@@ -26,6 +29,10 @@ export const TEAM_LOGO_MAP = {
   'будё глимт': 'bodo_glimt.png',
   'будë глимт': 'bodo_glimt.png',
   'буде глимт': 'bodo_glimt.png',
+  'будё-глимт': 'bodo_glimt.png',
+  'буде-глимт': 'bodo_glimt.png',
+  'будё': 'bodo_glimt.png',
+  'буде': 'bodo_glimt.png',
   'bodo glimt': 'bodo_glimt.png',
   'bodo_glimt': 'bodo_glimt.png',
   'фейеноорд': 'feyenoord.png',
@@ -49,13 +56,22 @@ export const TEAM_LOGO_MAP = {
 
 export function getTeamLogoUrl(teamName) {
   if (!teamName) return null;
-  const t = teamName.trim().toLowerCase();
+  const t = teamName.trim().toLowerCase().replace(/[-_.]/g, ' ');
   for (const [k, file] of Object.entries(TEAM_LOGO_MAP)) {
-    if (t === k || t.includes(k) || k.includes(t)) {
+    const kNorm = k.toLowerCase().replace(/[-_.]/g, ' ');
+    if (t === kNorm || t.includes(kNorm) || kNorm.includes(t)) {
       return `/assets/logos/${file}`;
     }
   }
   return null;
+}
+
+export function renderTeamLogoWrapperHtml(teamName, extraClass = '') {
+  const url = getTeamLogoUrl(teamName);
+  if (url) {
+    return `<div class="team-logo-wrapper ${extraClass}"><img src="${url}" alt="${teamName || 'Club'}" loading="lazy" onerror="this.style.display='none'; if(this.nextElementSibling) this.nextElementSibling.style.display='flex';" /><span class="team-logo-fallback" style="display:none;">🛡️</span></div>`;
+  }
+  return `<div class="team-logo-wrapper ${extraClass}"><span class="team-logo-fallback">🛡️</span></div>`;
 }
 
 export function renderTeamLogoHtml(teamName, size = 28, extraClass = '') {
@@ -718,13 +734,29 @@ export class UIRenderer {
 
     if (filtered.length === 0) {
       container.innerHTML = `
-        <div style="text-align: center; padding: 40px 20px; color: var(--text-muted);">
-          <div style="font-size: 2rem; margin-bottom: 8px;">📜</div>
-          <div>Прогнозов в данной категории не найдено</div>
+        <div class="coupons-empty-state">
+          <div class="empty-icon">📜</div>
+          <div class="empty-title">Прогнозов в данной категории не найдено</div>
+          <div class="empty-subtitle">Делайте прогнозы на матчи лиги и отслеживайте их статус здесь</div>
         </div>
       `;
       return;
     }
+
+    const formatAmount = (amt) => {
+      if (amt === undefined || amt === null) return '0';
+      return Number(amt).toLocaleString('ru-RU');
+    };
+
+    const formatDate = (dateStr) => {
+      if (!dateStr) return '';
+      const m = String(dateStr).match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/);
+      if (m) {
+        const [, y, mo, d, hh, mm] = m;
+        return `${d}.${mo}.${y} • ${hh}:${mm}`;
+      }
+      return String(dateStr).substring(0, 16);
+    };
 
     container.innerHTML = filtered.map(b => {
       const isWon = b.status === 'won';
@@ -732,87 +764,178 @@ export class UIRenderer {
       const isPending = b.status === 'pending';
       const isRefunded = b.status === 'refunded';
       const isCancelled = ['cancelled', 'voided', 'void'].includes(b.status);
-
       const isCashedOut = !!b.cashout_at;
-      const statusBadge = isCashedOut
-        ? '<span style="color: #60a5fa; font-weight: 800;">💰 CASHOUT</span>'
-        : isWon
-        ? '<span style="color: var(--color-success); font-weight: 800;">🎉 ВЫИГРЫШ</span>'
-        : isLost
-        ? '<span style="color: var(--color-danger); font-weight: 800;">❌ ПРОИГРЫШ</span>'
-        : isRefunded
-        ? '<span style="color: var(--color-warning); font-weight: 800;">↩️ ВОЗВРАТ</span>'
-        : isCancelled
-        ? '<span style="color: var(--text-muted); font-weight: 800;">🚫 ОТМЕНА</span>'
-        : '<span style="color: var(--accent-gold); font-weight: 800;">⏳ В ИГРЕ</span>';
+
+      let statusKey = 'pending';
+      let statusText = 'В ИГРЕ';
+      let statusDotColor = 'var(--accent-cyan)';
+
+      if (isCashedOut) {
+        statusKey = 'cashout';
+        statusText = 'CASHOUT';
+        statusDotColor = '#38bdf8';
+      } else if (isWon) {
+        statusKey = 'won';
+        statusText = 'ВЫИГРЫШ';
+        statusDotColor = 'var(--color-success)';
+      } else if (isLost) {
+        statusKey = 'lost';
+        statusText = 'ПРОИГРЫШ';
+        statusDotColor = 'var(--color-danger)';
+      } else if (isRefunded) {
+        statusKey = 'refunded';
+        statusText = 'ВОЗВРАТ';
+        statusDotColor = 'var(--color-warning)';
+      } else if (isCancelled) {
+        statusKey = 'cancelled';
+        statusText = 'ОТМЕНА';
+        statusDotColor = 'var(--text-muted)';
+      }
+
+      // Summary calculation
+      let payoutLabel = 'Выплата';
+      let payoutVal = '0';
+      let payoutClass = 'val-muted';
+
+      if (isCashedOut) {
+        payoutLabel = 'Выплата';
+        payoutVal = formatAmount(b.actual_payout);
+        payoutClass = 'val-cashout';
+      } else if (isWon) {
+        payoutLabel = 'Выплата';
+        payoutVal = formatAmount(b.actual_payout || b.potential_win);
+        payoutClass = 'val-won';
+      } else if (isLost) {
+        payoutLabel = 'Выплата';
+        payoutVal = '0';
+        payoutClass = 'val-lost';
+      } else if (isRefunded) {
+        payoutLabel = 'Выплата';
+        payoutVal = formatAmount(b.actual_payout || b.amount);
+        payoutClass = 'val-refund';
+      } else if (isPending) {
+        payoutLabel = b.bet_type === 'express' ? 'Возможный выигрыш' : 'Возможная выплата';
+        payoutVal = formatAmount(b.potential_win);
+        payoutClass = 'val-pending';
+      }
+
+      const isExpress = b.bet_type === 'express';
+      const items = b.items || [];
+      const showCashout = isPending && !isCashedOut;
+      const showRepeat = true;
 
       return `
-        <div class="bet-history-card" data-bet-id="${b.id}" style="background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 14px; margin-bottom: 12px; box-shadow: var(--shadow-card);">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 8px;">
-            <div style="display: flex; align-items: center; gap: 6px;">
-              <span style="font-size: 0.75rem; font-weight: 800; background: var(--bg-tertiary); padding: 3px 8px; border-radius: var(--radius-xs); color: #fff;">
-                ${b.bet_type === 'express' ? '⚡ ЭКСПРЕСС' : 'ОДИНАР'}
-              </span>
-              <span style="font-size: 0.75rem; font-weight: 700; color: var(--accent-gold);">#${b.id}</span>
-              <span style="font-size: 0.78rem; color: var(--text-muted);">${b.created_at ? b.created_at.substring(0, 16) : ''}</span>
+        <div class="coupon-card bet-history-card status-${statusKey}" data-bet-id="${b.id}">
+          <!-- LEVEL 1: HEADER -->
+          <div class="coupon-header">
+            <div class="coupon-header-left">
+              ${isExpress ? '<span class="coupon-badge-express">⚡ ЭКСПРЕСС</span>' : ''}
+              <span class="coupon-id">#${b.id}</span>
+              <span class="coupon-meta-dot">•</span>
+              <span class="coupon-date">${formatDate(b.created_at)}</span>
             </div>
-            <div>${statusBadge}</div>
+            <div class="coupon-header-right">
+              <span class="coupon-status-badge badge-${statusKey}">
+                <span class="status-indicator-dot" style="background-color: ${statusDotColor};"></span>
+                ${statusText}
+              </span>
+            </div>
           </div>
 
-          <!-- Items in Slip -->
-          <div style="margin-bottom: 10px;">
-            ${(b.items || []).map(it => {
+          <!-- LEVEL 2: MATCHES -->
+          <div class="coupon-matches-list">
+            ${items.map(it => {
               const acceptedOdd = Number(it.odds_at_placement || it.odd || 1.0).toFixed(2);
-              const divTag = it.division_id ? `<span style="font-size: 0.7rem; color: var(--text-muted); margin-right: 4px;">[Д${it.division_id}]</span>` : '';
+              const legWon = it.status === 'won';
+              const legLost = it.status === 'lost';
+              const legRefund = it.status === 'refunded';
+              const legPending = !legWon && !legLost && !legRefund;
+
+              const legClass = legWon ? 'won' : legLost ? 'lost' : legRefund ? 'refunded' : 'pending';
+              const legIcon = legWon ? '✓' : legLost ? '✕' : legRefund ? '↩' : '◷';
+
+              const outcomeRaw = it.outcome_type || '';
+              const outcomeName = OUTCOME_NAMES[outcomeRaw] || it.selection_name || outcomeRaw.toUpperCase();
+
+              const hasFinishedScore = it.match_status === 'finished' || (it.player1_score !== null && it.player1_score !== undefined && !isPending);
+              const isMatchLive = it.match_status === 'live';
+
               return `
-              <div style="display: flex; justify-content: space-between; align-items: center; padding: 6px 0; font-size: 0.82rem; border-bottom: 1px dashed rgba(255,255,255,0.04);">
-                <div style="display: flex; align-items: center; gap: 6px; color: #fff; font-weight: 600;">
-                  ${divTag}
-                  ${renderTeamLogoHtml(it.team1_name, 18)}
-                  <span>${it.team1_name}</span>
-                  <span style="color: var(--text-muted); font-size: 0.75rem;">vs</span>
-                  ${renderTeamLogoHtml(it.team2_name, 18)}
-                  <span>${it.team2_name}</span>
+                <div class="coupon-match-row">
+                  <div class="coupon-teams-layout">
+                    <!-- Home Team -->
+                    <div class="coupon-team home">
+                      ${renderTeamLogoWrapperHtml(it.team1_name)}
+                      <span class="coupon-team-name" title="${it.team1_name}">${it.team1_name}</span>
+                    </div>
+
+                    <!-- Center Score / VS -->
+                    <div class="coupon-match-center">
+                      ${hasFinishedScore ? `
+                        <div class="coupon-score">${it.player1_score ?? 0} : ${it.player2_score ?? 0}</div>
+                        <div class="coupon-match-sub">Завершён</div>
+                      ` : isMatchLive ? `
+                        <div class="coupon-score live">${it.player1_score ?? 0} : ${it.player2_score ?? 0}</div>
+                        <div class="coupon-match-sub live">LIVE ${it.live_minute ? it.live_minute + "'" : ''}</div>
+                      ` : `
+                        <div class="coupon-vs">VS</div>
+                        <div class="coupon-match-sub">${it.tour ? `Тур ${it.tour}` : 'Матч'}</div>
+                      `}
+                    </div>
+
+                    <!-- Away Team -->
+                    <div class="coupon-team away">
+                      <span class="coupon-team-name" title="${it.team2_name}">${it.team2_name}</span>
+                      ${renderTeamLogoWrapperHtml(it.team2_name)}
+                    </div>
+                  </div>
+
+                  <!-- Prediction Subrow -->
+                  <div class="coupon-prediction-subrow">
+                    <span class="coupon-market-label">${it.market_name || (it.division_id ? `Д${it.division_id}` : 'Исход')}</span>
+                    <div class="coupon-prediction-pill ${legClass}">
+                      <span class="coupon-pred-outcome">${outcomeName}</span>
+                      <span class="coupon-pred-at">@</span>
+                      <span class="coupon-pred-odd">${acceptedOdd}</span>
+                      <span class="coupon-pred-icon">${legIcon}</span>
+                    </div>
+                  </div>
                 </div>
-                <div style="display: flex; align-items: center; gap: 6px;">
-                  <span style="background: rgba(245,176,39,0.15); color: var(--accent-gold); padding: 2px 6px; border-radius: 4px; font-weight: 700;">
-                    ${OUTCOME_NAMES[it.outcome_type] || it.outcome_type} @ ${acceptedOdd}
-                  </span>
-                  <span style="font-size: 0.75rem;">
-                    ${it.status === 'won' ? '✅' : it.status === 'lost' ? '❌' : it.status === 'refunded' ? '↩️' : '⏳'}
-                  </span>
-                </div>
-              </div>
-            `;}).join('')}
+              `;
+            }).join('')}
           </div>
 
-          <!-- Payout Summary -->
-          <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.85rem; border-top: 1px solid rgba(255,255,255,0.06); padding-top: 8px;">
-            <div>
-              <span style="color: var(--text-muted);">Ставка: </span>
-              <span style="font-weight: 800; color: #fff;">${b.amount} 🪙</span>
-              <span style="color: var(--text-muted); margin-left: 8px;">Кэф: </span>
-              <span style="font-weight: 800; color: var(--accent-gold);">${Number(b.total_odd || 1.0).toFixed(2)}</span>
+          <!-- LEVEL 3: SUMMARY -->
+          <div class="coupon-summary">
+            <div class="coupon-summary-col">
+              <span class="coupon-summary-label">Ставка</span>
+              <span class="coupon-summary-val">${formatAmount(b.amount)} 🪙</span>
             </div>
-            <div>
-              <span style="color: var(--text-muted);">Выплата: </span>
-              <span style="font-weight: 900; color: ${isWon || isCashedOut ? 'var(--color-success)' : '#fff'};">
-                ${isCashedOut ? b.actual_payout : isWon ? (b.actual_payout || b.potential_win) : isPending ? b.potential_win : 0} 🪙
-              </span>
+            <div class="coupon-summary-col">
+              <span class="coupon-summary-label">${isExpress ? 'Общий коэф.' : 'Коэффициент'}</span>
+              <span class="coupon-summary-val gold">${Number(b.total_odd || 1.0).toFixed(2)}</span>
+            </div>
+            <div class="coupon-summary-col">
+              <span class="coupon-summary-label">${payoutLabel}</span>
+              <span class="coupon-summary-val ${payoutClass}">${payoutVal} 🪙</span>
             </div>
           </div>
 
-          <!-- Card Actions (Cashout & Repeat) -->
-          <div style="margin-top: 10px; display: flex; justify-content: flex-end; gap: 8px;">
-            ${isPending ? `
-              <button class="btn-cashout" data-bet-id="${b.id}" style="background: rgba(59,130,246,0.15); border: 1px solid rgba(59,130,246,0.3); color: #60a5fa; font-size: 0.75rem; font-weight: 700; padding: 5px 10px; border-radius: var(--radius-sm); cursor: pointer;">
-                💰 Cashout
-              </button>
-            ` : ''}
-            <button class="btn-repeat-bet" data-bet-id="${b.id}" style="background: transparent; border: 1px solid var(--border-subtle); color: var(--text-secondary); font-size: 0.75rem; font-weight: 700; padding: 5px 10px; border-radius: var(--radius-sm); cursor: pointer;">
-              🔄 Повторить прогноз
-            </button>
-          </div>
+          <!-- LEVEL 4: ACTIONS -->
+          ${showCashout || showRepeat ? `
+            <div class="coupon-actions">
+              ${showCashout ? `
+                <button class="btn-cashout coupon-btn-cashout" data-bet-id="${b.id}">
+                  💰 Cashout
+                </button>
+              ` : ''}
+              ${showRepeat ? `
+                <button class="btn-repeat-bet coupon-btn-repeat" data-bet-id="${b.id}">
+                  ↻ Повторить прогноз
+                </button>
+              ` : ''}
+            </div>
+          ` : ''}
         </div>
       `;
     }).join('');
