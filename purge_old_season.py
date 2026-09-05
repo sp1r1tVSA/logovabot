@@ -191,6 +191,17 @@ def execute_purge(conn: sqlite3.Connection, verbose: bool = False) -> Tuple[bool
         # Включаем внешние ключи для проверки связности
         cursor.execute("PRAGMA foreign_keys = ON;")
         
+        # Кэшируем связки топиков и администраторов дивизионов в память перед очисткой
+        saved_topics = []
+        if table_exists(cursor, "division_topics"):
+            cursor.execute("SELECT * FROM division_topics")
+            saved_topics = [dict(r) for r in cursor.fetchall()]
+
+        saved_div_admins = []
+        if table_exists(cursor, "division_admins"):
+            cursor.execute("SELECT * FROM division_admins")
+            saved_div_admins = [dict(r) for r in cursor.fetchall()]
+        
         # 1. Зависимости ставок и рынков
         dep_tables_first = [
             "bet_items",
@@ -266,34 +277,51 @@ def execute_purge(conn: sqlite3.Connection, verbose: bool = False) -> Tuple[bool
         if table_exists(cursor, "divisions"):
             try:
                 cursor.execute("UPDATE divisions SET season_id = NULL WHERE season_id IS NOT NULL")
+                if verbose:
+                    logger.info("Unlinked divisions from old season (season_id set to NULL)")
             except sqlite3.IntegrityError:
-                # Если в схеме был NOT NULL, выполняем безопасную миграцию таблицы
-                cursor.execute("""
-                    CREATE TABLE divisions_clean (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        tournament_id INTEGER NOT NULL DEFAULT 1,
-                        name TEXT NOT NULL,
-                        code TEXT NOT NULL UNIQUE,
-                        season_id INTEGER DEFAULT NULL,
-                        topic_id INTEGER DEFAULT NULL,
-                        is_active BOOLEAN DEFAULT 1,
-                        sort_order INTEGER DEFAULT 0,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        FOREIGN KEY(tournament_id) REFERENCES tournaments(id),
-                        FOREIGN KEY(season_id) REFERENCES seasons(id) ON DELETE SET NULL
+                # В схеме есть NOT NULL constraint на season_id (старая миграция без FK).
+                # Оставляем существующие значения season_id без изменений!
+                # Ни в коем случае НЕ делаем DROP TABLE divisions — это вызывает каскадное удаление division_topics!
+                if verbose:
+                    logger.info("divisions.season_id has NOT NULL constraint; preserved without dropping table")
+
+        # 5.1 Защита от каскадного удаления: проверка и восстановление топиков и админов дивизионов
+        if saved_topics and table_exists(cursor, "division_topics"):
+            curr_topics = cursor.execute("SELECT COUNT(*) FROM division_topics").fetchone()[0]
+            if curr_topics < len(saved_topics):
+                logger.warning(
+                    f"Обнаружена потеря записей division_topics ({curr_topics} вместо {len(saved_topics)})! "
+                    "Выполняется автоматическое восстановление..."
+                )
+                for t in saved_topics:
+                    cols = list(t.keys())
+                    placeholders = ", ".join("?" for _ in cols)
+                    col_names = ", ".join(f'"{c}"' for c in cols)
+                    cursor.execute(
+                        f'INSERT OR REPLACE INTO division_topics ({col_names}) VALUES ({placeholders})',
+                        [t[c] for c in cols]
                     )
-                """)
-                cursor.execute("""
-                    INSERT INTO divisions_clean (id, tournament_id, name, code, season_id, topic_id, is_active, sort_order, created_at)
-                    SELECT id, tournament_id, name, code, NULL, topic_id, is_active, sort_order, created_at FROM divisions
-                """)
-                cursor.execute("DROP TABLE divisions")
-                cursor.execute("ALTER TABLE divisions_clean RENAME TO divisions")
-                cursor.execute("CREATE INDEX IF NOT EXISTS idx_divisions_active ON divisions(is_active, sort_order)")
-                cursor.execute("CREATE INDEX IF NOT EXISTS idx_divisions_topic ON divisions(topic_id)")
-                cursor.execute("CREATE INDEX IF NOT EXISTS idx_divisions_season ON divisions(season_id)")
-            if verbose:
-                logger.info("Unlinked divisions from old season (DIV_1..DIV_5 preserved)")
+                if verbose:
+                    logger.info(f"Restored {len(saved_topics)} division_topics")
+
+        if saved_div_admins and table_exists(cursor, "division_admins"):
+            curr_admins = cursor.execute("SELECT COUNT(*) FROM division_admins").fetchone()[0]
+            if curr_admins < len(saved_div_admins):
+                logger.warning(
+                    f"Обнаружена потеря записей division_admins ({curr_admins} вместо {len(saved_div_admins)})! "
+                    "Выполняется автоматическое восстановление..."
+                )
+                for a in saved_div_admins:
+                    cols = list(a.keys())
+                    placeholders = ", ".join("?" for _ in cols)
+                    col_names = ", ".join(f'"{c}"' for c in cols)
+                    cursor.execute(
+                        f'INSERT OR REPLACE INTO division_admins ({col_names}) VALUES ({placeholders})',
+                        [a[c] for c in cols]
+                    )
+                if verbose:
+                    logger.info(f"Restored {len(saved_div_admins)} division_admins")
 
         # 6. Сезоны (удаляем все старые сезоны)
         if table_exists(cursor, "seasons"):
@@ -418,10 +446,34 @@ def verify_integrity(conn: sqlite3.Connection, summary_before: Dict[str, Any]) -
     # 7. Проверка дивизионов
     if table_exists(cursor, "divisions"):
         divs_count = get_table_count(cursor, "divisions")
-        if divs_count == 0:
-            errors.append("❌ Архитектура дивизионов была повреждена (таблица divisions пуста)")
+        divs_before = summary_before["preserved"].get("divisions", 0)
+        if divs_count == 0 or (divs_before > 0 and divs_count != divs_before):
+            errors.append(f"❌ Архитектура дивизионов была повреждена: было {divs_before}, стало {divs_count}")
         else:
             logger.info(f"✅ Архитектура дивизионов сохранена ({divs_count} дивизионов готовы к новому сезону)")
+
+    # 8. Проверка топиков дивизионов (строгое сохранение привязок к форуму Telegram)
+    if table_exists(cursor, "division_topics"):
+        topics_after = get_table_count(cursor, "division_topics")
+        topics_before = summary_before["preserved"].get("division_topics", 0)
+        if topics_after != topics_before:
+            errors.append(
+                f"❌ Таблица 'division_topics' изменилась: было {topics_before}, стало {topics_after}! "
+                "Топики дивизионов должны быть строго сохранены."
+            )
+        else:
+            logger.info(f"✅ Топики дивизионов полностью сохранены ({topics_after} топиков)")
+
+    # 9. Проверка администраторов дивизионов
+    if table_exists(cursor, "division_admins"):
+        admins_after = get_table_count(cursor, "division_admins")
+        admins_before = summary_before["preserved"].get("division_admins", 0)
+        if admins_after != admins_before:
+            errors.append(
+                f"❌ Таблица 'division_admins' изменилась: было {admins_before}, стало {admins_after}!"
+            )
+        else:
+            logger.info(f"✅ Администраторы дивизионов сохранены ({admins_after} записей)")
 
     return errors
 

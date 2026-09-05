@@ -98,6 +98,21 @@ class TestPurgeOldSeason(unittest.TestCase):
                     (1002, 20000, 'bet_won', 'bet', 120000)
             """)
             
+            # Seed 25 division topics (5 divisions x 5 topic types)
+            topic_types = ["chat", "table", "matches", "draft", "bets"]
+            for div_id in range(1, 6):
+                for tt in topic_types:
+                    cursor.execute("""
+                        INSERT OR REPLACE INTO division_topics (division_id, topic_type, message_thread_id, group_chat_id)
+                        VALUES (?, ?, ?, -100123456789)
+                    """, (div_id, tt, div_id * 1000 + (hash(tt) % 900)))
+                    
+            # Seed division admins
+            cursor.execute("""
+                INSERT OR REPLACE INTO division_admins (division_id, user_id)
+                VALUES (1, 9999), (2, 9999)
+            """)
+
             # Matches and rounds
             cursor.execute("""
                 INSERT INTO rounds (season_id, division_id, round_number, is_open, deadline)
@@ -268,7 +283,7 @@ class TestPurgeOldSeason(unittest.TestCase):
         conn.close()
 
     def test_04_execute_preserves_divisions_architecture(self):
-        """Verify divisions (DIV_1..DIV_5) and related multi-topic structures remain intact."""
+        """Verify divisions (DIV_1..DIV_5), all 25 division_topics, and division_admins remain intact."""
         ret = purge_old_season.run(self.db_path, execute=True, verbose=False)
         self.assertEqual(ret, 0)
         
@@ -283,6 +298,16 @@ class TestPurgeOldSeason(unittest.TestCase):
         self.assertIn("DIV_3", codes)
         self.assertIn("DIV_4", codes)
         self.assertIn("DIV_5", codes)
+        
+        # Verify EXACTLY 25 division_topics are preserved (5 divisions x 5 topics)
+        cursor.execute("SELECT COUNT(*) FROM division_topics")
+        topics_count = cursor.fetchone()[0]
+        self.assertEqual(topics_count, 25, f"Expected 25 division_topics, got {topics_count}")
+        
+        # Verify division_admins are preserved
+        cursor.execute("SELECT COUNT(*) FROM division_admins")
+        admins_count = cursor.fetchone()[0]
+        self.assertEqual(admins_count, 2, f"Expected 2 division_admins, got {admins_count}")
         
         conn.close()
 
@@ -302,6 +327,82 @@ class TestPurgeOldSeason(unittest.TestCase):
         res = cursor.fetchone()[0]
         self.assertEqual(res, "ok")
         
+        conn.close()
+
+    def test_06_execute_preserves_division_topics_when_season_id_is_not_null(self):
+        """
+        Simulate the exact production server scenario:
+        divisions.season_id has a NOT NULL constraint (from earlier migration).
+        Verify that execute mode does NOT drop divisions and keeps all 25 division_topics.
+        """
+        not_null_db = os.path.join(self.temp_dir, "test_not_null.db")
+        conn = sqlite3.connect(not_null_db)
+        conn.row_factory = sqlite3.Row
+        c = conn.cursor()
+        c.execute("PRAGMA foreign_keys = ON;")
+        c.execute("CREATE TABLE tournaments (id INTEGER PRIMARY KEY, name TEXT)")
+        c.execute("CREATE TABLE seasons (id INTEGER PRIMARY KEY, name TEXT)")
+        # divisions with NOT NULL on season_id (exactly as on server before fix)
+        c.execute("""
+            CREATE TABLE divisions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tournament_id INTEGER NOT NULL DEFAULT 1,
+                name TEXT NOT NULL,
+                code TEXT NOT NULL UNIQUE,
+                season_id INTEGER NOT NULL DEFAULT 1,
+                topic_id INTEGER DEFAULT NULL,
+                is_active BOOLEAN DEFAULT 1,
+                sort_order INTEGER DEFAULT 0,
+                FOREIGN KEY(tournament_id) REFERENCES tournaments(id)
+            )
+        """)
+        c.execute("""
+            CREATE TABLE division_topics (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                division_id INTEGER NOT NULL,
+                topic_type TEXT NOT NULL,
+                message_thread_id INTEGER NOT NULL,
+                group_chat_id INTEGER DEFAULT NULL,
+                UNIQUE(division_id, topic_type),
+                FOREIGN KEY(division_id) REFERENCES divisions(id) ON DELETE CASCADE
+            )
+        """)
+        c.execute("CREATE TABLE users (telegram_id INTEGER PRIMARY KEY, username TEXT, team_name TEXT, league_name TEXT, role TEXT DEFAULT 'user', division_id INTEGER DEFAULT 1)")
+        c.execute("CREATE TABLE user_wallets (user_id INTEGER PRIMARY KEY, balance INTEGER DEFAULT 1000, bets_count INTEGER DEFAULT 0, bets_won INTEGER DEFAULT 0, total_wagered INTEGER DEFAULT 0, total_won INTEGER DEFAULT 0)")
+        c.execute("CREATE TABLE matches (id INTEGER PRIMARY KEY, player1_team TEXT, player2_team TEXT, status TEXT)")
+        
+        c.execute("INSERT INTO tournaments (id, name) VALUES (1, 'Main League')")
+        c.execute("INSERT INTO seasons (id, name) VALUES (1, 'Season 2026')")
+        c.execute("INSERT INTO users (telegram_id, username, team_name) VALUES (101, 'player1', 'Team A')")
+        c.execute("INSERT INTO user_wallets (user_id, balance, bets_count) VALUES (101, 5000, 10)")
+        c.execute("INSERT INTO matches (id, player1_team, player2_team, status) VALUES (1, 'Team A', 'Team B', 'confirmed')")
+        
+        # Insert 5 divisions and 25 division_topics
+        for i in range(1, 6):
+            c.execute("INSERT INTO divisions (id, tournament_id, name, code, season_id, sort_order) VALUES (?, 1, ?, ?, 1, ?)", (i, f"Div {i}", f"DIV_{i}", i))
+            for tt in ["chat", "table", "matches", "draft", "bets"]:
+                c.execute("INSERT INTO division_topics (division_id, topic_type, message_thread_id, group_chat_id) VALUES (?, ?, ?, -100123)", (i, tt, i * 100 + hash(tt) % 50))
+                
+        conn.commit()
+        conn.close()
+        
+        # Run execute purge
+        ret = purge_old_season.run(not_null_db, execute=True, verbose=False)
+        self.assertEqual(ret, 0)
+        
+        # Check that all 25 topics remain intact
+        conn = sqlite3.connect(not_null_db)
+        c = conn.cursor()
+        c.execute("SELECT COUNT(*) FROM division_topics")
+        topics_count = c.fetchone()[0]
+        self.assertEqual(topics_count, 25, "division_topics must remain exactly 25 after purge with NOT NULL season_id")
+        
+        c.execute("SELECT COUNT(*) FROM divisions")
+        divs_count = c.fetchone()[0]
+        self.assertEqual(divs_count, 5, "divisions must remain exactly 5")
+        
+        c.execute("PRAGMA foreign_key_check;")
+        self.assertEqual(len(c.fetchall()), 0)
         conn.close()
 
 
