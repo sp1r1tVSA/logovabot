@@ -250,6 +250,7 @@ from handlers.topic_management import (
     cmd_bind_group,
     cb_bind_group,
 )
+from services.topic_cache import topic_cache
 
 
 logger = logging.getLogger(__name__)
