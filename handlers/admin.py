@@ -242,13 +242,14 @@ async def admin_test_ai(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 # --- Broadcast Handlers (Debt Notifications) ---
 
-async def _build_debts_summary() -> tuple[str | None, int]:
+async def _build_debts_summary(division_id: int | None = None, season_id: int | None = None, division_name: str | None = None) -> tuple[str | None, int]:
     """
     Build a full HTML summary of outstanding debts grouped by participant (club).
+    Optionally scoped to a specific division and season.
     Returns (text, total_debts_count). text is None when there are no debts.
     """
     league_unplayed, users = await asyncio.gather(
-        asyncio.to_thread(database.get_all_unplayed_league_matches),
+        asyncio.to_thread(database.get_all_unplayed_league_matches, division_id=division_id, season_id=season_id),
         asyncio.to_thread(database.list_users),
     )
 
@@ -292,10 +293,10 @@ async def _build_debts_summary() -> tuple[str | None, int]:
     for m in league_unplayed:
         p1 = ensure_participant(m.get("player1_team") or m.get("p1_team"))
         p2 = ensure_participant(m.get("player2_team") or m.get("p2_team"))
-        t1 = html.escape(m['player1_team'] or m['p1_team'] or 'неизвестно')
-        t2 = html.escape(m['player2_team'] or m['p2_team'] or 'неизвестно')
-        u1 = f" (@{html.escape(m['p1_username'])})" if m['p1_username'] else ""
-        u2 = f" (@{html.escape(m['p2_username'])})" if m['p2_username'] else ""
+        t1 = html.escape(m.get('player1_team') or m.get('p1_team') or 'неизвестно')
+        t2 = html.escape(m.get('player2_team') or m.get('p2_team') or 'неизвестно')
+        u1 = f" (@{html.escape(m['p1_username'])})" if m.get('p1_username') else ""
+        u2 = f" (@{html.escape(m['p2_username'])})" if m.get('p2_username') else ""
         line = f"Тур {m['round_number']}: 🏠 <b>{t1}</b>{u1} -:- <b>{t2}</b>{u2} ✈️"
         if p1:
             p1["league"].append(line)
@@ -305,8 +306,9 @@ async def _build_debts_summary() -> tuple[str | None, int]:
     total_debts = len(league_unplayed)
 
     now_str = datetime.datetime.now().strftime("%d.%m.%Y %H:%M")
+    header_title = f"🗂 <b>ДОЛГИ УЧАСТНИКОВ — {html.escape(division_name.upper())}</b>\n" if division_name else "🗂 <b>ДОЛГИ УЧАСТНИКОВ</b>\n"
     lines = [
-        "🗂 <b>ДОЛГИ УЧАСТНИКОВ</b>\n",
+        header_title,
         f"<i>Обновлено: {now_str}</i>\n",
     ]
 
@@ -342,13 +344,13 @@ async def admin_broadcast_menu(update: Update, context: ContextTypes.DEFAULT_TYP
         "📢 <b>Управление Рассылкой Задолженностей</b>\n\n"
         "Данный инструмент формирует и рассылает <b>список долгов участников</b>:\n\n"
         "1. 📩 <b>Персональные ЛС всем должникам:</b> Список несыгранных матчей каждого участника с кнопками прямого перехода к вводу результата.\n"
-        "2. 💬 <b>Сводка долгов в Тему ПРЕДЫ</b> (кнопкой ниже).\n\n"
+        "2. 💬 <b>Сводка долгов по топикам дивизионов</b> (кнопкой ниже).\n\n"
         "Нажмите кнопку ниже для старта рассылки:"
     )
 
     keyboard = [
         [InlineKeyboardButton("🚀 Запустить рассылку всех долгов", callback_data="admin_broadcast_all_debts_execute")],
-        [InlineKeyboardButton("📋 Отправить сводку долгов в тему «ПРЕДЫ»", callback_data="admin_send_debts_to_warns")],
+        [InlineKeyboardButton("📋 Отправить сводку по топикам дивизионов", callback_data="admin_send_debts_to_warns")],
         [InlineKeyboardButton("« Назад в админку", callback_data="admin_main_menu")]
     ]
     markup = InlineKeyboardMarkup(keyboard)
@@ -412,13 +414,43 @@ async def admin_broadcast_all_debts_execute(update: Update, context: ContextType
 
 @admin_only
 async def admin_send_debts_to_warns(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Send/update the debts summary in the ПРЕДЫ thread."""
+    """Send/update the debts summary across all active division topics."""
     query = update.callback_query
     if not query or not is_admin(query.from_user.id):
         return
     await query.answer()
 
-    await _post_or_update_debts_in_warns(context)
+    divisions = await asyncio.to_thread(database.get_active_divisions)
+    if not divisions:
+        res = await _post_or_update_debts_in_warns(context)
+        if res:
+            await query.answer("📋 Сводка долгов отправлена в общий топик!", show_alert=True)
+        else:
+            await query.answer("⚠️ Не удалось отправить сводку (проверьте настройки топика)", show_alert=True)
+        await admin_broadcast_menu(update, context)
+        return
+
+    updated_count = 0
+    total_found_debts = 0
+    results_detail = []
+
+    for d in divisions:
+        div_id = d["id"]
+        div_name = d.get("name") or f"Дивизион {div_id}"
+        success, debts_cnt = await _post_or_update_debts_for_division(context, div_id, div_name)
+        total_found_debts += debts_cnt
+        if success:
+            updated_count += 1
+            results_detail.append(f"• {div_name}: долгов — {debts_cnt} ✅")
+        else:
+            results_detail.append(f"• {div_name}: топик не настроен ⚠️")
+
+    detail_str = "\n".join(results_detail)
+    alert_msg = f"📢 Сводка по топикам дивизионов ({updated_count}/{len(divisions)}):\n{detail_str}"
+    if len(alert_msg) <= 200:
+        await query.answer(alert_msg, show_alert=True)
+    else:
+        await query.answer(f"📢 Сводка отправлена: обновлено {updated_count}/{len(divisions)} дивизионов (долгов: {total_found_debts})", show_alert=True)
 
     await admin_broadcast_menu(update, context)
 
@@ -474,15 +506,89 @@ async def _delete_any_message(context, group_id: int, ids: list[int]) -> None:
             pass
 
 
+async def _post_or_update_debts_for_division(context: ContextTypes.DEFAULT_TYPE, division_id: int, division_name: str) -> tuple[bool, int]:
+    """
+    Send or update debts summary for a specific division in its bound forum topic (previews or warns).
+    Returns (success, debts_count).
+    """
+    text, total_debts = await _build_debts_summary(division_id=division_id, division_name=division_name)
+    group_id = GROUP_ID or await asyncio.to_thread(database.get_group_id)
+    if not group_id:
+        return False, 0
+
+    topic_id = (
+        await asyncio.to_thread(database.get_division_topic, division_id, "previews", group_id)
+        or await asyncio.to_thread(database.get_division_topic, division_id, "warns", group_id)
+        or await asyncio.to_thread(database.get_config, "warns_topic_id")
+    )
+    if not topic_id:
+        return False, total_debts
+
+    config_key = f"div_debts_msg_{division_id}"
+    existing_raw = await asyncio.to_thread(database.get_config, config_key)
+    existing_ids = [int(x) for x in str(existing_raw or "").split(",") if str(x).strip().isdigit()]
+
+    if text is None:
+        await _delete_any_message(context, group_id, existing_ids)
+        if existing_ids:
+            await asyncio.to_thread(database.set_config, config_key, "")
+        return True, 0
+
+    chunks = _chunk_debts_text(text)
+
+    # Fast path: in-place edit
+    if len(chunks) == len(existing_ids):
+        try:
+            new_ids: list[int] = []
+            for i, chunk in enumerate(chunks):
+                try:
+                    await context.bot.edit_message_text(
+                        chat_id=group_id, message_id=existing_ids[i], text=chunk, parse_mode="HTML"
+                    )
+                    new_ids.append(existing_ids[i])
+                    continue
+                except BadRequest as e:
+                    if "message is not modified" in str(e).lower():
+                        new_ids.append(existing_ids[i])
+                        continue
+                raise TelegramError("debts message cannot be edited in place")
+            await asyncio.to_thread(database.set_config, config_key, ",".join(map(str, new_ids)))
+            return True, total_debts
+        except (BadRequest, TelegramError) as e:
+            logger.warning(f"Division {division_id} debts summary needs rebuild ({e}); will re-post all messages")
+
+    # Rebuild path
+    await _delete_any_message(context, group_id, existing_ids)
+    new_ids: list[int] = []
+    try:
+        for chunk in chunks:
+            msg = await context.bot.send_message(
+                chat_id=group_id, text=chunk, parse_mode="HTML", message_thread_id=int(topic_id)
+            )
+            new_ids.append(msg.message_id)
+    except (BadRequest, TelegramError) as e:
+        if new_ids:
+            await asyncio.to_thread(database.set_config, config_key, ",".join(map(str, new_ids)))
+        logger.warning(f"Failed to post debts to division {division_id} topic: {e}")
+        return False, total_debts
+
+    await asyncio.to_thread(database.set_config, config_key, ",".join(map(str, new_ids)))
+    return True, total_debts
+
+
 async def _post_or_update_debts_in_warns(context: ContextTypes.DEFAULT_TYPE) -> bool:
     """
-    Send debts summary to ПРЕДЫ thread, or edit the previously sent messages if they exist.
-    Splits the summary into multiple messages (<= MAX_DEBTS_MSG_LEN chars each) when needed.
-    Keeps the stored message ids always in sync with what is actually posted: whenever an
-    in-place update fails (deleted / too old message), all old messages are deleted and a
-    fresh batch is re-posted so no message is ever left un-updated or forgotten.
-    Returns True if posted/updated, False if no debts or thread not configured.
+    Send debts summary to division topics or global warns thread, or edit the previously sent messages.
     """
+    divisions = await asyncio.to_thread(database.get_active_divisions)
+    if divisions:
+        success_any = False
+        for d in divisions:
+            s, _ = await _post_or_update_debts_for_division(context, d["id"], d.get("name") or f"Дивизион {d['id']}")
+            if s:
+                success_any = True
+        return success_any
+
     text, total_debts = await _build_debts_summary()
     group_id = GROUP_ID or await asyncio.to_thread(database.get_group_id)
     warns_topic_id = await asyncio.to_thread(database.get_config, "warns_topic_id")
@@ -492,7 +598,6 @@ async def _post_or_update_debts_in_warns(context: ContextTypes.DEFAULT_TYPE) -> 
     existing_raw = await asyncio.to_thread(database.get_config, "warns_debts_msg_id")
     existing_ids = [int(x) for x in str(existing_raw or "").split(",") if str(x).strip().isdigit()]
 
-    # No outstanding debts — delete the old summary messages so the thread stays clean
     if text is None:
         await _delete_any_message(context, group_id, existing_ids)
         if existing_ids:
@@ -501,7 +606,6 @@ async def _post_or_update_debts_in_warns(context: ContextTypes.DEFAULT_TYPE) -> 
 
     chunks = _chunk_debts_text(text)
 
-    # Fast path: number of messages matches stored ids and every edit succeeds.
     if len(chunks) == len(existing_ids):
         try:
             new_ids: list[int] = []
@@ -522,7 +626,6 @@ async def _post_or_update_debts_in_warns(context: ContextTypes.DEFAULT_TYPE) -> 
         except (BadRequest, TelegramError) as e:
             logger.warning(f"Debts summary needs rebuild ({e}); will re-post all messages")
 
-    # Rebuild path: delete every previously stored message and post a fresh batch.
     await _delete_any_message(context, group_id, existing_ids)
     new_ids: list[int] = []
     try:
@@ -532,7 +635,6 @@ async def _post_or_update_debts_in_warns(context: ContextTypes.DEFAULT_TYPE) -> 
             )
             new_ids.append(msg.message_id)
     except (BadRequest, TelegramError) as e:
-        # Save whatever was posted to avoid leaking orphan messages.
         if new_ids:
             await asyncio.to_thread(database.set_config, "warns_debts_msg_id", ",".join(map(str, new_ids)))
         logger.warning(f"Failed to post debts to ПРЕДЫ thread: {e}")
@@ -3191,7 +3293,7 @@ async def admin_delete_player_execute(update: Update, context: ContextTypes.DEFA
 
 @admin_only
 async def admin_manage_squads(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Show list of 16 clubs for squad management."""
+    """Show list of active divisions for squad management."""
     query = update.callback_query
     if not query:
         return
@@ -3200,21 +3302,80 @@ async def admin_manage_squads(update: Update, context: ContextTypes.DEFAULT_TYPE
         await query.answer("⛔ Доступ запрещён", show_alert=True)
         return
 
+    divisions = await asyncio.to_thread(database.get_active_divisions)
+    if not divisions:
+        divisions = await asyncio.to_thread(database.get_all_divisions)
+
     keyboard = []
-    row = []
-    for club in CLUBS:
-        row.append(InlineKeyboardButton(club, callback_data=f"admin_squad_view_{club}"))
-        if len(row) == 2:
-            keyboard.append(row)
-            row = []
-    if row:
-        keyboard.append(row)
+    if divisions:
+        for div in divisions:
+            d_id = div.get("id")
+            d_name = div.get("name") or f"Дивизион #{d_id}"
+            keyboard.append([
+                InlineKeyboardButton(f"🏆 {d_name}", callback_data=f"admin_roster_div:{d_id}")
+            ])
+    else:
+        keyboard.append([InlineKeyboardButton("⚠️ Дивизионы не найдены", callback_data="admin_stub")])
+
     keyboard.append([InlineKeyboardButton("🖼 Загрузить фото игроков", callback_data="admin_fetch_photos_cb")])
     keyboard.append([InlineKeyboardButton("➕ Добавить во все клубы игроков из матчей", callback_data="admin_squad_add_missing_all")])
     keyboard.append([InlineKeyboardButton("« Назад в админку", callback_data="admin_main_menu")])
 
-    text = "📋 <b>Составы команд</b>\n\nВыберите клуб для просмотра и управления составом:"
+    text = "📋 <b>Управление составами</b>\n\nВыберите дивизион для просмотра и управления составами команд:"
     await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+@admin_only
+async def admin_rosters_for_division(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show list of clubs in the selected division for squad management."""
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+    if not is_admin(query.from_user.id):
+        await query.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    div_id_str = query.data.split(":", 1)[1] if ":" in query.data else ""
+    try:
+        div_id = int(div_id_str)
+    except (ValueError, TypeError):
+        div_id = 1
+
+    context.user_data["admin_roster_div_id"] = div_id
+
+    division = await asyncio.to_thread(database.get_division, div_id)
+    div_name = division.get("name") if division else f"Дивизион #{div_id}"
+
+    teams = await asyncio.to_thread(database.get_division_teams, div_id)
+
+    keyboard = []
+    if teams:
+        row = []
+        for club in teams:
+            row.append(InlineKeyboardButton(club, callback_data=f"admin_squad_view_{club}"))
+            if len(row) == 2:
+                keyboard.append(row)
+                row = []
+        if row:
+            keyboard.append(row)
+    else:
+        text_empty = f"⚠️ В дивизионе <b>{html.escape(div_name)}</b> пока нет зарегистрированных команд."
+        keyboard.append([InlineKeyboardButton("« Назад к дивизионам", callback_data="admin_manage_squads")])
+        await query.edit_message_text(text_empty, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+
+    keyboard.append([InlineKeyboardButton("« Назад к дивизионам", callback_data="admin_manage_squads")])
+
+    text = (
+        f"📋 <b>Составы — {html.escape(div_name)}</b>\n\n"
+        f"Всего клубов: <b>{len(teams)}</b>\n"
+        f"Выберите клуб для просмотра и управления составом:"
+    )
+    await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+admin_manage_rosters = admin_manage_squads
 
 
 @admin_only
@@ -3230,6 +3391,14 @@ async def admin_view_squad(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     club = query.data.replace("admin_squad_view_", "")
     squad_items = await asyncio.to_thread(database.get_squad_with_positions, club)
+
+    div_id = context.user_data.get("admin_roster_div_id")
+    if not div_id:
+        user = await asyncio.to_thread(database.get_user_by_team, club)
+        if user and user.get("division_id"):
+            div_id = user["division_id"]
+
+    back_cb = f"admin_roster_div:{div_id}" if div_id else "admin_manage_squads"
 
     if squad_items:
         lines = [f"👥 <b>Состав команды {html.escape(club)}:</b>\n"]
@@ -3248,7 +3417,7 @@ async def admin_view_squad(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         [InlineKeyboardButton("➖ Удалить игрока", callback_data=f"admin_squad_rm_menu_{club}")],
         [InlineKeyboardButton("➕ Добавить игроков из матчей", callback_data=f"admin_squad_add_missing_{club}")],
         [InlineKeyboardButton("🗑️ Очистить состав", callback_data=f"admin_squad_clear_{club}")],
-        [InlineKeyboardButton("« Назад к клубам", callback_data="admin_manage_squads")]
+        [InlineKeyboardButton("« Назад к клубам", callback_data=back_cb)]
     ]
     await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
 

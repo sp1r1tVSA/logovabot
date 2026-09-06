@@ -109,6 +109,8 @@ from handlers.cabinet import (
     show_club_squad,
     show_club_history,
     show_clubs_catalog,
+    show_clubs_catalog_divisions,
+    show_clubs_catalog_for_division,
     club_command,
 )
 
@@ -212,6 +214,8 @@ from handlers.admin import (
     admin_set_results_topic,
     admin_set_warns_topic,
     admin_manage_squads,
+    admin_manage_rosters,
+    admin_rosters_for_division,
     admin_view_squad,
     admin_squad_rm_menu,
     admin_squad_del_player,
@@ -375,6 +379,7 @@ def _register_user_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("club", club_command))
     app.add_handler(CallbackQueryHandler(show_my_club_card, pattern="^cb_my_club_card$"))
     app.add_handler(CallbackQueryHandler(show_clubs_catalog, pattern="^cb_clubs_catalog$"))
+    app.add_handler(CallbackQueryHandler(show_clubs_catalog_for_division, pattern=r"^clubs_catalog_div:(\d+)$"))
     app.add_handler(CallbackQueryHandler(show_specific_club_card, pattern="^view_club_.+$"))
     app.add_handler(CallbackQueryHandler(show_club_graphic_card, pattern="^img_club_.+$"))
     app.add_handler(CallbackQueryHandler(show_club_squad, pattern="^clsquad_.+$"))
@@ -613,7 +618,7 @@ def _register_admin_handlers(app: Application) -> None:
             ADMIN_EXPECT_SINGLE_PLAYER: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_squad_add_player_text)],
         },
         fallbacks=[
-            CallbackQueryHandler(admin_manage_squads, pattern="^admin_manage_squads$"),
+            CallbackQueryHandler(admin_manage_squads, pattern="^(admin_manage_squads|admin_manage_rosters)$"),
             CommandHandler("cancel", admin_cancel_player_action)
         ],
         allow_reentry=True,
@@ -698,7 +703,8 @@ def _register_admin_handlers(app: Application) -> None:
     app.add_handler(CallbackQueryHandler(admin_delete_options, pattern="^admin_delete_options_-?\\d+$"))
     app.add_handler(CallbackQueryHandler(admin_confirm_wipe_player, pattern="^admin_confirm_wipe_player_-?\\d+$"))
     app.add_handler(CallbackQueryHandler(admin_wipe_player_execute, pattern="^admin_wipe_player_execute_-?\\d+$"))
-    app.add_handler(CallbackQueryHandler(admin_manage_squads, pattern="^admin_manage_squads$"))
+    app.add_handler(CallbackQueryHandler(admin_manage_squads, pattern="^(admin_manage_squads|admin_manage_rosters)$"))
+    app.add_handler(CallbackQueryHandler(admin_rosters_for_division, pattern=r"^admin_roster_div:(\d+)$"))
     app.add_handler(CallbackQueryHandler(admin_view_squad, pattern="^admin_squad_view_.*$"))
     app.add_handler(CallbackQueryHandler(admin_squad_rm_menu, pattern="^admin_squad_rm_menu_.*$"))
     app.add_handler(CallbackQueryHandler(admin_squad_del_player, pattern="^admin_squad_del_p_.*$"))
@@ -709,7 +715,7 @@ def _register_admin_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("test_ai", admin_test_ai))
     app.add_handler(CallbackQueryHandler(admin_broadcast_menu, pattern="^admin_broadcast_menu$"))
     app.add_handler(CallbackQueryHandler(admin_broadcast_all_debts_execute, pattern="^admin_broadcast_all_debts_execute$"))
-    app.add_handler(CallbackQueryHandler(admin_send_debts_to_warns, pattern="^admin_send_debts_to_warns$"))
+    app.add_handler(CallbackQueryHandler(admin_send_debts_to_warns, pattern="^(admin_send_debts_to_warns|admin_send_debts_to_division_topics)$"))
     app.add_handler(CallbackQueryHandler(admin_fetch_photos, pattern="^admin_fetch_photos_cb$"))
     app.add_handler(CallbackQueryHandler(admin_stub, pattern="^admin_matches_stub$"))
 

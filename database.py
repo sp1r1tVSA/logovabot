@@ -5048,6 +5048,92 @@ def get_all_clubs_summary() -> list[dict]:
     return sorted(result, key=lambda x: (x["rank"] if x["rank"] > 0 else 999, -x["points"], x["team_name"]))
 
 
+def get_division_teams(division_id: int, season_id: int | None = None) -> list[str]:
+    """
+    Retrieve unique canonical team names belonging to a specific division.
+    Checks registered users in the division as well as matches scheduled in this division.
+    """
+    target_season_id = season_id
+    if target_season_id is None:
+        act = get_active_season()
+        target_season_id = act["id"] if act else 1
+
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT DISTINCT team_name FROM users WHERE division_id = ? AND team_name IS NOT NULL AND team_name != ''",
+            (division_id,)
+        )
+        user_teams = [resolve_team_name(r["team_name"]) or r["team_name"].strip() for r in cursor.fetchall() if r["team_name"]]
+
+        cursor.execute("""
+            SELECT DISTINCT player1_team FROM matches WHERE division_id = ? AND (season_id = ? OR season_id IS NULL) AND player1_team IS NOT NULL
+            UNION
+            SELECT DISTINCT player2_team FROM matches WHERE division_id = ? AND (season_id = ? OR season_id IS NULL) AND player2_team IS NOT NULL
+        """, (division_id, target_season_id, division_id, target_season_id))
+        match_teams = [resolve_team_name(r[0]) or r[0].strip() for r in cursor.fetchall() if r[0]]
+
+    seen = set()
+    result = []
+    for t in user_teams + match_teams:
+        if t:
+            t_low = t.lower()
+            if t_low not in seen:
+                seen.add(t_low)
+                result.append(t)
+    return sorted(result)
+
+
+def get_clubs_summary_for_division(division_id: int, season_id: int | None = None) -> list[dict]:
+    """
+    Get summary list of clubs for a specific division for the clubs catalog.
+    """
+    target_season_id = season_id
+    if target_season_id is None:
+        act = get_active_season()
+        target_season_id = act["id"] if act else 1
+
+    teams = get_division_teams(division_id, season_id=target_season_id)
+    standings = get_standings(division_id=division_id, season_id=target_season_id)
+    form_map = get_teams_recent_form(limit=5, division_id=division_id, season_id=target_season_id)
+
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT telegram_id, username, team_name, warn_count 
+            FROM users 
+            WHERE division_id = ? AND team_name IS NOT NULL AND team_name != ''
+        """, (division_id,))
+        users = {resolve_team_name(u["team_name"]).lower(): dict(u) for u in cursor.fetchall() if resolve_team_name(u["team_name"])}
+
+    standings_map = {resolve_team_name(s["team_name"]).lower(): (rank, s) for rank, s in enumerate(standings, 1) if resolve_team_name(s["team_name"])}
+
+    result = []
+    for t in teams:
+        canon = resolve_team_name(t) or t
+        canon_lower = canon.lower()
+
+        rank, s_row = standings_map.get(canon_lower, (0, {"played": 0, "points": 0, "wins": 0, "draws": 0, "losses": 0}))
+        u_info = users.get(canon_lower)
+        form = form_map.get(canon_lower, [])
+
+        result.append({
+            "team_name": canon,
+            "rank": rank,
+            "manager_username": u_info.get("username") if u_info else None,
+            "manager_id": u_info.get("telegram_id") if u_info else None,
+            "warn_count": u_info.get("warn_count", 0) if u_info else 0,
+            "played": s_row["played"],
+            "points": s_row["points"],
+            "wins": s_row["wins"],
+            "draws": s_row["draws"],
+            "losses": s_row["losses"],
+            "recent_form": form,
+        })
+
+    return sorted(result, key=lambda x: (x["rank"] if x["rank"] > 0 else 999, -x["points"], x["team_name"]))
+
+
 def rename_player(old_name: str, new_name: str, team_name: str | None = None) -> tuple[int, int]:
     """
     Rename a player across squad_players and match_events.

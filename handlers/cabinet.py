@@ -730,7 +730,16 @@ async def show_specific_club_card(update: Update, context: ContextTypes.DEFAULT_
         return
 
     raw_team = query.data.replace("view_club_", "")
-    await send_or_edit_club_card(update, context, raw_team, back_cb="cb_clubs_catalog")
+    canon = database.resolve_team_name(raw_team) or raw_team
+    div_id = None
+    with database.transaction() as conn:
+        c = conn.cursor()
+        c.execute("SELECT division_id FROM users WHERE LOWER(team_name) = LOWER(?) AND division_id IS NOT NULL LIMIT 1", (canon.strip(),))
+        row = c.fetchone()
+        if row:
+            div_id = row["division_id"]
+    back_cb = f"clubs_catalog_div:{div_id}" if div_id else "cb_clubs_catalog"
+    await send_or_edit_club_card(update, context, canon, back_cb=back_cb)
 
 
 async def show_club_graphic_card(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -847,8 +856,8 @@ async def show_game_history_stub(update: Update, context: ContextTypes.DEFAULT_T
     await send_or_edit_club_schedule(update, context, team, back_cb="menu_cabinet")
 
 
-async def show_clubs_catalog(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Display interactive grid of all KPL clubs."""
+async def show_clubs_catalog_divisions(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Step 1: Display list of active divisions to select for clubs catalog."""
     query = update.callback_query
     if query:
         try:
@@ -861,12 +870,78 @@ async def show_clubs_catalog(update: Update, context: ContextTypes.DEFAULT_TYPE)
             await query.answer("⛔ Просмотр и управление карточками в общем чате доступны только администраторам. Откройте ЛС с ботом!", show_alert=True)
         return
 
-    clubs = await asyncio.to_thread(database.get_all_clubs_summary)
+    divisions = await asyncio.to_thread(database.get_active_divisions)
 
     text = (
-        "🌍 <b>КАТАЛОГ ВСЕХ КЛУБОВ</b>\n\n"
+        "🌍 <b>КАТАЛОГ КЛУБОВ ПО ДИВИЗИОНАМ</b>\n\n"
+        "Выберите дивизион для просмотра клубов, их статистики, составов и формы:\n"
+    )
+
+    buttons: list[list[InlineKeyboardButton]] = []
+    if divisions:
+        for d in divisions:
+            d_name = d.get("name") or f"Дивизион {d['id']}"
+            buttons.append([InlineKeyboardButton(f"🏆 {d_name}", callback_data=f"clubs_catalog_div:{d['id']}")])
+    else:
+        text = "🌍 <b>КАТАЛОГ КЛУБОВ</b>\n\n<i>В текущем сезоне пока нет активных дивизионов.</i>"
+
+    buttons.append([InlineKeyboardButton("« Назад в меню", callback_data="main_menu")])
+    markup = InlineKeyboardMarkup(buttons)
+
+    target_chat_id = query.message.chat_id if query and query.message else (update.effective_chat.id if update.effective_chat else update.effective_user.id)
+    thread_id = query.message.message_thread_id if query and query.message and query.message.is_topic_message else None
+
+    if query:
+        if query.message and query.message.photo:
+            try:
+                await query.message.delete()
+            except Exception:
+                pass
+            await context.bot.send_message(chat_id=target_chat_id, message_thread_id=thread_id, text=text, parse_mode="HTML", reply_markup=markup)
+        else:
+            try:
+                await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
+            except Exception:
+                try:
+                    await query.message.delete()
+                except Exception:
+                    pass
+                await context.bot.send_message(chat_id=target_chat_id, message_thread_id=thread_id, text=text, parse_mode="HTML", reply_markup=markup)
+    elif update.message:
+        await update.message.reply_text(text, parse_mode="HTML", reply_markup=markup)
+
+# Backward-compatible alias
+show_clubs_catalog = show_clubs_catalog_divisions
+
+
+async def show_clubs_catalog_for_division(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Step 2: Display interactive grid of clubs belonging to the chosen division."""
+    query = update.callback_query
+    if query:
+        try:
+            await query.answer()
+        except Exception:
+            pass
+
+    if not check_group_card_access(update):
+        if query:
+            await query.answer("⛔ Просмотр и управление карточками в общем чате доступны только администраторам. Откройте ЛС с ботом!", show_alert=True)
+        return
+
+    data = query.data if query else ""
+    div_id = int(data.split(":")[1]) if ":" in data else 1
+
+    div_info = await asyncio.to_thread(database.get_division, div_id)
+    div_name = div_info.get("name") if div_info else f"Дивизион {div_id}"
+
+    clubs = await asyncio.to_thread(database.get_clubs_summary_for_division, div_id)
+
+    text = (
+        f"🌍 <b>КАТАЛОГ КЛУБОВ — {html.escape(div_name.upper())}</b>\n\n"
         "Выберите клуб для просмотра полной клубной карточки, статистики, формы и состава:\n"
     )
+    if not clubs:
+        text += "\n<i>В этом дивизионе пока нет зарегистрированных клубов.</i>\n"
 
     buttons: list[list[InlineKeyboardButton]] = []
     row: list[InlineKeyboardButton] = []
@@ -883,7 +958,7 @@ async def show_clubs_catalog(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if row:
         buttons.append(row)
 
-    buttons.append([InlineKeyboardButton("« Назад в меню", callback_data="main_menu")])
+    buttons.append([InlineKeyboardButton("« Назад к дивизионам", callback_data="cb_clubs_catalog")])
     markup = InlineKeyboardMarkup(buttons)
 
     target_chat_id = query.message.chat_id if query and query.message else (update.effective_chat.id if update.effective_chat else update.effective_user.id)
