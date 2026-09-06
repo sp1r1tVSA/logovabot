@@ -2688,7 +2688,7 @@ def get_open_rounds_with_deadlines(division_id: int | None = None, season_id: in
         cursor.execute(query, tuple(params))
         return [dict(row) for row in cursor.fetchall()]
 
-def get_teams_recent_form(limit: int = 5, division_id: int | None = None) -> dict[str, list[str]]:
+def get_teams_recent_form(limit: int = 5, division_id: int | None = None, season_id: int | None = None) -> dict[str, list[str]]:
     """
     Retrieve the last `limit` confirmed match outcomes for each team by team_name.
     Returns dict mapping lowercase team_name -> list of 'W', 'D', 'L' outcomes.
@@ -2696,6 +2696,11 @@ def get_teams_recent_form(limit: int = 5, division_id: int | None = None) -> dic
     with transaction() as conn:
         cursor = conn.cursor()
         
+        target_season_id = season_id
+        if target_season_id is None:
+            act = get_active_season()
+            target_season_id = act["id"] if act else 1
+
         if division_id is not None:
             cursor.execute("""
                 SELECT player1_team, player2_team, player1_score, player2_score
@@ -2703,8 +2708,9 @@ def get_teams_recent_form(limit: int = 5, division_id: int | None = None) -> dic
                 WHERE status = 'confirmed' 
                   AND (tournament_type IS NULL OR tournament_type = 'league')
                   AND division_id = ?
+                  AND (season_id = ? OR season_id IS NULL)
                 ORDER BY round_number DESC, id DESC
-            """, (division_id,))
+            """, (division_id, target_season_id))
             all_matches = cursor.fetchall()
 
             cursor.execute("SELECT team_name FROM users WHERE division_id = ? AND team_name IS NOT NULL AND team_name != ''", (division_id,))
@@ -2714,9 +2720,11 @@ def get_teams_recent_form(limit: int = 5, division_id: int | None = None) -> dic
             cursor.execute("""
                 SELECT player1_team, player2_team, player1_score, player2_score
                 FROM matches
-                WHERE status = 'confirmed' AND (tournament_type IS NULL OR tournament_type = 'league')
+                WHERE status = 'confirmed' 
+                  AND (tournament_type IS NULL OR tournament_type = 'league')
+                  AND (season_id = ? OR season_id IS NULL)
                 ORDER BY round_number DESC, id DESC
-            """)
+            """, (target_season_id,))
             all_matches = cursor.fetchall()
             team_candidates = list(KPL_TEAMS)
 
@@ -4183,10 +4191,15 @@ def get_unplayed_matches_in_round(round_number: int) -> list[dict]:
         """, (round_number,))
         return [dict(row) for row in cursor.fetchall()]
 
-def get_top_scorers(limit: int = 20, division_id: int | None = None) -> list[dict]:
+def get_top_scorers(limit: int = 20, division_id: int | None = None, season_id: int | None = None) -> list[dict]:
     """Get top goalscorers in the league aggregated from match_events (strictly confirmed league matches, round_number > 0)."""
     with transaction() as conn:
         cursor = conn.cursor()
+        target_season_id = season_id
+        if target_season_id is None:
+            act = get_active_season()
+            target_season_id = act["id"] if act else 1
+
         query = """
             SELECT me.player_name, me.team_name, SUM(me.count) AS total_goals
             FROM match_events me
@@ -4195,8 +4208,9 @@ def get_top_scorers(limit: int = 20, division_id: int | None = None) -> list[dic
               AND (m.tournament_type IS NULL OR m.tournament_type = 'league')
               AND m.round_number > 0
               AND m.status = 'confirmed'
+              AND (m.season_id = ? OR m.season_id IS NULL)
         """
-        params = []
+        params = [target_season_id]
         if division_id is not None:
             query += " AND m.division_id = ?"
             params.append(division_id)
@@ -4209,10 +4223,15 @@ def get_top_scorers(limit: int = 20, division_id: int | None = None) -> list[dic
         cursor.execute(query, tuple(params))
         return [dict(row) for row in cursor.fetchall()]
 
-def get_top_assists(limit: int = 20, division_id: int | None = None) -> list[dict]:
+def get_top_assists(limit: int = 20, division_id: int | None = None, season_id: int | None = None) -> list[dict]:
     """Get top assist providers in the league aggregated from match_events (strictly confirmed league matches, round_number > 0)."""
     with transaction() as conn:
         cursor = conn.cursor()
+        target_season_id = season_id
+        if target_season_id is None:
+            act = get_active_season()
+            target_season_id = act["id"] if act else 1
+
         query = """
             SELECT me.player_name, me.team_name, SUM(me.count) AS total_assists
             FROM match_events me
@@ -4221,8 +4240,9 @@ def get_top_assists(limit: int = 20, division_id: int | None = None) -> list[dic
               AND (m.tournament_type IS NULL OR m.tournament_type = 'league')
               AND m.round_number > 0
               AND m.status = 'confirmed'
+              AND (m.season_id = ? OR m.season_id IS NULL)
         """
-        params = []
+        params = [target_season_id]
         if division_id is not None:
             query += " AND m.division_id = ?"
             params.append(division_id)

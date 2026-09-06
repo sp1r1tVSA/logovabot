@@ -363,6 +363,178 @@ async def show_division_menu(update: Update, context: ContextTypes.DEFAULT_TYPE)
 # Backward compatibility alias
 show_league_menu = show_divisions_list
 
+
+async def show_division_table(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Generate and display graphic league table for a specific division and season."""
+    query = update.callback_query
+    if query:
+        try:
+            await query.answer()
+        except Exception:
+            pass
+
+    season_id = 1
+    div_id = 1
+    if context.matches:
+        season_id = int(context.matches[0].group(1))
+        div_id = int(context.matches[0].group(2))
+    elif query and query.data:
+        parts = query.data.split(":")
+        if len(parts) >= 3:
+            season_id = int(parts[1])
+            div_id = int(parts[2])
+
+    div_info = await asyncio.to_thread(database.get_division, div_id)
+    div_name = div_info["name"] if div_info and "name" in div_info else f"Дивизион {div_id}"
+
+    standings = await asyncio.to_thread(database.get_standings, division_id=div_id, season_id=season_id)
+    form_map = await asyncio.to_thread(database.get_teams_recent_form, limit=5, division_id=div_id, season_id=season_id)
+    img_buf = await asyncio.to_thread(generate_league_table_image, standings, form_map, div_name)
+    if hasattr(img_buf, "seek"):
+        img_buf.seek(0)
+
+    keyboard = [
+        [InlineKeyboardButton("« Назад к меню дивизиона", callback_data=f"division_view:{season_id}:{div_id}")]
+    ]
+    markup = InlineKeyboardMarkup(keyboard)
+
+    target_chat_id = query.message.chat_id if query and query.message else (update.effective_chat.id if update.effective_chat else update.effective_user.id)
+    thread_id = query.message.message_thread_id if query and query.message and query.message.is_topic_message else None
+
+    if query and query.message:
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
+
+    caption = f"🏆 <b>Турнирная таблица — {html.escape(div_name)}</b>"
+    await context.bot.send_photo(
+        chat_id=target_chat_id,
+        message_thread_id=thread_id,
+        photo=img_buf,
+        caption=caption,
+        parse_mode="HTML",
+        reply_markup=markup
+    )
+
+
+async def show_division_scorers(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Generate and display graphic top scorers card for a specific division and season."""
+    query = update.callback_query
+    if query:
+        try:
+            await query.answer()
+        except Exception:
+            pass
+
+    season_id = 1
+    div_id = 1
+    if context.matches:
+        season_id = int(context.matches[0].group(1))
+        div_id = int(context.matches[0].group(2))
+    elif query and query.data:
+        parts = query.data.split(":")
+        if len(parts) >= 3:
+            season_id = int(parts[1])
+            div_id = int(parts[2])
+
+    div_info = await asyncio.to_thread(database.get_division, div_id)
+    div_name = div_info["name"] if div_info and "name" in div_info else f"Дивизион {div_id}"
+
+    img_buf = await asyncio.to_thread(
+        top_stats_generator.generate_top_stats_image,
+        mode="goals",
+        limit=10,
+        division_id=div_id,
+        division_name=div_name,
+        season_id=season_id,
+    )
+    if hasattr(img_buf, "seek"):
+        img_buf.seek(0)
+
+    keyboard = [
+        [InlineKeyboardButton("« Назад к меню дивизиона", callback_data=f"division_view:{season_id}:{div_id}")]
+    ]
+    markup = InlineKeyboardMarkup(keyboard)
+
+    target_chat_id = query.message.chat_id if query and query.message else (update.effective_chat.id if update.effective_chat else update.effective_user.id)
+    thread_id = query.message.message_thread_id if query and query.message and query.message.is_topic_message else None
+
+    if query and query.message:
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
+
+    caption = f"⚽ <b>Топ бомбардиров — {html.escape(div_name)}</b>"
+    await context.bot.send_photo(
+        chat_id=target_chat_id,
+        message_thread_id=thread_id,
+        photo=img_buf,
+        caption=caption,
+        parse_mode="HTML",
+        reply_markup=markup
+    )
+
+
+async def show_division_assists(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Generate and display graphic top assists card for a specific division and season."""
+    query = update.callback_query
+    if query:
+        try:
+            await query.answer()
+        except Exception:
+            pass
+
+    season_id = 1
+    div_id = 1
+    if context.matches:
+        season_id = int(context.matches[0].group(1))
+        div_id = int(context.matches[0].group(2))
+    elif query and query.data:
+        parts = query.data.split(":")
+        if len(parts) >= 3:
+            season_id = int(parts[1])
+            div_id = int(parts[2])
+
+    div_info = await asyncio.to_thread(database.get_division, div_id)
+    div_name = div_info["name"] if div_info and "name" in div_info else f"Дивизион {div_id}"
+
+    img_buf = await asyncio.to_thread(
+        top_stats_generator.generate_top_stats_image,
+        mode="assists",
+        limit=10,
+        division_id=div_id,
+        division_name=div_name,
+        season_id=season_id,
+    )
+    if hasattr(img_buf, "seek"):
+        img_buf.seek(0)
+
+    keyboard = [
+        [InlineKeyboardButton("« Назад к меню дивизиона", callback_data=f"division_view:{season_id}:{div_id}")]
+    ]
+    markup = InlineKeyboardMarkup(keyboard)
+
+    target_chat_id = query.message.chat_id if query and query.message else (update.effective_chat.id if update.effective_chat else update.effective_user.id)
+    thread_id = query.message.message_thread_id if query and query.message and query.message.is_topic_message else None
+
+    if query and query.message:
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
+
+    caption = f"🎯 <b>Топ ассистентов — {html.escape(div_name)}</b>"
+    await context.bot.send_photo(
+        chat_id=target_chat_id,
+        message_thread_id=thread_id,
+        photo=img_buf,
+        caption=caption,
+        parse_mode="HTML",
+        reply_markup=markup
+    )
+
 async def show_top_scorers(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show Top 20 goalscorers leaderboard."""
     query = update.callback_query

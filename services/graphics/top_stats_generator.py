@@ -59,7 +59,8 @@ def generate_top_stats_image(
     limit: int = 10, 
     tournament_type: str = "league",
     division_id: int | None = None,
-    division_name: str | None = None
+    division_name: str | None = None,
+    season_id: int | None = None
 ) -> io.BytesIO:
     """
     Generate a high-res graphic image for Top Scorers ("goals") or Top Assisters ("assists")
@@ -67,6 +68,16 @@ def generate_top_stats_image(
 
     Returns io.BytesIO PNG buffer.
     """
+    if division_id is not None and not division_name:
+        try:
+            div_info = database.get_division(division_id)
+            if div_info and div_info.get("name"):
+                division_name = div_info["name"]
+            else:
+                division_name = f"Дивизион {division_id}"
+        except Exception:
+            division_name = f"Дивизион {division_id}"
+
     is_cup = (tournament_type == "cup")
     if is_cup:
         sub_suffix = "КУБОК КПЛ 2026"
@@ -82,7 +93,7 @@ def generate_top_stats_image(
         stat_color = GOAL_COLOR
         badge_bg = GOAL_BG
         badge_border = GOAL_BORDER
-        raw_data = database.get_cup_top_scorers(limit) if is_cup else database.get_top_scorers(limit, division_id=division_id)
+        raw_data = database.get_cup_top_scorers(limit) if is_cup else database.get_top_scorers(limit, division_id=division_id, season_id=season_id)
     else:
         title_text = "ТОП АССИСТЕНТОВ КУБКА" if is_cup else ("ТОП АССИСТЕНТОВ" if not division_name else f"АССИСТЕНТЫ • {division_name.upper()}")
         subtitle_text = f"ЛУЧШИЕ АССИСТЕНТЫ  •  {sub_suffix}"
@@ -90,7 +101,7 @@ def generate_top_stats_image(
         stat_color = ASSIST_COLOR
         badge_bg = ASSIST_BG
         badge_border = ASSIST_BORDER
-        raw_data = database.get_cup_top_assists(limit) if is_cup else database.get_top_assists(limit, division_id=division_id)
+        raw_data = database.get_cup_top_assists(limit) if is_cup else database.get_top_assists(limit, division_id=division_id, season_id=season_id)
 
     # ── 2x Scaled Fonts ────────────────────────────────────────────────────
     font_title    = load_font(26 * SCALE, bold=True)
