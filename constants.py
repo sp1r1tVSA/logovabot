@@ -5,14 +5,7 @@ CB_MAIN_MENU = "main_menu"
 CB_MENU_CABINET = "menu_cabinet"
 CB_MENU_TOURNAMENTS = "menu_tournaments"
 CB_MENU_DIVISIONS = "menu_divisions"
-CB_MENU_LEAGUE = "menu_league"
 CB_MENU_SUPPORT = "menu_support"
-
-# League Section
-CB_LEAGUE_TABLE = "league_table"
-CB_LEAGUE_SCORERS = "league_scorers"
-CB_LEAGUE_ASSISTS = "league_assists"
-CB_REFRESH_LEAGUE_TABLE = "refresh_league_table_topic"
 
 # User Cabinet Section
 CB_CABINET_MY_MATCHES = "cabinet_my_matches"

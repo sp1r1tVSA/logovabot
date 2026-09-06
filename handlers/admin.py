@@ -89,7 +89,6 @@ async def show_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         [InlineKeyboardButton("👥 Управление игроками", callback_data="admin_manage_players")],
         [InlineKeyboardButton("📋 Составы команд", callback_data="admin_manage_squads")],
         [InlineKeyboardButton("⚔️ Управление матчами", callback_data="admin_manage_matches_info")],
-        [InlineKeyboardButton("🏆 Управление Кубком КПЛ", callback_data="admin_manage_cup")],
         [InlineKeyboardButton("📢 Рассылка задолженностей", callback_data="admin_broadcast_menu")],
         [InlineKeyboardButton("🔄 Обновить таблицы и стату", callback_data="admin_force_update")],
         [InlineKeyboardButton(f"🎭 Режим общения: {mode_label}", callback_data="admin_toggle_chat_mode")],
@@ -178,264 +177,7 @@ async def admin_list_players(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     await query.edit_message_text("\n".join(lines), parse_mode="Markdown", reply_markup=markup)
 
-# --- KPL Cup Admin Management ---
 
-@admin_only
-async def admin_manage_cup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    query = update.callback_query
-    if not query or not is_admin(query.from_user.id):
-        return
-    await query.answer()
-
-    stage = "1/8"
-    if query.data.startswith("admin_cup_stage_"):
-        stage = query.data.replace("admin_cup_stage_", "")
-
-    series_list = await asyncio.to_thread(database.get_cup_series_list, stage)
-
-    text = f"🏆 <b>Админ-панель: Управление Кубком КПЛ ({stage})</b>\n\n"
-
-    if not series_list:
-        text += "⚠️ Сетка Кубка еще не инициализирована.\n\nНажмите кнопку ниже, чтобы сформировать сразу все стадии (1/8, 1/4, 1/2 и Финал)."
-        keyboard = [
-            [InlineKeyboardButton("🚀 Сформировать сетку Кубка (Все стадии)", callback_data="admin_init_cup_execute")],
-            [InlineKeyboardButton("« Назад в админку", callback_data="admin_main_menu")]
-        ]
-    else:
-        for s in series_list:
-            t1 = html.escape(s['team1_name'])
-            t2 = html.escape(s['team2_name'])
-            w1 = s['team1_wins']
-            w2 = s['team2_wins']
-            s_num = s['series_num']
-
-            if s['status'] == 'completed':
-                win_label = "🏆 ЧЕМПИОН КУБКА 2026" if stage == 'final' else "🏆 Победитель"
-                text += f"⚔️ <b>Серия {s_num}:</b> {t1} ({w1}) 🆚 ({w2}) {t2} ➔ <b>{win_label}: {html.escape(s['winner_name'] or 'Победитель')}</b>\n"
-            else:
-                text += f"⚔️ <b>Серия {s_num}:</b> <b>{t1}</b> ({w1}) 🆚 ({w2}) <b>{t2}</b>\n"
-        
-        text += "\n"
-
-        keyboard = [
-            [
-                InlineKeyboardButton("1/8", callback_data="admin_cup_stage_1/8"),
-                InlineKeyboardButton("1/4", callback_data="admin_cup_stage_1/4"),
-                InlineKeyboardButton("1/2", callback_data="admin_cup_stage_1/2"),
-                InlineKeyboardButton("Финал", callback_data="admin_cup_stage_final"),
-            ]
-        ]
-
-        # Add match management buttons for all matches in current stage
-        for s in series_list:
-            for m in s.get("matches", []):
-                g_num = m['game_num_in_series']
-                t1 = m['player1_team'] or s['team1_name']
-                t2 = m['player2_team'] or s['team2_name']
-                st_icon = "✅" if m['status'] == 'confirmed' else "⏳"
-                score_part = f"({m['player1_score']}:{m['player2_score']})" if m['status'] == 'confirmed' else "vs"
-                btn_label = f"⚙️ Игра {g_num}: {t1} {score_part} {t2} {st_icon}"
-                keyboard.append([InlineKeyboardButton(btn_label, callback_data=f"admin_view_match_{m['id']}")])
-
-        keyboard.append([InlineKeyboardButton("📢 Напомнить участникам Кубка в тему отчётов", callback_data=f"admin_remind_cup_{stage}")])
-        keyboard.append([InlineKeyboardButton("🔄 Обновить", callback_data=f"admin_cup_stage_{stage}")])
-        keyboard.append([InlineKeyboardButton("« Назад в админку", callback_data="admin_main_menu")])
-
-    markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
-
-@admin_only
-async def admin_remind_cup_execute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    query = update.callback_query
-    if not query or not is_admin(query.from_user.id):
-        return
-    await query.answer()
-
-    stage = "1/8"
-    if query.data.startswith("admin_remind_cup_"):
-        stage = query.data.replace("admin_remind_cup_", "")
-
-    series_list = await asyncio.to_thread(database.get_cup_series_list, stage)
-
-    unplayed_matches = []
-    for s in series_list:
-        if s["status"] != "completed":
-            for m in s.get("matches", []):
-                if m["status"] == "pending":
-                    unplayed_matches.append((s, m))
-
-    if not unplayed_matches:
-        await query.answer(f"✅ В стадии {stage} нет несыгранных матчей!", show_alert=True)
-        return
-
-    # 1. PM reminders
-    pm_sent = 0
-    for s, m in unplayed_matches:
-        t1, t2 = s["team1_name"], s["team2_name"]
-        w1, w2 = s["team1_wins"], s["team2_wins"]
-        g_num = m["game_num_in_series"]
-
-        p1_id = None
-        p2_id = None
-        with database.transaction() as conn:
-            c = conn.cursor()
-            c.execute("SELECT telegram_id FROM users WHERE LOWER(team_name) = LOWER(?)", (t1.strip(),))
-            r1 = c.fetchone()
-            if r1: p1_id = r1[0]
-            c.execute("SELECT telegram_id FROM users WHERE LOWER(team_name) = LOWER(?)", (t2.strip(),))
-            r2 = c.fetchone()
-            if r2: p2_id = r2[0]
-
-        wins_needed = 3 if stage == 'final' else 2
-        best_of_text = "Best-of-5" if stage == 'final' else "Best-of-3"
-        rule_desc = "Матчи играются в стандартном режиме (90 мин, без доп. времени и серии пенальти)." if stage == 'final' else "Каждая игра до победы (с доп. временем и пенальти)."
-
-        pm_text = (
-            f"🏆 <b>НАПОМИНАНИЕ О КУБКОВОМ МАТЧЕ!</b>\n\n"
-            f"⚔️ <b>Стадия:</b> {stage} Финала (Игра {g_num})\n"
-            f"🏠 <b>{html.escape(t1)}</b> 🆚 <b>{html.escape(t2)}</b> ✈️\n"
-            f"📊 <b>Счёт серии ({best_of_text}):</b> {w1} : {w2}\n\n"
-            f"Пожалуйста, сыграйте свой кубковый матч! {rule_desc}"
-        )
-        kb = [[InlineKeyboardButton("📋 Внести результат", callback_data=f"cabinet_report_score_{m['id']}")]]
-
-        if p1_id and p1_id > 0:
-            if await safe_send_notification(context.bot, p1_id, pm_text, InlineKeyboardMarkup(kb)):
-                pm_sent += 1
-        if p2_id and p2_id > 0:
-            if await safe_send_notification(context.bot, p2_id, pm_text, InlineKeyboardMarkup(kb)):
-                pm_sent += 1
-
-    # 2. Group post to Reports Topic
-    main_group_id = await asyncio.to_thread(database.get_group_id)
-    reports_topic_id = await asyncio.to_thread(database.get_config, "reports_topic_id")
-
-    if main_group_id:
-        lines = [
-            f"🏆 <b>НАПОМИНАНИЕ О КУБКЕ КПЛ | {stage} Финала</b>\n",
-            f"Несыгранные кубковые матчи ({len(unplayed_matches)}):"
-        ]
-        for s, m in unplayed_matches:
-            t1_esc, t2_esc = html.escape(s["team1_name"]), html.escape(s["team2_name"])
-            w1, w2 = s["team1_wins"], s["team2_wins"]
-            g_num = m["game_num_in_series"]
-            lines.append(f"• ⚔️ <b>Игра {g_num}:</b> <b>{t1_esc}</b> 🆚 <b>{t2_esc}</b> (Счёт серии: {w1} : {w2})")
-
-        if stage == 'final':
-            lines.append("\n⚠️ Напоминаем: в финале серия до 3-х побед (Best-of-5), матчи играются в обычном режиме (90 мин, без доп. времени и серии пенальти).")
-        else:
-            lines.append("\n⚠️ Напоминаем: в каждом кубковом матче обязательно доп. время и пенальти (ничьих нет).")
-        lines.append("Пожалуйста, внесите результаты в бота!")
-
-        try:
-            kwargs = {"chat_id": main_group_id, "text": "\n".join(lines), "parse_mode": "HTML"}
-            if reports_topic_id:
-                kwargs["message_thread_id"] = int(reports_topic_id)
-            await context.bot.send_message(**kwargs)
-        except Exception as e:
-            logger.exception("Failed to post cup reminder summary to group")
-
-    await query.answer(f"🚀 Напоминания отправлены! (ЛС: {pm_sent}, Тема отчетов: ✅)", show_alert=True)
-
-async def notify_cup_stage_opened(bot, stage: str) -> None:
-    """Post an announcement for the newly opened Cup stage to Reports Topic."""
-    main_group_id = await asyncio.to_thread(database.get_group_id)
-    reports_topic_id = await asyncio.to_thread(database.get_config, "reports_topic_id")
-    if not main_group_id:
-        return
-
-    series_list = await asyncio.to_thread(database.get_cup_series_list, stage)
-    if not series_list:
-        return
-
-    # Проверяем, известны ли все участники стадии
-    for s in series_list:
-        if s["team1_name"].startswith("Победитель") or s["team2_name"].startswith("Победитель"):
-            return  # Ждем, пока все пары определятся
-
-
-    stage_title_map = {
-        '1/8': '1/8 ФИНАЛА',
-        '1/4': '1/4 ФИНАЛА',
-        '1/2': '1/2 ФИНАЛА (ПОЛУФИНАЛ)',
-        'final': '🏆 ФИНАЛ КУБКА КПЛ 2026'
-    }
-    title = stage_title_map.get(stage, f"СТАДИЯ {stage}")
-
-    if stage == 'final':
-        format_lines = [
-            f"<i>Формат: Финальная серия до 3-х побед (Best-of-5)</i>",
-            f"<i>Матчи проводятся в стандартном режиме (90 мин, без доп. времени и серии пенальти).</i>\n"
-        ]
-    else:
-        format_lines = [
-            f"<i>Формат: Серии до 2-х побед (Best-of-3)</i>",
-            f"<i>Каждая игра проводится с возможным доп. временем и пенальти (ничьих нет).</i>\n"
-        ]
-
-    lines = [
-        f"🚀 <b>ОТКРЫТИЕ СТАДИИ | КУБОК КПЛ — {title}</b>\n",
-        *format_lines,
-        f"⚔️ <b>Пары участников:</b>"
-    ]
-
-    for s in series_list:
-        t1 = html.escape(s["team1_name"])
-        t2 = html.escape(s["team2_name"])
-        s_num = s["series_num"]
-        lines.append(f"• <b>Серия {s_num}:</b> <b>{t1}</b> 🆚 <b>{t2}</b>")
-
-    lines.append("\n📋 Матчи доступны для игры в вашем кабинете (раздел «Мои открытые матчи»). Удачи участникам!")
-
-    try:
-        from services.graphics.table_generator import generate_cup_bracket_image
-        from telegram import InputFile
-        img_buf = await asyncio.to_thread(generate_cup_bracket_image, stage)
-
-        kwargs = {
-            "chat_id": main_group_id,
-            "photo": InputFile(img_buf, filename=f"cup_bracket_{stage}.png"),
-            "caption": "\n".join(lines),
-            "parse_mode": "HTML"
-        }
-        if reports_topic_id:
-            kwargs["message_thread_id"] = int(reports_topic_id)
-        await bot.send_photo(**kwargs)
-    except Exception as e:
-        logger.exception("Failed to post cup stage opening photo, fallback to text")
-        kwargs = {"chat_id": main_group_id, "text": "\n".join(lines), "parse_mode": "HTML"}
-        if reports_topic_id:
-            kwargs["message_thread_id"] = int(reports_topic_id)
-        await bot.send_message(**kwargs)
-
-@admin_only
-async def admin_init_cup_execute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    query = update.callback_query
-    if not query or not is_admin(query.from_user.id):
-        return
-    await query.answer()
-
-    created_count = await asyncio.to_thread(database.init_kpl_cup_all_stages)
-    if created_count > 0:
-        await query.answer(f"✅ Сформировано {created_count} серий 1/8 финала!", show_alert=True)
-        await notify_cup_stage_opened(context.bot, '1/8')
-    else:
-        await query.answer("⚠️ Сетка 1/8 финала уже сформирована!", show_alert=True)
-
-    await admin_manage_cup(update, context)
-
-@admin_only
-async def admin_sync_cup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Manually synchronize winners of completed series to next stages."""
-    msg = update.message or (update.callback_query.message if update.callback_query else None)
-    if not msg:
-        return
-        
-    try:
-        sync_count = await asyncio.to_thread(database.sync_cup_bracket)
-        await msg.reply_text(f"✅ Синхронизация Кубка завершена!\nПереведено победителей на следующие стадии: {sync_count}")
-    except Exception as e:
-        await msg.reply_text(f"❌ Ошибка синхронизации: {e}")
 
 @admin_only
 async def admin_test_ai(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -502,16 +244,15 @@ async def admin_test_ai(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 async def _build_debts_summary() -> tuple[str | None, int]:
     """
-    Build a full HTML summary of outstanding debts (League + Cup) grouped by participant (club).
+    Build a full HTML summary of outstanding debts grouped by participant (club).
     Returns (text, total_debts_count). text is None when there are no debts.
     """
-    league_unplayed, cup_unplayed, users = await asyncio.gather(
+    league_unplayed, users = await asyncio.gather(
         asyncio.to_thread(database.get_all_unplayed_league_matches),
-        asyncio.to_thread(database.get_all_unplayed_cup_matches),
         asyncio.to_thread(database.list_users),
     )
 
-    if not league_unplayed and not cup_unplayed:
+    if not league_unplayed:
         return None, 0
 
     # Map club name (lowercased) -> user info to group debts by participant
@@ -544,7 +285,6 @@ async def _build_debts_summary() -> tuple[str | None, int]:
                 "username": info["username"] if info else None,
                 "warn_count": info["warn_count"] if info else 0,
                 "league": [],
-                "cup": [],
             },
         )
         return p
@@ -562,48 +302,26 @@ async def _build_debts_summary() -> tuple[str | None, int]:
         if p2:
             p2["league"].append(line)
 
-    for m in cup_unplayed:
-        stage = m.get('cup_stage', '1/8')
-        g_num = m.get('game_num_in_series', 1)
-        w1 = m.get('team1_wins', 0)
-        w2 = m.get('team2_wins', 0)
-        t1 = html.escape(m['player1_team'] or m['team1_name'] or 'неизвестно')
-        t2 = html.escape(m['player2_team'] or m['team2_name'] or 'неизвестно')
-        u1 = f" (@{html.escape(m['p1_username'])})" if m['p1_username'] else ""
-        u2 = f" (@{html.escape(m['p2_username'])})" if m['p2_username'] else ""
-        match_line = f"{stage} Финала (игра {g_num}): 🏠 <b>{t1}</b>{u1} 🆚 <b>{t2}</b>{u2} ✈️ <i>(Счёт серии: {w1}:{w2})</i>"
-
-        p1 = ensure_participant(m.get("player1_team") or m.get("p1_team"))
-        p2 = ensure_participant(m.get("player2_team") or m.get("p2_team"))
-        if p1:
-            p1["cup"].append(match_line)
-        if p2:
-            p2["cup"].append(match_line)
-
-    total_debts = len(league_unplayed) + len(cup_unplayed)
+    total_debts = len(league_unplayed)
 
     now_str = datetime.datetime.now().strftime("%d.%m.%Y %H:%M")
     lines = [
-        "🗂 <b>ДОЛГИ УЧАСТНИКОВ | ЛИГА И КУБОК КПЛ</b>\n",
+        "🗂 <b>ДОЛГИ УЧАСТНИКОВ</b>\n",
         f"<i>Обновлено: {now_str}</i>\n",
     ]
 
     bar = "━━━━━━━━━━━━━━━━━━━━━━"
 
-    for idx, p in enumerate(sorted(participants.values(), key=lambda x: (len(x["league"]) + len(x["cup"]), x.get("warn_count", 0)), reverse=True), 1):
+    for idx, p in enumerate(sorted(participants.values(), key=lambda x: (len(x["league"]), x.get("warn_count", 0)), reverse=True), 1):
         uname_str = f"@{p['username']}" if p['username'] else p['team_name']
-        total_n = len(p["league"]) + len(p["cup"])
+        total_n = len(p["league"])
         w_cnt = p.get("warn_count", 0)
         warn_badge = f" ⚠️ <b>{w_cnt}/{MAX_WARNS_LIMIT}</b>" if w_cnt > 0 else f" 🟢 <b>0/{MAX_WARNS_LIMIT}</b>"
         card: list[str] = [bar]
         card.append(f"{idx}. 👤 <b>{html.escape(uname_str)}</b> [{html.escape(p['team_name'])}] — {total_n} долг. |{warn_badge}")
         if p["league"]:
-            card.append("⚙️ <b>ЛИГА:</b>")
+            card.append("⚙️ <b>МАТЧИ:</b>")
             for line in p["league"]:
-                card.append(f"   • {line}")
-        if p["cup"]:
-            card.append("🏆 <b>КУБОК:</b>")
-            for line in p["cup"]:
                 card.append(f"   • {line}")
         card.append(bar)
         lines.extend(card)
@@ -622,14 +340,14 @@ async def admin_broadcast_menu(update: Update, context: ContextTypes.DEFAULT_TYP
 
     text = (
         "📢 <b>Управление Рассылкой Задолженностей</b>\n\n"
-        "Данный инструмент формирует и рассылает <b>полный список долгов (Лига + Кубок КПЛ)</b>:\n\n"
+        "Данный инструмент формирует и рассылает <b>список долгов участников</b>:\n\n"
         "1. 📩 <b>Персональные ЛС всем должникам:</b> Список несыгранных матчей каждого участника с кнопками прямого перехода к вводу результата.\n"
         "2. 💬 <b>Сводка долгов в Тему ПРЕДЫ</b> (кнопкой ниже).\n\n"
         "Нажмите кнопку ниже для старта рассылки:"
     )
 
     keyboard = [
-        [InlineKeyboardButton("🚀 Запустить рассылку всех долгов (Лига + Кубок)", callback_data="admin_broadcast_all_debts_execute")],
+        [InlineKeyboardButton("🚀 Запустить рассылку всех долгов", callback_data="admin_broadcast_all_debts_execute")],
         [InlineKeyboardButton("📋 Отправить сводку долгов в тему «ПРЕДЫ»", callback_data="admin_send_debts_to_warns")],
         [InlineKeyboardButton("« Назад в админку", callback_data="admin_main_menu")]
     ]
@@ -644,13 +362,10 @@ async def admin_broadcast_all_debts_execute(update: Update, context: ContextType
     await query.answer()
 
     users = await asyncio.to_thread(database.list_users)
-    league_unplayed, cup_unplayed = await asyncio.gather(
-        asyncio.to_thread(database.get_all_unplayed_league_matches),
-        asyncio.to_thread(database.get_all_unplayed_cup_matches)
-    )
+    league_unplayed = await asyncio.to_thread(database.get_all_unplayed_league_matches)
 
-    if not league_unplayed and not cup_unplayed:
-        await query.answer("✅ Отличная новость! В Лиге и Кубке нет несыгранных матчей-долгов!", show_alert=True)
+    if not league_unplayed:
+        await query.answer("✅ Отличная новость! Нет несыгранных матчей-долгов!", show_alert=True)
         return
 
     # 1. Individual PM Notifications to every debtor
@@ -668,8 +383,6 @@ async def admin_broadcast_all_debts_execute(update: Update, context: ContextType
 
         notified_users_count += 1
         total = len(u_matches)
-        league_matches = [m for m in u_matches if m.get("tournament_type") != "cup"]
-        cup_matches = [m for m in u_matches if m.get("tournament_type") == "cup"]
 
         bar = "━━━━━━━━━━━━━━━━━━━━━━"
         lines = [
@@ -677,25 +390,13 @@ async def admin_broadcast_all_debts_execute(update: Update, context: ContextType
             f"У вас <b>{total}</b> несыгранн{'ый' if total == 1 else 'ых'} матч{'а' if total in (2, 3, 4) else 'ей'} 🕒\n",
         ]
 
-        if league_matches:
-            lines.append(bar)
-            lines.append("⚽ <b>ЧЕМПИОНАТ КПЛ</b>")
-            for i, m in enumerate(league_matches, 1):
-                opp = m['opponent_team'] or m['opponent_username'] or "Соперник"
-                lines.append(f"   {i}. Тур {m['round_number']}: 🆚 <b>{html.escape(opp)}</b>")
-            lines.append(bar)
-            lines.append("")
-
-        if cup_matches:
-            lines.append(bar)
-            lines.append("🏆 <b>КУБОК КПЛ · Best-of-3</b>")
-            for i, m in enumerate(cup_matches, 1):
-                opp = m['opponent_team'] or m['opponent_username'] or "Соперник"
-                stage = m.get('cup_stage', '1/8')
-                g_num = m.get('game_num_in_series', 1)
-                lines.append(f"   {i}. {stage} Финала (Игра {g_num}): 🆚 <b>{html.escape(opp)}</b>")
-            lines.append(bar)
-            lines.append("")
+        lines.append(bar)
+        lines.append("⚽ <b>МАТЧИ ТУРНИРА</b>")
+        for i, m in enumerate(u_matches, 1):
+            opp = m.get('opponent_team') or m.get('opponent_username') or "Соперник"
+            lines.append(f"   {i}. Тур {m.get('round_number', '?')}: 🆚 <b>{html.escape(opp)}</b>")
+        lines.append(bar)
+        lines.append("")
 
         lines.append("📅 Согласуйте время с соперниками и внесите результаты через кабинет — иначе последуют ⚠️ предупреждения!")
 
@@ -2071,17 +1772,8 @@ async def admin_view_match(update: Update, context: ContextTypes.DEFAULT_TYPE, m
         await query.edit_message_text("❌ Матч не найден.", reply_markup=InlineKeyboardMarkup(keyboard))
         return
         
-    is_cup = match.get("tournament_type") == "cup"
-    cup_stage = match.get("cup_stage", "1/8")
-    g_num = match.get("game_num_in_series", 1)
-
-    if is_cup:
-        title_stage = f"{cup_stage} Финала" if cup_stage != "final" else "ФИНАЛ"
-        header_title = f"🏆 <b>Карточка кубкового матча #{match['id']} | Кубок КПЛ — {title_stage} (Игра {g_num})</b>"
-        back_button = InlineKeyboardButton("« Назад к Кубку", callback_data=f"admin_cup_stage_{cup_stage}")
-    else:
-        header_title = f"⚽️ <b>Карточка матча #{match['id']} (Тур {match['round_number']})</b>"
-        back_button = InlineKeyboardButton("« Назад к туру", callback_data=f"admin_round_matches_{match['round_number']}")
+    header_title = f"⚽️ <b>Карточка матча #{match['id']} (Тур {match.get('round_number', '?')})</b>"
+    back_button = InlineKeyboardButton("« Назад", callback_data="admin_manage_matches_info")
 
     status_map = {
         "pending": "⚔️ Ожидает игры",
@@ -2122,10 +1814,7 @@ async def admin_view_match(update: Update, context: ContextTypes.DEFAULT_TYPE, m
     if match.get("status") == "pending":
         btn_ext = "▶️ Снять продление (Возобновить варны)" if is_extended else "⏸ Продлить матч (Заморозить варны)"
         keyboard.append([InlineKeyboardButton(btn_ext, callback_data=f"admin_extend_match_{match_id}")])
-    if not is_cup:
-        keyboard.append([InlineKeyboardButton("🤝 ТН 0:0 (Ничья)", callback_data=f"admin_tp_draw_{match_id}"), InlineKeyboardButton("🔄 Сбросить результат", callback_data=f"admin_reset_match_execute_{match_id}")])
-    else:
-        keyboard.append([InlineKeyboardButton("🔄 Сбросить результат", callback_data=f"admin_reset_match_execute_{match_id}")])
+    keyboard.append([InlineKeyboardButton("🤝 ТН 0:0 (Ничья)", callback_data=f"admin_tp_draw_{match_id}"), InlineKeyboardButton("🔄 Сбросить результат", callback_data=f"admin_reset_match_execute_{match_id}")])
     if match.get("photo_id"):
         keyboard.append([InlineKeyboardButton("📸 Просмотр скриншота матча", callback_data=f"admin_view_match_photo_{match_id}")])
     keyboard.append([back_button])
@@ -2172,7 +1861,7 @@ async def admin_view_match_photo(update: Update, context: ContextTypes.DEFAULT_T
     p1 = html.escape(str(match['player1_nickname'] or match['player1_team'] or ""))
     p2 = html.escape(str(match['player2_nickname'] or match['player2_team'] or ""))
     score_str = f"{match['player1_score']} : {match['player2_score']}" if match['player1_score'] is not None else "Не сыгран"
-    title = "🏆 Кубок" if match.get("tournament_type") == "cup" else f"Тур {match['round_number']}"
+    title = f"Тур {match.get('round_number', '?')}"
 
     caption = (
         f"📸 <b>Скриншот матча #{match_id} ({title})</b>\n"
@@ -2316,9 +2005,7 @@ async def admin_set_tp_home_execute(update: Update, context: ContextTypes.DEFAUL
     if not query or not is_admin(query.from_user.id): return
     await query.answer()
     match_id = int(query.data.replace("admin_tp_home_", ""))
-    next_stage = await asyncio.to_thread(database.set_technical_result, match_id, 1, 0)
-    if next_stage:
-        await notify_cup_stage_opened(context.bot, next_stage)
+    await asyncio.to_thread(database.set_technical_result, match_id, 1, 0)
     await _notify_group_about_tp(context, match_id, "home")
     await _process_tp_debt_rewards(context, match_id)
     await query.answer("✅ Назначено ТП 1:0 (Победа Хозяев)", show_alert=True)
@@ -2330,9 +2017,7 @@ async def admin_set_tp_away_execute(update: Update, context: ContextTypes.DEFAUL
     if not query or not is_admin(query.from_user.id): return
     await query.answer()
     match_id = int(query.data.replace("admin_tp_away_", ""))
-    next_stage = await asyncio.to_thread(database.set_technical_result, match_id, 0, 1)
-    if next_stage:
-        await notify_cup_stage_opened(context.bot, next_stage)
+    await asyncio.to_thread(database.set_technical_result, match_id, 0, 1)
     await _notify_group_about_tp(context, match_id, "away")
     await _process_tp_debt_rewards(context, match_id)
     await query.answer("✅ Назначено ТП 0:1 (Победа Гостей)", show_alert=True)

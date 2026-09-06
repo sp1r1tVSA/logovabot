@@ -167,34 +167,13 @@ async def _process_draft_group_delayed(buffer_key: str, update: Update, context:
         await status_msg.edit_text(f"❌ Не найден активный матч между командами {html.escape(t1)} и {html.escape(t2)}.\nВозможно, этот тур уже подтвержден или названия клубов не совпадают.")
         return
 
-    is_cup = first_match.get("tournament_type") == "cup"
-    s_id = first_match.get("cup_series_id")
-    cup_stage = first_match.get("cup_stage", "1/8")
-    
     prepared_games = []
     
     for idx, m_info in enumerate(matches_list):
         if idx == 0:
             cur_match = first_match
         else:
-            if is_cup and s_id:
-                cur_match = database.get_cup_match_by_series_and_game(s_id, idx + 1)
-                if not cur_match:
-                    cur_match = {
-                        "id": None,
-                        "tournament_type": "cup",
-                        "cup_stage": cup_stage,
-                        "cup_series_id": s_id,
-                        "game_num_in_series": idx + 1,
-                        "round_number": -1,
-                        "player1_team": first_match["player2_team"] if (idx % 2 == 1) else first_match["player1_team"],
-                        "player2_team": first_match["player1_team"] if (idx % 2 == 1) else first_match["player2_team"],
-                        "player1_username": first_match.get("player2_username") if (idx % 2 == 1) else first_match.get("player1_username"),
-                        "player2_username": first_match.get("player1_username") if (idx % 2 == 1) else first_match.get("player2_username"),
-                        "division_id": first_match.get("division_id") or division_id,
-                    }
-            else:
-                cur_match = database.get_active_match_by_teams(t1, t2, caption=caption, division_id=division_id) or first_match
+            cur_match = database.get_active_match_by_teams(t1, t2, caption=caption, division_id=division_id) or first_match
 
         home_team = cur_match.get("player1_team") or cur_match.get("player1_nickname") or t1
         away_team = cur_match.get("player2_team") or cur_match.get("player2_nickname") or t2
@@ -287,9 +266,7 @@ async def _process_draft_group_delayed(buffer_key: str, update: Update, context:
         prepared_games.append({
             "match_id": cur_match.get("id"),
             "round_number": cur_match.get("round_number"),
-            "tournament_type": cur_match.get("tournament_type"),
-            "cup_stage": cur_match.get("cup_stage"),
-            "cup_series_id": s_id,
+            "division_id": cur_match.get("division_id") or division_id,
             "game_num": cur_match.get("game_num_in_series", idx + 1),
             "home_team": home_team,
             "away_team": away_team,
@@ -358,15 +335,10 @@ async def _process_draft_group_delayed(buffer_key: str, update: Update, context:
     else:
         draft_data = {
             "is_multi": True,
-            "s_id": s_id,
             "games": prepared_games
         }
         
-        if is_cup:
-            stage_title = f"{cup_stage} Финала" if cup_stage != "final" else "ФИНАЛ"
-            post_lines = [f"📝 <b>ЧЕРНОВИК РЕЗУЛЬТАТОВ СЕРИИ | КУБОК КПЛ - {stage_title}</b>\n"]
-        else:
-            post_lines = ["📝 <b>ЧЕРНОВИК РЕЗУЛЬТАТОВ МАТЧЕЙ</b>\n"]
+        post_lines = ["📝 <b>ЧЕРНОВИК РЕЗУЛЬТАТОВ МАТЧЕЙ</b>\n"]
 
         def _fmt(data):
             if not data: return ""
@@ -393,50 +365,6 @@ async def _process_draft_group_delayed(buffer_key: str, update: Update, context:
                 if not g["is_single_timeline"]:
                     post_lines.append(f"🎯 <b>Ассисты ({a_team_esc}):</b> {html.escape(a_a_str) if a_a_str else 'Нет'}")
             post_lines.append("")
-
-        if is_cup and s_id:
-            s_row = database.get_cup_series(s_id)
-            if s_row:
-                team1_n = s_row["team1_name"]
-                team2_n = s_row["team2_name"]
-                
-                with database.transaction() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute("SELECT id, player1_team, player2_team, player1_score, player2_score FROM matches WHERE cup_series_id = ? AND status = 'confirmed'", (s_id,))
-                    conf_matches = cursor.fetchall()
-                
-                prep_game_ids = set(g.get("match_id") for g in prepared_games if g.get("match_id"))
-                
-                t1_wins = 0
-                t2_wins = 0
-                
-                for cm in conf_matches:
-                    if cm["id"] in prep_game_ids:
-                        continue
-                    s1, s2 = cm["player1_score"] or 0, cm["player2_score"] or 0
-                    if s1 > s2: w = cm["player1_team"]
-                    elif s2 > s1: w = cm["player2_team"]
-                    else: continue
-                    if w and database.teams_match(w, team1_n): t1_wins += 1
-                    elif w and database.teams_match(w, team2_n): t2_wins += 1
-                
-                for g in prepared_games:
-                    if g["h_score"] > g["a_score"]: w = g["home_team"]
-                    elif g["a_score"] > g["h_score"]: w = g["away_team"]
-                    else: continue
-                    if database.teams_match(w, team1_n): t1_wins += 1
-                    elif database.teams_match(w, team2_n): t2_wins += 1
-                s_stage = (s_row.get("stage") or "1/8").lower()
-                wins_needed = 3 if s_stage == 'final' else 2
-                best_of_text = "Best-of-5" if s_stage == 'final' else "Best-of-3"
-
-                post_lines.append(f"📊 <b>Счёт серии ({best_of_text}): {html.escape(team1_n)} {t1_wins} : {t2_wins} {html.escape(team2_n)}</b>")
-                if t1_wins >= wins_needed or t2_wins >= wins_needed:
-                    series_win = team1_n if t1_wins >= wins_needed else team2_n
-                    if s_stage == 'final':
-                        post_lines.append(f"🏆 <b>ЧЕМПИОН КУБКА КПЛ 2026: {html.escape(series_win)}! ПОЗДРАВЛЯЕМ С ПОБЕДОЙ В ТУРНИРЕ! 🎉</b>")
-                    else:
-                        post_lines.append(f"🏆 <b>Победитель серии: {html.escape(series_win)}! Проходит в следующий раунд!</b>")
 
         post_lines.append("\n⏳ <i>Ожидает подтверждения администратором...</i>")
         group_text = "\n".join(post_lines)
@@ -499,29 +427,21 @@ async def cb_draft_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     draft = drafts.pop(draft_uuid)
     is_multi = draft.get("is_multi", False)
     games = draft.get("games", [draft])
-    s_id = draft.get("s_id")
-    
-    last_next_stage = None
     main_group_id = await asyncio.to_thread(database.get_group_id)
     results_topic_id = (await asyncio.to_thread(database.get_config, "results_topic_id")) or (await asyncio.to_thread(database.get_config, "reports_topic_id"))
 
     for idx, g in enumerate(games):
         m_id = g.get("match_id")
-        if not m_id and s_id:
-            m_id = await asyncio.to_thread(database.ensure_cup_match_exists, s_id, g.get("game_num", idx + 1))
-            
         if not m_id:
             logger.error(f"Could not resolve match_id for game {idx+1}")
             continue
             
         try:
-            next_stage = await asyncio.to_thread(
+            await asyncio.to_thread(
                 database.confirm_and_finalize_match,
                 m_id, g["h_score"], g["a_score"], g["events"],
                 reporter_id=g["reporter_id"], photo_id=g["photo_id"]
             )
-            if next_stage:
-                last_next_stage = next_stage
 
             # Reward players with -1 warn if this was an overdue debt match
             try:
@@ -611,10 +531,6 @@ async def cb_draft_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                     await context.bot.send_message(**kwargs)
             except Exception as e:
                 logger.error(f"Failed to send match post to group: {e}")
-
-    if last_next_stage:
-        from handlers.admin import notify_cup_stage_opened
-        await notify_cup_stage_opened(context.bot, last_next_stage)
 
     admin_name = f"@{query.from_user.username}" if query.from_user.username else (query.from_user.first_name or "Администратор")
     original_text = query.message.caption if query.message.photo else query.message.text

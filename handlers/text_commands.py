@@ -32,7 +32,7 @@ async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_T
     cmd_text = text[match.end():].strip()
     if not cmd_text:
         await msg.reply_text(
-            "👋 Привет! Я <b>Темшик</b> — бот лиги КПЛ.\n"
+            "👋 Привет! Я <b>Темшик</b> — турнирный бот.\n"
             "Напиши <code>Темшик помощь</code> или <code>Темшик команды</code>, чтобы посмотреть список доступных команд.",
             parse_mode="HTML"
         )
@@ -54,11 +54,10 @@ async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_T
         help_text = (
             "📋 <b>ТЕКСТОВЫЕ КОМАНДЫ БОТА:</b>\n\n"
             "⚽ <b>Для всех участников:</b>\n"
-            "• <code>Темшик таблица</code> — турнирная таблица лиги\n"
+            "• <code>Темшик таблица</code> — турнирная таблица\n"
             "• <code>Темшик состав [клуб]</code> — состав клуба\n"
             "• <code>Темшик бомбардиры [число]</code> — топ бомбардиров\n"
             "• <code>Темшик ассистенты [число]</code> — топ ассистентов\n"
-            "• <code>Темшик кубок</code> — сетка и серии кубка\n"
             "• <code>Темшик долги</code> — несыгранные матчи с тегами\n"
         )
         if is_adm:
@@ -70,7 +69,6 @@ async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_T
                 "• <code>Темшик открыть тур [номер]</code>\n"
                 "• <code>Темшик закрыть тур [номер]</code>\n"
                 "• <code>Темшик дедлайн [номер] [дата/время]</code>\n"
-                "• <code>Темшик синх кубок</code> — синхронизировать победителей\n"
                 "• <code>Темшик варн @username [причина]</code> — выдать варн\n"
                 "• <code>Темшик снять варн @username</code> — снять варн\n"
                 "• <code>Темшик варны</code> — список игроков с варнами\n"
@@ -81,8 +79,8 @@ async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_T
 
     if action in ("таблица", "турнирка", "table", "standings"):
         img_buf = await asyncio.to_thread(generate_league_table_image)
-        caption = "🏆 <b>Турнирная таблица лиги КПЛ 2026</b>"
-        keyboard = [[InlineKeyboardButton("🔄 Обновить", callback_data="refresh_league_table_topic")]]
+        caption = "🏆 <b>Турнирная таблица турнира</b>"
+        keyboard = [[InlineKeyboardButton("🔄 Обновить", callback_data="refresh_div_table_0")]]
         await msg.reply_photo(photo=img_buf, caption=caption, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
         return True
 
@@ -90,21 +88,16 @@ async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_T
         from telegram import InputFile
         from services.graphics import top_stats_generator
 
-        args_lower = args_str.lower()
         nums = re.findall(r"\d+", args_str)
-        is_cup = "кубок" in args_lower or "cup" in args_lower
-        tourn_type = "cup" if is_cup else "league"
-        tourn_title = "КУБКА" if is_cup else "ЛИГИ"
 
         if nums:
             # Text list mode if explicit number is given
             limit = min(30, max(3, int(nums[0])))
-            fetch_func = database.get_cup_top_scorers if is_cup else database.get_top_scorers
-            top_list = await asyncio.to_thread(fetch_func, limit)
+            top_list = await asyncio.to_thread(database.get_top_scorers, limit)
             if not top_list:
-                await msg.reply_text(f"⚽ Список бомбардиров {tourn_title.lower()} пока пуст.", parse_mode="HTML")
+                await msg.reply_text("⚽ Список бомбардиров пока пуст.", parse_mode="HTML")
                 return True
-            lines = [f"⚽ <b>ТОП-{len(top_list)} БОМБАРДИРОВ {tourn_title} КПЛ:</b>\n"]
+            lines = [f"⚽ <b>ТОП-{len(top_list)} БОМБАРДИРОВ ТУРНИРА:</b>\n"]
             for idx, p in enumerate(top_list, 1):
                 badge = "🥇 " if idx == 1 else ("🥈 " if idx == 2 else ("🥉 " if idx == 3 else f"{idx}. "))
                 team_str = f" ({p['team_name']})" if p.get('team_name') else ""
@@ -114,9 +107,9 @@ async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_T
             return True
         else:
             # Graphic card mode!
-            buf = await asyncio.to_thread(top_stats_generator.generate_top_stats_image, "goals", 10, tourn_type)
-            caption = f"<b>⚽ ТОП БОМБАРДИРОВ {tourn_title} КПЛ 2026</b>"
-            filename = f"{tourn_type}_top_scorers.png"
+            buf = await asyncio.to_thread(top_stats_generator.generate_top_stats_image, "goals", 10)
+            caption = "<b>⚽ ТОП БОМБАРДИРОВ ТУРНИРА</b>"
+            filename = "top_scorers.png"
             await msg.reply_photo(photo=InputFile(buf, filename=filename), caption=caption, parse_mode="HTML")
             return True
 
@@ -124,21 +117,16 @@ async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_T
         from telegram import InputFile
         from services.graphics import top_stats_generator
 
-        args_lower = args_str.lower()
         nums = re.findall(r"\d+", args_str)
-        is_cup = "кубок" in args_lower or "cup" in args_lower
-        tourn_type = "cup" if is_cup else "league"
-        tourn_title = "КУБКА" if is_cup else "ЛИГИ"
 
         if nums:
             # Text list mode if explicit number is given
             limit = min(30, max(3, int(nums[0])))
-            fetch_func = database.get_cup_top_assists if is_cup else database.get_top_assists
-            top_list = await asyncio.to_thread(fetch_func, limit)
+            top_list = await asyncio.to_thread(database.get_top_assists, limit)
             if not top_list:
-                await msg.reply_text(f"🎯 Список ассистентов {tourn_title.lower()} пока пуст.", parse_mode="HTML")
+                await msg.reply_text("🎯 Список ассистентов пока пуст.", parse_mode="HTML")
                 return True
-            lines = [f"🎯 <b>ТОП-{len(top_list)} АССИСТЕНТОВ {tourn_title} КПЛ:</b>\n"]
+            lines = [f"🎯 <b>ТОП-{len(top_list)} АССИСТЕНТОВ ТУРНИРА:</b>\n"]
             for idx, p in enumerate(top_list, 1):
                 badge = "🥇 " if idx == 1 else ("🥈 " if idx == 2 else ("🥉 " if idx == 3 else f"{idx}. "))
                 team_str = f" ({p['team_name']})" if p.get('team_name') else ""
@@ -148,9 +136,9 @@ async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_T
             return True
         else:
             # Graphic card mode!
-            buf = await asyncio.to_thread(top_stats_generator.generate_top_stats_image, "assists", 10, tourn_type)
-            caption = f"<b>🎯 ТОП АССИСТЕНТОВ {tourn_title} КПЛ 2026</b>"
-            filename = f"{tourn_type}_top_assisters.png"
+            buf = await asyncio.to_thread(top_stats_generator.generate_top_stats_image, "assists", 10)
+            caption = "<b>🎯 ТОП АССИСТЕНТОВ ТУРНИРА</b>"
+            filename = "top_assisters.png"
             await msg.reply_photo(photo=InputFile(buf, filename=filename), caption=caption, parse_mode="HTML")
             return True
 
@@ -212,56 +200,6 @@ async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_T
                 f"📸 У клуба <b>{html.escape(team_to_find)}</b> ещё не загружено фото состава.",
                 parse_mode="HTML"
             )
-        return True
-
-    # =========================================================================
-    # ⚔️ КУБОК (Сетка)
-    # =========================================================================
-
-    if action in ("сетка", "кубок", "cup", "bracket"):
-        from telegram import InputFile
-        
-        stage_arg = args_str.strip().lower()
-        if any(st in stage_arg for st in ("1/8", "1/4", "1/2", "финал", "final")):
-            if "1/8" in stage_arg:
-                stage = "1/8"
-            elif "1/4" in stage_arg:
-                stage = "1/4"
-            elif "1/2" in stage_arg:
-                stage = "1/2"
-            else:
-                stage = "final"
-            
-            from services.graphics.table_generator import generate_cup_bracket_image
-            img_buf = await asyncio.to_thread(generate_cup_bracket_image, stage)
-            stage_title_map = {'1/8': '1/8 Финала', '1/4': '1/4 Финала', '1/2': '1/2 Финала', 'final': '🏆 Финал'}
-            title = stage_title_map.get(stage, stage)
-            caption = f"🏆 <b>КУБОК КПЛ 2026 | {title}</b>\n<i>Графическая сетка турнира</i>"
-            filename = f"cup_bracket_{stage}.png"
-        else:
-            # Default to full bracket graphic!
-            from services.graphics.cup_bracket_generator import generate_bracket_image
-            img_buf = await asyncio.to_thread(generate_bracket_image)
-            caption = "🏆 <b>КУБОК КПЛ 2026 | ПОЛНАЯ СЕТКА</b>\n<i>От 1/8 до Финала</i>"
-            filename = "full_cup_bracket.png"
-
-        keyboard = [
-            [
-                InlineKeyboardButton("1/8", callback_data="show_cup_graphic_1/8"),
-                InlineKeyboardButton("1/4", callback_data="show_cup_graphic_1/4"),
-                InlineKeyboardButton("1/2", callback_data="show_cup_graphic_1/2"),
-                InlineKeyboardButton("Финал", callback_data="show_cup_graphic_final"),
-            ],
-            [
-                InlineKeyboardButton("📊 Полная сетка", callback_data="show_full_cup_bracket")
-            ]
-        ]
-        await msg.reply_photo(
-            photo=InputFile(img_buf, filename=filename),
-            caption=caption,
-            parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
         return True
 
     # =========================================================================
@@ -450,18 +388,6 @@ async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_T
         )
         return True
 
-    if action in ("синх", "синх_кубок", "sync_cup") or full_cmd.startswith("синх кубок"):
-        if not is_adm:
-            await msg.reply_text("⚠️ Эта команда доступна только администраторам турнира.")
-            return True
-
-        advanced = await asyncio.to_thread(database.sync_cup_bracket)
-        await msg.reply_text(
-            f"🔄 <b>Кубковая сетка синхронизирована.</b> Перенесено победителей в следующие стадии: <b>{advanced}</b>.",
-            parse_mode="HTML"
-        )
-        return True
-
     if action in ("автоварны", "проверить_долги", "чекер_долгов") or full_cmd.startswith("автоварны") or full_cmd.startswith("проверить долги") or full_cmd.startswith("проверка долгов"):
         if not is_adm:
             await msg.reply_text("⚠️ Эта команда доступна только администраторам турнира.")
@@ -499,126 +425,13 @@ async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_T
         canon = database.resolve_team_name(target_club_raw)
         if not canon:
             await msg.reply_text(
-                f"❌ Клуб <b>{html.escape(target_club_raw)}</b> не найден в Лиге КПЛ. Напишите <code>/club</code>, чтобы посмотреть весь список.",
+                f"❌ Клуб <b>{html.escape(target_club_raw)}</b> не найден. Напишите <code>/club</code>, чтобы посмотреть весь список.",
                 parse_mode="HTML"
             )
             return True
 
         from handlers.cabinet import send_or_edit_club_card
         await send_or_edit_club_card(update, context, canon, back_cb="cb_clubs_catalog")
-        return True
-
-    if action in ("анонс_кубок", "анонс_финал", "анонс") or full_cmd.startswith("анонс кубок") or full_cmd.startswith("анонс финал") or full_cmd.startswith("кубок анонс"):
-        if not is_adm:
-            await msg.reply_text("⚠️ Эта команда доступна только администраторам турнира.")
-            return True
-
-        stage_req = "final"
-        if "1/8" in full_cmd:
-            stage_req = "1/8"
-        elif "1/4" in full_cmd:
-            stage_req = "1/4"
-        elif "1/2" in full_cmd or "полуфинал" in full_cmd:
-            stage_req = "1/2"
-        elif "финал" in full_cmd or "final" in full_cmd:
-            stage_req = "final"
-
-        from handlers.admin import notify_cup_stage_opened
-        await notify_cup_stage_opened(context.bot, stage_req)
-        await msg.reply_text(f"🚀 <b>Официальное уведомление и сетка для стадии «{stage_req}» отправлены в тему отчётов!</b>", parse_mode="HTML")
-        return True
-
-    if action in ("напомнить_кубок", "кубок_напомнить") or full_cmd.startswith("напомнить кубок") or full_cmd.startswith("кубок напомнить") or full_cmd.startswith("напомни кубок"):
-        if not is_adm:
-            await msg.reply_text("⚠️ Эта команда доступна только администраторам турнира.")
-            return True
-
-        stage_req = "final"
-        if "1/8" in full_cmd:
-            stage_req = "1/8"
-        elif "1/4" in full_cmd:
-            stage_req = "1/4"
-        elif "1/2" in full_cmd or "полуфинал" in full_cmd:
-            stage_req = "1/2"
-        elif "финал" in full_cmd or "final" in full_cmd:
-            stage_req = "final"
-
-        from handlers.admin import admin_remind_cup_execute
-        series_list = await asyncio.to_thread(database.get_cup_series_list, stage_req)
-        unplayed_matches = []
-        for s in series_list:
-            if s["status"] != "completed":
-                for m in s.get("matches", []):
-                    if m["status"] == "pending":
-                        unplayed_matches.append((s, m))
-
-        if not unplayed_matches:
-            await msg.reply_text(f"✅ В стадии {stage_req} нет несыгранных матчей!", parse_mode="HTML")
-            return True
-
-        from handlers.admin import safe_send_notification
-        pm_sent = 0
-        for s, m in unplayed_matches:
-            t1, t2 = s["team1_name"], s["team2_name"]
-            w1, w2 = s["team1_wins"], s["team2_wins"]
-            g_num = m["game_num_in_series"]
-            wins_needed = 3 if stage_req == 'final' else 2
-            best_of_text = "Best-of-5" if stage_req == 'final' else "Best-of-3"
-            rule_desc = "Матчи играются в стандартном режиме (90 мин, без доп. времени и серии пенальти)." if stage_req == 'final' else "Каждая игра до победы (с доп. временем и пенальти)."
-
-            p1_id, p2_id = None, None
-            with database.transaction() as conn:
-                c = conn.cursor()
-                c.execute("SELECT telegram_id FROM users WHERE LOWER(team_name) = LOWER(?)", (t1.strip(),))
-                r1 = c.fetchone()
-                if r1: p1_id = r1[0]
-                c.execute("SELECT telegram_id FROM users WHERE LOWER(team_name) = LOWER(?)", (t2.strip(),))
-                r2 = c.fetchone()
-                if r2: p2_id = r2[0]
-
-            pm_text = (
-                f"🏆 <b>НАПОМИНАНИЕ О КУБКОВОМ МАТЧЕ!</b>\n\n"
-                f"⚔️ <b>Стадия:</b> {stage_req} Финала (Игра {g_num})\n"
-                f"🏠 <b>{html.escape(t1)}</b> 🆚 <b>{html.escape(t2)}</b> ✈️\n"
-                f"📊 <b>Счёт серии ({best_of_text}):</b> {w1} : {w2}\n\n"
-                f"Пожалуйста, сыграйте свой кубковый матч! {rule_desc}"
-            )
-            kb = [[InlineKeyboardButton("📋 Внести результат", callback_data=f"cabinet_report_score_{m['id']}")]]
-            if p1_id and p1_id > 0:
-                if await safe_send_notification(context.bot, p1_id, pm_text, InlineKeyboardMarkup(kb)):
-                    pm_sent += 1
-            if p2_id and p2_id > 0:
-                if await safe_send_notification(context.bot, p2_id, pm_text, InlineKeyboardMarkup(kb)):
-                    pm_sent += 1
-
-        main_group_id = await asyncio.to_thread(database.get_group_id)
-        reports_topic_id = await asyncio.to_thread(database.get_config, "reports_topic_id")
-        if main_group_id:
-            lines = [
-                f"🏆 <b>НАПОМИНАНИЕ О КУБКЕ КПЛ | {stage_req} Финала</b>\n",
-                f"Несыгранные кубковые матчи ({len(unplayed_matches)}):"
-            ]
-            for s, m in unplayed_matches:
-                t1_esc, t2_esc = html.escape(s["team1_name"]), html.escape(s["team2_name"])
-                w1, w2 = s["team1_wins"], s["team2_wins"]
-                g_num = m["game_num_in_series"]
-                lines.append(f"• ⚔️ <b>Игра {g_num}:</b> <b>{t1_esc}</b> 🆚 <b>{t2_esc}</b> (Счёт серии: {w1} : {w2})")
-
-            if stage_req == 'final':
-                lines.append("\n⚠️ Напоминаем: в финале серия до 3-х побед (Best-of-5), матчи играются в обычном режиме (90 мин, без доп. времени и серии пенальти).")
-            else:
-                lines.append("\n⚠️ Напоминаем: в каждом кубковом матче обязательно доп. время и пенальти (ничьих нет).")
-            lines.append("Пожалуйста, внесите результаты в бота!")
-
-            try:
-                kwargs = {"chat_id": main_group_id, "text": "\n".join(lines), "parse_mode": "HTML"}
-                if reports_topic_id:
-                    kwargs["message_thread_id"] = int(reports_topic_id)
-                await context.bot.send_message(**kwargs)
-            except Exception as e:
-                logger.exception("Failed to post cup reminder summary to group")
-
-        await msg.reply_text(f"🚀 <b>Напоминания по стадии «{stage_req}» отправлены!</b> (В ЛС: {pm_sent}, Тема отчетов: ✅)", parse_mode="HTML")
         return True
 
     if action in ("варн", "warn"):

@@ -83,8 +83,7 @@ async def handle_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         all_squads,
         all_rounds,
         recent_form_map,
-        pending_matches,
-        cup_info_text
+        pending_matches
     ) = await asyncio.gather(
         asyncio.to_thread(database.get_user, user_id),
         asyncio.to_thread(database.get_standings),
@@ -94,8 +93,7 @@ async def handle_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         asyncio.to_thread(database.get_all_squads),
         asyncio.to_thread(database.get_all_rounds),
         asyncio.to_thread(database.get_teams_recent_form, 5),
-        asyncio.to_thread(database.get_open_pending_matches),
-        asyncio.to_thread(database.get_full_cup_summary_for_ai)
+        asyncio.to_thread(database.get_open_pending_matches)
     )
 
     user_team = user_data["team_name"] if user_data else "Не зарегистрирован"
@@ -216,7 +214,7 @@ async def handle_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  6. Умышленное затягивание времени (особенно с 70 по 90 мин).\n"
         "• Судья турнира: @onvamneVSAplayer (принимает окончательные решения по спорам). Главный админ / правила: @antonv2801.\n"
         "• Ограничения: Ничьи переигрывать нельзя (тех. поражение/снятие очков). Уходить с поста тренера до конца сезона запрещено (ЧС турнира).\n"
-        "• Кубок и Награды: Есть Кубок КПЛ (стадия 1/8). В конце сезона вручается премия 'Золотой Мяч'. Красивые голы отправлять @antonv2801.\n"
+        "• Награды: В конце сезона вручается премия 'Золотой Мяч'. Красивые голы отправлять @antonv2801.\n"
     )
 
     # Opponents list: club -> coach username (from registered users)

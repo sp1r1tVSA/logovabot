@@ -78,30 +78,27 @@ def generate_top_stats_image(
         except Exception:
             division_name = f"Дивизион {division_id}"
 
-    is_cup = (tournament_type == "cup")
-    if is_cup:
-        sub_suffix = "КУБОК КПЛ 2026"
-    elif division_name:
-        sub_suffix = f"СЕЗОН 2026 • {division_name.upper()}"
+    if division_name:
+        sub_suffix = f"СЕЗОН 2 • {division_name.upper()}"
     else:
-        sub_suffix = "СЕЗОН 2026"
+        sub_suffix = "СЕЗОН 2"
 
     if mode == "goals":
-        title_text = "ТОП БОМБАРДИРОВ КУБКА" if is_cup else ("ТОП БОМБАРДИРОВ" if not division_name else f"БОМБАРДИРЫ • {division_name.upper()}")
+        title_text = "ТОП БОМБАРДИРОВ" if not division_name else f"БОМБАРДИРЫ • {division_name.upper()}"
         subtitle_text = f"ГОНКА БОМБАРДИРОВ  •  {sub_suffix}"
         stat_label_str = "ГОЛОВ"
         stat_color = GOAL_COLOR
         badge_bg = GOAL_BG
         badge_border = GOAL_BORDER
-        raw_data = database.get_cup_top_scorers(limit) if is_cup else database.get_top_scorers(limit, division_id=division_id, season_id=season_id)
+        raw_data = database.get_top_scorers(limit, division_id=division_id, season_id=season_id)
     else:
-        title_text = "ТОП АССИСТЕНТОВ КУБКА" if is_cup else ("ТОП АССИСТЕНТОВ" if not division_name else f"АССИСТЕНТЫ • {division_name.upper()}")
+        title_text = "ТОП АССИСТЕНТОВ" if not division_name else f"АССИСТЕНТЫ • {division_name.upper()}"
         subtitle_text = f"ЛУЧШИЕ АССИСТЕНТЫ  •  {sub_suffix}"
         stat_label_str = "ПАСОВ"
         stat_color = ASSIST_COLOR
         badge_bg = ASSIST_BG
         badge_border = ASSIST_BORDER
-        raw_data = database.get_cup_top_assists(limit) if is_cup else database.get_top_assists(limit, division_id=division_id, season_id=season_id)
+        raw_data = database.get_top_assists(limit, division_id=division_id, season_id=season_id)
 
     # ── 2x Scaled Fonts ────────────────────────────────────────────────────
     font_title    = load_font(26 * SCALE, bold=True)
@@ -287,7 +284,7 @@ def generate_top_stats_image(
     # ══════════════════════════════════════════════════════════════════════
     y += 8 * SCALE
     draw.line([(PAD, y), (WIDTH - PAD, y)], fill=BORDER_COLOR, width=1 * SCALE)
-    footer_str = "КПЛ 2026  •  Официальная статистика турнира"
+    footer_str = "Официальная статистика турнира"
     fw = int(draw.textlength(footer_str, font=font_footer))
     draw.text(((WIDTH - fw) // 2, y + 12 * SCALE), footer_str, fill=MUTED, font=font_footer)
 

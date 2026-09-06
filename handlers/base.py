@@ -14,8 +14,7 @@ from services.graphics.table_generator import generate_league_table_image
 from services.graphics import top_stats_generator
 from constants import (
     CB_MAIN_MENU, CB_MENU_CABINET, CB_MENU_TOURNAMENTS,
-    CB_MENU_DIVISIONS, CB_MENU_LEAGUE, CB_MENU_SUPPORT, CB_LEAGUE_TABLE,
-    CB_LEAGUE_SCORERS, CB_LEAGUE_ASSISTS, CB_REFRESH_LEAGUE_TABLE,
+    CB_MENU_DIVISIONS, CB_MENU_SUPPORT,
     CB_ADMIN_MAIN_MENU
 )
 
@@ -535,190 +534,18 @@ async def show_division_assists(update: Update, context: ContextTypes.DEFAULT_TY
         reply_markup=markup
     )
 
-async def show_top_scorers(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Show Top 20 goalscorers leaderboard."""
-    query = update.callback_query
-    if query:
-        try:
-            await query.answer()
-        except Exception:
-            pass
-
-    scorers = await asyncio.to_thread(database.get_top_scorers, limit=20)
-    
-    text = "⚽ <b>ТОП БОМБАРДИРОВ ЛИГИ</b>\n\n"
-    if not scorers:
-        text += "<i>Пока нет забитых голов в турнире.</i>"
-    else:
-        medals = ["🥇", "🥈", "🥉"]
-        for idx, row in enumerate(scorers, 1):
-            rank = medals[idx - 1] if idx <= 3 else f"<b>{idx}.</b>"
-            p_name = html.escape(str(row['player_name']))
-            t_name = html.escape(str(row['team_name']))
-            goals = row['total_goals']
-            text += f"{rank} <b>{p_name}</b> ({t_name}) — <b>{goals}</b> ⚽\n"
-
-
-    keyboard = [
-        [InlineKeyboardButton("🖼 Графика (с фото)", callback_data="img_top_scorers")],
-        [InlineKeyboardButton("🎯 Перейти к Ассистам", callback_data="league_assists")],
-        [InlineKeyboardButton("« Назад в раздел «Лига»", callback_data="menu_league")]
-    ]
-    markup = InlineKeyboardMarkup(keyboard)
-
-    if query:
-        target_chat_id = query.message.chat_id if query.message else (update.effective_chat.id if update.effective_chat else update.effective_user.id)
-        thread_id = query.message.message_thread_id if query.message and query.message.is_topic_message else None
-        if query.message and query.message.photo:
-            try:
-                await query.message.delete()
-            except Exception:
-                pass
-            await context.bot.send_message(chat_id=target_chat_id, message_thread_id=thread_id, text=text, reply_markup=markup, parse_mode="HTML")
-        else:
-            try:
-                await query.edit_message_text(text, reply_markup=markup, parse_mode="HTML")
-            except Exception:
-                try:
-                    await query.message.delete()
-                except Exception:
-                    pass
-                await context.bot.send_message(chat_id=target_chat_id, message_thread_id=thread_id, text=text, reply_markup=markup, parse_mode="HTML")
-    elif update.message:
-        await update.message.reply_text(text, reply_markup=markup, parse_mode="HTML")
-
-async def show_top_assists(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Show Top 20 assist providers leaderboard."""
-    query = update.callback_query
-    if query:
-        try:
-            await query.answer()
-        except Exception:
-            pass
-
-    assists = await asyncio.to_thread(database.get_top_assists, limit=20)
-    
-    text = "🎯 <b>ТОП АССИСТЕНТОВ ЛИГИ</b>\n\n"
-    if not assists:
-        text += "<i>Пока нет голевых передач в турнире.</i>"
-    else:
-        medals = ["🥇", "🥈", "🥉"]
-        for idx, row in enumerate(assists, 1):
-            rank = medals[idx - 1] if idx <= 3 else f"<b>{idx}.</b>"
-            p_name = html.escape(str(row['player_name']))
-            t_name = html.escape(str(row['team_name']))
-            ast = row['total_assists']
-            text += f"{rank} <b>{p_name}</b> ({t_name}) — <b>{ast}</b> 🎯\n"
-
-    keyboard = [
-        [InlineKeyboardButton("🖼 Графика (с фото)", callback_data="img_top_assisters")],
-        [InlineKeyboardButton("⚽ Перейти к Бомбардирам", callback_data="league_scorers")],
-        [InlineKeyboardButton("« Назад в раздел «Лига»", callback_data="menu_league")]
-    ]
-    markup = InlineKeyboardMarkup(keyboard)
-
-    if query:
-        target_chat_id = query.message.chat_id if query.message else (update.effective_chat.id if update.effective_chat else update.effective_user.id)
-        thread_id = query.message.message_thread_id if query.message and query.message.is_topic_message else None
-        if query.message and query.message.photo:
-            try:
-                await query.message.delete()
-            except Exception:
-                pass
-            await context.bot.send_message(chat_id=target_chat_id, message_thread_id=thread_id, text=text, reply_markup=markup, parse_mode="HTML")
-        else:
-            try:
-                await query.edit_message_text(text, reply_markup=markup, parse_mode="HTML")
-            except Exception:
-                try:
-                    await query.message.delete()
-                except Exception:
-                    pass
-                await context.bot.send_message(chat_id=target_chat_id, message_thread_id=thread_id, text=text, reply_markup=markup, parse_mode="HTML")
-    elif update.message:
-        await update.message.reply_text(text, reply_markup=markup, parse_mode="HTML")
-
-
-async def send_top_scorers_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Generate and send PNG graphics card for Top Scorers with player photos."""
-    query = update.callback_query
-    if query:
-        await query.answer()
-
-    buf = await asyncio.to_thread(top_stats_generator.generate_top_stats_image, "goals", 10)
-
-    keyboard = [
-        [InlineKeyboardButton("🎯 Ассистенты (Графика)", callback_data="img_top_assisters")],
-        [InlineKeyboardButton("⚽ К списку бомбардиров", callback_data="league_scorers")],
-        [InlineKeyboardButton("« Раздел «Лига»", callback_data="menu_league")]
-    ]
-    markup = InlineKeyboardMarkup(keyboard)
-
-    target_chat_id = query.message.chat_id if query and query.message else (update.effective_chat.id if update.effective_chat else update.effective_user.id)
-    thread_id = query.message.message_thread_id if query and query.message and query.message.is_topic_message else None
-
-    if query and query.message:
-        try:
-            await query.message.delete()
-        except Exception:
-            pass
-
-    await context.bot.send_photo(
-        chat_id=target_chat_id,
-        message_thread_id=thread_id,
-        photo=buf,
-        caption="<b>⚽ ТОП БОМБАРДИРОВ КПЛ 2026</b>",
-        parse_mode="HTML",
-        reply_markup=markup
-    )
-
-
-async def send_top_assisters_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Generate and send PNG graphics card for Top Assisters with player photos."""
-    query = update.callback_query
-    if query:
-        await query.answer()
-
-    buf = await asyncio.to_thread(top_stats_generator.generate_top_stats_image, "assists", 10)
-
-    keyboard = [
-        [InlineKeyboardButton("⚽ Бомбардиры (Графика)", callback_data="img_top_scorers")],
-        [InlineKeyboardButton("🎯 К списку ассистентов", callback_data="league_assists")],
-        [InlineKeyboardButton("« Раздел «Лига»", callback_data="menu_league")]
-    ]
-    markup = InlineKeyboardMarkup(keyboard)
-
-    target_chat_id = query.message.chat_id if query and query.message else (update.effective_chat.id if update.effective_chat else update.effective_user.id)
-    thread_id = query.message.message_thread_id if query and query.message and query.message.is_topic_message else None
-
-    if query and query.message:
-        try:
-            await query.message.delete()
-        except Exception:
-            pass
-
-    await context.bot.send_photo(
-        chat_id=target_chat_id,
-        message_thread_id=thread_id,
-        photo=buf,
-        caption="<b>🎯 ТОП АССИСТЕНТОВ КПЛ 2026</b>",
-        parse_mode="HTML",
-        reply_markup=markup
-    )
-
 async def show_tournaments(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     if query:
         await query.answer()
 
     text = (
-        "🏆 <b>Турниры КПЛ 2026</b>\n\n"
+        "🏆 <b>Турниры</b>\n\n"
         "Выберите интересующий соревновательный раздел:"
     )
 
     keyboard = [
-        [InlineKeyboardButton("⚽ Чемпионат КПЛ (Лига)", callback_data="tournaments_league_rounds")],
-        [InlineKeyboardButton("🏆 Кубок КПЛ (Плей-офф Best-of-3)", callback_data="tournaments_cup_menu")],
+        [InlineKeyboardButton("🏆 Дивизионы", callback_data=CB_MENU_DIVISIONS)],
         [InlineKeyboardButton("« Назад в меню", callback_data="main_menu")]
     ]
     markup = InlineKeyboardMarkup(keyboard)
@@ -737,291 +564,6 @@ async def show_tournaments(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     elif update.message:
         await update.message.reply_text(text, parse_mode="HTML", reply_markup=markup)
 
-async def show_league_rounds(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    query = update.callback_query
-    if query:
-        await query.answer()
-
-    rounds = await asyncio.to_thread(database.get_all_rounds)
-
-    keyboard = []
-    if not rounds:
-        text = "⚽ <b>Чемпионат КПЛ</b>\n\nРасписание туров еще не сформировано."
-    else:
-        text = "⚽ <b>Чемпионат КПЛ</b>\n\nВыберите тур для просмотра расписания:"
-        row = []
-        for r in rounds:
-            row.append(InlineKeyboardButton(f"{r} Тур", callback_data=f"show_round_matches_{r}"))
-            if len(row) == 2:
-                keyboard.append(row)
-                row = []
-        if row:
-            keyboard.append(row)
-
-    keyboard.append([InlineKeyboardButton("« Назад к турнирам", callback_data="menu_tournaments")])
-    markup = InlineKeyboardMarkup(keyboard)
-
-    target_chat_id = query.message.chat_id if query and query.message else (update.effective_chat.id if update.effective_chat else update.effective_user.id)
-    thread_id = query.message.message_thread_id if query and query.message and query.message.is_topic_message else None
-
-    if query and query.message and (query.message.photo or query.message.document):
-        try:
-            await query.message.delete()
-        except Exception:
-            pass
-        await context.bot.send_message(chat_id=target_chat_id, message_thread_id=thread_id, text=text, parse_mode="HTML", reply_markup=markup)
-    elif query:
-        try:
-            await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
-        except Exception:
-            try:
-                await query.message.delete()
-            except Exception:
-                pass
-            await context.bot.send_message(chat_id=target_chat_id, message_thread_id=thread_id, text=text, parse_mode="HTML", reply_markup=markup)
-    elif update.message:
-        await update.message.reply_text(text, parse_mode="HTML", reply_markup=markup)
-
-async def show_cup_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    query = update.callback_query
-    if query:
-        await query.answer()
-
-    stage = "1/8"
-    if query and query.data.startswith("show_cup_stage_"):
-        stage = query.data.replace("show_cup_stage_", "")
-
-    series_list = await asyncio.to_thread(database.get_cup_series_list, stage)
-
-    stage_title_map = {
-        '1/8': '1/8 Финала',
-        '1/4': '1/4 Финала',
-        '1/2': '1/2 Финала (Полуфинал)',
-        'final': '🏆 ФИНАЛ КУБКА КПЛ'
-    }
-    title = stage_title_map.get(stage, stage)
-
-    text = f"🏆 <b>КУБОК КПЛ | {title}</b>\n"
-    if stage == 'final':
-        text += f"<i>Формат: Финальная серия до 3-х побед (Best-of-5, без доп. времени и пенальти)</i>\n\n"
-    else:
-        text += f"<i>Формат: Серии до 2-х побед (Best-of-3)</i>\n\n"
-
-    if not series_list:
-        text += "Матчи данной стадии пока не сформированы."
-    else:
-        for s in series_list:
-            t1 = html.escape(s['team1_name'])
-            t2 = html.escape(s['team2_name'])
-            w1 = s['team1_wins']
-            w2 = s['team2_wins']
-            s_num = s['series_num']
-
-            if s['status'] == 'completed':
-                text += f"✅ <b>{t1}</b> ({w1}:{w2}) <b>{t2}</b>\n\n"
-            else:
-                text += f"⚔️ <b>{t1}</b> ({w1}:{w2}) <b>{t2}</b>\n"
-                matches = s.get("matches", [])
-                for m in matches:
-                    g_num = m['game_num_in_series']
-                    if m['status'] == 'confirmed':
-                        text += f"   └ И{g_num}: {m['player1_score']}:{m['player2_score']} ✅\n"
-                    else:
-                        text += f"   └ И{g_num}: ⏳\n"
-                text += "\n"
-
-    keyboard = [
-        [
-            InlineKeyboardButton("1/8", callback_data="show_cup_stage_1/8"),
-            InlineKeyboardButton("1/4", callback_data="show_cup_stage_1/4"),
-            InlineKeyboardButton("1/2", callback_data="show_cup_stage_1/2"),
-            InlineKeyboardButton("Финал", callback_data="show_cup_stage_final"),
-        ],
-        [InlineKeyboardButton("🖼 Сетка турнира", callback_data="show_full_cup_bracket")],
-        [InlineKeyboardButton("📊 Статистика", callback_data="show_cup_stats")],
-        [InlineKeyboardButton("« Назад", callback_data="menu_tournaments")]
-    ]
-    markup = InlineKeyboardMarkup(keyboard)
-    if query.message and (query.message.photo or query.message.document):
-        try:
-            await query.message.delete()
-        except Exception:
-            pass
-        await context.bot.send_message(
-            chat_id=query.message.chat_id,
-            text=text,
-            parse_mode="HTML",
-            reply_markup=markup
-        )
-    else:
-        try:
-            await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
-        except Exception as e:
-            logger.warning(f"Failed to edit message in show_cup_menu: {e}")
-async def cb_show_cup_graphic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    query = update.callback_query
-    if not query:
-        return
-    await query.answer()
-
-    stage = "1/8"
-    if query.data.startswith("show_cup_graphic_"):
-        stage = query.data.replace("show_cup_graphic_", "")
-
-    from services.graphics.table_generator import generate_cup_bracket_image
-    img_buf = await asyncio.to_thread(generate_cup_bracket_image, stage)
-
-    from telegram import InputFile
-    stage_title_map = {'1/8': '1/8 Финала', '1/4': '1/4 Финала', '1/2': '1/2 Финала', 'final': '🏆 Финал'}
-    title = stage_title_map.get(stage, stage)
-
-    await query.message.reply_photo(
-        photo=InputFile(img_buf, filename=f"cup_bracket_{stage}.png"),
-        caption=f"🏆 <b>КУБОК КПЛ 2026 | {title}</b>\n<i>Графическая сетка турнира</i>",
-        parse_mode="HTML"
-    )
-
-async def cb_show_full_cup_bracket(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    query = update.callback_query
-    if not query:
-        return
-    await query.answer()
-
-    from services.graphics.cup_bracket_generator import generate_bracket_image
-    
-    img_buf = await asyncio.to_thread(generate_bracket_image)
-
-    from telegram import InputFile
-    await query.message.reply_photo(
-        photo=InputFile(img_buf, filename="full_cup_bracket.png"),
-        caption="🏆 <b>КУБОК КПЛ 2026 | ПОЛНАЯ СЕТКА</b>\n<i>От 1/8 до Финала</i>",
-        parse_mode="HTML"
-    )
-
-
-async def show_cup_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    query = update.callback_query
-    if query:
-        await query.answer()
-
-    top_goals, top_assists = await asyncio.gather(
-        asyncio.to_thread(database.get_cup_top_scorers, 10),
-        asyncio.to_thread(database.get_cup_top_assists, 10)
-    )
-
-    text = "🏆 <b>СТАТИСТИКА КУБКА КПЛ 2026</b>\n\n"
-
-    text += "⚽ <b>ТОП-10 БОМБАРДИРОВ КУБКА:</b>\n"
-    if not top_goals:
-        text += "<i>Пока нет забитых голов в кубке.</i>\n\n"
-    else:
-        for idx, item in enumerate(top_goals, 1):
-            medals = {1: "🥇", 2: "🥈", 3: "🥉"}
-            prefix = medals.get(idx, f"<b>{idx}.</b>")
-            text += f"{prefix} <b>{html.escape(item['player_name'])}</b> ({html.escape(item['team_name'])}) — <b>{item['total_goals']}</b> ⚽\n"
-        text += "\n"
-
-    text += "🎯 <b>ТОП-10 АССИСТЕНТОВ КУБКА:</b>\n"
-    if not top_assists:
-        text += "<i>Пока нет голевых передач в кубке.</i>\n\n"
-    else:
-        for idx, item in enumerate(top_assists, 1):
-            medals = {1: "🥇", 2: "🥈", 3: "🥉"}
-            prefix = medals.get(idx, f"<b>{idx}.</b>")
-            text += f"{prefix} <b>{html.escape(item['player_name'])}</b> ({html.escape(item['team_name'])}) — <b>{item['total_assists']}</b> 🎯\n"
-        text += "\n"
-
-    keyboard = [
-        [
-            InlineKeyboardButton("⚽ Бомбардиры (Графика)", callback_data="img_cup_scorers"),
-            InlineKeyboardButton("🎯 Ассистенты (Графика)", callback_data="img_cup_assisters")
-        ],
-        [InlineKeyboardButton("« Назад к Кубку", callback_data="tournaments_cup_menu")]
-    ]
-    markup = InlineKeyboardMarkup(keyboard)
-    if query.message and (query.message.photo or query.message.document):
-        try:
-            await query.message.delete()
-        except Exception:
-            pass
-        await context.bot.send_message(
-            chat_id=query.message.chat_id,
-            text=text,
-            parse_mode="HTML",
-            reply_markup=markup
-        )
-    else:
-        try:
-            await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
-        except Exception as e:
-            logger.warning(f"Failed to edit message in show_cup_stats: {e}")
-async def send_cup_scorers_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Generate and send PNG graphics card for Cup Top Scorers."""
-    query = update.callback_query
-    if query:
-        await query.answer()
-
-    from services.graphics import top_stats_generator
-    buf = await asyncio.to_thread(top_stats_generator.generate_top_stats_image, "goals", 10, "cup")
-
-    keyboard = [
-        [InlineKeyboardButton("🎯 Ассистенты Кубка (Графика)", callback_data="img_cup_assisters")],
-        [InlineKeyboardButton("🏆 Назад к Кубку", callback_data="tournaments_cup_menu")]
-    ]
-    markup = InlineKeyboardMarkup(keyboard)
-
-    target_chat_id = query.message.chat_id if query and query.message else (update.effective_chat.id if update.effective_chat else update.effective_user.id)
-    thread_id = query.message.message_thread_id if query and query.message and query.message.is_topic_message else None
-
-    if query and query.message:
-        try:
-            await query.message.delete()
-        except Exception:
-            pass
-
-    from telegram import InputFile
-    await context.bot.send_photo(
-        chat_id=target_chat_id,
-        message_thread_id=thread_id,
-        photo=InputFile(buf, filename="cup_top_scorers.png"),
-        caption="<b>⚽ ТОП БОМБАРДИРОВ КУБКА КПЛ 2026</b>",
-        parse_mode="HTML",
-        reply_markup=markup
-    )
-
-async def send_cup_assisters_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Generate and send PNG graphics card for Cup Top Assisters."""
-    query = update.callback_query
-    if query:
-        await query.answer()
-
-    from services.graphics import top_stats_generator
-    buf = await asyncio.to_thread(top_stats_generator.generate_top_stats_image, "assists", 10, "cup")
-
-    keyboard = [
-        [InlineKeyboardButton("⚽ Бомбардиры Кубка (Графика)", callback_data="img_cup_scorers")],
-        [InlineKeyboardButton("🏆 Назад к Кубку", callback_data="tournaments_cup_menu")]
-    ]
-    markup = InlineKeyboardMarkup(keyboard)
-
-    target_chat_id = query.message.chat_id if query and query.message else (update.effective_chat.id if update.effective_chat else update.effective_user.id)
-    thread_id = query.message.message_thread_id if query and query.message and query.message.is_topic_message else None
-
-    if query and query.message:
-        try:
-            await query.message.delete()
-        except Exception:
-            pass
-
-    from telegram import InputFile
-    await context.bot.send_photo(
-        chat_id=target_chat_id,
-        message_thread_id=thread_id,
-        photo=InputFile(buf, filename="cup_top_assisters.png"),
-        caption="<b>🎯 ТОП АССИСТЕНТОВ КУБКА КПЛ 2026</b>",
-        parse_mode="HTML",
-        reply_markup=markup
-    )
 
 async def show_round_matches(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
@@ -1061,7 +603,7 @@ async def show_round_matches(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not matches:
         text += "Матчи не найдены."
         
-    keyboard = [[InlineKeyboardButton("« Назад к турам", callback_data="tournaments_league_rounds")]]
+    keyboard = [[InlineKeyboardButton("« Назад в меню", callback_data="main_menu")]]
     markup = InlineKeyboardMarkup(keyboard)
 
     target_chat_id = query.message.chat_id if query and query.message else (update.effective_chat.id if update.effective_chat else update.effective_user.id)
@@ -1129,93 +671,42 @@ async def group_table_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     else:
         standings = await asyncio.to_thread(database.get_standings)
         img_buf = await asyncio.to_thread(generate_league_table_image, standings=standings)
-        caption = "🏆 <b>Турнирная таблица лиги КПЛ 2026</b>"
-        refresh_cb = "refresh_league_table_topic"
+        caption = "🏆 <b>Турнирная таблица</b>"
+        refresh_cb = "refresh_div_table_0"
 
     keyboard = [[InlineKeyboardButton("🔄 Обновить", callback_data=refresh_cb)]]
     await update.message.reply_photo(photo=img_buf, caption=caption, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
 
-async def show_league_table(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Show graphic league standings table via inline button / PM."""
-    query = update.callback_query
-    if query:
-        await query.answer()
-
-    img_buf = await asyncio.to_thread(generate_league_table_image)
-    caption = "🏆 <b>Турнирная таблица лиги КПЛ 2026</b>"
-    keyboard = [[InlineKeyboardButton("« Назад в меню", callback_data="main_menu")]]
-    markup = InlineKeyboardMarkup(keyboard)
-
-    target_chat_id = query.message.chat_id if query and query.message else (update.effective_chat.id if update.effective_chat else update.effective_user.id)
-    thread_id = query.message.message_thread_id if query and query.message and query.message.is_topic_message else None
-
-    if query:
-        try:
-            await query.message.delete()
-        except Exception:
-            pass
-        await context.bot.send_photo(chat_id=target_chat_id, message_thread_id=thread_id, photo=img_buf, caption=caption, parse_mode="HTML", reply_markup=markup)
-    elif update.message:
-        await update.message.reply_photo(photo=img_buf, caption=caption, parse_mode="HTML", reply_markup=markup)
-
-async def format_league_table_text() -> str:
-    standings = await asyncio.to_thread(database.get_standings)
-    if not standings:
-        return "📊 <b>Таблица лиги пуста — ещё нет данных.</b>"
-
-    lines = ["🏆 <b>ТЕКУЩАЯ ТУРНИРНАЯ ТАБЛИЦА ЛИГИ:</b>\n"]
-    for i, s in enumerate(standings, 1):
-        team = html.escape(s.get('team_name', '—'))
-        p = s.get('points', 0)
-        w = s.get('wins', 0)
-        d = s.get('draws', 0)
-        l = s.get('losses', 0)
-        gf = s.get('goals_scored', 0)
-        ga = s.get('goals_conceded', 0)
-        
-        lines.append(f"{i}. <b>{team}</b> — {p} очк. (И: {w+d+l}, В: {w}, Н: {d}, П: {l}, ЗГ: {gf}, ПГ: {ga})")
-
-    return "\n".join(lines)
-
 async def post_league_table_to_reports(context: ContextTypes.DEFAULT_TYPE, division_id: int | None = None) -> None:
-    """Post or update the graphic league table in the reports topic for a specific division or globally."""
+    """Post or update the graphic league table in the reports topic for a specific division."""
     from telegram.error import BadRequest, TelegramError
     from services.topic_cache import topic_cache
 
-    if division_id is not None:
-        div_topic = topic_cache.get_by_division(division_id, "reports")
-        if not div_topic:
-            div_topic = topic_cache.get_by_division(division_id, "tables")
-        if not div_topic:
-            topics_map = await asyncio.to_thread(database.get_division_topics_map, division_id)
-            div_topic = topics_map.get("reports") or topics_map.get("tables")
+    if division_id is None:
+        return
 
-        if not div_topic or not div_topic.get("group_chat_id") or not div_topic.get("message_thread_id"):
-            logger.warning(f"No reports/tables topic configured for division {division_id}; skipping table posting.")
-            return
+    div_topic = topic_cache.get_by_division(division_id, "reports")
+    if not div_topic:
+        div_topic = topic_cache.get_by_division(division_id, "tables")
+    if not div_topic:
+        topics_map = await asyncio.to_thread(database.get_division_topics_map, division_id)
+        div_topic = topics_map.get("reports") or topics_map.get("tables")
 
-        group_id = div_topic["group_chat_id"]
-        reports_topic_id = div_topic["message_thread_id"]
-        div_record = await asyncio.to_thread(database.get_division, division_id)
-        division_name = div_record["name"] if div_record else f"Дивизион {division_id}"
+    if not div_topic or not div_topic.get("group_chat_id") or not div_topic.get("message_thread_id"):
+        logger.warning(f"No reports/tables topic configured for division {division_id}; skipping table posting.")
+        return
 
-        standings = await asyncio.to_thread(database.get_standings, division_id=division_id)
-        form_map = await asyncio.to_thread(database.get_teams_recent_form, limit=5, division_id=division_id)
-        img_buf = await asyncio.to_thread(generate_league_table_image, standings=standings, form_map=form_map, division_name=division_name)
-        caption = f"🏆 <b>ТУРНИРНАЯ ТАБЛИЦА — {html.escape(division_name).upper()}</b>"
-        markup = InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Обновить таблицу", callback_data=f"refresh_div_table_{division_id}")]])
-        config_key = f"league_table_msg_id_div_{division_id}"
-    else:
-        reports_topic_id, group_id = await asyncio.gather(
-            asyncio.to_thread(database.get_config, "reports_topic_id"),
-            asyncio.to_thread(database.get_group_id)
-        )
-        if not group_id:
-            return
-        img_buf = await asyncio.to_thread(generate_league_table_image)
-        caption = "🏆 <b>ТЕКУЩАЯ ТУРНИРНАЯ ТАБЛИЦА ЛИГИ</b>"
-        markup = InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Обновить таблицу", callback_data="refresh_league_table_topic")]])
-        config_key = "league_table_msg_id"
+    group_id = div_topic["group_chat_id"]
+    reports_topic_id = div_topic["message_thread_id"]
+    div_record = await asyncio.to_thread(database.get_division, division_id)
+    division_name = div_record["name"] if div_record else f"Дивизион {division_id}"
+
+    standings = await asyncio.to_thread(database.get_standings, division_id=division_id)
+    form_map = await asyncio.to_thread(database.get_teams_recent_form, limit=5, division_id=division_id)
+    img_buf = await asyncio.to_thread(generate_league_table_image, standings=standings, form_map=form_map, division_name=division_name)
+    caption = f"🏆 <b>ТУРНИРНАЯ ТАБЛИЦА — {html.escape(division_name).upper()}</b>"
+    markup = InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Обновить таблицу", callback_data=f"refresh_div_table_{division_id}")]])
+    config_key = f"league_table_msg_id_div_{division_id}"
 
     existing_raw = await asyncio.to_thread(database.get_config, config_key)
     existing_id = int(existing_raw) if str(existing_raw or "").strip().isdigit() else None
@@ -1245,7 +736,7 @@ async def post_league_table_to_reports(context: ContextTypes.DEFAULT_TYPE, divis
     except Exception:
         logger.exception("Failed to post graphic league table to reports topic")
 
-async def cb_refresh_league_table_topic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def cb_refresh_division_table_topic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     if not query:
         return
@@ -1262,16 +753,14 @@ async def cb_refresh_league_table_topic(update: Update, context: ContextTypes.DE
         except Exception:
             pass
 
-    if div_id:
-        standings = await asyncio.to_thread(database.get_standings, division_id=div_id)
-        form_map = await asyncio.to_thread(database.get_teams_recent_form, limit=5, division_id=div_id)
-        img_buf = await asyncio.to_thread(generate_league_table_image, standings=standings, form_map=form_map, division_name=div_name)
-        caption = f"🏆 <b>ТЕКУЩАЯ ТУРНИРНАЯ ТАБЛИЦА ДИВИЗИОНА «{html.escape(div_name)}»</b>"
-        refresh_cb = f"refresh_div_table_{div_id}"
-    else:
-        img_buf = await asyncio.to_thread(generate_league_table_image)
-        caption = "🏆 <b>ТЕКУЩАЯ ТУРНИРНАЯ ТАБЛИЦА ЛИГИ</b>"
-        refresh_cb = "refresh_league_table_topic"
+    if not div_id:
+        return
+
+    standings = await asyncio.to_thread(database.get_standings, division_id=div_id)
+    form_map = await asyncio.to_thread(database.get_teams_recent_form, limit=5, division_id=div_id)
+    img_buf = await asyncio.to_thread(generate_league_table_image, standings=standings, form_map=form_map, division_name=div_name)
+    caption = f"🏆 <b>ТЕКУЩАЯ ТУРНИРНАЯ ТАБЛИЦА ДИВИЗИОНА «{html.escape(div_name)}»</b>"
+    refresh_cb = f"refresh_div_table_{div_id}"
 
     keyboard = [[InlineKeyboardButton("🔄 Обновить таблицу", callback_data=refresh_cb)]]
     markup = InlineKeyboardMarkup(keyboard)
@@ -1287,6 +776,7 @@ async def cb_refresh_league_table_topic(update: Update, context: ContextTypes.DE
             await query.answer("✅ Данные таблицы уже актуальны!", show_alert=True)
         else:
             logger.exception("Failed to refresh graphic table")
+
 
 async def show_support(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query

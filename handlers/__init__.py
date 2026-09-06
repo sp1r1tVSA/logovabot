@@ -41,28 +41,15 @@ from handlers.base import (
     start,
     show_main_menu,
     show_tournaments,
-    show_league_rounds,
-    show_cup_menu,
-    show_cup_stats,
-    show_league_table,
-    show_league_menu,
     show_divisions_list,
     show_division_menu,
     show_division_table,
     show_division_scorers,
     show_division_assists,
-    show_top_scorers,
-    show_top_assists,
-    send_top_scorers_image,
-    send_top_assisters_image,
     show_support,
     group_table_command,
     show_round_matches,
-    cb_refresh_league_table_topic,
-    cb_show_cup_graphic,
-    cb_show_full_cup_bracket,
-    send_cup_scorers_image,
-    send_cup_assisters_image,
+    cb_refresh_division_table_topic,
 )
 
 # Import cabinet handlers
@@ -238,10 +225,6 @@ from handlers.admin import (
     ADMIN_EXPECT_SINGLE_PLAYER,
     admin_stub,
     admin_fetch_photos,
-    admin_manage_cup,
-    admin_init_cup_execute,
-    admin_remind_cup_execute,
-    admin_sync_cup,
     admin_force_update,
     admin_broadcast_menu,
     admin_broadcast_all_debts_execute,
@@ -371,7 +354,6 @@ def _register_user_handlers(app: Application) -> None:
 
     app.add_handler(MessageHandler(filters.Regex("^👤 Мой кабинет$"), show_cabinet))
     app.add_handler(MessageHandler(filters.Regex("^🏆 Турниры$"), show_tournaments))
-    app.add_handler(MessageHandler(filters.Regex("^📊 Таблица лиги$"), show_league_table))
     app.add_handler(MessageHandler(filters.Regex("^💬 Поддержка$"), show_support))
     
     from handlers.drafts import handle_draft_media, cb_draft_confirm, cb_draft_reject
@@ -380,7 +362,7 @@ def _register_user_handlers(app: Application) -> None:
     app.add_handler(CallbackQueryHandler(cb_draft_reject, pattern="^draft_rej_"))
     app.add_handler(MessageHandler(filters.Regex("^⚙️ Админ-панель$"), show_admin_panel))
 
-    app.add_handler(CallbackQueryHandler(cb_refresh_league_table_topic, pattern="^(refresh_league_table_topic|refresh_div_table_\\d+)$"))
+    app.add_handler(CallbackQueryHandler(cb_refresh_division_table_topic, pattern=r"^refresh_div_table_\d+$"))
     app.add_handler(CallbackQueryHandler(show_cabinet, pattern="^menu_cabinet$"))
     app.add_handler(CallbackQueryHandler(show_tournaments, pattern="^menu_tournaments$"))
     app.add_handler(CallbackQueryHandler(show_divisions_list, pattern="^(menu_divisions|menu_league)$"))
@@ -388,21 +370,8 @@ def _register_user_handlers(app: Application) -> None:
     app.add_handler(CallbackQueryHandler(show_division_table, pattern=r"^division_table:(\d+):(\d+)$"))
     app.add_handler(CallbackQueryHandler(show_division_scorers, pattern=r"^division_scorers:(\d+):(\d+)$"))
     app.add_handler(CallbackQueryHandler(show_division_assists, pattern=r"^division_assists:(\d+):(\d+)$"))
-    app.add_handler(CallbackQueryHandler(show_league_table, pattern="^(league_table|menu_ratings)$"))
-    app.add_handler(CallbackQueryHandler(show_top_scorers, pattern="^league_scorers$"))
-    app.add_handler(CallbackQueryHandler(show_top_assists, pattern="^league_assists$"))
-    app.add_handler(CallbackQueryHandler(send_top_scorers_image, pattern="^img_top_scorers$"))
-    app.add_handler(CallbackQueryHandler(send_top_assisters_image, pattern="^img_top_assisters$"))
     app.add_handler(CallbackQueryHandler(show_support, pattern="^menu_support$"))
     app.add_handler(CallbackQueryHandler(show_main_menu, pattern="^main_menu$"))
-    app.add_handler(CallbackQueryHandler(show_league_rounds, pattern="^tournaments_league_rounds$"))
-    app.add_handler(CallbackQueryHandler(show_cup_menu, pattern="^tournaments_cup_menu$"))
-    app.add_handler(CallbackQueryHandler(show_cup_menu, pattern="^show_cup_stage_.*$"))
-    app.add_handler(CallbackQueryHandler(cb_show_cup_graphic, pattern="^show_cup_graphic_.*$"))
-    app.add_handler(CallbackQueryHandler(cb_show_full_cup_bracket, pattern="^show_full_cup_bracket$"))
-    app.add_handler(CallbackQueryHandler(show_cup_stats, pattern="^show_cup_stats$"))
-    app.add_handler(CallbackQueryHandler(send_cup_scorers_image, pattern="^img_cup_scorers$"))
-    app.add_handler(CallbackQueryHandler(send_cup_assisters_image, pattern="^img_cup_assisters$"))
     app.add_handler(CommandHandler("club", club_command))
     app.add_handler(CallbackQueryHandler(show_my_club_card, pattern="^cb_my_club_card$"))
     app.add_handler(CallbackQueryHandler(show_clubs_catalog, pattern="^cb_clubs_catalog$"))
@@ -735,11 +704,6 @@ def _register_admin_handlers(app: Application) -> None:
     app.add_handler(CallbackQueryHandler(admin_squad_del_player, pattern="^admin_squad_del_p_.*$"))
     app.add_handler(CallbackQueryHandler(admin_squad_clear, pattern="^admin_squad_clear_.*$"))
     app.add_handler(CallbackQueryHandler(admin_squad_add_missing, pattern="^admin_squad_add_missing_.*$"))
-    app.add_handler(CallbackQueryHandler(admin_manage_cup, pattern="^admin_manage_cup$"))
-    app.add_handler(CallbackQueryHandler(admin_manage_cup, pattern="^admin_cup_stage_.*$"))
-    app.add_handler(CallbackQueryHandler(admin_init_cup_execute, pattern="^admin_init_cup_execute$"))
-    app.add_handler(CallbackQueryHandler(admin_remind_cup_execute, pattern="^admin_remind_cup_.*$"))
-    app.add_handler(CommandHandler("sync_cup", admin_sync_cup))
     app.add_handler(CommandHandler("force_update", admin_force_update))
     app.add_handler(CallbackQueryHandler(admin_force_update, pattern="^admin_force_update$"))
     app.add_handler(CommandHandler("test_ai", admin_test_ai))

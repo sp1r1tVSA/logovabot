@@ -287,9 +287,8 @@ async def show_cabinet(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         f"👤 <b>Личный кабинет участника</b>\n\n"
         f"• <b>Telegram:</b> {username_display}\n"
         f"• <b>Игровой клуб:</b> {html.escape(team)}\n"
-        f"{div_line}"
-        f"• <b>Лига:</b> КПЛ\n\n"
-        f"📊 <b>Ваша статистика в лиге:</b>\n"
+        f"{div_line}\n"
+        f"📊 <b>Ваша статистика:</b>\n"
         f"• <b>Сыграно матчей:</b> {stats['played']}\n"
         f"• <b>Победы:</b> {stats['wins']} | <b>Ничьи:</b> {stats['draws']} | <b>Поражения:</b> {stats['losses']}\n"
         f"• <b>Забито/Пропущено:</b> {stats['goals_scored']} / {stats['goals_conceded']}\n"
@@ -487,8 +486,8 @@ async def show_player_card(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     pts = stats.get("total_points", stats["total_goals"] + stats["total_assists"])
     caption = (
         f"🃏 <b>{html.escape(player_name)}</b> · {html.escape(team_name)}\n"
-        f"⚽ <b>{stats['total_goals']}</b> голов (Лига: {stats.get('league_goals', 0)} · Кубок: {stats.get('cup_goals', 0)})\n"
-        f"🅰️ <b>{stats['total_assists']}</b> ассистов (Лига: {stats.get('league_assists', 0)} · Кубок: {stats.get('cup_assists', 0)})\n"
+        f"⚽ <b>{stats['total_goals']}</b> голов\n"
+        f"🅰️ <b>{stats['total_assists']}</b> ассистов\n"
         f"🔥 <b>{pts}</b> очков (Г+П)"
     )
 
@@ -865,7 +864,7 @@ async def show_clubs_catalog(update: Update, context: ContextTypes.DEFAULT_TYPE)
     clubs = await asyncio.to_thread(database.get_all_clubs_summary)
 
     text = (
-        "🌍 <b>КАТАЛОГ ВСЕХ КЛУБОВ ЛИГИ КПЛ 2026</b>\n\n"
+        "🌍 <b>КАТАЛОГ ВСЕХ КЛУБОВ</b>\n\n"
         "Выберите клуб для просмотра полной клубной карточки, статистики, формы и состава:\n"
     )
 
@@ -940,7 +939,7 @@ async def club_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if not canon:
         if update.message:
             await update.message.reply_text(
-                f"❌ Клуб «{html.escape(req_team)}» не найден в Лиге КПЛ.\n"
+                f"❌ Клуб «{html.escape(req_team)}» не найден.\n"
                 f"Используйте команду <code>/club</code> без параметров, чтобы открыть каталог всех клубов.",
                 parse_mode="HTML"
             )
@@ -1138,12 +1137,7 @@ async def show_my_matches(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         text += "Выберите матч для просмотра и ввода результата:"
         for m in matches:
             opp = m['opponent_team'] or m['opponent_username'] or "Соперник"
-            if m.get('tournament_type') == 'cup':
-                stage = m.get('cup_stage', 'Кубок')
-                g_num = m.get('game_num_in_series', 1)
-                btn_text = f"🏆 {stage} (Игра {g_num}): 🆚 {opp}"
-            else:
-                btn_text = f"⚽ Тур {m['round_number']}: 🆚 {opp}"
+            btn_text = f"⚽ Тур {m.get('round_number', '?')}: 🆚 {opp}"
             keyboard.append([InlineKeyboardButton(btn_text, callback_data=f"cabinet_view_match_{m['id']}")])
             
     keyboard.append([InlineKeyboardButton("« Назад в кабинет", callback_data="menu_cabinet")])
@@ -2489,115 +2483,40 @@ def build_formatted_match_post(
     events_block = ("\n\n" + "\n".join(lines)) if lines else ""
 
     match_info = database.get_match(match_id) if match_id else None
-    is_cup = match_info and match_info.get("tournament_type") == "cup"
-
-    cup_stage = match_info.get("cup_stage", "1/8") if match_info else "1/8"
-    g_num = match_info.get("game_num_in_series", 1) if match_info else 1
-    series_info_text = ""
-
-    if is_cup and match_info.get("cup_series_id"):
-        s_id = match_info["cup_series_id"]
-        with database.transaction() as conn:
-            c = conn.cursor()
-            c.execute("SELECT team1_name, team2_name, team1_wins, team2_wins, winner_name, status FROM cup_series WHERE id = ?", (s_id,))
-            s_row = c.fetchone()
-            if s_row:
-                t1 = safe_escape(s_row["team1_name"])
-                t2 = safe_escape(s_row["team2_name"])
-                w1 = s_row["team1_wins"] or 0
-                w2 = s_row["team2_wins"] or 0
-                
-                if is_draft:
-                    c.execute("SELECT id, player1_team, player2_team, player1_score, player2_score FROM matches WHERE cup_series_id = ? AND status = 'confirmed' AND id != ?", (s_id, match_id or -1))
-                    other_conf = c.fetchall()
-                    w1 = 0
-                    w2 = 0
-                    for om in other_conf:
-                        os1, os2 = om["player1_score"] or 0, om["player2_score"] or 0
-                        ow = om["player1_team"] if os1 > os2 else (om["player2_team"] if os2 > os1 else None)
-                        if ow and ow.lower() == s_row["team1_name"].lower(): w1 += 1
-                        elif ow and ow.lower() == s_row["team2_name"].lower(): w2 += 1
-                    
-                    if h_score > a_score: cur_w = home_team
-                    elif a_score > h_score: cur_w = away_team
-                    else: cur_w = None
-                    if cur_w and cur_w.lower() == s_row["team1_name"].lower(): w1 += 1
-                    elif cur_w and cur_w.lower() == s_row["team2_name"].lower(): w2 += 1
-
-                s_stage = (cup_stage or "1/8").lower()
-                wins_needed = 3 if s_stage == 'final' else 2
-                best_of_text = "Best-of-5" if s_stage == 'final' else "Best-of-3"
-
-                series_info_text = f"\n📊 <b>Счёт серии ({best_of_text}):</b> {t1} {w1} : {w2} {t2}"
-                if (w1 >= wins_needed or w2 >= wins_needed) and is_draft:
-                    win_name = t1 if w1 >= wins_needed else t2
-                    if s_stage == 'final':
-                        series_info_text += f"\n🏆 <b>ЧЕМПИОН КУБКА КПЛ 2026: {win_name}! ПОЗДРАВЛЯЕМ С ПОБЕДОЙ В ТУРНИРЕ! 🎉</b>"
-                    else:
-                        series_info_text += f"\n🏆 <b>Победитель серии: {win_name}! Проходит в следующий раунд!</b>"
-                elif s_row["winner_name"]:
-                    if s_stage == 'final':
-                        series_info_text += f"\n🏆 <b>ЧЕМПИОН КУБКА КПЛ 2026: {safe_escape(s_row['winner_name'])}! ПОЗДРАВЛЯЕМ С ПОБЕДОЙ В ТУРНИРЕ! 🎉</b>"
-                    else:
-                        series_info_text += f"\n🏆 <b>Победитель серии: {safe_escape(s_row['winner_name'])}! Проходит в следующий раунд!</b>"
 
     p1_clean = safe_escape(p1_username.lstrip('@')) if p1_username else ""
     p2_clean = safe_escape(p2_username.lstrip('@')) if p2_username else ""
     p1_str = f" (@{p1_clean})" if p1_clean else ""
     p2_str = f" (@{p2_clean})" if p2_clean else ""
 
-    if is_cup:
-        title_stage = f"{cup_stage} Финала" if cup_stage != "final" else "ФИНАЛ"
-        if is_draft:
-            header = (
-                f"📝 <b>ЧЕРНОВИК РЕЗУЛЬТАТА | КУБОК КПЛ - {title_stage} (Игра {g_num})</b>\n\n"
-                f"🏠 <b>{home_team_esc}</b>{p1_str} <b>{h_score} : {a_score}</b> <b>{away_team_esc}</b>{p2_str} ✈️"
-                f"{series_info_text}"
-            )
-            footer = "\n\n⏳ <i>Ожидает подтверждения администратором...</i>"
-        elif is_pm:
-            match_id_str = f" #{match_id}" if match_id else ""
-            header = (
-                f"🏆 <b>Результат кубкового матча занесен!</b>\n\n"
-                f"🏟 <b>Кубок КПЛ | {title_stage} (Игра {g_num})</b>{match_id_str}\n"
-                f"🏠 <b>{home_team_esc}</b> <b>{h_score} : {a_score}</b> <b>{away_team_esc}</b> ✈️"
-                f"{series_info_text}"
-            )
-            footer = "\n\n📊 <i>Сетка Кубка и статистика игроков обновлены.</i>"
-        else:
-            header = (
-                f"🏆 <b>КУБОК КПЛ | {title_stage} (Игра {g_num})</b>\n\n"
-                f"🏠 <b>{home_team_esc}</b>{p1_str} <b>{h_score} : {a_score}</b> <b>{away_team_esc}</b>{p2_str} ✈️"
-                f"{series_info_text}"
-            )
-            footer = "\n\n📸 <i>Результат официально занесен в сетку Кубка КПЛ.</i>"
-    else:
-        div_label = ""
-        if match_info and match_info.get("division_id"):
-            div_row = database.get_division(match_info["division_id"])
-            if div_row:
-                div_label = f" • {safe_escape(div_row['name'])}"
+    div_label = ""
+    if match_info and match_info.get("division_id"):
+        div_row = database.get_division(match_info["division_id"])
+        if div_row:
+            div_label = f" • {safe_escape(div_row['name'])}"
 
-        if is_draft:
-            header = (
-                f"📝 <b>ЧЕРНОВИК РЕЗУЛЬТАТА | Тур {round_number}{div_label}</b>\n\n"
-                f"🏠 <b>{home_team_esc}</b>{p1_str} <b>{h_score} : {a_score}</b> <b>{away_team_esc}</b>{p2_str} ✈️"
-            )
-            footer = "\n\n⏳ <i>Ожидает подтверждения администратором...</i>"
-        elif is_pm:
-            match_id_str = f" #{match_id}" if match_id else ""
-            header = (
-                f"{pm_title}\n\n"
-                f"🏟 <b>Матч{match_id_str} (Тур {round_number}{div_label})</b>\n"
-                f"🏠 <b>{home_team_esc}</b> <b>{h_score} : {a_score}</b> <b>{away_team_esc}</b> ✈️"
-            )
-            footer = "\n\n📊 <i>Турнирная таблица и статистика игроков обновлены.</i>"
-        else:
-            header = (
-                f"🏆 <b>РЕЗУЛЬТАТ МАТЧА | Тур {round_number}{div_label}</b>\n\n"
-                f"🏠 <b>{home_team_esc}</b>{p1_str} <b>{h_score} : {a_score}</b> <b>{away_team_esc}</b>{p2_str} ✈️"
-            )
-            footer = "\n\n📸 <i>Результат официально занесен в турнирную таблицу.</i>"
+    if is_draft:
+        header = (
+            f"📝 <b>ЧЕРНОВИК РЕЗУЛЬТАТА | Тур {round_number}{div_label}</b>\n\n"
+            f"🏠 <b>{home_team_esc}</b>{p1_str} <b>{h_score} : {a_score}</b> <b>{away_team_esc}</b>{p2_str} ✈️"
+        )
+        footer = "\n\n⏳ <i>Ожидает подтверждения администратором...</i>"
+    elif is_pm:
+        match_id_str = f" #{match_id}" if match_id else ""
+        header = (
+            f"{pm_title}\n\n"
+            f"🏟 <b>Матч{match_id_str} (Тур {round_number}{div_label})</b>\n"
+            f"🏠 <b>{home_team_esc}</b> <b>{h_score} : {a_score}</b> <b>{away_team_esc}</b> ✈️"
+        )
+        footer = "\n\n📊 <i>Турнирная таблица и статистика игроков обновлены.</i>"
+    else:
+        header = (
+            f"🏆 <b>РЕЗУЛЬТАТ МАТЧА | Тур {round_number}{div_label}</b>\n\n"
+            f"🏠 <b>{home_team_esc}</b>{p1_str} <b>{h_score} : {a_score}</b> <b>{away_team_esc}</b>{p2_str} ✈️"
+        )
+        footer = "\n\n📸 <i>Результат официально занесен в турнирную таблицу.</i>"
+
+    return f"{header}{events_block}{footer}"
 
     return f"{header}{events_block}{footer}"
 
@@ -2720,10 +2639,7 @@ async def cb_confirm_ai_final(update: Update, context: ContextTypes.DEFAULT_TYPE
     for p, c in a_assists.items():
         events.append((away_team, p, "assist", c))
 
-    next_stage = await asyncio.to_thread(database.confirm_and_finalize_match, match_id, h_score, a_score, events, reporter_id=user_id, photo_id=photo_id)
-    if next_stage:
-        from handlers.admin import notify_cup_stage_opened
-        await notify_cup_stage_opened(context.bot, next_stage)
+    await asyncio.to_thread(database.confirm_and_finalize_match, match_id, h_score, a_score, events, reporter_id=user_id, photo_id=photo_id)
     await refresh_debts_summary(context)
     await refresh_league_table(context)
 
@@ -2899,11 +2815,6 @@ async def submit_report_to_guest(update: Update, context: ContextTypes.DEFAULT_T
             photo_id=payload.get("photo_id"),
         )
         await asyncio.to_thread(database.delete_pending_report, match_id)
-
-        if next_stage:
-            from handlers.admin import notify_cup_stage_opened
-            await notify_cup_stage_opened(context.bot, next_stage)
-
         await notify_match_confirmed(context, match_id)
         await refresh_debts_summary(context)
         await refresh_league_table(context)
@@ -3068,17 +2979,13 @@ async def cb_guest_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     a_score = int(pending.get("a_score", 0))
     events = _pending_report_events(match, pending)
 
-    next_stage = await asyncio.to_thread(
+    await asyncio.to_thread(
         database.confirm_and_finalize_match,
         match_id, h_score, a_score, events,
         reporter_id=pending.get("reporter_id"),
         photo_id=pending.get("photo_id"),
     )
     await asyncio.to_thread(database.delete_pending_report, match_id)
-
-    if next_stage:
-        from handlers.admin import notify_cup_stage_opened
-        await notify_cup_stage_opened(context.bot, next_stage)
 
     # Full post-confirmation pipeline: PMs to both players, debt rewards, group post
     await notify_match_confirmed(context, match_id)
