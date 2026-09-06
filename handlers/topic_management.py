@@ -3,6 +3,7 @@ handlers/topic_management.py
 Управление Telegram Forum Topics для дивизионов (русские команды, RBAC, защита от конфликтов, TopicCache).
 """
 
+import asyncio
 import html
 import logging
 import re
@@ -535,6 +536,107 @@ async def cb_unbind_topic_confirm(update: Update, context: ContextTypes.DEFAULT_
     )
 
 
+async def cmd_bind_group(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Команда /bind_group или /привязать_группу.
+    Вызывается внутри группы (супергруппы) администратором.
+    Отображает инлайн-клавиатуру со списком активных дивизионов текущего сезона.
+    """
+    msg = update.effective_message
+    user = update.effective_user
+    chat = update.effective_chat
+
+    if not msg or not user or not chat:
+        return
+
+    # 1. Проверка прав администратора
+    if not is_admin(user.id):
+        await msg.reply_text("⛔ Эта команда доступна только администраторам.")
+        return
+
+    # 2. Проверка контекста чата (группа/супергруппа)
+    if chat.type not in ("group", "supergroup"):
+        await msg.reply_text("⚠️ Эту команду необходимо вызывать внутри группы (супергруппы), которую вы хотите привязать к дивизиону.")
+        return
+
+    # 3. Список активных дивизионов текущего сезона
+    divisions = await asyncio.to_thread(database.get_active_divisions)
+    if not divisions:
+        divisions = await asyncio.to_thread(database.get_all_divisions)
+
+    if not divisions:
+        await msg.reply_text("⚠️ Активные дивизионы не найдены в базе данных.")
+        return
+
+    current_bound = await asyncio.to_thread(database.get_division_by_group, chat.id)
+    curr_text = f"\nТекущая привязка: <b>{html.escape(current_bound['name'])}</b>\n" if current_bound else ""
+
+    keyboard = []
+    for div in divisions:
+        d_id = div["id"]
+        d_name = div.get("name") or f"Дивизион #{d_id}"
+        is_current = (current_bound and current_bound.get("id") == d_id)
+        prefix = "⭐ " if is_current else "🏆 "
+        keyboard.append([
+            InlineKeyboardButton(f"{prefix}{d_name}", callback_data=f"bind_group:{d_id}")
+        ])
+
+    keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data="top_cancel")])
+
+    chat_title = html.escape(chat.title or str(chat.id))
+    text = (
+        f"🏢 <b>Привязка группы к дивизиону</b>\n\n"
+        f"Группа: <b>{chat_title}</b> (ID: <code>{chat.id}</code>){curr_text}\n"
+        f"К какому дивизиону привязать эту группу?"
+    )
+    await msg.reply_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+async def cb_bind_group(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Обработчик callback bind_group:{div_id}.
+    Привязывает текущую группу к выбранному дивизиону.
+    """
+    query = update.callback_query
+    user = update.effective_user
+    chat = update.effective_chat
+
+    if not query or not user or not chat:
+        return
+
+    await query.answer()
+
+    if not is_admin(user.id):
+        await query.answer("⛔ Недостаточно прав для привязки группы!", show_alert=True)
+        return
+
+    data = query.data or ""
+    div_id_str = data.split(":", 1)[1] if ":" in data else ""
+    try:
+        div_id = int(div_id_str)
+    except (ValueError, TypeError):
+        await query.edit_message_text("❌ Неверный идентификатор дивизиона.")
+        return
+
+    group_id = chat.id
+    division = await asyncio.to_thread(database.get_division, div_id)
+    if not division:
+        await query.edit_message_text("❌ Дивизион не найден.")
+        return
+
+    div_name = division.get("name") or f"Дивизион #{div_id}"
+    await asyncio.to_thread(database.set_division_group, div_id, group_id)
+
+    chat_title = html.escape(chat.title or str(chat.id))
+    text = (
+        f"✅ <b>Эта группа успешно привязана к дивизиону {html.escape(div_name)}.</b>\n\n"
+        f"Группа: <b>{chat_title}</b> (ID: <code>{group_id}</code>)\n"
+        f"Дивизион: <b>{html.escape(div_name)}</b>\n\n"
+        f"Бот теперь понимает контекст этой группы для дивизиона."
+    )
+    await query.edit_message_text(text, parse_mode="HTML")
+
+
 def _make_cyrillic_command_handler(command_name: str, handler_func):
     """
     Creates a MessageHandler that responds to Cyrillic slash commands (e.g. /назначить_топик 1)
@@ -564,6 +666,7 @@ def register_topic_management_handlers(app) -> None:
     app.add_handler(_make_cyrillic_command_handler("топики", cmd_division_topics))
     app.add_handler(_make_cyrillic_command_handler("дивизионы", cmd_divisions_summary))
     app.add_handler(_make_cyrillic_command_handler("снять_топик", cmd_unbind_topic))
+    app.add_handler(_make_cyrillic_command_handler("привязать_группу", cmd_bind_group))
 
     # 2. Latin / Translit Aliases (via native CommandHandler)
     app.add_handler(CommandHandler(["naznachit_topik", "assign_topic"], cmd_assign_topic))
@@ -572,10 +675,12 @@ def register_topic_management_handlers(app) -> None:
     app.add_handler(CommandHandler(["topiki", "topics"], cmd_division_topics))
     app.add_handler(CommandHandler(["diviziony", "divisions"], cmd_divisions_summary))
     app.add_handler(CommandHandler(["snyat_topik", "unbind_topic"], cmd_unbind_topic))
+    app.add_handler(CommandHandler(["bind_group", "privyazat_gruppu"], cmd_bind_group))
 
     # 3. Callbacks
     app.add_handler(CallbackQueryHandler(cb_set_topic, pattern="^set_top:\\d+:(d|p|r|rep|l)$"))
     app.add_handler(CallbackQueryHandler(cb_reassign_topic_confirm, pattern="^reassign_top:\\d+:(d|p|r|rep|l)$"))
     app.add_handler(CallbackQueryHandler(cb_unbind_topic_confirm, pattern="^unbind_confirm:-?\\d+:-?\\d+$"))
+    app.add_handler(CallbackQueryHandler(cb_bind_group, pattern=r"^bind_group:(\d+)$"))
     app.add_handler(CallbackQueryHandler(cb_top_cancel, pattern="^top_cancel$"))
 

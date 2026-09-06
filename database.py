@@ -559,6 +559,7 @@ def init_db() -> None:
                 code TEXT NOT NULL UNIQUE,
                 season_id INTEGER DEFAULT NULL,
                 topic_id INTEGER DEFAULT NULL,
+                group_chat_id INTEGER DEFAULT NULL,
                 is_active BOOLEAN DEFAULT 1,
                 sort_order INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -575,9 +576,12 @@ def init_db() -> None:
             d_col_names = [c["name"] if isinstance(c, sqlite3.Row) else c[1] for c in d_cols]
             if "season_id" not in d_col_names:
                 cursor.execute("ALTER TABLE divisions ADD COLUMN season_id INTEGER NOT NULL DEFAULT 1")
+            if "group_chat_id" not in d_col_names:
+                cursor.execute("ALTER TABLE divisions ADD COLUMN group_chat_id INTEGER DEFAULT NULL")
         except Exception as e:
-            logger.debug(f"Notice during divisions season_id migration: {e}")
+            logger.debug(f"Notice during divisions migration: {e}")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_divisions_season ON divisions(season_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_divisions_group ON divisions(group_chat_id)")
 
         cursor.execute("""
             INSERT OR IGNORE INTO divisions (id, tournament_id, name, code, season_id, sort_order)
@@ -7818,8 +7822,8 @@ def get_division_by_code(code: str) -> dict | None:
 
 
 def update_division(division_id: int, **kwargs) -> None:
-    """Update division attributes dynamically (name, code, topic_id, is_active, sort_order)."""
-    allowed_keys = {"name", "code", "tournament_id", "topic_id", "is_active", "sort_order"}
+    """Update division attributes dynamically (name, code, topic_id, group_chat_id, is_active, sort_order)."""
+    allowed_keys = {"name", "code", "tournament_id", "topic_id", "group_chat_id", "is_active", "sort_order"}
     updates = {k: v for k, v in kwargs.items() if k in allowed_keys}
     if not updates:
         return
@@ -7828,6 +7832,40 @@ def update_division(division_id: int, **kwargs) -> None:
     with transaction() as conn:
         cursor = conn.cursor()
         cursor.execute(f"UPDATE divisions SET {set_clause} WHERE id = ?", values)
+
+
+def set_division_group(division_id: int, chat_id: int) -> None:
+    """Bind a Telegram group (supergroup chat_id) to a division."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE divisions SET group_chat_id = ? WHERE id = ?",
+            (chat_id, division_id)
+        )
+
+
+def get_division_by_group(chat_id: int) -> dict | None:
+    """Retrieve division bound to the given group chat_id."""
+    if not chat_id:
+        return None
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM divisions WHERE group_chat_id = ? LIMIT 1",
+            (chat_id,)
+        )
+        row = cursor.fetchone()
+        if row:
+            return dict(row)
+        # Fallback: check if division_topics has this group_chat_id
+        cursor.execute("""
+            SELECT d.* FROM divisions d
+            JOIN division_topics dt ON dt.division_id = d.id
+            WHERE dt.group_chat_id = ?
+            ORDER BY dt.id DESC LIMIT 1
+        """, (chat_id,))
+        fallback_row = cursor.fetchone()
+        return dict(fallback_row) if fallback_row else None
 
 
 def assign_user_division(telegram_id: int, division_id: int | None) -> None:

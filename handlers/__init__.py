@@ -245,8 +245,11 @@ from handlers.admin import (
     admin_unwarn_command,
 )
 
-from handlers.topic_management import register_topic_management_handlers
-from services.topic_cache import topic_cache
+from handlers.topic_management import (
+    register_topic_management_handlers,
+    cmd_bind_group,
+    cb_bind_group,
+)
 
 
 logger = logging.getLogger(__name__)
