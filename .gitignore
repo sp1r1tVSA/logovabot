@@ -93,12 +93,19 @@ Thumbs.db
 # ==============================================================================
 # Claude Code (share project config, ignore local state and caches)
 # ==============================================================================
-.claude/*
-!.claude/settings.json
-!.claude/agents/
-!.claude/commands/
-!.claude/prds/
+# Config (agents, commands, skills, guides, prds) is tracked by default so a
+# newly installed tool cannot go missing silently. Only local state is ignored.
 .claude/settings.local.json
+.claude/cache/
+.claude/paste-cache/
+.claude/sessions/
+.claude/shell-snapshots/
+.claude/session-env/
+.claude/backups/
+.claude/todos/
+.claude/statsig/
+.claude/history.jsonl
+.claude/*.log
 
 # ==============================================================================
 # Agent Tooling (vendored ECC framework — local only, not project source)
