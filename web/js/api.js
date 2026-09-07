@@ -248,42 +248,19 @@ class ApiClient {
     return this.request('/api/achievements');
   }
 
-  claimAchievement(achId) {
-    return this.request('/api/achievements/claim', {
-      method: 'POST',
-      body: JSON.stringify({ achievement_id: achId })
-    });
+  // Награды за достижения отключены — claimAchievement() удалён.
+
+  getTournamentStats() {
+    return this.request('/api/profile/tournament-stats');
   }
 
   getProfile(userId) {
     return this.request(`/api/profile/${userId}`);
   }
 
-  // 8. Phase 6: Live Center & Sports Intelligence
-  getLiveMatches() {
-    return this.request('/api/live');
-  }
-
-  getLiveMatch(id) {
-    return this.request(`/api/live/${id}`);
-  }
-
-  getLiveEvents(id) {
-    return this.request(`/api/live/${id}/events`);
-  }
-
-  getLiveStats(id) {
-    return this.request(`/api/live/${id}/stats`);
-  }
-
-  getLiveMarkets(id) {
-    return this.request(`/api/live/${id}/markets`);
-  }
-
-  getLiveIntelligence(id) {
-    return this.request(`/api/live/${id}/intelligence`);
-  }
-
+  // 8. Sports Intelligence
+  // LIVE-центр удалён из мини-приложения: клиентские обёртки над /api/live/*
+  // убраны, серверные маршруты остались (ими пользуется админка).
   getOddsMovers() {
     return this.request('/api/odds/movers');
   }

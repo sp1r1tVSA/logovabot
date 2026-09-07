@@ -111,6 +111,7 @@ from handlers.admin import (
     admin_delete_player_execute,
     admin_manage_matches_info,
     admin_manage_round,
+    admin_toggle_round_bets,
     admin_extend_match_execute,
     admin_list_overdue,
     admin_open_round_prompt,
@@ -679,6 +680,7 @@ def _register_admin_handlers(app: Application) -> None:
     app.add_handler(CallbackQueryHandler(admin_confirm_delete_player, pattern="^(admin_confirm_delete_player|admin_delete_player_confirm)_-?\\d+$"))
     app.add_handler(CallbackQueryHandler(admin_delete_player_execute, pattern="^admin_delete_player_execute_-?\\d+$"))
     app.add_handler(CallbackQueryHandler(admin_manage_round, pattern="^admin_manage_round_\\d+$"))
+    app.add_handler(CallbackQueryHandler(admin_toggle_round_bets, pattern="^admin_bets_(open|close)_round_\\d+$"))
     app.add_handler(CallbackQueryHandler(admin_close_round, pattern="^admin_close_round_\\d+$"))
     app.add_handler(CallbackQueryHandler(admin_remind_round, pattern="^admin_remind_round_\\d+$"))
     app.add_handler(CallbackQueryHandler(admin_toggle_remind_match, pattern="^admin_toggle_remind_match_\\d+_\\d+$"))

@@ -4,6 +4,7 @@ api/routes_wallet.py
 REST API handlers for bootstrap data, user wallet, daily bonus, and leaderboard.
 """
 
+import asyncio
 import json
 import logging
 from aiohttp import web
@@ -32,14 +33,11 @@ async def handle_bootstrap(request: web.Request) -> web.Response:
     is_adm = is_admin(user_id)
     has_access = check_user_access(user_id)
 
-    # Auto-settle any finished matches in background
-    try:
-        database.settle_all_pending_finished_matches()
-    except Exception as e:
-        logger.warning(f"Error in auto-settlement: {e}")
+    # NOTE: settlement runs in settle_finished_bets_job (services/background_sync.py),
+    # not on this request path — it blocked the shared bot/API event loop.
 
     # Fetch wallet
-    wallet = database.get_or_create_wallet(user_id)
+    wallet = await asyncio.to_thread(database.get_or_create_wallet, user_id)
 
     # Check bonus availability
     can_claim = True
@@ -57,7 +55,7 @@ async def handle_bootstrap(request: web.Request) -> web.Response:
             pass
 
     # Fetch open tours summary
-    open_tours = database.get_open_betting_tours()
+    open_tours = await asyncio.to_thread(database.get_open_betting_tours)
 
     return web.json_response({
         "status": "ok",
@@ -101,7 +99,7 @@ async def handle_claim_bonus(request: web.Request) -> web.Response:
             status=403
         )
 
-    success, val, msg = database.claim_daily_bonus(user_id, 250)
+    success, val, msg = await asyncio.to_thread(database.claim_daily_bonus, user_id, 250)
     if not success:
         return web.json_response({
             "status": "error",
@@ -145,7 +143,7 @@ async def handle_leaderboard(request: web.Request) -> web.Response:
     capper_leaders = get_capper_leaderboard(division_id=div_id, season_id=season_id, min_bets=min_bets)
 
     # Legacy coin leaders for backward compatibility
-    coin_leaders = database.get_top_bettors(20)
+    coin_leaders = await asyncio.to_thread(database.get_top_bettors, 20)
 
     my_rank = None
     if user_id:
@@ -211,7 +209,7 @@ async def handle_get_wallet(request: web.Request) -> web.Response:
         )
 
     user_id = user_info["id"]
-    wallet = database.get_or_create_wallet(user_id)
+    wallet = await asyncio.to_thread(database.get_or_create_wallet, user_id)
 
     can_claim = True
     cooldown_sec = 0

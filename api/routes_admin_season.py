@@ -11,6 +11,7 @@ Strict Invariants:
 3. Transactional Audit Logging for every administrative change.
 """
 
+import asyncio
 import json
 import logging
 from aiohttp import web
@@ -57,8 +58,8 @@ async def handle_admin_get_season(request: web.Request) -> web.Response:
     if err is not None:
         return err
 
-    seasons = database.list_seasons()
-    active_s = database.get_active_season()
+    seasons = await asyncio.to_thread(database.list_seasons)
+    active_s = await asyncio.to_thread(database.get_active_season)
     s_id = active_s["id"] if active_s else 1
 
     with database.transaction() as conn:
@@ -75,7 +76,7 @@ async def handle_admin_get_season(request: web.Request) -> web.Response:
     for d in divisions:
         d_id = d["id"]
         standings = SeasonProgressionEngine.get_division_standings(s_id, d_id)
-        rules = database.get_season_rules(s_id, d_id)
+        rules = await asyncio.to_thread(database.get_season_rules, s_id, d_id)
         div_summaries.append({
             "division": d,
             "rules": rules,
@@ -117,7 +118,7 @@ async def handle_admin_create_season(request: web.Request) -> web.Response:
         if not name:
             return web.json_response({"status": "error", "message": "Season name is required."}, status=400)
 
-        s_id = database.create_season(name=name, created_by=actor_id)
+        s_id = await asyncio.to_thread(database.create_season, name=name, created_by=actor_id)
         return web.json_response({
             "status": "ok",
             "message": f"Сезон #{s_id} ('{name}') создан.",
@@ -136,7 +137,7 @@ async def handle_admin_create_season(request: web.Request) -> web.Response:
         min_b = int(data.get("min_bets_qualification", 5))
         min_m = int(data.get("min_matches_qualification", 3))
 
-        database.set_season_rules(
+        await asyncio.to_thread(database.set_season_rules, 
             season_id=s_id,
             division_id=d_id,
             promotion_slots=prom_slots,
@@ -188,7 +189,7 @@ async def handle_admin_finalize_season(request: web.Request) -> web.Response:
         return web.json_response({"status": "error", "message": "Invalid season_id."}, status=400)
 
     if season_id <= 0:
-        act = database.get_active_season()
+        act = await asyncio.to_thread(database.get_active_season)
         if not act:
             return web.json_response({"status": "error", "message": "No active season to finalize."}, status=400)
         season_id = act["id"]

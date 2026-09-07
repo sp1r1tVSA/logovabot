@@ -10,6 +10,7 @@ Uses telegram.ext.JobQueue compatible coroutines:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -121,3 +122,20 @@ async def process_notification_queue_job(context: Any) -> None:
                 logger.warning("Unexpected error sending notification %s: %s", ev_id, e)
     except Exception as e:
         logger.error("Error in process_notification_queue_job: %s", e)
+
+
+async def settle_finished_bets_job(context: Any) -> None:
+    """
+    Settle bets on matches that have finished.
+
+    Previously this sweep ran synchronously inside the Mini App request handlers
+    (GET /api/predictions and the wallet bootstrap). Because the API server shares
+    the bot's event loop, that stalled Telegram handling on every request. It now
+    runs here on a fixed schedule, off the loop.
+    """
+    try:
+        settled = await asyncio.to_thread(database.settle_all_pending_finished_matches)
+        if settled:
+            logger.info("Settled %d finished bet(s).", len(settled))
+    except Exception as e:
+        logger.error("Error in settle_finished_bets_job: %s", e, exc_info=True)

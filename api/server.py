@@ -52,7 +52,8 @@ from api.routes_tournaments import (
     handle_get_season_by_id,
     handle_get_standings,
     handle_get_results,
-    handle_get_top_scorers
+    handle_get_top_scorers,
+    handle_get_my_tournament_stats
 )
 from api.routes_user_extras import (
     handle_get_my_stats,
@@ -265,6 +266,7 @@ def create_app() -> web.Application:
     app.router.add_get("/api/tournaments/{id}/standings", handle_get_standings)
     app.router.add_get("/api/tournaments/{id}/results", handle_get_results)
     app.router.add_get("/api/tournaments/{id}/top-scorers", handle_get_top_scorers)
+    app.router.add_get("/api/profile/tournament-stats", handle_get_my_tournament_stats)
 
     # 6. User Stats, Saved Coupons, Favorites & Notifications
     app.router.add_get("/api/stats/me", handle_get_my_stats)

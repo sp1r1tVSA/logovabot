@@ -1,12 +1,9 @@
-import os
 import re
 import asyncio
-import io
 import logging
 from telegram import Update
 from telegram.constants import ChatAction
 from telegram.ext import ContextTypes
-from telegram.error import BadRequest
 import database
 from services.ai import ai_chat
 from handlers.text_commands import handle_temshik_command
@@ -52,7 +49,6 @@ async def handle_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 is_reply_to_bot = False
         # Если текстовое сообщение НЕ начинается с "темшик" и НЕ является ответом на бота
         if not user_text.lower().startswith("темшик") and not is_reply_to_bot:
-            import re
             if re.match(r"^\d{2}\.\d{2}\.\d{4}\s+\d{2}:\d{2}$", user_text):
                 await update.message.reply_text(
                     "⚠️ **Сессия ввода прервана из-за перезапуска бота.**\n\n"
@@ -83,7 +79,11 @@ async def handle_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         all_squads,
         all_rounds,
         recent_form_map,
-        pending_matches
+        pending_matches,
+        cup_series,
+        all_players,
+        chat_history,
+        chat_mode
     ) = await asyncio.gather(
         asyncio.to_thread(database.get_user, user_id),
         asyncio.to_thread(database.get_standings),
@@ -93,7 +93,11 @@ async def handle_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         asyncio.to_thread(database.get_all_squads),
         asyncio.to_thread(database.get_all_rounds),
         asyncio.to_thread(database.get_teams_recent_form, 5),
-        asyncio.to_thread(database.get_open_pending_matches)
+        asyncio.to_thread(database.get_open_pending_matches),
+        asyncio.to_thread(database.get_all_cup_series),
+        asyncio.to_thread(database.list_users),
+        asyncio.to_thread(database.get_chat_history, user_id, 10),
+        asyncio.to_thread(database.get_config, "chat_mode")
     )
 
     user_team = user_data["team_name"] if user_data else "Не зарегистрирован"
@@ -217,8 +221,24 @@ async def handle_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• Награды: В конце сезона вручается премия 'Золотой Мяч'. Красивые голы отправлять @antonv2801.\n"
     )
 
+    # Cup bracket state (series are stored newest-stage-last)
+    cup_info_text = "🏆 КУБОК КПЛ:\n"
+    if cup_series:
+        for cs in cup_series:
+            t1, t2 = cs.get("team1_name", "?"), cs.get("team2_name", "?")
+            w1, w2 = cs.get("team1_wins", 0) or 0, cs.get("team2_wins", 0) or 0
+            stage = cs.get("stage") or "?"
+            winner = cs.get("winner_name")
+            line = f"• [{stage}] {t1} {w1}:{w2} {t2}"
+            if winner:
+                line += f" — прошёл дальше: {winner}"
+            elif (cs.get("status") or "") == "active":
+                line += " — серия ещё идёт"
+            cup_info_text += line + "\n"
+    else:
+        cup_info_text += "Кубок ещё не стартовал или сетка не сформирована.\n"
+
     # Opponents list: club -> coach username (from registered users)
-    all_players = await asyncio.to_thread(database.list_users)
     opponents_text = ""
     if all_players:
         for p in all_players:
@@ -252,11 +272,8 @@ async def handle_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"{league_rules_text}"
     )
 
-    # 2. History Management (persistent in DB)
-    chat_history = database.get_chat_history(user_id, limit=10)
-
-    # 3. Call AI non-blocking via thread
-    chat_mode = database.get_config("chat_mode") or "temshik"
+    # 2. Call AI non-blocking via thread (history & mode were fetched above)
+    chat_mode = chat_mode or "temshik"
     reply_text = await asyncio.to_thread(
         ai_chat.generate_chat_reply, 
         user_id, 
@@ -268,13 +285,13 @@ async def handle_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_mode
     )
 
-    # 4. Save to history
+    # 3. Save to history
     await asyncio.to_thread(database.append_chat_history, user_id, "user", user_text)
     await asyncio.to_thread(database.append_chat_history, user_id, "model", reply_text)
     # Keep only last 10 messages (5 pairs) to avoid context bloat
     await asyncio.to_thread(database.trim_chat_history, user_id, keep=10)
 
-    # 5. Send reply
+    # 4. Send reply
     await update.message.reply_text(reply_text)
 
 

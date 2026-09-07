@@ -130,18 +130,17 @@ export class UIRenderer {
   static renderHeader(user, progression) {
     const balEl = document.getElementById('user-balance-val');
     if (balEl && user) {
-      balEl.textContent = `${this.formatNumber(user.balance)} 🪙`;
+      // Монета уже нарисована в .balance-icon — второй эмодзи здесь не нужен.
+      balEl.textContent = this.formatNumber(user.balance);
     }
     const lvlEl = document.getElementById('user-level-val');
     if (lvlEl && progression) {
       lvlEl.textContent = `Lvl ${progression.level || 1}`;
     }
 
+    // Награды за достижения отключены — счётчик «неполученных» больше не нужен.
     const aBadge = document.getElementById('achievements-badge');
-    if (aBadge) {
-      aBadge.style.display = store.state.unclaimedAchievementsCount > 0 ? 'inline-block' : 'none';
-      aBadge.textContent = store.state.unclaimedAchievementsCount;
-    }
+    if (aBadge) aBadge.style.display = 'none';
   }
 
   static renderBonusBanner(_bonus) {
@@ -179,10 +178,12 @@ export class UIRenderer {
       return;
     }
 
+    // is_early — линия открыта заранее, тур ещё не открыт для внесения результатов.
     container.innerHTML = tours.map(t => `
-      <button class="tour-tab-btn ${t.round_number === selectedTour ? 'active' : ''}" 
-              data-tour="${t.round_number}">
-        ⚽ Тур ${t.round_number} (${t.unplayed_matches || t.total_matches})
+      <button class="tour-tab-btn ${t.round_number === selectedTour ? 'active' : ''} ${t.is_early ? 'early' : ''}"
+              data-tour="${t.round_number}"
+              ${t.is_early ? 'title="Ранняя линия: тур ещё не начался"' : ''}>
+        ${t.is_early ? '🔮' : '⚽'} Тур ${t.round_number} (${t.unplayed_matches || t.total_matches})
       </button>
     `).join('');
   }
@@ -1087,6 +1088,8 @@ export class UIRenderer {
       if (bestEl) bestEl.textContent = `${this.formatNumber(stats.best_win)} 🪙`;
     }
 
+    this.renderTournamentStats(store.state.tournamentStats);
+
     // Achievements Grid
     const achEl = document.getElementById('achievements-grid-container');
     const achCountEl = document.getElementById('achievements-count-label');
@@ -1094,21 +1097,92 @@ export class UIRenderer {
       const unlocked = achievements.filter(a => a.is_unlocked).length;
       if (achCountEl) achCountEl.textContent = `${unlocked}/${achievements.length}`;
 
+      // The catalog columns are `name` / `badge_icon` — не `title` / `icon`.
+      // Награды за достижения отключены: карточка показывает только название,
+      // описание и статус.
       achEl.innerHTML = achievements.map(a => `
         <div class="achievement-card ${a.is_unlocked ? 'unlocked' : 'locked'}" data-ach-id="${a.id}">
-          <div class="ach-icon" style="font-size: 1.8rem;">${a.icon || '🏆'}</div>
+          <div class="ach-icon" style="font-size: 1.8rem;">${a.badge_icon || '🏆'}</div>
           <div style="margin-top: 6px;">
-            <div class="ach-title" style="font-weight: 800; color: #fff; font-size: 0.85rem;">${a.title}</div>
-            <div class="ach-desc" style="font-size: 0.72rem; color: var(--text-secondary); margin-top: 2px;">${a.description}</div>
+            <div class="ach-title" style="font-weight: 800; color: #fff; font-size: 0.85rem;">${a.name || 'Достижение'}</div>
+            <div class="ach-desc" style="font-size: 0.72rem; color: var(--text-secondary); margin-top: 2px;">${a.description || ''}</div>
           </div>
-          ${a.is_unlocked && !a.is_claimed ? `
-            <button class="btn-claim-ach" data-ach-id="${a.id}" style="margin-top: 8px; background: var(--accent-gold); color: #000; border: none; font-weight: 800; font-size: 0.75rem; padding: 4px 8px; border-radius: 4px; cursor: pointer;">
-              Забрать +${a.reward_coins}🪙
-            </button>
+          ${a.is_unlocked ? `
+            <div class="ach-status" style="margin-top: 8px; font-size: 0.7rem; font-weight: 800; color: var(--accent-gold); text-transform: uppercase; letter-spacing: 0.03em;">Получено</div>
           ` : ''}
         </div>
       `).join('');
     }
+  }
+
+  static renderTournamentStats(ts) {
+    const el = document.getElementById('tournament-stats-container');
+    if (!el) return;
+
+    if (!ts) {
+      el.innerHTML = `<div style="text-align: center; padding: 24px; color: var(--text-muted);">Загрузка турнирной статистики...</div>`;
+      return;
+    }
+
+    if (!ts.registered) {
+      el.innerHTML = `
+        <div style="text-align: center; padding: 24px 16px; background: var(--bg-secondary); border: 1px dashed var(--border-subtle); border-radius: var(--radius-md); color: var(--text-muted); font-size: 0.85rem;">
+          Вы пока не заявлены ни за один клуб — турнирная статистика появится после регистрации в дивизионе.
+        </div>
+      `;
+      return;
+    }
+
+    const formHtml = (ts.form || []).map(r => {
+      const color = r === 'W' ? 'var(--color-success)' : (r === 'D' ? 'var(--text-muted)' : 'var(--color-danger)');
+      const label = r === 'W' ? 'В' : (r === 'D' ? 'Н' : 'П');
+      return `<span style="display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 50%; background: ${color}; color: #000; font-size: 0.68rem; font-weight: 900;">${label}</span>`;
+    }).join('');
+
+    const place = ts.position ? `${ts.position} место` : '—';
+    const divLabel = ts.division_name || (ts.division_id ? `Дивизион ${ts.division_id}` : 'Лига');
+    const diff = ts.goal_diff > 0 ? `+${ts.goal_diff}` : `${ts.goal_diff}`;
+
+    el.innerHTML = `
+      <div style="background: var(--bg-secondary); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 14px;">
+        <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px;">
+          <div style="min-width: 0;">
+            <div style="font-family: 'Outfit', sans-serif; font-size: 1.02rem; font-weight: 900; color: #fff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${ts.team_name}</div>
+            <div style="font-size: 0.76rem; color: var(--text-secondary); margin-top: 2px;">${divLabel}</div>
+          </div>
+          <div style="text-align: right; flex-shrink: 0;">
+            <div style="font-family: 'Outfit', sans-serif; font-size: 1.02rem; font-weight: 900; color: var(--accent-gold);">${place}</div>
+            <div style="font-size: 0.72rem; color: var(--text-muted);">из ${ts.total_teams || '—'}</div>
+          </div>
+        </div>
+
+        <div class="kpi-grid">
+          <div class="kpi-card">
+            <span class="kpi-label">Очки</span>
+            <span class="kpi-value gold">${ts.points}</span>
+          </div>
+          <div class="kpi-card">
+            <span class="kpi-label">Матчей сыграно</span>
+            <span class="kpi-value">${ts.played}</span>
+          </div>
+          <div class="kpi-card">
+            <span class="kpi-label">В / Н / П</span>
+            <span class="kpi-value">${ts.wins} / ${ts.draws} / ${ts.losses}</span>
+          </div>
+          <div class="kpi-card">
+            <span class="kpi-label">Голы (разница)</span>
+            <span class="kpi-value">${ts.goals_scored}:${ts.goals_conceded} <span style="color: var(--text-muted); font-size: 0.8em;">(${diff})</span></span>
+          </div>
+        </div>
+
+        ${formHtml ? `
+          <div style="display: flex; align-items: center; gap: 8px; margin-top: 12px;">
+            <span style="font-size: 0.76rem; color: var(--text-muted); font-weight: 600;">Форма:</span>
+            <div style="display: flex; gap: 4px;">${formHtml}</div>
+          </div>
+        ` : ''}
+      </div>
+    `;
   }
 
   static renderSlipDrawer(slip, stakeAmount) {
@@ -1223,184 +1297,8 @@ export class UIRenderer {
     }
   }
 
-  // ─── Phase 6: Live Center & Sports Intelligence ───────────────────────────
-
-  static renderLiveCenter(liveMatches, selectedMatchId, liveDetail, liveEvents, liveStats, liveMarkets, liveIntelligence) {
-    const listEl = document.getElementById('live-matches-list-container');
-    const detailEl = document.getElementById('live-match-detail-container');
-    const statusEl = document.getElementById('live-provider-status-container');
-
-    if (!listEl) return;
-
-    if (statusEl) {
-      statusEl.innerHTML = `
-        <div style="background: rgba(255, 71, 87, 0.08); border: 1px solid rgba(255, 71, 87, 0.25); border-radius: var(--radius-sm); padding: 8px 12px; display: flex; justify-content: space-between; align-items: center; font-size: 0.8rem;">
-          <span style="color: #ff4757; font-weight: 800;">⚡ IN-PLAY FEED: АКТИВЕН</span>
-          <span style="color: var(--text-muted);">Матчей в игре: <b>${liveMatches ? liveMatches.length : 0}</b></span>
-        </div>
-      `;
-    }
-
-    if (!liveMatches || liveMatches.length === 0) {
-      listEl.innerHTML = `
-        <div style="text-align: center; padding: 48px 20px; background: var(--bg-secondary); border: 1px dashed var(--border-subtle); border-radius: var(--radius-md);">
-          <div style="font-size: 2.5rem; margin-bottom: 10px;">📡</div>
-          <div style="font-family: 'Outfit', sans-serif; font-size: 1.1rem; font-weight: 800; color: #fff; margin-bottom: 6px;">
-            НЕТ АКТИВНЫХ ЛАЙВ-МАТЧЕЙ
-          </div>
-          <div style="font-size: 0.82rem; color: var(--text-muted); max-width: 320px; margin: 0 auto; line-height: 1.45;">
-            Внешний спорт-провайдер в режиме ожидания (LIVE DATA UNAVAILABLE). Лайв-трансляции и счет активируются в начале матчей тура.
-          </div>
-        </div>
-      `;
-      if (detailEl) detailEl.style.display = 'none';
-      return;
-    }
-
-    // Render matches list
-    listEl.innerHTML = liveMatches.map(m => {
-      const isSelected = m.id === selectedMatchId;
-      const hScore = m.home_score !== undefined ? m.home_score : 0;
-      const aScore = m.away_score !== undefined ? m.away_score : 0;
-      const min = m.minute ? `${m.minute}'` : 'LIVE';
-
-      const freshnessBadge = m.freshness && m.freshness.badge ? m.freshness.badge : '';
-
-      return `
-        <div class="match-card ${isSelected ? 'live-selected' : ''}" style="margin-bottom: 12px; border-left: 3px solid #ff4757;">
-          <div class="match-card-header" style="display: flex; justify-content: space-between; align-items: center;">
-            <div style="display: flex; align-items: center; gap: 6px;">
-              <span class="live-pulse-dot" style="width: 8px; height: 8px; background: #ff4757; border-radius: 50%; display: inline-block;"></span>
-              <span style="font-weight: 800; color: #ff4757; font-size: 0.82rem;">${min}</span>
-              <span style="font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase;">${m.period || 'Основное время'}</span>
-            </div>
-            <div style="display: flex; align-items: center; gap: 8px;">
-              ${freshnessBadge ? `<span style="font-size: 0.72rem; font-weight: 700;">${freshnessBadge}</span>` : ''}
-              <span style="font-size: 0.75rem; color: var(--accent-gold); font-weight: 700;">Дивизион ${m.division_id || 1}</span>
-            </div>
-          </div>
-
-          <div class="match-card-teams" style="display: flex; justify-content: space-between; align-items: center; padding: 12px 0;">
-            <div style="flex: 1; text-align: left; display: flex; align-items: center; gap: 8px;">
-              ${renderTeamLogoHtml(m.player1_team, 28)}
-              <span style="font-weight: 800; font-size: 0.95rem; color: #fff;">${m.player1_team}</span>
-            </div>
-            <div style="padding: 4px 12px; background: var(--bg-tertiary); border-radius: var(--radius-sm); font-size: 1.25rem; font-weight: 900; color: #ff4757; letter-spacing: 2px;">
-              ${hScore} : ${aScore}
-            </div>
-            <div style="flex: 1; text-align: right; display: flex; align-items: center; justify-content: flex-end; gap: 8px;">
-              <span style="font-weight: 800; font-size: 0.95rem; color: #fff;">${m.player2_team}</span>
-              ${renderTeamLogoHtml(m.player2_team, 28)}
-            </div>
-          </div>
-
-          <div style="display: flex; justify-content: flex-end; gap: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.05);">
-            <button class="btn-open-live-detail" data-match-id="${m.id}" style="background: linear-gradient(135deg, #ff4757, #ff6b81); color: #fff; border: none; padding: 6px 14px; border-radius: var(--radius-sm); font-size: 0.8rem; font-weight: 800; cursor: pointer;">
-              ⚡ Лайв Центр 2.0
-            </button>
-          </div>
-        </div>
-      `;
-    }).join('');
-
-    // Render detailed match center 2.0 if match selected
-    if (detailEl && selectedMatchId && liveDetail) {
-      detailEl.style.display = 'block';
-      const m = liveDetail;
-      const hScore = m.home_score !== undefined ? m.home_score : 0;
-      const aScore = m.away_score !== undefined ? m.away_score : 0;
-
-      // Statistics bars (strictly preserves NULL without fake 0s)
-      let statsHtml = '';
-      if (liveStats && liveStats.statistics) {
-        const s = liveStats.statistics;
-        const metrics = [
-          { key: 'possession', label: 'Владение мячом', unit: '%' },
-          { key: 'shots', label: 'Удары по воротам', unit: '' },
-          { key: 'shots_on_target', label: 'Удары в створ', unit: '' },
-          { key: 'corners', label: 'Угловые', unit: '' },
-          { key: 'fouls', label: 'Фолы', unit: '' },
-          { key: 'yellow_cards', label: 'Желтые карточки', unit: '' },
-          { key: 'red_cards', label: 'Красные карточки', unit: '' },
-          { key: 'xg', label: 'Ожидаемые голы (xG)', unit: '' },
-        ];
-
-        const validMetrics = metrics.filter(met => s[met.key] && (s[met.key].home !== null || s[met.key].away !== null));
-        if (validMetrics.length > 0) {
-          statsHtml = `
-            <div style="margin-top: 16px; background: var(--bg-secondary); padding: 14px; border-radius: var(--radius-md); border: 1px solid var(--border-subtle);">
-              <div style="font-weight: 800; font-size: 0.92rem; color: #fff; margin-bottom: 12px;">📊 Лайв-Статистика Матча</div>
-              ${validMetrics.map(met => {
-                const hVal = s[met.key].home !== null ? s[met.key].home : '—';
-                const aVal = s[met.key].away !== null ? s[met.key].away : '—';
-                return `
-                  <div style="margin-bottom: 10px;">
-                    <div style="display: flex; justify-content: space-between; font-size: 0.78rem; font-weight: 700; margin-bottom: 4px;">
-                      <span style="color: var(--accent-gold);">${hVal}${met.unit}</span>
-                      <span style="color: var(--text-muted);">${met.label}</span>
-                      <span style="color: var(--accent-cyan);">${aVal}${met.unit}</span>
-                    </div>
-                  </div>
-                `;
-              }).join('')}
-            </div>
-          `;
-        }
-      }
-
-      // Timeline events
-      let eventsHtml = '';
-      if (liveEvents && liveEvents.length > 0) {
-        eventsHtml = `
-          <div style="margin-top: 16px; background: var(--bg-secondary); padding: 14px; border-radius: var(--radius-md); border: 1px solid var(--border-subtle);">
-            <div style="font-weight: 800; font-size: 0.92rem; color: #fff; margin-bottom: 12px;">⏱ Хроника Событий</div>
-            <div style="display: flex; flex-direction: column; gap: 8px;">
-              ${liveEvents.map(ev => {
-                const icon = ev.event_type === 'goal' ? '⚽' : ev.event_type === 'yellow_card' ? '🟨' : ev.event_type === 'red_card' ? '🟥' : ev.event_type === 'substitution' ? '🔄' : '📌';
-                return `
-                  <div style="display: flex; align-items: center; gap: 10px; font-size: 0.82rem; padding: 6px 8px; background: var(--bg-tertiary); border-radius: var(--radius-sm);">
-                    <span style="font-weight: 900; color: #ff4757; min-width: 28px;">${ev.minute}'</span>
-                    <span>${icon}</span>
-                    <span style="font-weight: 700; color: #fff;">${ev.event_type.toUpperCase()}</span>
-                    <span style="color: var(--text-secondary); margin-left: auto;">${ev.player_id || ''}</span>
-                  </div>
-                `;
-              }).join('')}
-            </div>
-          </div>
-        `;
-      }
-
-      detailEl.innerHTML = `
-        <div style="background: var(--bg-secondary); border: 1px solid var(--border-active); border-radius: var(--radius-md); padding: 16px; margin-bottom: 14px;">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-            <div style="display: flex; align-items: center; gap: 8px;">
-              <span style="font-size: 0.8rem; font-weight: 800; color: #ff4757;">🔴 В ЭФИРЕ: ${m.minute ? m.minute + "'" : 'LIVE'}</span>
-              <span style="font-size: 0.72rem; font-weight: 700;">${m.freshness && m.freshness.badge ? m.freshness.badge : '🟢 LIVE DATA FRESH'}</span>
-            </div>
-            <span style="font-size: 0.75rem; color: var(--text-muted);">${m.provider || 'Официальный поток'}</span>
-          </div>
-
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-            <div style="flex: 1; text-align: center;">
-              ${renderTeamLogoHtml(m.player1_team, 40)}
-              <div style="font-weight: 800; font-size: 0.95rem; color: #fff; margin-top: 6px;">${m.player1_team}</div>
-            </div>
-            <div style="font-family: 'Outfit', sans-serif; font-size: 2rem; font-weight: 900; color: #ff4757; padding: 0 16px;">
-              ${hScore} : ${aScore}
-            </div>
-            <div style="flex: 1; text-align: center;">
-              ${renderTeamLogoHtml(m.player2_team, 40)}
-              <div style="font-weight: 800; font-size: 0.95rem; color: #fff; margin-top: 6px;">${m.player2_team}</div>
-            </div>
-          </div>
-        </div>
-
-        ${eventsHtml}
-        ${statsHtml}
-      `;
-    }
-  }
+  // ─── Sports Intelligence ──────────────────────────────────────────────
+  // LIVE-центр удалён из мини-приложения, renderLiveCenter больше не нужен.
 
   static renderHotMatches(hotMatches) {
     const el = document.getElementById('hot-matches-container');

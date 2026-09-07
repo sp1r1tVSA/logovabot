@@ -68,10 +68,13 @@ def register_jobs(application: Application) -> None:
             sync_live_provider_job,
             sync_intelligence_cache_job,
             process_notification_queue_job,
+            settle_finished_bets_job,
         )
         application.job_queue.run_repeating(sync_live_provider_job, interval=45, first=15)
         application.job_queue.run_repeating(sync_intelligence_cache_job, interval=300, first=45)
         application.job_queue.run_repeating(process_notification_queue_job, interval=15, first=20)
+        # Bet settlement used to run inline on Mini App requests; now scheduled off the loop.
+        application.job_queue.run_repeating(settle_finished_bets_job, interval=60, first=25)
     except Exception as e:
         logger.warning(f"Could not register Phase 6 background jobs: {e}")
 

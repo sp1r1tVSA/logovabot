@@ -13,6 +13,7 @@ Strict Invariants:
 4. Telegram WebApp HMAC Authentication & Access Controls.
 """
 
+import asyncio
 import logging
 from aiohttp import web
 from .auth import get_authenticated_user, check_user_access
@@ -46,9 +47,9 @@ async def handle_get_progression(request: web.Request) -> web.Response:
         return err
     user_id = user_info["id"]
 
-    streak_info = database.check_and_update_login_streak(user_id)
-    progression = database.get_or_create_progression(user_id)
-    achievements = database.get_user_achievements(user_id)
+    streak_info = await asyncio.to_thread(database.check_and_update_login_streak, user_id)
+    progression = await asyncio.to_thread(database.get_or_create_progression, user_id)
+    achievements = await asyncio.to_thread(database.get_user_achievements, user_id)
 
     unclaimed_ach = sum(1 for a in achievements if a["is_unlocked"] and not a["is_claimed"])
 
@@ -82,9 +83,9 @@ async def handle_get_profile(request: web.Request) -> web.Response:
 
     # Privacy enforcement
     if target_uid == auth_uid:
-        profile = database.get_private_player_profile(target_uid)
+        profile = await asyncio.to_thread(database.get_private_player_profile, target_uid)
     else:
-        profile = database.get_public_player_profile(target_uid)
+        profile = await asyncio.to_thread(database.get_public_player_profile, target_uid)
 
     return web.json_response({
         "status": "ok",
@@ -107,7 +108,7 @@ async def handle_get_player_public(request: web.Request) -> web.Response:
     except (KeyError, ValueError):
         return web.json_response({"status": "error", "message": "Invalid player ID."}, status=400)
 
-    profile = database.get_public_player_profile(target_uid)
+    profile = await asyncio.to_thread(database.get_public_player_profile, target_uid)
     return web.json_response({
         "status": "ok",
         "player": profile
@@ -124,9 +125,9 @@ async def handle_get_profile_stats(request: web.Request) -> web.Response:
         return err
     user_id = user_info["id"]
 
-    fav = database.get_user_favorite_stats(user_id)
-    season_stats = database.get_player_season_stats(user_id)
-    career = database.get_player_career_stats(user_id)
+    fav = await asyncio.to_thread(database.get_user_favorite_stats, user_id)
+    season_stats = await asyncio.to_thread(database.get_player_season_stats, user_id)
+    career = await asyncio.to_thread(database.get_player_career_stats, user_id)
 
     return web.json_response({
         "status": "ok",
@@ -184,7 +185,7 @@ async def handle_get_leaderboard(request: web.Request) -> web.Response:
         user_id=user_id
     )
 
-    coin_leaders = database.get_top_bettors(20)
+    coin_leaders = await asyncio.to_thread(database.get_top_bettors, 20)
     from services.analytics_service import get_capper_leaderboard
     capper_leaders = get_capper_leaderboard(division_id=None, season_id=s_id, min_bets=5)
 
@@ -221,7 +222,7 @@ async def handle_get_leaderboard_division(request: web.Request) -> web.Response:
             return web.json_response({"status": "error", "message": "division_id must be integer."}, status=400)
     else:
         # Default to user's division
-        s_stats = database.get_player_season_stats(user_id)
+        s_stats = await asyncio.to_thread(database.get_player_season_stats, user_id)
         div_id = s_stats["division_id"]
 
     metric = request.query.get("metric", "RATING").strip().upper()
@@ -286,16 +287,16 @@ async def handle_get_season(request: web.Request) -> web.Response:
         return err
     user_id = user_info["id"]
 
-    act = database.get_active_season()
+    act = await asyncio.to_thread(database.get_active_season)
     if not act:
         return web.json_response({"status": "error", "message": "No active season found."}, status=404)
 
     s_id = act["id"]
-    s_stats = database.get_player_season_stats(user_id, season_id=s_id)
+    s_stats = await asyncio.to_thread(database.get_player_season_stats, user_id, season_id=s_id)
     div_id = s_stats["division_id"]
 
     standings = SeasonProgressionEngine.get_division_standings(s_id, div_id)
-    rules = database.get_season_rules(s_id, div_id)
+    rules = await asyncio.to_thread(database.get_season_rules, s_id, div_id)
 
     # Current user standing
     user_standing = next((p for p in standings if p["user_id"] == user_id), None)
@@ -320,7 +321,7 @@ async def handle_get_season_rewards(request: web.Request) -> web.Response:
         return err
     user_id = user_info["id"]
 
-    act = database.get_active_season()
+    act = await asyncio.to_thread(database.get_active_season)
     s_id = act["id"] if act else 1
 
     with database.transaction() as conn:
@@ -328,7 +329,7 @@ async def handle_get_season_rewards(request: web.Request) -> web.Response:
         cursor.execute("SELECT * FROM season_rewards_catalog")
         catalog = [dict(r) for r in cursor.fetchall()]
 
-    user_rewards = database.get_user_season_rewards(user_id, season_id=s_id)
+    user_rewards = await asyncio.to_thread(database.get_user_season_rewards, user_id, season_id=s_id)
 
     return web.json_response({
         "status": "ok",
@@ -348,7 +349,7 @@ async def handle_get_achievements(request: web.Request) -> web.Response:
         return err
     user_id = user_info["id"]
 
-    achievements = database.get_user_achievements(user_id)
+    achievements = await asyncio.to_thread(database.get_user_achievements, user_id)
     return web.json_response({
         "status": "ok",
         "achievements": achievements
@@ -371,7 +372,7 @@ async def handle_claim_achievement(request: web.Request) -> web.Response:
     except Exception:
         return web.json_response({"status": "error", "error": "invalid_payload"}, status=400)
 
-    success, msg, payload = database.claim_achievement_reward(user_id, ach_id)
+    success, msg, payload = await asyncio.to_thread(database.claim_achievement_reward, user_id, ach_id)
     if not success:
         return web.json_response({"status": "error", "message": msg}, status=400)
 

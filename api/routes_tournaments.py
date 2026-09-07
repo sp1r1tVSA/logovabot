@@ -8,6 +8,7 @@ Logovo.bet — Tournament Hub & Results Center API:
 - Top scorers / stats leaders
 """
 
+import asyncio
 import logging
 from aiohttp import web
 import database
@@ -56,7 +57,7 @@ async def handle_get_divisions(request: web.Request) -> web.Response:
     if not user_info or "id" not in user_info:
         return web.json_response({"status": "error", "error": "unauthorized"}, status=401)
 
-    divisions = database.get_divisions(only_active=True)
+    divisions = await asyncio.to_thread(database.get_divisions, only_active=True)
     return web.json_response({
         "status": "ok",
         "divisions": divisions
@@ -73,7 +74,7 @@ async def handle_get_seasons(request: web.Request) -> web.Response:
     if not user_info or "id" not in user_info:
         return web.json_response({"status": "error", "error": "unauthorized"}, status=401)
 
-    seasons = database.list_seasons()
+    seasons = await asyncio.to_thread(database.list_seasons)
     return web.json_response({
         "status": "ok",
         "seasons": seasons
@@ -94,7 +95,7 @@ async def handle_get_season_by_id(request: web.Request) -> web.Response:
     if not s_id_str or not s_id_str.isdigit():
         return web.json_response({"status": "error", "error": "invalid_season_id"}, status=400)
 
-    season = database.get_season(int(s_id_str))
+    season = await asyncio.to_thread(database.get_season, int(s_id_str))
     if not season:
         return web.json_response({"status": "error", "error": "season_not_found"}, status=404)
 
@@ -120,7 +121,7 @@ async def handle_get_standings(request: web.Request) -> web.Response:
     s_id = int(season_id) if season_id and season_id.isdigit() else None
 
     try:
-        standings = database.get_standings(division_id=div_id, season_id=s_id)
+        standings = await asyncio.to_thread(database.get_standings, division_id=div_id, season_id=s_id)
     except Exception as e:
         logger.warning(f"Error fetching standings: {e}")
         standings = []
@@ -188,11 +189,30 @@ async def handle_get_top_scorers(request: web.Request) -> web.Response:
     div_param = request.query.get("division_id")
     div_id = int(div_param) if div_param and div_param.isdigit() else None
 
-    top_scorers = database.get_top_scorers(limit=15, division_id=div_id)
-    top_assists = database.get_top_assists(limit=15, division_id=div_id)
+    top_scorers = await asyncio.to_thread(database.get_top_scorers, limit=15, division_id=div_id)
+    top_assists = await asyncio.to_thread(database.get_top_assists, limit=15, division_id=div_id)
 
     return web.json_response({
         "status": "ok",
         "top_scorers": top_scorers,
         "top_assists": top_assists
+    })
+
+
+async def handle_get_my_tournament_stats(request: web.Request) -> web.Response:
+    """
+    GET /api/profile/tournament-stats
+    Турнирная (не беттинговая) статистика текущего участника для кабинета:
+    место в дивизионе, очки, В/Н/П, голы и форма последних матчей.
+    """
+    init_data = request.headers.get("X-Telegram-Init-Data", "")
+    user_info = get_authenticated_user(init_data)
+    if not user_info or "id" not in user_info:
+        return web.json_response({"status": "error", "error": "unauthorized"}, status=401)
+
+    summary = await asyncio.to_thread(database.get_user_tournament_summary, user_info["id"])
+
+    return web.json_response({
+        "status": "ok",
+        "tournament_stats": summary
     })

@@ -114,7 +114,7 @@
       <!-- Coin Balance Pill -->
       <div class="balance-pill" id="header-balance-btn">
         <span class="balance-icon">🪙</span>
-        <span class="balance-amount" id="user-balance-val">1 000 🪙</span>
+        <span class="balance-amount" id="user-balance-val">1 000</span>
       </div>
     </div>
   </header>
@@ -124,26 +124,30 @@
     
     <!-- 1. Lobby & Match Line View (Default Active) -->
     <section id="view-lobby" class="view-section active">
-      <!-- Division Selector Tabs -->
-      <div class="division-tabs" id="lobby-division-tabs-container"></div>
+      <!-- Sticky filter bar: дивизионы / туры / рынки — каждая строка
+           прокручивается по горизонтали и остаётся в верхней строке экрана. -->
+      <div class="lobby-filter-bar">
+        <!-- Division Selector Tabs -->
+        <div class="division-tabs scroll-row" id="lobby-division-tabs-container"></div>
 
-      <!-- Tours Selector Tabs -->
-      <div class="tour-tabs" id="tour-tabs-container"></div>
+        <!-- Tours Selector Tabs -->
+        <div class="tour-tabs scroll-row" id="tour-tabs-container"></div>
 
-      <!-- Match Status Filter Pills -->
-      <div class="category-pills" id="match-status-pills-container" style="margin-bottom: 8px;">
-        <button class="category-pill active" data-status="all">⚡ Все</button>
-        <button class="category-pill" data-status="open">🔥 Открытые</button>
-        <button class="category-pill" data-status="upcoming">⏰ Скоро</button>
-        <button class="category-pill" data-status="completed">✅ Завершённые</button>
-      </div>
+        <!-- Match Status Filter Pills -->
+        <div class="category-pills scroll-row" id="match-status-pills-container">
+          <button class="category-pill active" data-status="all">⚡ Все</button>
+          <button class="category-pill" data-status="open">🔥 Открытые</button>
+          <button class="category-pill" data-status="upcoming">⏰ Скоро</button>
+          <button class="category-pill" data-status="completed">✅ Завершённые</button>
+        </div>
 
-      <!-- Category Filter Pills -->
-      <div class="category-pills" id="category-pills-container">
-        <button class="category-pill active" data-cat="all">🔥 Все рынки</button>
-        <button class="category-pill" data-cat="main">🏆 1X2</button>
-        <button class="category-pill" data-cat="totals">⚽ Тоталы</button>
-        <button class="category-pill" data-cat="btts">🤝 Обе забьют</button>
+        <!-- Category Filter Pills -->
+        <div class="category-pills scroll-row" id="category-pills-container">
+          <button class="category-pill active" data-cat="all">🔥 Все рынки</button>
+          <button class="category-pill" data-cat="main">🏆 1X2</button>
+          <button class="category-pill" data-cat="totals">⚽ Тоталы</button>
+          <button class="category-pill" data-cat="btts">🤝 Обе забьют</button>
+        </div>
       </div>
 
       <!-- Search Input -->
@@ -166,30 +170,8 @@
       </div>
     </section>
 
-    <!-- 1b. Phase 6: Live Center & In-Play Match Center View -->
-    <section id="view-live" class="view-section">
-      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-        <div style="display: flex; align-items: center; gap: 8px;">
-          <span style="font-size: 1.15rem; font-weight: 900; color: #fff;">🔥 LIVE Матч-Центр</span>
-          <span class="live-pulse-badge">● IN-PLAY</span>
-        </div>
-        <button id="btn-refresh-live" class="btn-live-refresh" title="Обновить лайв" style="background: var(--bg-tertiary); border: 1px solid var(--border-subtle); color: #fff; border-radius: var(--radius-sm); padding: 5px 10px; cursor: pointer; font-size: 0.82rem; font-weight: 700;">🔄 Обновить</button>
-      </div>
-
-      <!-- Live Provider Status Indicator -->
-      <div id="live-provider-status-container" style="margin-bottom: 12px;"></div>
-
-      <!-- Live Matches List -->
-      <div id="live-matches-list-container">
-        <div style="text-align: center; padding: 40px 20px; color: var(--text-muted);">
-          <div style="font-size: 2rem; margin-bottom: 8px;">⏳</div>
-          <div>Загрузка лайв-матчей...</div>
-        </div>
-      </div>
-
-      <!-- Live Match In-Play Center Container (Timeline, Stats, Markets, Intelligence) -->
-      <div id="live-match-detail-container" style="display: none; margin-top: 16px;"></div>
-    </section>
+    <!-- 1b. LIVE-центр удалён. Лайв-данные отдельного матча остались во вкладке
+         «Матч-Центр» (/api/matches/{id}/live). -->
 
     <!-- 2. Match Center & Analytics View -->
     <section id="view-match_center" class="view-section">
@@ -284,9 +266,17 @@
         </div>
       </div>
 
+      <!-- Tournament (League) Statistics -->
+      <div style="font-size: 1.05rem; font-weight: 800; margin: 20px 0 10px; color: #fff;">
+        🏟 Турнирная статистика
+      </div>
+      <div id="tournament-stats-container">
+        <div style="text-align: center; padding: 24px; color: var(--text-muted);">Загрузка турнирной статистики...</div>
+      </div>
+
       <!-- Achievements Showcase -->
       <div style="font-size: 1.05rem; font-weight: 800; margin: 16px 0 10px; color: #fff; display: flex; align-items: center; justify-content: space-between;">
-        <span>🏆 Достижения и Награды</span>
+        <span>🏆 Достижения</span>
         <span id="achievements-count-label" style="font-size: 0.8rem; color: var(--text-gold); font-weight: 700;">0/22</span>
       </div>
       <div class="achievements-grid" id="achievements-grid-container">
@@ -365,10 +355,6 @@
     <button class="nav-item active" data-view="lobby">
       <span class="nav-icon">⚽</span>
       <span>Линия</span>
-    </button>
-    <button class="nav-item nav-item-live" data-view="live" style="position: relative;">
-      <span class="nav-icon">🔥</span>
-      <span style="color: #ff4757; font-weight: 800;">LIVE</span>
     </button>
     <button class="nav-item" data-view="match_center">
       <span class="nav-icon">📊</span>

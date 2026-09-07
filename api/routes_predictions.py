@@ -4,6 +4,7 @@ api/routes_predictions.py
 REST API handlers for bet slip placement, prediction history, details, and repeat predictions.
 """
 
+import asyncio
 import json
 import logging
 from aiohttp import web
@@ -56,7 +57,7 @@ async def handle_place_prediction(request: web.Request) -> web.Response:
     if not selections or not isinstance(selections, list):
         return web.json_response({"status": "error", "message": "Купон не содержит выбранных исходов."}, status=400)
 
-    success, result = database.place_user_bet(
+    success, result = await asyncio.to_thread(database.place_user_bet, 
         user_id=user_id,
         amount=amount,
         selections=selections,
@@ -93,13 +94,13 @@ async def handle_place_prediction(request: web.Request) -> web.Response:
         return web.json_response({"status": "error", "message": str(result)}, status=400)
 
     bet_id = result
-    user_balance = database.get_wallet_balance(user_id)
+    user_balance = await asyncio.to_thread(database.get_wallet_balance, user_id)
     bet_type = "single" if len(selections) == 1 else "express"
 
     # Progression and achievements hooks
     try:
-        database.add_user_xp(user_id, 30 if bet_type == "single" else 60)
-        database.evaluate_betting_achievements(user_id)
+        await asyncio.to_thread(database.add_user_xp, user_id, 30 if bet_type == "single" else 60)
+        await asyncio.to_thread(database.evaluate_betting_achievements, user_id)
     except Exception as e:
         logger.warning(f"Error in gamification hook on bet placement: {e}")
 
@@ -132,10 +133,8 @@ async def handle_get_predictions(request: web.Request) -> web.Response:
             "message": "Logovo.bet временно недоступен."
         }, status=403)
 
-    try:
-        database.settle_all_pending_finished_matches()
-    except Exception as e:
-        logger.warning(f"Error auto-settling in get_predictions: {e}")
+    # NOTE: settlement runs in settle_finished_bets_job (services/background_sync.py),
+    # not on this request path — it blocked the shared bot/API event loop.
 
     # Phase 5: Bet History 2.0 — support all status filters including 'cancelled'
     VALID_STATUSES = {"pending", "won", "lost", "refunded", "cancelled", "void", "all"}
@@ -149,7 +148,7 @@ async def handle_get_predictions(request: web.Request) -> web.Response:
     except (ValueError, TypeError):
         limit = 30
 
-    bets = database.get_user_bets(user_id, status=status_filter, limit=limit)
+    bets = await asyncio.to_thread(database.get_user_bets, user_id, status=status_filter, limit=limit)
 
     return web.json_response({
         "status": "ok",
@@ -175,7 +174,7 @@ async def handle_get_prediction_detail(request: web.Request) -> web.Response:
     except (KeyError, ValueError):
         return web.json_response({"status": "error", "message": "Некорректный ID."}, status=400)
 
-    matching = database.get_user_bet_by_id(user_id, bet_id)
+    matching = await asyncio.to_thread(database.get_user_bet_by_id, user_id, bet_id)
     if not matching:
         return web.json_response({"status": "error", "message": "Прогноз не найден."}, status=404)
 
@@ -202,7 +201,7 @@ async def handle_repeat_prediction(request: web.Request) -> web.Response:
     except (KeyError, ValueError):
         return web.json_response({"status": "error", "message": "Некорректный ID."}, status=400)
 
-    matching = database.get_user_bet_by_id(user_id, bet_id)
+    matching = await asyncio.to_thread(database.get_user_bet_by_id, user_id, bet_id)
     if not matching:
         return web.json_response({"status": "error", "message": "Исходный прогноз не найден."}, status=404)
 

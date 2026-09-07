@@ -35,6 +35,10 @@ ENV/
 *.db-shm
 league.db
 server_league.db
+# Timestamped copies pulled from the server for local debugging — real user data.
+# `*.db` does not match these: the extension is .bak-<timestamp>, not .db
+*.db.bak-*
+*.db.bak
 
 # ==============================================================================
 # Telegram Sessions

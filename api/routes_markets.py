@@ -4,6 +4,7 @@ api/routes_markets.py
 REST API handlers for open tours, matches schedule, and relational odds lines.
 """
 
+import asyncio
 import logging
 from aiohttp import web
 import database
@@ -36,14 +37,14 @@ async def handle_get_tours(request: web.Request) -> web.Response:
     division_id_param = request.query.get("division_id")
     div_id = int(division_id_param) if division_id_param and division_id_param.isdigit() else None
 
-    open_tours = database.get_open_betting_tours(division_id=div_id)
+    open_tours = await asyncio.to_thread(database.get_open_betting_tours, division_id=div_id)
     results = []
 
     for t in open_tours:
         r_num = t["round_number"]
         # Ensure markets are generated
         generate_round_markets(r_num, division_id=div_id)
-        markets = database.get_active_bet_markets(r_num, division_id=div_id)
+        markets = await asyncio.to_thread(database.get_active_bet_markets, r_num, division_id=div_id)
 
         matches_list = []
         for m in markets:
@@ -77,6 +78,8 @@ async def handle_get_tours(request: web.Request) -> web.Response:
             "deadline": t.get("deadline"),
             "total_matches": t.get("total_matches", len(matches_list)),
             "unplayed_matches": t.get("unplayed_matches", len(matches_list)),
+            # Ранняя линия: тур ещё не открыт для игры, но прогнозы уже принимаются.
+            "is_early": bool(t.get("is_early")),
             "matches": matches_list
         })
 

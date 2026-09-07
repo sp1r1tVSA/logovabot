@@ -325,6 +325,45 @@ async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_T
         await msg.reply_text(f"{'✅' if ok else '❌'} {text_res}", parse_mode="HTML")
         return True
 
+    # Ранняя линия Logovo.bet: приём прогнозов открывается до открытия тура для игры.
+    # Проверяется раньше «открыть тур», иначе префикс «открыть» перехватит команду.
+    if (
+        full_cmd.startswith("открыть линию") or
+        full_cmd.startswith("открой линию") or
+        full_cmd.startswith("закрыть линию") or
+        full_cmd.startswith("закрой линию")
+    ):
+        if not is_adm:
+            await msg.reply_text("⚠️ Эта команда доступна только администраторам турнира.")
+            return True
+
+        opening = full_cmd.startswith("откр")
+        nums = re.findall(r"\d+", cmd_text)
+        if not nums:
+            await msg.reply_text(
+                "ℹ️ Укажите номер тура. Пример: <code>Темшик открыть линию 19</code>",
+                parse_mode="HTML"
+            )
+            return True
+
+        rn = int(nums[0])
+        ok = await asyncio.to_thread(database.set_round_bets_open, rn, opening)
+        if not ok:
+            await msg.reply_text(
+                f"❌ <b>Не удалось изменить линию на тур {rn}.</b>\n"
+                f"Проверьте, что матчи тура созданы, а сезон активен.",
+                parse_mode="HTML"
+            )
+        elif opening:
+            await msg.reply_text(
+                f"🎰 <b>Линия на Тур {rn} открыта!</b>\n"
+                f"Прогнозы принимаются, даже пока тур закрыт для внесения результатов.",
+                parse_mode="HTML"
+            )
+        else:
+            await msg.reply_text(f"🚫 <b>Линия на Тур {rn} закрыта.</b> Приём прогнозов остановлен.", parse_mode="HTML")
+        return True
+
     if (
         action in ("открыть", "открой", "open_round") or
         full_cmd.startswith("открыть тур") or

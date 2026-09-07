@@ -13,6 +13,7 @@ Admin Live Center & Safety Controls (Phase 6):
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any
@@ -171,8 +172,8 @@ async def handle_admin_suspend_market(request: web.Request) -> web.Response:
         return web.json_response({"status": "error", "message": "Reason is required for market suspension."}, status=400)
 
     try:
-        res = database.transition_market_status(market_id, "suspended", actor_id)
-        database.log_admin_action(
+        res = await asyncio.to_thread(database.transition_market_status, market_id, "suspended", actor_id)
+        await asyncio.to_thread(database.log_admin_action, 
             admin_id=actor_id,
             action="live_market_suspend",
             target_type="market",
@@ -216,8 +217,8 @@ async def handle_admin_resume_market(request: web.Request) -> web.Response:
         return web.json_response({"status": "error", "message": "Reason is required to resume market."}, status=400)
 
     try:
-        res = database.transition_market_status(market_id, "open", actor_id)
-        database.log_admin_action(
+        res = await asyncio.to_thread(database.transition_market_status, market_id, "open", actor_id)
+        await asyncio.to_thread(database.log_admin_action, 
             admin_id=actor_id,
             action="live_market_resume",
             target_type="market",
@@ -261,8 +262,8 @@ async def handle_admin_close_market(request: web.Request) -> web.Response:
         return web.json_response({"status": "error", "message": "Reason is required to close market."}, status=400)
 
     try:
-        res = database.transition_market_status(market_id, "closed", actor_id)
-        database.log_admin_action(
+        res = await asyncio.to_thread(database.transition_market_status, market_id, "closed", actor_id)
+        await asyncio.to_thread(database.log_admin_action, 
             admin_id=actor_id,
             action="live_market_close",
             target_type="market",
@@ -350,6 +351,8 @@ async def handle_admin_void_market(request: web.Request) -> web.Response:
                 WHERE bet_id = ? AND market_id = ?
             """, (b["id"], market_id))
 
+            # NOTE: must stay synchronous — transaction() is thread-local, so a
+            # to_thread hop here would open a second connection and self-deadlock.
             database.get_or_create_wallet(b["user_id"])
             cursor.execute("""
                 UPDATE user_wallets
@@ -491,7 +494,8 @@ async def handle_admin_match_correction(request: web.Request) -> web.Response:
             """, (match_id, match_row["season_id"], match_row["division_id"],
                   new_status or "live", new_home, new_away, str(match_id)))
 
-        # Audit logs
+        # Audit logs — synchronous on purpose: transaction() is thread-local and a
+        # to_thread hop inside this open transaction would deadlock on the write lock.
         database.log_admin_action(
             admin_id=actor_id,
             action="match_result_correction",
@@ -590,7 +594,7 @@ async def handle_admin_sports_health(request: web.Request) -> web.Response:
 
     # Count stale live matches
     try:
-        health_status["stale_matches_count"] = database.get_stale_provider_matches_count()
+        health_status["stale_matches_count"] = await asyncio.to_thread(database.get_stale_provider_matches_count)
     except Exception as e:
         logger.warning("Failed to count stale provider matches: %s", e)
         health_status["stale_matches_count"] = 0

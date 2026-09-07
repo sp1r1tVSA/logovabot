@@ -187,55 +187,65 @@ async def admin_test_ai(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     status_msg = await msg.reply_text("🔄 **Запуск диагностики связи с WARP и Gemini AI...**", parse_mode="Markdown")
 
-    import socket
     import urllib.request
+    import urllib.error
     from services.ai.ai_recognizer import GEMINI_MODELS, _check_proxy_alive
     import config
 
-    warp_alive = _check_proxy_alive("http://127.0.0.1:4001")
+    target_api_key = (getattr(config, "GEMINI_API_KEY", "") or "").strip()
+    if not target_api_key:
+        await status_msg.edit_text(
+            "🤖 **РЕЗУЛЬТАТЫ ДИАГНОСТИКИ AI & WARP**\n\n"
+            "❌ `GEMINI_API_KEY не установлен в config.py!`",
+            parse_mode="Markdown",
+        )
+        return
+
+    def _run_diagnostics() -> tuple[bool, list[str]]:
+        """Blocking proxy probe + per-model reachability check. Runs off the event loop."""
+        alive = _check_proxy_alive("http://127.0.0.1:4001")
+        proxy_url = "http://127.0.0.1:4001" if alive else None
+        results: list[str] = []
+
+        for m_name in GEMINI_MODELS:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{m_name}:generateContent?key={target_api_key}"
+            payload = {"contents": [{"parts": [{"text": "Reply OK"}]}]}
+            req = urllib.request.Request(
+                url,
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type": "application/json"}
+            )
+
+            if proxy_url:
+                handler = urllib.request.ProxyHandler({"http": proxy_url, "https": proxy_url})
+                opener = urllib.request.build_opener(handler)
+            else:
+                opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+            try:
+                with opener.open(req, timeout=8) as res:
+                    res_data = json.loads(res.read().decode("utf-8"))
+                    if res_data.get("candidates"):
+                        results.append(f"• `{m_name}`: ✅ 200 OK")
+                    else:
+                        results.append(f"• `{m_name}`: ⚠️ Нет ответа")
+            except urllib.error.HTTPError as e:
+                err_text = e.read().decode("utf-8", errors="ignore")[:60].replace("\n", " ")
+                results.append(f"• `{m_name}`: ❌ HTTP {e.code} ({err_text})")
+            except Exception as e:
+                results.append(f"• `{m_name}`: ❌ {e}")
+
+        return alive, results
+
+    warp_alive, model_lines = await asyncio.to_thread(_run_diagnostics)
     warp_status_str = "✅ **Доступен (127.0.0.1:4001)**" if warp_alive else "❌ **Не прослушивается (прямой режим)**"
 
     lines = [
         "🤖 **РЕЗУЛЬТАТЫ ДИАГНОСТИКИ AI & WARP**\n",
         f"📡 **WARP Proxy Status:** {warp_status_str}\n",
-        "🧪 **Статус моделей Gemini:**"
+        "🧪 **Статус моделей Gemini:**",
+        *model_lines,
     ]
-
-    target_api_key = (getattr(config, "GEMINI_API_KEY", "") or "").strip()
-    if not target_api_key:
-        lines.append("❌ `GEMINI_API_KEY не установлен в config.py!`")
-        await status_msg.edit_text("\n".join(lines), parse_mode="Markdown")
-        return
-
-    proxy_url = "http://127.0.0.1:4001" if warp_alive else None
-
-    for m_name in GEMINI_MODELS:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{m_name}:generateContent?key={target_api_key}"
-        payload = {"contents": [{"parts": [{"text": "Reply OK"}]}]}
-        req = urllib.request.Request(
-            url,
-            data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"}
-        )
-
-        if proxy_url:
-            handler = urllib.request.ProxyHandler({"http": proxy_url, "https": proxy_url})
-            opener = urllib.request.build_opener(handler)
-        else:
-            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-
-        try:
-            with opener.open(req, timeout=8) as res:
-                res_data = json.loads(res.read().decode("utf-8"))
-                if res_data.get("candidates"):
-                    lines.append(f"• `{m_name}`: ✅ 200 OK")
-                else:
-                    lines.append(f"• `{m_name}`: ⚠️ Нет ответа")
-        except urllib.error.HTTPError as e:
-            err_text = e.read().decode("utf-8", errors="ignore")[:60].replace("\n", " ")
-            lines.append(f"• `{m_name}`: ❌ HTTP {e.code} ({err_text})")
-        except Exception as e:
-            lines.append(f"• `{m_name}`: ❌ {e}")
 
     await status_msg.edit_text("\n".join(lines), parse_mode="Markdown")
 
@@ -1553,10 +1563,16 @@ async def admin_manage_round(update: Update, context: ContextTypes.DEFAULT_TYPE)
     query = update.callback_query
     if not query or not is_admin(query.from_user.id): return
     await query.answer()
-    
+
     round_number = int(query.data.replace("admin_manage_round_", ""))
+    await _render_round_management(query, round_number)
+
+
+async def _render_round_management(query, round_number: int) -> None:
+    """Draw the round management screen. Не отвечает на callback query —
+    вызывающий уже это сделал."""
     info = await asyncio.to_thread(database.get_round_info, round_number)
-    
+
     if not info:
         keyboard = [[InlineKeyboardButton("« Назад", callback_data="admin_manage_matches_info")]]
         await query.edit_message_text("❌ Тур не найден в базе данных.", reply_markup=InlineKeyboardMarkup(keyboard))
@@ -1564,23 +1580,64 @@ async def admin_manage_round(update: Update, context: ContextTypes.DEFAULT_TYPE)
         
     is_open = info["is_open"]
     deadline = info["deadline"]
-    
+    bets_open = bool(info.get("bets_open"))
+
     text = f"📅 **Управление: {round_number}-й Тур**\n\n"
     text += f"Статус: {'🟢 Открыт' if is_open else '🔴 Закрыт'}\n"
     if is_open and deadline:
         text += f"Дедлайн: {deadline}\n"
-        
+    if bets_open and not is_open:
+        text += "Линия Logovo.bet: 🎰 открыта заранее (тур ещё не открыт для игры)\n"
+    else:
+        text += f"Линия Logovo.bet: {'🎰 открыта' if bets_open else '🚫 закрыта'}\n"
+
     keyboard = []
     if is_open:
         keyboard.append([InlineKeyboardButton("🔴 Закрыть тур", callback_data=f"admin_close_round_{round_number}")])
         keyboard.append([InlineKeyboardButton("⏰ Напомнить должникам", callback_data=f"admin_remind_round_{round_number}")])
     else:
         keyboard.append([InlineKeyboardButton("🟢 Открыть тур (установить дедлайн)", callback_data=f"admin_open_round_{round_number}")])
-        
+        # Ранняя линия: прогнозы можно принимать до открытия тура для игры.
+        if bets_open:
+            keyboard.append([InlineKeyboardButton("🚫 Закрыть линию ставок", callback_data=f"admin_bets_close_round_{round_number}")])
+        else:
+            keyboard.append([InlineKeyboardButton("🎰 Открыть линию ставок заранее", callback_data=f"admin_bets_open_round_{round_number}")])
+
     keyboard.append([InlineKeyboardButton("⚔️ Смотреть матчи тура", callback_data=f"admin_round_matches_{round_number}")])
     keyboard.append([InlineKeyboardButton("« Назад", callback_data="admin_manage_matches_info")])
-    
+
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+
+@admin_only
+async def admin_toggle_round_bets(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Open/close the Logovo.bet line for a round independently of `is_open`.
+
+    Позволяет выставить линию заранее: участники ставят прогнозы на тур,
+    который ещё не открыт для внесения результатов.
+    """
+    query = update.callback_query
+    if not query or not is_admin(query.from_user.id):
+        return
+
+    opening = query.data.startswith("admin_bets_open_round_")
+    prefix = "admin_bets_open_round_" if opening else "admin_bets_close_round_"
+    round_number = int(query.data.replace(prefix, ""))
+
+    ok = await asyncio.to_thread(database.set_round_bets_open, round_number, opening)
+
+    if ok and opening:
+        await query.answer(f"🎰 Линия на Тур {round_number} открыта", show_alert=True)
+    elif ok:
+        await query.answer(f"🚫 Линия на Тур {round_number} закрыта", show_alert=True)
+    else:
+        await query.answer(
+            f"❌ Не удалось открыть линию на Тур {round_number}: нет матчей или сезон неактивен.",
+            show_alert=True
+        )
+        return
+
+    await _render_round_management(query, round_number)
 
 @admin_only
 async def admin_extend_match_execute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

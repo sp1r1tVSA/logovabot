@@ -11,6 +11,7 @@ RBAC:
   - Player: no access (403).
 """
 
+import asyncio
 import logging
 from aiohttp import web
 import database
@@ -179,7 +180,7 @@ async def handle_admin_transition_market(request: web.Request) -> web.Response:
         return web.json_response({"status": "error", "message": "new_status is required."}, status=400)
 
     try:
-        result = database.transition_market_status(market_id, new_status, actor_id)
+        result = await asyncio.to_thread(database.transition_market_status, market_id, new_status, actor_id)
         return web.json_response({"status": "ok", "market": result})
     except ValueError as e:
         return web.json_response({"status": "error", "error": "INVALID_TRANSITION", "message": str(e)}, status=409)
@@ -216,7 +217,7 @@ async def handle_admin_update_odds(request: web.Request) -> web.Response:
         return web.json_response({"status": "error", "message": "selection_id and new_odd are required."}, status=400)
 
     try:
-        result = database.update_selection_odds(int(selection_id), float(new_odd), actor_id)
+        result = await asyncio.to_thread(database.update_selection_odds, int(selection_id), float(new_odd), actor_id)
         return web.json_response({"status": "ok", "update": result})
     except ValueError as e:
         return web.json_response({"status": "error", "message": str(e)}, status=400)
@@ -296,7 +297,7 @@ async def handle_admin_void_bet(request: web.Request) -> web.Response:
         return web.json_response({"status": "error", "error": "forbidden"}, status=403)
 
     try:
-        result = database.void_user_bet(bet_id, actor_id)
+        result = await asyncio.to_thread(database.void_user_bet, bet_id, actor_id)
         return web.json_response({"status": "ok", "void": result, "message": f"Bet #{bet_id} voided and refunded {result['refunded_amount']} coins."})
     except ValueError as e:
         return web.json_response({"status": "error", "message": str(e)}, status=400)
@@ -327,7 +328,7 @@ async def handle_admin_audit_log(request: web.Request) -> web.Response:
         division_id = str(allowed[0]) if allowed else None
 
     try:
-        logs = database.get_betting_audit_log(
+        logs = await asyncio.to_thread(database.get_betting_audit_log, 
             limit=limit,
             offset=offset,
             entity_type=entity_type,

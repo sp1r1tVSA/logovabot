@@ -109,6 +109,10 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
+  /* Логотип уступает место пилюлям, а не наоборот. */
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
 }
 
 .brand-logo-icon {
@@ -130,48 +134,50 @@ body {
   background: linear-gradient(135deg, #ffffff 30%, var(--accent-gold) 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .header-right {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
+  flex: 0 0 auto;
 }
 
+/* Компактные пилюли шапки: без свечения и анимаций, минимум высоты. */
 .balance-pill {
   display: flex;
   align-items: center;
-  gap: 6px;
-  background: linear-gradient(135deg, rgba(245, 176, 39, 0.18) 0%, rgba(245, 176, 39, 0.06) 100%);
-  border: 1px solid var(--border-active);
-  padding: 7px 14px;
+  gap: 4px;
+  background: rgba(245, 176, 39, 0.10);
+  border: 1px solid rgba(245, 176, 39, 0.28);
+  padding: 4px 9px;
   border-radius: var(--radius-full);
   cursor: pointer;
-  box-shadow: 0 0 12px rgba(245, 176, 39, 0.15);
   transition: var(--transition-fast);
+  /* Пилюля не переносится на две строки и не сжимается. */
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 .balance-pill:active {
   transform: scale(0.95);
 }
 
 .balance-icon {
-  font-size: 1.1rem;
-  animation: coinSpin 4s ease-in-out infinite;
-}
-
-@keyframes coinSpin {
-  0%, 100% { transform: rotate(0deg); }
-  25% { transform: rotate(-10deg) scale(1.1); }
-  75% { transform: rotate(10deg) scale(1.1); }
+  font-size: 0.82rem;
+  line-height: 1;
 }
 
 .balance-amount {
   font-family: 'Outfit', sans-serif;
-  font-size: 1rem;
-  font-weight: 800;
+  font-size: 0.82rem;
+  font-weight: 700;
   color: var(--accent-gold);
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.01em;
+  line-height: 1.1;
 }
 
 /* App Views Container */

@@ -320,6 +320,21 @@ def init_db() -> None:
         except sqlite3.OperationalError:
             pass
 
+        # Ранняя линия Logovo.bet: приём прогнозов может открываться до того,
+        # как тур открыт для игры. `bets_open` независим от `is_open`.
+        for col_name, col_type in (
+            ("bets_open", "BOOLEAN DEFAULT 0"),
+            ("bets_opened_at", "TEXT"),
+        ):
+            try:
+                cursor.execute(f"ALTER TABLE rounds ADD COLUMN {col_name} {col_type}")
+                if col_name == "bets_open":
+                    # Разовый бэкфилл: у туров, уже открытых для игры, линия открыта.
+                    # Выполняется только в момент добавления колонки.
+                    cursor.execute("UPDATE rounds SET bets_open = 1 WHERE is_open = 1")
+            except sqlite3.OperationalError:
+                pass
+
         # Safely migration-add new columns to user_bets, bet_items, coin_transactions, user_wallets
         for col_name, col_type in (
             ("system_config", "TEXT"),
@@ -1699,6 +1714,88 @@ def get_player_stats(telegram_id: int) -> dict:
             "goals_conceded": goals_conceded,
             "points": points
         }
+
+def get_user_tournament_summary(telegram_id: int, season_id: int | None = None) -> dict:
+    """Tournament (не беттинговый) профиль участника для кабинета Mini App.
+
+    Возвращает место в таблице своего дивизиона, очки и матчевую статистику,
+    а также форму по последним пяти сыгранным матчам. Если пользователь не
+    привязан к команде/дивизиону — `registered` = False и остальные поля пустые.
+    """
+    user = get_user(telegram_id)
+    team_name = (user["team_name"] if user and user["team_name"] else "") or ""
+    div_id = (user["division_id"] if user and "division_id" in user.keys() else None)
+
+    if not team_name:
+        return {
+            "registered": False,
+            "team_name": None,
+            "division_id": div_id,
+            "division_name": None,
+            "position": None,
+            "total_teams": 0,
+            "played": 0, "wins": 0, "draws": 0, "losses": 0,
+            "goals_scored": 0, "goals_conceded": 0, "goal_diff": 0,
+            "points": 0, "form": [],
+        }
+
+    division = get_division(div_id) if div_id is not None else None
+    standings = get_standings(division_id=div_id, season_id=season_id)
+
+    position = None
+    row = None
+    for idx, entry in enumerate(standings, start=1):
+        if entry.get("telegram_id") == telegram_id:
+            position, row = idx, entry
+            break
+
+    # Таблица считается только по подтверждённым матчам дивизиона; если строки
+    # нет (например, игрок вне активного дивизиона), падаем на общий подсчёт.
+    stats = row if row else get_player_stats(telegram_id)
+
+    with transaction() as conn:
+        cursor = conn.cursor()
+        params: list = [team_name, team_name]
+        query = """
+            SELECT player1_team, player2_team, player1_score, player2_score
+            FROM matches
+            WHERE status = 'confirmed'
+              AND (LOWER(player1_team) = LOWER(?) OR LOWER(player2_team) = LOWER(?))
+        """
+        if div_id is not None:
+            query += " AND (division_id = ? OR division_id IS NULL)"
+            params.append(div_id)
+        query += " ORDER BY id DESC LIMIT 5"
+        cursor.execute(query, params)
+        form = []
+        for m in cursor.fetchall():
+            is_home = (m["player1_team"] or "").lower() == team_name.lower()
+            own = m["player1_score"] if is_home else m["player2_score"]
+            opp = m["player2_score"] if is_home else m["player1_score"]
+            if own is None or opp is None:
+                continue
+            form.append("W" if own > opp else ("D" if own == opp else "L"))
+
+    scored = int(stats.get("goals_scored") or 0)
+    conceded = int(stats.get("goals_conceded") or 0)
+    return {
+        "registered": True,
+        "team_name": team_name,
+        "division_id": div_id,
+        "division_name": (division or {}).get("name") if division else None,
+        "position": position,
+        "total_teams": len(standings),
+        "played": int(stats.get("played") or 0),
+        "wins": int(stats.get("wins") or 0),
+        "draws": int(stats.get("draws") or 0),
+        "losses": int(stats.get("losses") or 0),
+        "goals_scored": scored,
+        "goals_conceded": conceded,
+        "goal_diff": scored - conceded,
+        "points": int(stats.get("points") or 0),
+        "form": form,
+    }
+
 
 def get_active_matches(telegram_id: int, only_expired_deadlines: bool = False, division_id: int | None = None) -> list[dict]:
     """Retrieve active matches for a user from Round 1 up to the highest OPEN round number in their division."""
@@ -4052,12 +4149,12 @@ def get_round_info(round_number: int, division_id: int | None = None, season_id:
 
         if division_id is not None:
             cursor.execute(
-                "SELECT round_number, is_open, deadline, division_id, season_id FROM rounds WHERE (season_id = ? OR season_id IS NULL) AND division_id = ? AND round_number = ?",
+                "SELECT round_number, is_open, COALESCE(bets_open, 0) AS bets_open, bets_opened_at, deadline, division_id, season_id FROM rounds WHERE (season_id = ? OR season_id IS NULL) AND division_id = ? AND round_number = ?",
                 (s_id, division_id, round_number)
             )
         else:
             cursor.execute(
-                "SELECT round_number, is_open, deadline, division_id, season_id FROM rounds WHERE (season_id = ? OR season_id IS NULL) AND round_number = ? LIMIT 1",
+                "SELECT round_number, is_open, COALESCE(bets_open, 0) AS bets_open, bets_opened_at, deadline, division_id, season_id FROM rounds WHERE (season_id = ? OR season_id IS NULL) AND round_number = ? LIMIT 1",
                 (s_id, round_number)
             )
         row = cursor.fetchone()
@@ -4112,6 +4209,12 @@ def update_round_status(round_number: int, is_open: bool, deadline: str | None =
                 )
                 cursor.execute("UPDATE bet_markets SET is_active = 0 WHERE tour = ?", (round_number,))
 
+            # Открытие тура для игры всегда открывает и линию; закрытие — закрывает.
+            cursor.execute(
+                "UPDATE rounds SET bets_open = ? WHERE (season_id = ? OR season_id IS NULL) AND division_id = ? AND round_number = ?",
+                (1 if is_open else 0, s_id, division_id, round_number)
+            )
+
             if deadline is not None:
                 cursor.execute(
                     "DELETE FROM round_reminders WHERE round_number = ? AND (division_id = ? OR division_id IS NULL)",
@@ -4137,6 +4240,11 @@ def update_round_status(round_number: int, is_open: bool, deadline: str | None =
                 # 🎰 Close betting line when round is closed
                 cursor.execute("UPDATE bet_markets SET is_active = 0 WHERE tour = ?", (round_number,))
 
+            cursor.execute(
+                "UPDATE rounds SET bets_open = ? WHERE (season_id = ? OR season_id IS NULL) AND round_number = ?",
+                (1 if is_open else 0, s_id, round_number)
+            )
+
             if deadline is not None:
                 cursor.execute("DELETE FROM round_reminders WHERE round_number = ?", (round_number,))
 
@@ -4147,6 +4255,88 @@ def update_round_status(round_number: int, is_open: bool, deadline: str | None =
             generate_round_markets(round_number, division_id=division_id, season_id=s_id)
         except Exception as e:
             logger.exception(f"Error generating betting line for round {round_number}: {e}")
+
+        # 🎰 Ранняя линия: как только тур N открыт для игры, приём прогнозов на
+        # тур N+1 открывается автоматически, чтобы линия всегда была на шаг впереди.
+        try:
+            set_round_bets_open(round_number + 1, True, division_id=division_id, season_id=s_id)
+        except Exception as e:
+            logger.warning(f"Could not pre-open betting line for round {round_number + 1}: {e}")
+
+
+def set_round_bets_open(
+    round_number: int,
+    bets_open: bool,
+    division_id: int | None = None,
+    season_id: int | None = None,
+) -> bool:
+    """Открыть/закрыть приём прогнозов на тур независимо от `rounds.is_open`.
+
+    Позволяет выставить линию заранее — до того, как тур открыт для игры.
+    При открытии сразу генерируются рынки. Возвращает False, если у тура нет
+    матчей (открывать нечего) или сезон не активен.
+    """
+    if season_id is None:
+        act = get_active_season()
+        s_id = act["id"] if act else 1
+    else:
+        s_id = season_id
+
+    if bets_open:
+        season = get_season(s_id)
+        if season and season.get("status") not in ("active", None):
+            return False
+
+    with transaction() as conn:
+        cursor = conn.cursor()
+
+        if bets_open:
+            # Нет матчей — нечего выставлять в линию.
+            if division_id is not None:
+                cursor.execute(
+                    "SELECT COUNT(*) AS c FROM matches WHERE round_number = ? AND (division_id = ? OR division_id IS NULL) AND (season_id = ? OR season_id IS NULL)",
+                    (round_number, division_id, s_id)
+                )
+            else:
+                cursor.execute(
+                    "SELECT COUNT(*) AS c FROM matches WHERE round_number = ? AND (season_id = ? OR season_id IS NULL)",
+                    (round_number, s_id)
+                )
+            if (cursor.fetchone()["c"] or 0) == 0:
+                return False
+
+            cursor.execute(
+                "INSERT OR IGNORE INTO rounds (season_id, division_id, round_number, is_open, deadline) VALUES (?, ?, ?, 0, NULL)",
+                (s_id, division_id if division_id is not None else 1, round_number)
+            )
+
+        opened_at = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S") if bets_open else None
+        if division_id is not None:
+            cursor.execute(
+                "UPDATE rounds SET bets_open = ?, bets_opened_at = ? WHERE (season_id = ? OR season_id IS NULL) AND division_id = ? AND round_number = ?",
+                (1 if bets_open else 0, opened_at, s_id, division_id, round_number)
+            )
+        else:
+            cursor.execute(
+                "UPDATE rounds SET bets_open = ?, bets_opened_at = ? WHERE (season_id = ? OR season_id IS NULL) AND round_number = ?",
+                (1 if bets_open else 0, opened_at, s_id, round_number)
+            )
+        changed = cursor.rowcount
+
+        if not bets_open:
+            cursor.execute("UPDATE bet_markets SET is_active = 0 WHERE tour = ?", (round_number,))
+
+    if changed == 0:
+        return False
+
+    if bets_open:
+        try:
+            from services.betting_engine import generate_round_markets
+            generate_round_markets(round_number, division_id=division_id, season_id=s_id)
+        except Exception as e:
+            logger.exception(f"Error generating early betting line for round {round_number}: {e}")
+
+    return True
 
 
 def get_all_rounds() -> list[int]:
@@ -4524,6 +4714,19 @@ def get_player_card_stats(player_name: str, team_name: str) -> dict:
             "items": items,
             "rounds": {item["round_key"]: {"goals": item["goals"], "assists": item["assists"]} for item in items},
         }
+
+
+def get_all_cup_series() -> list[dict]:
+    """Return every cup series (newest stage first) for context/summary rendering."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, stage, series_num, team1_name, team2_name,
+                   team1_wins, team2_wins, winner_name, status
+            FROM cup_series
+            ORDER BY id ASC
+        """)
+        return [dict(r) for r in cursor.fetchall()]
 
 
 def get_club_card_data(team_name: str) -> dict:
@@ -5000,7 +5203,7 @@ def get_club_schedule_and_results(team_name: str, limit: int = 25) -> dict:
         played_league.sort(key=lambda x: -x["round_number"]) # Recent rounds first
 
         pending_league = [l for l in league_items if not l["is_completed"]]
-        pending_league.sort(key=lambda x: l["round_number"])
+        pending_league.sort(key=lambda x: x["round_number"]) # Nearest upcoming round first
 
         all_items = played_league + pending_league
 
@@ -5986,18 +6189,20 @@ def get_open_betting_tours(division_id: int | None = None, season_id: int | None
     """
     Retrieve all currently open tours that have unplayed matches
     and where the round deadline has not expired.
-    Strictly filters by rounds.is_open = 1 and optional division_id/season_id.
+    Тур попадает в линию, если он открыт для игры (`is_open = 1`) либо для него
+    заранее открыт приём прогнозов (`bets_open = 1`).
     """
     with transaction() as conn:
         cursor = conn.cursor()
         query = """
-            SELECT 
+            SELECT
                 r.round_number, r.deadline, r.division_id, r.season_id,
+                r.is_open, COALESCE(r.bets_open, 0) AS bets_open,
                 COUNT(m.id) as total_matches,
                 SUM(CASE WHEN m.status NOT IN ('confirmed', 'completed') THEN 1 ELSE 0 END) as unplayed_matches
             FROM rounds r
             JOIN matches m ON r.round_number = m.round_number AND (r.division_id = m.division_id OR r.division_id IS NULL OR m.division_id IS NULL)
-            WHERE r.is_open = 1
+            WHERE (r.is_open = 1 OR COALESCE(r.bets_open, 0) = 1)
         """
         params = []
         if division_id is not None:
@@ -6008,7 +6213,7 @@ def get_open_betting_tours(division_id: int | None = None, season_id: int | None
             params.append(season_id)
 
         query += """
-            GROUP BY r.round_number, r.deadline, r.division_id, r.season_id
+            GROUP BY r.round_number, r.deadline, r.division_id, r.season_id, r.is_open, r.bets_open
             HAVING unplayed_matches > 0
             ORDER BY r.round_number ASC
         """
@@ -6031,21 +6236,26 @@ def get_open_betting_tours(division_id: int | None = None, season_id: int | None
                 "division_id": row["division_id"],
                 "season_id": row["season_id"],
                 "total_matches": row["total_matches"],
-                "unplayed_matches": row["unplayed_matches"]
+                "unplayed_matches": row["unplayed_matches"],
+                # Ранняя линия: тур ещё не открыт для игры, но прогнозы уже принимаются.
+                "is_open": bool(row["is_open"]),
+                "is_early": (not row["is_open"]) and bool(row["bets_open"])
             })
         return open_tours
 
 
 def get_active_bet_markets(tour: int | None = None, division_id: int | None = None) -> list[dict]:
-    """Retrieve open betting markets for unplayed matches strictly in open rounds."""
+    """Retrieve open betting markets for unplayed matches in open or pre-opened rounds."""
     with transaction() as conn:
         cursor = conn.cursor()
         query = """
-            SELECT bm.*, m.status as match_status, m.round_number, m.division_id, r.deadline, r.is_open
+            SELECT bm.*, m.status as match_status, m.round_number, m.division_id, r.deadline, r.is_open,
+                   COALESCE(r.bets_open, 0) AS bets_open
             FROM bet_markets bm
             JOIN matches m ON bm.match_id = m.id
             JOIN rounds r ON m.round_number = r.round_number AND (r.division_id = m.division_id OR r.division_id IS NULL OR m.division_id IS NULL)
-            WHERE bm.is_active = 1 AND m.status NOT IN ('confirmed', 'completed') AND r.is_open = 1
+            WHERE bm.is_active = 1 AND m.status NOT IN ('confirmed', 'completed')
+              AND (r.is_open = 1 OR COALESCE(r.bets_open, 0) = 1)
         """
         params = []
         if tour is not None:
@@ -6069,15 +6279,17 @@ def get_active_bet_markets(tour: int | None = None, division_id: int | None = No
 
 
 def get_bet_market_by_match_id(match_id: int) -> dict | None:
-    """Fetch market odds for a specific match ID if round is open."""
+    """Fetch market odds for a specific match ID if its round accepts bets."""
     with transaction() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT bm.*, r.is_open, r.deadline
+            SELECT bm.*, r.is_open, COALESCE(r.bets_open, 0) AS bets_open, r.deadline
             FROM bet_markets bm
             JOIN matches m ON bm.match_id = m.id
             JOIN rounds r ON m.round_number = r.round_number
-            WHERE bm.match_id = ? AND r.is_open = 1 AND m.status NOT IN ('confirmed', 'completed')
+            WHERE bm.match_id = ?
+              AND (r.is_open = 1 OR COALESCE(r.bets_open, 0) = 1)
+              AND m.status NOT IN ('confirmed', 'completed')
         """, (match_id,))
         row = cursor.fetchone()
         return dict(row) if row else None

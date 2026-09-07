@@ -12,6 +12,7 @@ Strict Invariants:
 """
 
 import math
+import datetime
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Optional
@@ -178,17 +179,26 @@ class RiskEngine:
                         message=f"Матч #{m_id} уже сыгран или завершен."
                     )
 
-                # Check round deadline and is_open
+                # Check round deadline and betting availability.
+                # Приём прогнозов разрешён, если тур открыт для игры (is_open)
+                # ЛИБО для него заранее открыта линия (bets_open).
                 r_num = match_row["round_number"] if "round_number" in match_row.keys() else None
                 m_div_id = match_row["division_id"] if "division_id" in match_row.keys() and match_row["division_id"] is not None else 1
                 if r_num:
-                    cursor.execute("SELECT is_open, deadline FROM rounds WHERE division_id = ? AND round_number = ?", (m_div_id, r_num))
+                    cursor.execute(
+                        "SELECT is_open, COALESCE(bets_open, 0) AS bets_open, deadline FROM rounds WHERE division_id = ? AND round_number = ?",
+                        (m_div_id, r_num)
+                    )
                     r_row = cursor.fetchone()
                     if not r_row:
-                        cursor.execute("SELECT is_open, deadline FROM rounds WHERE round_number = ? ORDER BY is_open DESC, id DESC LIMIT 1", (r_num,))
+                        cursor.execute(
+                            "SELECT is_open, COALESCE(bets_open, 0) AS bets_open, deadline FROM rounds "
+                            "WHERE round_number = ? ORDER BY is_open DESC, bets_open DESC, id DESC LIMIT 1",
+                            (r_num,)
+                        )
                         r_row = cursor.fetchone()
                     if r_row:
-                        if not r_row["is_open"]:
+                        if not (r_row["is_open"] or r_row["bets_open"]):
                             return RiskDecision(
                                 decision="REJECT",
                                 allowed=False,

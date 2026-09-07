@@ -2936,6 +2936,7 @@ async def submit_report_to_guest(update: Update, context: ContextTypes.DEFAULT_T
     a_score = payload["a_score"]
     scorers = payload["scorers"]
     assists = payload["assists"]
+    photo_id = payload.get("photo_id")
 
     # Persist report so the opponent (or an admin) can finalize it later from their own chat
     await asyncio.to_thread(database.save_pending_report, match_id, submitter_id, payload)

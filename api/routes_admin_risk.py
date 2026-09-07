@@ -18,6 +18,7 @@ Strict RBAC:
   - Unauthenticated: 401 Unauthorized.
 """
 
+import asyncio
 import logging
 from aiohttp import web
 import database
@@ -289,7 +290,7 @@ async def handle_admin_emergency_suspend(request: web.Request) -> web.Response:
                 return web.json_response({"status": "error", "error": "forbidden"}, status=403)
 
     try:
-        res = database.transition_market_status(market_id, "suspended", actor_id)
+        res = await asyncio.to_thread(database.transition_market_status, market_id, "suspended", actor_id)
         return web.json_response({"status": "ok", "result": res})
     except Exception as e:
         return web.json_response({"status": "error", "message": str(e)}, status=400)

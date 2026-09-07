@@ -12,7 +12,6 @@ import { ParticleEffects } from './effects.js';
 class AppController {
   constructor() {
     this.currentTournamentTab = 'standings';
-    this.livePollTimer = null;
     this.init();
   }
 
@@ -27,15 +26,6 @@ class AppController {
       UIRenderer.renderOddsMovers(state.oddsMovers);
       UIRenderer.renderRecommendations(state.recommendations);
       UIRenderer.renderMatches(state.tours, state.selectedTour, state.marketCategoryFilter, state.searchQuery, state.matchStatusFilter, state.selectedDivisionId);
-      UIRenderer.renderLiveCenter(
-        state.liveMatches,
-        state.selectedLiveMatchId,
-        state.liveMatchDetail,
-        state.liveMatchEvents,
-        state.liveMatchStats,
-        state.liveMatchMarkets,
-        state.liveMatchIntelligence
-      );
       UIRenderer.renderMatchCenter(state.matchDetail, state.matchStats, state.matchH2H, state.matchInsights, state.matchLive, state.matchMarkets, state.matchCenterSubTab);
       UIRenderer.renderTournaments(state.standings, state.results, state.topScorers, this.currentTournamentTab);
       UIRenderer.renderPredictionsHistory(state.myBets, state.myBetsFilter);
@@ -150,57 +140,6 @@ class AppController {
     }
   }
 
-  startLivePolling() {
-    this.stopLivePolling();
-    this.fetchLiveMatches();
-    this.livePollTimer = setInterval(() => {
-      this.fetchLiveMatches();
-    }, 10000);
-  }
-
-  stopLivePolling() {
-    if (this.livePollTimer) {
-      clearInterval(this.livePollTimer);
-      this.livePollTimer = null;
-    }
-  }
-
-  async fetchLiveMatches() {
-    try {
-      const res = await api.getLiveMatches();
-      if (res.status === 'ok') {
-        store.setLiveMatches(res.live_matches);
-        if (store.state.selectedLiveMatchId) {
-          this.loadLiveMatchDetail(store.state.selectedLiveMatchId);
-        }
-      }
-    } catch (e) {
-      console.warn("Could not fetch live matches:", e);
-    }
-  }
-
-  async loadLiveMatchDetail(matchId) {
-    try {
-      const [detailRes, eventsRes, statsRes, mktsRes, intRes] = await Promise.all([
-        api.getLiveMatch(matchId),
-        api.getLiveEvents(matchId),
-        api.getLiveStats(matchId),
-        api.getLiveMarkets(matchId),
-        api.getLiveIntelligence(matchId)
-      ]);
-      store.setLiveMatchData(
-        matchId,
-        detailRes.status === 'ok' ? detailRes.match : null,
-        eventsRes.status === 'ok' ? eventsRes.events : [],
-        statsRes.status === 'ok' ? statsRes : null,
-        mktsRes.status === 'ok' ? mktsRes.markets : [],
-        intRes.status === 'ok' ? intRes : null
-      );
-    } catch (e) {
-      console.warn("Could not load live match detail:", e);
-    }
-  }
-
   async fetchProgressionData() {
     try {
       const res = await api.getProgression();
@@ -236,12 +175,14 @@ class AppController {
 
   async fetchUserExtras() {
     try {
-      const [statsRes, savedRes] = await Promise.all([
+      const [statsRes, savedRes, tourStatsRes] = await Promise.all([
         api.getMyStats(),
-        api.getSavedCoupons()
+        api.getSavedCoupons(),
+        api.getTournamentStats().catch(() => null)
       ]);
       if (statsRes.status === 'ok') store.setMyStats(statsRes.stats);
       if (savedRes.status === 'ok') store.setSavedCoupons(savedRes.saved_coupons);
+      if (tourStatsRes && tourStatsRes.status === 'ok') store.setTournamentStats(tourStatsRes.tournament_stats);
     } catch (e) {
       console.warn("Could not load user extras:", e);
     }
@@ -541,23 +482,8 @@ class AppController {
       }
     });
 
-    // 13b. Phase 6: Live Center Events
-    document.addEventListener('click', (e) => {
-      const btn = e.target.closest('.btn-open-live-detail');
-      if (btn && btn.dataset.matchId) {
-        const mId = parseInt(btn.dataset.matchId);
-        this.loadLiveMatchDetail(mId);
-        tgBridge.hapticImpact('light');
-      }
-    });
-
-    const btnRefreshLive = document.getElementById('btn-refresh-live');
-    if (btnRefreshLive) {
-      btnRefreshLive.addEventListener('click', () => {
-        this.fetchLiveMatches();
-        tgBridge.hapticImpact('light');
-      });
-    }
+    // 13b. LIVE-центр удалён из мини-приложения — обработчиков нет.
+    // Лайв-данные конкретного матча по-прежнему доступны во вкладке Матч-Центра.
 
     // 14. Bet Slip Drawer Controls
     const slipBar = document.getElementById('slip-bar-collapsed');
@@ -708,30 +634,8 @@ class AppController {
       });
     }
 
-    // 17. Claim Achievement
-    document.addEventListener('click', async (e) => {
-      const btn = e.target.closest('.btn-claim-ach');
-      if (btn && btn.dataset.achId) {
-        btn.disabled = true;
-        try {
-          const achId = String(btn.dataset.achId).trim();
-          const res = await api.claimAchievement(achId);
-          if (res.status === 'ok') {
-            const addedCoins = (res.reward && res.reward.coins) ? Number(res.reward.coins) : 0;
-            const currentBal = Number(store.state.user?.balance || 0);
-            store.setUser({ ...store.state.user, balance: currentBal + addedCoins });
-            this.fetchProgressionData();
-            ParticleEffects.confetti();
-            tgBridge.hapticNotification('success');
-            tgBridge.showAlert(res.message || "Награда успешно получена!");
-          }
-        } catch (err) {
-          tgBridge.showAlert(err.message);
-        } finally {
-          btn.disabled = false;
-        }
-      }
-    });
+    // 17. Achievement rewards removed — достижения теперь чисто статусные,
+    // монеты и XP за них не выдаются, поэтому обработчика получения награды нет.
 
     // 18. Early Cashout Settlement
     document.addEventListener('click', async (e) => {
@@ -831,12 +735,6 @@ class AppController {
     });
 
     // On-demand view refresh
-    if (viewName === 'live') {
-      this.startLivePolling();
-    } else {
-      this.stopLivePolling();
-    }
-
     if (viewName === 'history') {
       api.getPredictions().then(res => {
         if (res.status === 'ok') store.setMyBets(res.predictions || res.bets || []);

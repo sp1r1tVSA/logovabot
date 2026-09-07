@@ -33,6 +33,7 @@ class StateStore {
       favorites: [],
       notifications: [],
       myStats: null,
+      tournamentStats: null,
       leaderboard: [],
       myRank: null,
       progression: { level: 1, current_xp: 0, total_xp_earned: 0, equipped_title: 'Новичок' },
@@ -43,14 +44,7 @@ class StateStore {
       selectedDivisionId: 1,
       matchStatusFilter: 'all', // 'all' | 'open' | 'upcoming' | 'completed'
       unclaimedAchievementsCount: 0,
-      // Phase 6: Live Center & Sports Intelligence State
-      liveMatches: [],
-      selectedLiveMatchId: null,
-      liveMatchDetail: null,
-      liveMatchEvents: [],
-      liveMatchStats: null,
-      liveMatchMarkets: [],
-      liveMatchIntelligence: null,
+      // Sports Intelligence State (LIVE-центр удалён)
       oddsMovers: [],
       hotMatches: [],
       recommendations: [],
@@ -189,6 +183,11 @@ class StateStore {
     this.notify();
   }
 
+  setTournamentStats(stats) {
+    this.state.tournamentStats = stats;
+    this.notify();
+  }
+
   setLeaderboard(leaderboard, myRank) {
     this.state.leaderboard = leaderboard || [];
     this.state.myRank = myRank;
@@ -278,22 +277,7 @@ class StateStore {
     return this.state.slip.some(s => s.match_id === matchId && s.outcome === outcome);
   }
 
-  // --- Phase 6: Live Center & Intelligence Setters ---
-  setLiveMatches(matches) {
-    this.state.liveMatches = matches || [];
-    this.notify();
-  }
-
-  setLiveMatchData(id, detail, events, stats, markets, intelligence) {
-    this.state.selectedLiveMatchId = id;
-    if (detail !== undefined) this.state.liveMatchDetail = detail;
-    if (events !== undefined) this.state.liveMatchEvents = events || [];
-    if (stats !== undefined) this.state.liveMatchStats = stats;
-    if (markets !== undefined) this.state.liveMatchMarkets = markets || [];
-    if (intelligence !== undefined) this.state.liveMatchIntelligence = intelligence;
-    this.notify();
-  }
-
+  // --- Intelligence Setters ---
   setOddsMovers(movers) {
     this.state.oddsMovers = movers || [];
     this.notify();
