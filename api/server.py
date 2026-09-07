@@ -205,9 +205,14 @@ async def lockdown_middleware(request: web.Request, handler):
 
 
 async def handle_index(request: web.Request) -> web.FileResponse:
-    """Serve SPA index.html."""
+    """Serve SPA index.html with anti-caching headers."""
     index_path = os.path.join(WEB_DIR, "index.html")
-    return web.FileResponse(index_path)
+    headers = {
+        "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
+        "Pragma": "no-cache",
+        "Expires": "0",
+    }
+    return web.FileResponse(index_path, headers=headers)
 
 
 

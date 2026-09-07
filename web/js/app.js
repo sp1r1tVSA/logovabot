@@ -71,7 +71,7 @@ class AppController {
         store.setUser(data.user);
 
         if (!data.user.has_access) {
-          const lockScreen = document.getElementById('lab-lock-screen');
+          const lockScreen = document.getElementById('access-lock-screen');
           if (lockScreen) lockScreen.style.display = 'flex';
           const nav = document.querySelector('.bottom-nav');
           if (nav) nav.style.display = 'none';
