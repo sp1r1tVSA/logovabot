@@ -90,3 +90,9 @@ Thumbs.db
 *.swp
 *.swo
 .claude/
+
+# ==============================================================================
+# Agent Tooling (vendored ECC framework — local only, not project source)
+# ==============================================================================
+.agents/*
+!.agents/AGENTS.md
