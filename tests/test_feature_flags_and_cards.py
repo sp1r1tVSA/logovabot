@@ -1,10 +1,9 @@
 """
-tests/test_lab_and_cards.py
+tests/test_feature_flags_and_cards.py
 
 Unit and integration tests for:
 1. Feature Flags & Access Control in database.py
 2. EA FC Card Generator attribute calculations & image rendering
-3. Lab handler registration and access decorator
 """
 
 import os

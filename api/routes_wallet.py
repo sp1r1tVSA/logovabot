@@ -97,7 +97,7 @@ async def handle_claim_bonus(request: web.Request) -> web.Response:
     user_id = user_info["id"]
     if not check_user_access(user_id):
         return web.json_response(
-            {"status": "error", "error": "lab_mode", "message": "Logovo.bet находится на закрытом тесте в Лаборатории."},
+            {"status": "error", "error": "access_restricted", "message": "Logovo.bet временно недоступен."},
             status=403
         )
 
@@ -129,8 +129,8 @@ async def handle_leaderboard(request: web.Request) -> web.Response:
     if not check_user_access(user_id):
         return web.json_response({
             "status": "error",
-            "error": "lab_mode",
-            "message": "Logovo.bet находится на закрытом тесте в Лаборатории."
+            "error": "access_restricted",
+            "message": "Logovo.bet временно недоступен."
         }, status=403)
 
     division_id_str = request.query.get("division_id")

@@ -82,7 +82,7 @@ class AppController {
           return;
         }
 
-        // Parse URL query parameters (e.g. from Logovo Lab deep links)
+        // Parse URL query parameters (e.g. from deep links)
         const urlParams = new URLSearchParams(window.location.search);
         const targetDivId = urlParams.get('division_id');
         const targetMatchId = urlParams.get('match_id');

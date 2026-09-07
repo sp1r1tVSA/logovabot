@@ -438,7 +438,9 @@ def test_all_inline_buttons_match_registered_handlers():
                 if sample == "back_data":
                     sample = "admin_squad_view_Arsenal"
                 elif sample == "refresh_cb":
-                    sample = "refresh_league_table_topic"
+                    sample = "refresh_div_table_1"
+                elif sample.startswith("division_view:"):
+                    sample = "division_view:1:1"
                 elif sample == "cb":
                     sample = "pcard_1"
                 elif sample == "back_cb":

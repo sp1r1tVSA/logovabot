@@ -16,7 +16,6 @@ import database
 from handlers.base import is_admin, is_global_admin
 from handlers.betting import cb_bet_place_amount
 from handlers.admin import admin_generate_matches_execute
-from handlers.lab import cb_lab_ovr_calc_demo
 from handlers.__init__ import handle_placeholders
 
 
@@ -148,35 +147,6 @@ def test_admin_schedule_generation_rbac_isolation():
     asyncio.run(_test())
 
 
-def test_lab_ovr_calc_demo_handler():
-    """Verify that cb_lab_ovr_calc_demo answers callback and displays OVR formula card."""
-    async def _test():
-        admin_id = 99999921
-        with database.transaction() as conn:
-            conn.execute("INSERT OR REPLACE INTO users (telegram_id, username, role) VALUES (?, ?, 'admin')",
-                         (admin_id, "lab_admin"))
-
-        update = MagicMock()
-        query = MagicMock()
-        query.data = "lab_ovr_calc_demo"
-        query.from_user.id = admin_id
-        query.answer = AsyncMock()
-        query.edit_message_text = AsyncMock()
-        update.callback_query = query
-        update.effective_user.id = admin_id
-
-        context = MagicMock()
-
-        await cb_lab_ovr_calc_demo(update, context)
-
-        assert query.answer.called
-        assert query.edit_message_text.called
-        call_text = query.edit_message_text.call_args[0][0]
-        assert "Калькулятор и формула OVR" in call_text
-        assert "75 OVR" in call_text
-
-    asyncio.run(_test())
-
 
 def test_handle_placeholders_noop_is_silent():
     """Verify that callback 'noop' is silently answered without 'в разработке' alert."""
@@ -215,11 +185,7 @@ def test_callback_pattern_dispatching():
     assert len(delete_handlers_1) > 0, "admin_confirm_delete_player_42 must match a registered handler"
     assert len(delete_handlers_2) > 0, "admin_delete_player_confirm_42 must match a registered handler"
 
-    # 2. Verify lab_ovr_calc_demo
-    ovr_handlers = [h for h in registered_handlers if h.pattern and h.pattern.search("lab_ovr_calc_demo")]
-    assert len(ovr_handlers) > 0, "lab_ovr_calc_demo must match a registered handler"
-
-    # 3. Verify cabinet game history is registered exactly once without duplicates
+    # 2. Verify cabinet game history is registered exactly once without duplicates
     history_handlers = [h for h in registered_handlers if h.pattern and h.pattern.search("cabinet_game_history")]
     assert len(history_handlers) == 1, f"cabinet_game_history should be registered exactly once, found {len(history_handlers)}"
 

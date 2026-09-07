@@ -17,24 +17,6 @@ import telegram.error
 from handlers.base import is_global_admin, is_logovo_access_allowed
 
 from handlers.chat import handle_ai_chat
-from handlers.lab import (
-    cmd_lab,
-    cmd_test_card,
-    cmd_test_anim,
-    cb_lab_main_menu,
-    cb_lab_flags_menu,
-    cb_lab_toggle_flag,
-    cb_lab_card_menu,
-    cb_lab_anim_card_menu,
-    cb_lab_demo_card,
-    cb_lab_demo_anim,
-    cb_lab_card_pick_club,
-    cb_lab_card_pick_player,
-    cb_lab_card_generate_player,
-    cb_lab_player_anim_styles,
-    cb_lab_player_anim,
-    cb_lab_ovr_calc_demo,
-)
 
 # Import base handlers
 from handlers.base import (
@@ -745,24 +727,6 @@ def _register_admin_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("unwarn", admin_unwarn_command))
     app.add_handler(CommandHandler("check_debts", admin_check_debts_command))
     app.add_handler(CommandHandler("debug_debts", admin_check_debts_command))
-
-    # 🧪 Admin Sandbox & Feature Flags Lab
-    app.add_handler(CommandHandler("lab", cmd_lab))
-    app.add_handler(CommandHandler("test_card", cmd_test_card))
-    app.add_handler(CommandHandler("test_anim", cmd_test_anim))
-    app.add_handler(CallbackQueryHandler(cb_lab_main_menu, pattern="^admin_lab_menu$"))
-    app.add_handler(CallbackQueryHandler(cb_lab_flags_menu, pattern="^lab_flags_menu$"))
-    app.add_handler(CallbackQueryHandler(cb_lab_toggle_flag, pattern="^lab_toggle_flag_.*$"))
-    app.add_handler(CallbackQueryHandler(cb_lab_card_menu, pattern="^lab_card_menu$"))
-    app.add_handler(CallbackQueryHandler(cb_lab_anim_card_menu, pattern="^lab_anim_card_menu$"))
-    app.add_handler(CallbackQueryHandler(cb_lab_demo_card, pattern="^lab_demo_card_.*$"))
-    app.add_handler(CallbackQueryHandler(cb_lab_demo_anim, pattern="^lab_demo_anim_.*$"))
-    app.add_handler(CallbackQueryHandler(cb_lab_card_pick_club, pattern="^lab_card_pick_club$"))
-    app.add_handler(CallbackQueryHandler(cb_lab_card_pick_player, pattern="^lab_pick_player_.*$"))
-    app.add_handler(CallbackQueryHandler(cb_lab_card_generate_player, pattern="^lab_gen_card_.*$"))
-    app.add_handler(CallbackQueryHandler(cb_lab_player_anim_styles, pattern="^lab_p_styles_.*$"))
-    app.add_handler(CallbackQueryHandler(cb_lab_player_anim, pattern="^lab_p_anim_.*$"))
-    app.add_handler(CallbackQueryHandler(cb_lab_ovr_calc_demo, pattern="^lab_ovr_calc_demo$"))
 
 def register_all_handlers(application: Application) -> None:
     """Register all command, message, and callback handlers to the application."""

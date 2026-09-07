@@ -37,8 +37,8 @@ async def handle_place_prediction(request: web.Request) -> web.Response:
     if not check_user_access(user_id):
         return web.json_response({
             "status": "error",
-            "error": "lab_mode",
-            "message": "Logovo.bet находится на закрытом тесте в Лаборатории."
+            "error": "access_restricted",
+            "message": "Logovo.bet временно недоступен."
         }, status=403)
 
     try:
@@ -128,8 +128,8 @@ async def handle_get_predictions(request: web.Request) -> web.Response:
     if not check_user_access(user_id):
         return web.json_response({
             "status": "error",
-            "error": "lab_mode",
-            "message": "Logovo.bet находится на закрытом тесте в Лаборатории."
+            "error": "access_restricted",
+            "message": "Logovo.bet временно недоступен."
         }, status=403)
 
     try:

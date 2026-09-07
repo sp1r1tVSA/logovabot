@@ -26,7 +26,6 @@
 | ISSUE-03 | `bet_place_*` | `handlers/betting.py:376` | Telegram bet placement has no client/server debouncing or idempotency key. Coupon is cleared only after async DB call. Rapid clicking causes double placement if user has balance. | **P1** | Immediately disable/answer callback, pop coupon atomically from context before calling place_user_bet, and generate unique idempotency key. |
 | ISSUE-04 | `admin_gen_exec_*` | `handlers/admin.py:945` | RBAC check `if not (is_admin(user_id) or ...)` uses base is_admin() which returns True for ANY division_admin. Allows division admin from Div 1 to generate matches for Div 2. | **P1** | Change check to is_global_admin(user_id) or database.is_division_admin(user_id, div_id). |
 | ISSUE-05 | `admin_confirm_delete_player_*` | `handlers/admin.py:2911` | Button uses callback 'admin_confirm_delete_player_{id}', but CallbackQueryHandler registered in handlers/__init__.py uses inverted pattern 'admin_delete_player_confirm_'. Handler admin_confirm_delete_player is never registered, causing placeholder alert. | **P1** | Register CallbackQueryHandler(admin_confirm_delete_player, pattern='^admin_confirm_delete_player_\\d+$') in handlers/__init__.py. |
-| ISSUE-06 | `lab_ovr_calc_demo` | `handlers/lab.py:93` | Button 'Тест формулы OVR (Калькулятор)' has no registered CallbackQueryHandler. Clicking triggers placeholder fallback. | **P2** | Implement cb_lab_ovr_calc_demo in handlers/lab.py and register handler in handlers/__init__.py. |
 | ISSUE-07 | `btn-close-locked-app` | `web/index.html:363` | Button 'Вернуться в чат' on locked screen has no event listener in app.js. | **P2** | Add document.getElementById('btn-close-locked-app').addEventListener('click', () => tgBridge.close()). |
 | ISSUE-08 | `stub (Скаут)` | `handlers/cabinet.py:1241` | Button 'Скаут' has raw callback_data='stub' with no handler registered, falling back to placeholder. | **P2** | Connect to opponent head-to-head stats view or replace with noop/remove until feature is implemented. |
 | ISSUE-09 | `cabinet_club_stats (« Назад)` | `handlers/cabinet.py:477` | Player card back button hardcoded to user's personal cabinet_club_stats. If viewing another club's roster, user loses context. | **P2** | Pass dynamic back_cb in context/payload (e.g. clsquad_{club} or cabinet_club_stats). |
@@ -65,7 +64,6 @@
 | BTN-TG-006 | 📢 Рассылка задолженностей | Telegram | admin_broadcast_menu | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
 | BTN-TG-007 | 🔄 Обновить таблицы и стату | Telegram | admin_force_update | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
 | BTN-TG-008 | 🎭 Режим общения: {mode_label} | Telegram | admin_toggle_chat_mode | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
-| BTN-TG-009 | 🧪 Лаборатория фич (Sandbox) | Telegram | cb_lab_main_menu | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
 | BTN-TG-010 | « Назад в меню | Telegram | show_main_menu | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
 | BTN-TG-011 | « Назад | Telegram | show_admin_panel | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
 | BTN-TG-012 | 🚀 Сформировать сетку Кубка (Вс | Telegram | admin_init_cup_execute | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
@@ -354,7 +352,6 @@
 | BTN-TG-295 | 📜 Мои Ставки | Telegram | cb_bet_my_history | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
 | BTN-TG-296 | 🎁 Бонус (+250 🪙) | Telegram | cb_bet_claim_bonus | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
 | BTN-TG-297 | 🏆 Топ Капперов | Telegram | cb_bet_leaderboard | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
-| BTN-TG-298 | 🧪 Назад в Лабораторию (/lab) | Telegram | cb_lab_main_menu | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
 | BTN-TG-299 | 🔙 Главное Меню | Telegram | cmd_bet_hub | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
 | BTN-TG-300 | UNKNOWN | Telegram | cb_bet_pick_tour | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
 | BTN-TG-301 | 🎫 Мой Купон | Telegram | cb_bet_view_slip | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
@@ -495,65 +492,6 @@
 | BTN-TG-436 | ❌ Отклонить | Telegram | cb_draft_reject | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
 | BTN-TG-437 | 🎰 Logovo.bet (Mini App) | Telegram | Telegram Client (Browser / MiniApp) | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
 | BTN-TG-438 | 🎰 Logovo.bet (Тест Букмекерки) | Telegram | cmd_bet_hub | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
-| BTN-TG-439 | 🃏 Тестировать Карточки EA FC | Telegram | cb_lab_card_menu | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
-| BTN-TG-440 | 🚩 Управление Feature Flags | Telegram | cb_lab_flags_menu | N/A (Bot Callback) | Да | Да | 🟢 PASS |
-| BTN-TG-441 | 📊 Тест формулы OVR (Калькулято | Telegram | cb_lab_ovr_calc_demo | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
-| BTN-TG-442 | « Назад в Админ-панель | Telegram | show_admin_panel | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
-| BTN-TG-443 | UNKNOWN | Telegram | cb_lab_toggle_flag | N/A (Bot Callback) | Да | Да | 🟢 PASS |
-| BTN-TG-444 | « Назад в лабораторию | Telegram | cb_lab_main_menu | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
-| BTN-TG-445 | 🥉 1. КПЛ Standard (≤85) | Telegram | cb_lab_demo_card | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
-| BTN-TG-446 | 🥈 2. КПЛ Star (86-92) | Telegram | cb_lab_demo_card | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
-| BTN-TG-447 | 🥇 3. КПЛ Prime (93+) | Telegram | cb_lab_demo_card | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
-| BTN-TG-448 | ⭐ 4. UCL Night | Telegram | cb_lab_demo_card | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
-| BTN-TG-449 | 🔥 5. Inferno Magma | Telegram | cb_lab_demo_card | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
-| BTN-TG-450 | ⚡ 6. Cyberpunk | Telegram | cb_lab_demo_card | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
-| BTN-TG-451 | 💎 7. Hyper-Glass | Telegram | cb_lab_demo_card | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
-| BTN-TG-452 | 🌌 8. Void Eclipse | Telegram | cb_lab_demo_card | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
-| BTN-TG-453 | 🎬 ➔ ТЕСТ АНИМИРОВАННЫХ (GIF/MP | Telegram | cb_lab_anim_card_menu | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
-| BTN-TG-454 | 🔍 Выбрать реального игрока из  | Telegram | cb_lab_card_pick_club | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
-| BTN-TG-455 | « Назад в лабораторию | Telegram | cb_lab_main_menu | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
-| BTN-TG-456 | 🥉 1. КПЛ Standard | Telegram | cb_lab_demo_anim | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
-| BTN-TG-457 | 🥈 2. КПЛ Star | Telegram | cb_lab_demo_anim | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
-| BTN-TG-458 | 🥇 3. КПЛ Prime | Telegram | cb_lab_demo_anim | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
-| BTN-TG-459 | ⭐ 4. UCL Night | Telegram | cb_lab_demo_anim | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
-| BTN-TG-460 | 🔥 5. Inferno Magma | Telegram | cb_lab_demo_anim | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
-| BTN-TG-461 | ⚡ 6. Cyberpunk | Telegram | cb_lab_demo_anim | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
-| BTN-TG-462 | 🖼️ ➔ Тест статичных карточек | Telegram | cb_lab_card_menu | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
-| BTN-TG-463 | 🖼️ ➔ К статичным карточкам (PN | Telegram | cb_lab_card_menu | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
-| BTN-TG-464 | « В лабораторию | Telegram | cb_lab_main_menu | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
-| BTN-TG-465 | 🎬 Анимировать (GIF) | Telegram | cb_lab_demo_anim | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
-| BTN-TG-466 | 🔄 Выбрать другой стиль | Telegram | cb_lab_card_menu | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
-| BTN-TG-467 | « В лабораторию | Telegram | cb_lab_main_menu | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
-| BTN-TG-468 | 🖼️ Статичная (PNG) | Telegram | cb_lab_demo_card | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
-| BTN-TG-469 | 🔄 Другая анимация | Telegram | cb_lab_anim_card_menu | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
-| BTN-TG-470 | « В лабораторию | Telegram | cb_lab_main_menu | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
-| BTN-TG-471 | UNKNOWN | Telegram | cb_lab_card_pick_player | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
-| BTN-TG-472 | « Назад к карточкам | Telegram | cb_lab_card_menu | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
-| BTN-TG-473 | « Выбрать другой клуб | Telegram | cb_lab_card_pick_club | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
-| BTN-TG-474 | UNKNOWN | Telegram | cb_lab_card_generate_player | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
-| BTN-TG-475 | « Назад к клубам | Telegram | cb_lab_card_pick_club | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
-| BTN-TG-476 | 🎬 Анимировать ({cfg[ | Telegram | cb_lab_player_anim | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
-| BTN-TG-477 | ✨ Выбрать стиль анимации | Telegram | cb_lab_player_anim_styles | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
-| BTN-TG-478 | 👥 Другой игрок | Telegram | cb_lab_card_pick_player | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
-| BTN-TG-479 | 🏛 Выбрать клуб | Telegram | cb_lab_card_pick_club | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
-| BTN-TG-480 | « В лабораторию | Telegram | cb_lab_main_menu | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
-| BTN-TG-481 | 🌟 1. TOTY Gold | Telegram | cb_lab_player_anim | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
-| BTN-TG-482 | 🌌 2. Void Eclipse | Telegram | cb_lab_player_anim | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
-| BTN-TG-483 | ⚡ 3. Cyberpunk | Telegram | cb_lab_player_anim | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
-| BTN-TG-484 | 💎 4. Hyper-Glass | Telegram | cb_lab_player_anim | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
-| BTN-TG-485 | 🔥 5. Inferno Magma | Telegram | cb_lab_player_anim | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
-| BTN-TG-486 | ❄️ 6. Glacial Frost | Telegram | cb_lab_player_anim | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
-| BTN-TG-487 | ⚽ 7. Anime Sakuga | Telegram | cb_lab_player_anim | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
-| BTN-TG-488 | 👑 8. Royal 24K | Telegram | cb_lab_player_anim | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
-| BTN-TG-489 | 🏎️ 9. Aero Carbon | Telegram | cb_lab_player_anim | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
-| BTN-TG-490 | 🌌 10. UCL Night | Telegram | cb_lab_player_anim | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
-| BTN-TG-491 | « Назад к {player_name} | Telegram | cb_lab_card_generate_player | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
-| BTN-TG-492 | 🖼️ Статичная | Telegram | cb_lab_card_generate_player | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
-| BTN-TG-493 | 🔄 Другой стиль | Telegram | cb_lab_player_anim_styles | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
-| BTN-TG-494 | 👥 Другой игрок | Telegram | cb_lab_card_pick_player | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
-| BTN-TG-495 | « В лабораторию | Telegram | cb_lab_main_menu | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
-| BTN-TG-496 | 🃏 Перейти к тесту карточек | Telegram | cb_lab_card_menu | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
-| BTN-TG-497 | « Назад в Лабораторию | Telegram | cb_lab_main_menu | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
 | BTN-TG-498 | 🔄 Обновить | Telegram | cb_refresh_league_table_topic | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
 | BTN-TG-499 | 1/8 | Telegram | cb_show_cup_graphic | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
 | BTN-TG-500 | 1/4 | Telegram | cb_show_cup_graphic | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
@@ -607,7 +545,6 @@
 
 2. **Phase 2 (P2 - Dead Buttons & UX/Navigation)**:
    - Add `#btn-close-locked-app` click listener in `app.js` (`tgBridge.close()`).
-   - Implement `lab_ovr_calc_demo` handler in `handlers/lab.py`.
    - Connect or clean up `stub` callback on 'Скаут' buttons in `handlers/cabinet.py`.
    - Fix context-preserving back button in player card (`handlers/cabinet.py:477`).
 

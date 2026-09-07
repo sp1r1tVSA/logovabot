@@ -24,7 +24,7 @@ def clean_leaderboard_users():
     database.init_db()
     invalidate_leaderboard_cache()
     with database.transaction() as conn:
-        conn.execute("DELETE FROM season_player_stats WHERE user_id BETWEEN 3001 AND 3010")
+        conn.execute("DELETE FROM season_player_stats WHERE user_id >= 9000 OR user_id BETWEEN 3001 AND 3010")
         conn.execute("DELETE FROM users WHERE telegram_id BETWEEN 3001 AND 3010")
 
         # Seed 5 players in Division 1, 2 in Division 2

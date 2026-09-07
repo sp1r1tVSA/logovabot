@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 
 
 def _authenticate(request: web.Request) -> tuple[Optional[dict], Optional[web.Response]]:
-    """Helper for Telegram initData authentication with closed lab check."""
+    """Helper for Telegram initData authentication with access check."""
     init_data = request.headers.get("X-Telegram-Init-Data", "")
     user_info = get_authenticated_user(init_data)
     if not user_info or "id" not in user_info:
@@ -49,8 +49,8 @@ def _authenticate(request: web.Request) -> tuple[Optional[dict], Optional[web.Re
     if not check_user_access(user_id):
         return None, web.json_response({
             "status": "error",
-            "error": "lab_mode",
-            "message": "Logovo.bet находится на закрытом тесте в Лаборатории."
+            "error": "access_restricted",
+            "message": "Logovo.bet временно недоступен."
         }, status=403)
 
     return user_info, None

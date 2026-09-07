@@ -29,8 +29,8 @@ async def handle_get_tours(request: web.Request) -> web.Response:
     if not check_user_access(user_id):
         return web.json_response({
             "status": "error",
-            "error": "lab_mode",
-            "message": "Logovo.bet находится на закрытом тесте в Лаборатории."
+            "error": "access_restricted",
+            "message": "Logovo.bet временно недоступен."
         }, status=403)
 
     division_id_param = request.query.get("division_id")
@@ -99,7 +99,7 @@ async def handle_get_match_markets(request: web.Request) -> web.Response:
 
     user_id = user_info["id"]
     if not check_user_access(user_id):
-        return web.json_response({"status": "error", "error": "lab_mode"}, status=403)
+        return web.json_response({"status": "error", "error": "access_restricted", "message": "Logovo.bet временно недоступен."}, status=403)
 
     try:
         match_id = int(request.match_info["id"])

@@ -89,7 +89,7 @@ def validate_telegram_init_data(init_data_str: str, bot_token: str | None = None
 def get_authenticated_user(init_data_str: str) -> dict | None:
     """
     Extract and authenticate user info from initData.
-    Also handles development/lab bypass if ALLOW_DEV_AUTH_BYPASS is explicitly enabled.
+    Also handles development bypass if ALLOW_DEV_AUTH_BYPASS is explicitly enabled.
     """
     user_info = validate_telegram_init_data(init_data_str)
     if not user_info:

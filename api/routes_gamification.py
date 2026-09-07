@@ -31,7 +31,7 @@ def _get_auth_user(request: web.Request) -> tuple[dict | None, web.Response | No
 
     user_id = user_info["id"]
     if not check_user_access(user_id):
-        return None, web.json_response({"status": "error", "error": "lab_mode"}, status=403)
+        return None, web.json_response({"status": "error", "error": "access_restricted", "message": "Logovo.bet временно недоступен."}, status=403)
 
     return user_info, None
 
@@ -150,8 +150,8 @@ async def handle_get_leaderboard(request: web.Request) -> web.Response:
     if err is not None:
         return web.json_response({
             "status": "error",
-            "error": "lab_mode",
-            "message": "Logovo.bet находится на закрытом тесте в Лаборатории."
+            "error": "access_restricted",
+            "message": "Logovo.bet временно недоступен."
         }, status=403)
     user_id = user_info["id"]
 
@@ -159,8 +159,8 @@ async def handle_get_leaderboard(request: web.Request) -> web.Response:
     if not check_user_access(user_id):
         return web.json_response({
             "status": "error",
-            "error": "lab_mode",
-            "message": "Logovo.bet находится на закрытом тесте в Лаборатории."
+            "error": "access_restricted",
+            "message": "Logovo.bet временно недоступен."
         }, status=403)
 
     try:

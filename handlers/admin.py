@@ -92,7 +92,6 @@ async def show_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         [InlineKeyboardButton("📢 Рассылка задолженностей", callback_data="admin_broadcast_menu")],
         [InlineKeyboardButton("🔄 Обновить таблицы и стату", callback_data="admin_force_update")],
         [InlineKeyboardButton(f"🎭 Режим общения: {mode_label}", callback_data="admin_toggle_chat_mode")],
-        [InlineKeyboardButton("🧪 Лаборатория фич (Sandbox)", callback_data="admin_lab_menu")],
         [InlineKeyboardButton("« Назад в меню", callback_data="main_menu")]
     ]
     markup = InlineKeyboardMarkup(keyboard)
@@ -3458,7 +3457,7 @@ async def admin_manage_squads(update: Update, context: ContextTypes.DEFAULT_TYPE
                 InlineKeyboardButton(f"🏆 {d_name}", callback_data=f"admin_roster_div:{d_id}")
             ])
     else:
-        keyboard.append([InlineKeyboardButton("⚠️ Дивизионы не найдены", callback_data="admin_stub")])
+        keyboard.append([InlineKeyboardButton("⚠️ Дивизионы не найдены", callback_data="noop")])
 
     keyboard.append([InlineKeyboardButton("🖼 Загрузить фото игроков", callback_data="admin_fetch_photos_cb")])
     keyboard.append([InlineKeyboardButton("➕ Добавить во все клубы игроков из матчей", callback_data="admin_squad_add_missing_all")])

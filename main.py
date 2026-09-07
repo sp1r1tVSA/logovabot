@@ -25,7 +25,7 @@ async def post_init(application: Application) -> None:
     except Exception as e:
         logger.warning(f"Failed to start Logovo.bet Mini App server: {e}")
 
-    # 📱 Configure Telegram WebApp Menu Button (Admins only in Lab mode, or Global if public)
+    # 📱 Configure Telegram WebApp Menu Button (Admins only while in testing, or Global if public)
     try:
         from telegram import MenuButtonWebApp, MenuButtonDefault, WebAppInfo
         import config
@@ -46,7 +46,7 @@ async def post_init(application: Application) -> None:
                     try:
                         await application.bot.set_chat_menu_button(
                             chat_id=adm_id,
-                            menu_button=MenuButtonWebApp(text="🎰 Logovo.bet [Lab]", web_app=WebAppInfo(url=config.WEBAPP_URL))
+                            menu_button=MenuButtonWebApp(text="🎰 Logovo.bet", web_app=WebAppInfo(url=config.WEBAPP_URL))
                         )
                     except Exception:
                         pass
