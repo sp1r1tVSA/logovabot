@@ -89,7 +89,16 @@ Thumbs.db
 .vscode/
 *.swp
 *.swo
-.claude/
+
+# ==============================================================================
+# Claude Code (share project config, ignore local state and caches)
+# ==============================================================================
+.claude/*
+!.claude/settings.json
+!.claude/agents/
+!.claude/commands/
+!.claude/prds/
+.claude/settings.local.json
 
 # ==============================================================================
 # Agent Tooling (vendored ECC framework — local only, not project source)
