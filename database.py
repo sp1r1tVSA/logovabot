@@ -3474,10 +3474,10 @@ def clear_entire_league() -> None:
         logger.info("Entire league matches and players cleared (admins kept).")
 
 
-def assign_player_to_club(username: str, club: str) -> tuple[int, str | None]:
+def assign_player_to_club(username: str, club: str, division_id: int = 1) -> tuple[int, str | None]:
     """
-    Assign a player by username/tag to a club.
-    If the club was previously assigned to someone else, unlink (or delete) the old player.
+    Assign a player by username/tag to a club within a specific division.
+    If the club was previously assigned to someone else in the same division, unlink (or delete) the old player.
     Returns (telegram_id, old_player_username).
     """
     username_clean = username.strip().lstrip("@")
@@ -3486,8 +3486,11 @@ def assign_player_to_club(username: str, club: str) -> tuple[int, str | None]:
     with transaction() as conn:
         cursor = conn.cursor()
         
-        # 1. Find who is currently assigned to this club
-        cursor.execute("SELECT telegram_id, username FROM users WHERE LOWER(team_name) = LOWER(?)", (club_clean,))
+        # 1. Find who is currently assigned to this club in this division
+        cursor.execute(
+            "SELECT telegram_id, username FROM users WHERE LOWER(team_name) = LOWER(?) AND division_id = ?",
+            (club_clean, division_id)
+        )
         old_player = cursor.fetchone()
         old_username = None
         if old_player:
@@ -3512,9 +3515,10 @@ def assign_player_to_club(username: str, club: str) -> tuple[int, str | None]:
                 DELETE FROM debt_reminders WHERE match_id IN (
                     SELECT id FROM matches
                     WHERE status = 'pending'
+                      AND (division_id = ? OR division_id IS NULL)
                       AND (LOWER(player1_team) = LOWER(?) OR LOWER(player2_team) = LOWER(?))
                 )
-            """, (club_clean, club_clean))
+            """, (division_id, club_clean, club_clean))
 
         # 2. Check if the new player already exists in the system
         cursor.execute("SELECT telegram_id FROM users WHERE LOWER(username) = LOWER(?)", (username_clean,))
@@ -3523,8 +3527,8 @@ def assign_player_to_club(username: str, club: str) -> tuple[int, str | None]:
             new_id = exists[0]
             # Reset warns so a previously excluded player does not get instantly re-kicked
             cursor.execute(
-                "UPDATE users SET team_name = ?, warn_count = 0 WHERE telegram_id = ?",
-                (club_clean, new_id)
+                "UPDATE users SET team_name = ?, division_id = ?, warn_count = 0 WHERE telegram_id = ?",
+                (club_clean, division_id, new_id)
             )
         else:
             # Generate negative temp ID
@@ -3533,11 +3537,12 @@ def assign_player_to_club(username: str, club: str) -> tuple[int, str | None]:
             min_id = min_row[0] if min_row and min_row[0] else 0
             new_id = min(min_id - 1, -1)
             cursor.execute(
-                "INSERT INTO users (telegram_id, username, team_name, league_name, role) VALUES (?, ?, ?, ?, ?)",
-                (new_id, username_clean, club_clean, "Основная", "player")
+                "INSERT INTO users (telegram_id, username, team_name, league_name, role, division_id) VALUES (?, ?, ?, ?, ?, ?)",
+                (new_id, username_clean, club_clean, "Основная", "player", division_id)
             )
             
         return new_id, old_username
+
 
 
 def set_pending_notification(telegram_id: int, value: int = 1) -> None:

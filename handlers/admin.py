@@ -14,7 +14,7 @@ import database
 from handlers.base import is_admin, is_global_admin, admin_only, post_league_table_to_reports
 from handlers.cabinet import notify_match_confirmed, safe_send_notification, cb_report_choice_manual, safe_edit_or_reply
 import config
-from config import CLUBS, MAX_WARNS_LIMIT, GROUP_ID
+from config import MAX_WARNS_LIMIT, GROUP_ID
 
 from scripts.schedule_parser import parse_schedule_text, create_matches_from_parsed_schedule
 from services.graphics import player_photos
@@ -871,6 +871,8 @@ ADMIN_EXPECT_NEW_CLUB = 204
 ADMIN_EXPECT_NEW_USERNAME = 206
 ADMIN_EXPECT_NEW_NICKNAME = 207
 ADMIN_EXPECT_RESET_CONFIRM = 208
+ADMIN_EXPECT_PLAYER_DIVISION = 213
+ADMIN_EXPECT_MANUAL_CLUB = 214
 
 # Conversation States for Admin Match management
 ADMIN_EXPECT_MATCH_SCORE = 205
@@ -2195,24 +2197,24 @@ async def admin_add_player_start(update: Update, context: ContextTypes.DEFAULT_T
             return ADMIN_EXPECT_PLAYER_USERNAME
         
         context.user_data["admin_add_player_username"] = username
-        return await admin_show_free_clubs(update, context)
+        return await admin_show_player_divisions(update, context, username)
 
     # Ask for username
     text = (
-        "➕ **Добавление игрока**\n\n"
-        "Введите Telegram-юзернейм игрока (например, `@username`):\n\n"
-        "*(Отправьте /cancel для отмены)*"
+        "➕ <b>Добавление игрока</b>\n\n"
+        "Введите Telegram-юзернейм игрока (например, <code>@username</code>):\n\n"
+        "<i>(Отправьте /cancel для отмены)</i>"
     )
     keyboard = [[InlineKeyboardButton("❌ Отмена", callback_data="admin_cancel_player_action")]]
     if query:
-        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
     else:
-        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
     return ADMIN_EXPECT_PLAYER_USERNAME
 
 @admin_only
 async def admin_add_player_username(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Capture username and show club selection."""
+    """Capture username and show division selection."""
     username = update.message.text.strip().lstrip("@")
     if not username or " " in username:
         await update.message.reply_text(
@@ -2222,49 +2224,102 @@ async def admin_add_player_username(update: Update, context: ContextTypes.DEFAUL
         return ADMIN_EXPECT_PLAYER_USERNAME
         
     context.user_data["admin_add_player_username"] = username
-    return await admin_show_free_clubs(update, context)
+    return await admin_show_player_divisions(update, context, username)
 
 @admin_only
-async def admin_show_free_clubs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Helper to display clubs list for selection."""
-    username = context.user_data.get("admin_add_player_username")
-    if not username:
-        text = "Произошла ошибка (не найден юзернейм). Сброс."
-        if update.message:
-            await update.message.reply_text(text)
+async def admin_show_player_divisions(update: Update, context: ContextTypes.DEFAULT_TYPE, username: str) -> int:
+    """Display active divisions list for selection."""
+    divisions = await asyncio.to_thread(database.get_active_divisions)
+    if not divisions:
+        text = "❌ Нет активных дивизионов в системе."
+        keyboard = [[InlineKeyboardButton("❌ Отмена", callback_data="admin_cancel_player_action")]]
+        markup = InlineKeyboardMarkup(keyboard)
+        if update.callback_query:
+            await update.callback_query.edit_message_text(text, reply_markup=markup, parse_mode="HTML")
+        elif update.message:
+            await update.message.reply_text(text, reply_markup=markup, parse_mode="HTML")
         return ConversationHandler.END
 
-    # Get active mapping of club to player username
-    club_to_player = {u["team_name"].lower(): u["username"] for u in (await asyncio.to_thread(database.list_users)) if u["team_name"]}
-    
     keyboard = []
     row = []
-    
-    for club in CLUBS:
-        # Check if busy
+    for div in divisions:
+        div_name = div.get("name") or f"Дивизион {div['id']}"
+        row.append(InlineKeyboardButton(div_name, callback_data=f"admin_add_player_div_{div['id']}"))
+        if len(row) == 2:
+            keyboard.append(row)
+            row = []
+    if row:
+        keyboard.append(row)
+
+    keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data="admin_cancel_player_action")])
+    markup = InlineKeyboardMarkup(keyboard)
+
+    text = f"📁 <b>Выберите дивизион для игрока @{username}:</b>"
+
+    if update.callback_query:
+        await update.callback_query.edit_message_text(text, reply_markup=markup, parse_mode="HTML")
+    else:
+        await update.message.reply_text(text, reply_markup=markup, parse_mode="HTML")
+
+    return ADMIN_EXPECT_PLAYER_DIVISION
+
+@admin_only
+async def admin_add_player_div_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handle callback from division selection button and show clubs for that division."""
+    query = update.callback_query
+    if not query:
+        return ConversationHandler.END
+    await query.answer()
+
+    division_id_str = query.data.replace("admin_add_player_div_", "")
+    try:
+        division_id = int(division_id_str)
+    except ValueError:
+        await query.edit_message_text("❌ Ошибка при выборе дивизиона.")
+        return ConversationHandler.END
+
+    context.user_data["admin_add_player_division_id"] = division_id
+    username = context.user_data.get("admin_add_player_username")
+    if not username:
+        await query.answer("❌ Ошибка: не найден юзернейм.", show_alert=True)
+        return ConversationHandler.END
+
+    # Get division teams and users in this division
+    teams = await asyncio.to_thread(database.get_division_teams, division_id)
+    raw_users = await asyncio.to_thread(database.list_users)
+    users = [dict(u) if not isinstance(u, dict) else u for u in raw_users]
+    club_to_player = {
+        u["team_name"].lower(): u["username"]
+        for u in users
+        if u.get("team_name") and u.get("division_id") == division_id
+    }
+
+    keyboard = []
+    row = []
+    for club in teams:
         occupied_by = club_to_player.get(club.lower())
         if occupied_by:
             btn_text = f"🔴 {club} (@{occupied_by})"
         else:
             btn_text = f"🟢 {club} (свободен)"
-            
+
         row.append(InlineKeyboardButton(btn_text, callback_data=f"assign_club_{club}"))
         if len(row) == 2:
             keyboard.append(row)
             row = []
     if row:
         keyboard.append(row)
-        
+
+    # Mandatory button: manual club entry
+    keyboard.append([InlineKeyboardButton("✍️ Ввести название вручную", callback_data="admin_add_player_manual_club")])
     keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data="admin_cancel_player_action")])
     markup = InlineKeyboardMarkup(keyboard)
-    
-    text = f"⚽ <b>Выберите клуб для игрока @{username}</b>:\n\n<i>(Красным отмечены уже занятые клубы — выбор такого клуба переназначит его новому игроку)</i>"
-    
-    if update.callback_query:
-        await update.callback_query.edit_message_text(text, reply_markup=markup, parse_mode="HTML")
-    else:
-        await update.message.reply_text(text, reply_markup=markup, parse_mode="HTML")
-            
+
+    text = (
+        f"⚽ <b>Выберите клуб для игрока @{username} (Дивизион {division_id}):</b>\n\n"
+        f"<i>(Красным отмечены уже занятые клубы — выбор такого клуба переназначит его новому игроку)</i>"
+    )
+    await query.edit_message_text(text, reply_markup=markup, parse_mode="HTML")
     return ADMIN_EXPECT_PLAYER_CLUB
 
 @admin_only
@@ -2274,29 +2329,85 @@ async def admin_add_player_club_callback(update: Update, context: ContextTypes.D
     if not query:
         return ConversationHandler.END
     await query.answer()
-    
+
     club = query.data.replace("assign_club_", "")
     username = context.user_data.pop("admin_add_player_username", None)
-    
+    division_id = context.user_data.pop("admin_add_player_division_id", 1)
+
     if not username:
         await query.answer("❌ Ошибка: не найден юзернейм. Возможно, вы уже добавили этого игрока.", show_alert=True)
         return ConversationHandler.END
-        
-    # Assign new player to the club (will automatically handle unlinking the old one)
-    temp_id, old_username = await asyncio.to_thread(database.assign_player_to_club, username, club)
-    
+
+    # Assign new player to the club with division_id
+    temp_id, old_username = await asyncio.to_thread(database.assign_player_to_club, username, club, division_id)
+
     text = (
         f"✅ <b>Игрок успешно добавлен!</b>\n\n"
         f"👤 <b>Telegram:</b> @{username}\n"
         f"🛡️ <b>Клуб:</b> {club}\n"
+        f"📁 <b>Дивизион:</b> {division_id}\n"
         f"🆔 <b>Временный ID:</b> <code>{temp_id}</code>\n\n"
-        f"Когда @{username} запустит бота (отправит `/start`), его аккаунт свяжется автоматически."
+        f"Когда @{username} запустит бота (отправит <code>/start</code>), его аккаунт свяжется автоматически."
     )
     if old_username:
         text += f"\n\n<i>⚠️ Примечание: старый участник @{old_username} был автоматически отвязан от клуба {club} и удален.</i>"
-        
+
     keyboard = [[InlineKeyboardButton("« Назад в меню", callback_data="admin_cancel_player_action")]]
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+    return ConversationHandler.END
+
+@admin_only
+async def admin_add_player_manual_club_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Transition to manual club name entry state."""
+    query = update.callback_query
+    if not query:
+        return ConversationHandler.END
+    await query.answer()
+
+    username = context.user_data.get("admin_add_player_username")
+    division_id = context.user_data.get("admin_add_player_division_id", 1)
+
+    text = (
+        f"✍️ <b>Введите название клуба вручную</b> для игрока @{username} (Дивизион {division_id}):\n\n"
+        f"<i>(Отправьте /cancel для отмены)</i>"
+    )
+    keyboard = [[InlineKeyboardButton("❌ Отмена", callback_data="admin_cancel_player_action")]]
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+    return ADMIN_EXPECT_MANUAL_CLUB
+
+@admin_only
+async def admin_add_player_manual_club_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Capture manually entered club name and assign player."""
+    club = update.message.text.strip()
+    if not club:
+        await update.message.reply_text(
+            "❌ Название клуба не может быть пустым. Введите название клуба:",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Отмена", callback_data="admin_cancel_player_action")]])
+        )
+        return ADMIN_EXPECT_MANUAL_CLUB
+
+    username = context.user_data.pop("admin_add_player_username", None)
+    division_id = context.user_data.pop("admin_add_player_division_id", 1)
+
+    if not username:
+        await update.message.reply_text("❌ Ошибка: не найден юзернейм игрока. Диалог завершен.")
+        return ConversationHandler.END
+
+    temp_id, old_username = await asyncio.to_thread(database.assign_player_to_club, username, club, division_id)
+
+    text = (
+        f"✅ <b>Игрок успешно добавлен!</b>\n\n"
+        f"👤 <b>Telegram:</b> @{username}\n"
+        f"🛡️ <b>Клуб:</b> {club}\n"
+        f"📁 <b>Дивизион:</b> {division_id}\n"
+        f"🆔 <b>Временный ID:</b> <code>{temp_id}</code>\n\n"
+        f"Когда @{username} запустит бота (отправит <code>/start</code>), его аккаунт свяжется автоматически."
+    )
+    if old_username:
+        text += f"\n\n<i>⚠️ Примечание: старый участник @{old_username} был автоматически отвязан от клуба {club} и удален.</i>"
+
+    keyboard = [[InlineKeyboardButton("« Назад в меню", callback_data="admin_cancel_player_action")]]
+    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
     return ConversationHandler.END
 
 @admin_only
@@ -2358,7 +2469,7 @@ async def admin_import_players_text(update: Update, context: ContextTypes.DEFAUL
             continue
             
         try:
-            temp_id, old_username = await asyncio.to_thread(database.assign_player_to_club, username, team_name)
+            temp_id, old_username = await asyncio.to_thread(database.assign_player_to_club, username, team_name, 1)
             added.append(f"• @{username} — {team_name} (ID: `{temp_id}`)")
         except Exception as e:
             errors.append(f"Ошибка при добавлении @{username}: {e}")
@@ -2624,6 +2735,7 @@ async def admin_cancel_player_action(update: Update, context: ContextTypes.DEFAU
     """Abort player edits and return to players hub or admin panel."""
     query = update.callback_query
     context.user_data.pop("admin_add_player_username", None)
+    context.user_data.pop("admin_add_player_division_id", None)
     context.user_data.pop("admin_edit_player_id", None)
     
     if query:
@@ -2912,10 +3024,21 @@ async def admin_list_players_command(update: Update, context: ContextTypes.DEFAU
         return
         
     # Get active mapping of club to player row
-    club_to_player = {u["team_name"].lower(): u for u in (await asyncio.to_thread(database.list_users)) if u["team_name"]}
-    
+    raw_users = await asyncio.to_thread(database.list_users)
+    users = [dict(u) if not isinstance(u, dict) else u for u in raw_users]
+    club_to_player = {u["team_name"].lower(): u for u in users if u.get("team_name")}
+
+    divisions = await asyncio.to_thread(database.get_active_divisions)
+    all_clubs = set()
+    for div in divisions:
+        teams = await asyncio.to_thread(database.get_division_teams, div["id"])
+        all_clubs.update(teams)
+    for u in users:
+        if u.get("team_name"):
+            all_clubs.add(u["team_name"])
+
     lines = ["📋 <b>Текущий состав участников и клубов:</b>\n"]
-    for club in CLUBS:
+    for club in sorted(all_clubs):
         user_row = club_to_player.get(club.lower())
         if user_row:
             status = "✅" if user_row["telegram_id"] > 0 else "⏳ ждёт старта"
@@ -3084,7 +3207,7 @@ async def admin_view_player(update: Update, context: ContextTypes.DEFAULT_TYPE, 
 
 @admin_only
 async def admin_edit_club_select(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Show grid of inline buttons for all CLUBS to edit player's club."""
+    """Show grid of inline buttons for clubs in the division to edit player's club."""
     query = update.callback_query
     if not query or not is_admin(query.from_user.id):
         return
@@ -3098,12 +3221,23 @@ async def admin_edit_club_select(update: Update, context: ContextTypes.DEFAULT_T
         await query.edit_message_text("❌ Игрок не найден.", reply_markup=InlineKeyboardMarkup(keyboard))
         return
 
-    club_to_player = {u["team_name"].lower(): u["username"] for u in (await asyncio.to_thread(database.list_users)) if u["team_name"]}
+    raw_users = await asyncio.to_thread(database.list_users)
+    users = [dict(u) if not isinstance(u, dict) else u for u in raw_users]
+    club_to_player = {u["team_name"].lower(): u["username"] for u in users if u.get("team_name")}
+
+    div_id = player.get("division_id") if isinstance(player, dict) else (player["division_id"] if player else 1) or 1
+    division_teams = await asyncio.to_thread(database.get_division_teams, div_id)
+    if not division_teams:
+        division_teams = await asyncio.to_thread(database.get_all_teams)
+    if not division_teams:
+        division_teams = sorted(list({u["team_name"] for u in users if u.get("team_name")}))
+
+    context.user_data[f"admin_edit_clubs_{p_id}"] = division_teams
 
     keyboard = []
     row = []
 
-    for club_idx, club in enumerate(CLUBS):
+    for club_idx, club in enumerate(division_teams):
         occupied_by = club_to_player.get(club.lower())
         if player['team_name'] and player['team_name'].lower() == club.lower():
             btn_text = f"⭐ {club} (текущий)"
@@ -3141,10 +3275,19 @@ async def admin_edit_club_execute(update: Update, context: ContextTypes.DEFAULT_
         return
     p_id = int(data_parts[0])
     club_idx = int(data_parts[1])
-    if club_idx < 0 or club_idx >= len(CLUBS):
+
+    clubs_list = context.user_data.get(f"admin_edit_clubs_{p_id}")
+    if not clubs_list:
+        player = await asyncio.to_thread(database.get_user, p_id)
+        div_id = player.get("division_id") or 1 if player else 1
+        clubs_list = await asyncio.to_thread(database.get_division_teams, div_id)
+        if not clubs_list:
+            clubs_list = await asyncio.to_thread(database.get_all_teams)
+
+    if not clubs_list or club_idx < 0 or club_idx >= len(clubs_list):
         await query.answer("❌ Неверный индекс клуба.", show_alert=True)
         return
-    new_club = CLUBS[club_idx]
+    new_club = clubs_list[club_idx]
 
     success, msg = await asyncio.to_thread(database.set_player_club, str(p_id), new_club)
     if success:
