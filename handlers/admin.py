@@ -1977,8 +1977,13 @@ async def admin_confirm_delete_player(update: Update, context: ContextTypes.DEFA
         f"⚠️ **Подтвердите удаление**\n\n"
         f"Вы действительно хотите исключить игрока @{player['username']} "
         f"из лиги?\n\n"
-        f"**Внимание:** все его несыгранные матчи будут автоматически закрыты техническим поражением (0:3)."
+        f"Клуб освободится для нового участника. Сыгранные матчи останутся в истории лиги, "
+        f"несыгранные — в расписании."
     )
+    # Тот же экран ведёт в admin_delete_player_execute, что и admin_delete_player_confirm,
+    # поэтому и предупреждение про группу должно быть тем же.
+    if player["division_id"]:
+        text += "\n\n🚪 Игрок будет объявлен выбывшим в своём дивизионе и удалён из группы."
     keyboard = [
         [InlineKeyboardButton("🗑️ Да, удалить игрока", callback_data=f"admin_delete_player_execute_{player_id}")],
         [InlineKeyboardButton("❌ Отмена", callback_data=f"admin_view_player_{player_id}")]
@@ -3252,14 +3257,14 @@ async def admin_delete_options(update: Update, context: ContextTypes.DEFAULT_TYP
     text = (
         f"❌ **Удаление участника @{player['username']}**\n\n"
         f"Выберите тип удаления:\n\n"
-        f"1. **Исключить (Тех. поражения)**:\n"
-        f"Сохраняет сыгранные матчи игрока, а все его будущие/несыгранные матчи закрывает техническим поражением (0:3).\n\n"
+        f"1. **Исключить (матчи сохранить)**:\n"
+        f"Сыгранные матчи остаются в истории лиги, несыгранные — в расписании и ждут нового владельца клуба.\n\n"
         f"2. **Стереть полностью (Без следов)**:\n"
         f"Полностью удаляет игрока и **все матчи с его участием** (включая уже сыгранные)."
     )
-    
+
     keyboard = [
-        [InlineKeyboardButton("🗑️ 1. Исключить (Тех. поражения)", callback_data=f"admin_confirm_delete_player_{player_id}")],
+        [InlineKeyboardButton("🗑️ 1. Исключить (матчи сохранить)", callback_data=f"admin_confirm_delete_player_{player_id}")],
         [InlineKeyboardButton("🔥 2. Стереть полностью (Без следов)", callback_data=f"admin_confirm_wipe_player_{player_id}")],
         [InlineKeyboardButton("« Назад к карточке", callback_data=f"admin_view_player_{player_id}")]
     ]
