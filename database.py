@@ -2472,6 +2472,13 @@ def confirm_and_finalize_match(match_id: int, p1_score: int, p2_score: int, even
         raise ValueError("Scores must be non-negative integers")
     with transaction() as conn:
         cursor = conn.cursor()
+        # Без этой проверки UPDATE по несуществующему id молча затрагивает 0 строк,
+        # транзакция коммитится, вызывающий код считает матч сохранённым — и результат
+        # уходит в РЕЗУЛЬТАТЫ, хотя в базе его нет.
+        cursor.execute("SELECT id FROM matches WHERE id = ?", (match_id,))
+        if not cursor.fetchone():
+            raise ValueError(f"Match {match_id} not found: nothing to confirm")
+
         cursor.execute("DELETE FROM match_events WHERE match_id = ?", (match_id,))
         aggregated = {}
         for item in events:
@@ -2491,6 +2498,10 @@ def confirm_and_finalize_match(match_id: int, p1_score: int, p2_score: int, even
             "UPDATE matches SET player1_score = ?, player2_score = ?, reported_by = ?, photo_id = ?, status = 'confirmed', played_at = ? WHERE id = ?",
             (p1_score, p2_score, reporter_id, photo_id, datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), match_id)
         )
+        if cursor.rowcount != 1:
+            # Матч исчез между проверкой и записью — откатываем, чтобы не остаться
+            # с событиями без результата.
+            raise RuntimeError(f"Match {match_id} was not saved: UPDATE touched {cursor.rowcount} rows")
         try:
             settle_match_bets(match_id, p1_score, p2_score)
         except Exception as e:
@@ -2507,6 +2518,9 @@ def set_technical_result(match_id: int, p1_score: int, p2_score: int) -> str | N
             "UPDATE matches SET player1_score = ?, player2_score = ?, status = 'confirmed', played_at = ? WHERE id = ?",
             (p1_score, p2_score, datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), match_id)
         )
+        # Тот же silent no-op, что и в confirm_and_finalize_match.
+        if cursor.rowcount != 1:
+            raise ValueError(f"Match {match_id} not found: technical result not saved")
         cursor.execute("DELETE FROM match_events WHERE match_id = ?", (match_id,))
         try:
             settle_match_bets(match_id, p1_score, p2_score)
@@ -2633,11 +2647,19 @@ def save_match_events(match_id: int, events: list[tuple[str, str, int]], team_na
                 (match_id, t_name, p_name, e_type, cnt)
             )
 
-def get_active_match_by_teams(team1: str, team2: str, caption: str | None = None, division_id: int | None = None) -> dict | None:
-    """Find an active (pending/reported/disputed) match given two team names, optional caption, and optional division_id."""
+def get_active_match_by_teams(team1: str, team2: str, caption: str | None = None, division_id: int | None = None, exclude_ids: set | list | None = None) -> dict | None:
+    """
+    Find an active (pending/reported/disputed) match given two team names, optional caption, and optional division_id.
+
+    exclude_ids отсеивает матчи, которые вызывающий код уже занял: скоринг
+    детерминированный, поэтому без этого несколько игр одной серии сматчились бы
+    на один и тот же match_id.
+    """
     if not team1 or not team2:
         return None
-    
+
+    excluded = {int(x) for x in exclude_ids} if exclude_ids else set()
+
     t1_canon = resolve_team_name(team1) or team1
     t2_canon = resolve_team_name(team2) or team2
     t1_lower = t1_canon.lower().strip()
@@ -2685,6 +2707,8 @@ def get_active_match_by_teams(team1: str, team2: str, caption: str | None = None
         candidates = []
         for row in rows:
             d = dict(row)
+            if d['id'] in excluded:
+                continue
             p1 = (d['direct_p1_team'] or d['u1_team'] or "").lower()
             p2 = (d['direct_p2_team'] or d['u2_team'] or "").lower()
             

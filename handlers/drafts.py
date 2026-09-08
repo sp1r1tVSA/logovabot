@@ -168,12 +168,25 @@ async def _process_draft_group_delayed(buffer_key: str, update: Update, context:
         return
 
     prepared_games = []
-    
+    # Скоринг в get_active_match_by_teams детерминированный: без учёта уже занятых id
+    # все игры серии сматчились бы на один матч, и N подтверждений переписали бы одну
+    # строку, пока в РЕЗУЛЬТАТЫ уходило бы N постов.
+    used_match_ids = set()
+
     for idx, m_info in enumerate(matches_list):
         if idx == 0:
             cur_match = first_match
         else:
-            cur_match = database.get_active_match_by_teams(t1, t2, caption=caption, division_id=division_id) or first_match
+            cur_match = database.get_active_match_by_teams(
+                t1, t2, caption=caption, division_id=division_id, exclude_ids=used_match_ids
+            )
+        if not cur_match:
+            logger.warning(
+                f"Draft: only {idx} active match(es) found for {t1} vs {t2}, "
+                f"but AI returned {len(matches_list)} games. Extra games dropped."
+            )
+            break
+        used_match_ids.add(cur_match.get("id"))
 
         home_team = cur_match.get("player1_team") or cur_match.get("player1_nickname") or t1
         away_team = cur_match.get("player2_team") or cur_match.get("player2_nickname") or t2
@@ -369,6 +382,14 @@ async def _process_draft_group_delayed(buffer_key: str, update: Update, context:
         post_lines.append("\n⏳ <i>Ожидает подтверждения администратором...</i>")
         group_text = "\n".join(post_lines)
 
+    dropped_games = len(matches_list) - len(prepared_games)
+    if dropped_games > 0:
+        group_text += (
+            f"\n\n⚠️ <i>ИИ распознал игр: {len(matches_list)}, "
+            f"но свободных матчей в расписании только {len(prepared_games)}. "
+            f"Лишние игры не занесены.</i>"
+        )
+
     if "drafts" not in context.bot_data:
         context.bot_data["drafts"] = {}
     context.bot_data["drafts"][draft_uuid] = draft_data
@@ -424,25 +445,37 @@ async def cb_draft_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         else: await query.edit_message_text(text="❌ Данные черновика устарели или не найдены.")
         return
         
-    draft = drafts.pop(draft_uuid)
-    is_multi = draft.get("is_multi", False)
+    # Черновик забираем только после успешного сохранения: иначе неудачное
+    # подтверждение оставляло бы админа без данных и без возможности повторить.
+    draft = drafts[draft_uuid]
     games = draft.get("games", [draft])
     main_group_id = await asyncio.to_thread(database.get_group_id)
     results_topic_id = (await asyncio.to_thread(database.get_config, "results_topic_id")) or (await asyncio.to_thread(database.get_config, "reports_topic_id"))
 
+    failed_games = []
+
     for idx, g in enumerate(games):
+        _m_row = None
         m_id = g.get("match_id")
         if not m_id:
             logger.error(f"Could not resolve match_id for game {idx+1}")
+            failed_games.append((idx, g, "матч не найден в расписании"))
             continue
-            
+
         try:
             await asyncio.to_thread(
                 database.confirm_and_finalize_match,
                 m_id, g["h_score"], g["a_score"], g["events"],
                 reporter_id=g["reporter_id"], photo_id=g["photo_id"]
             )
+        except Exception as e:
+            # Пост в РЕЗУЛЬТАТЫ обязан следовать за записью в базу, а не идти
+            # параллельно ей: иначе результат «есть» в топике и отсутствует в таблице.
+            logger.exception(f"Failed to confirm match {m_id}")
+            failed_games.append((idx, g, str(e) or e.__class__.__name__))
+            continue
 
+        try:
             # Reward players with -1 warn if this was an overdue debt match
             try:
                 from handlers.cabinet import handle_debt_played_rewards
@@ -478,8 +511,9 @@ async def cb_draft_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             except Exception as e:
                 logger.warning(f"Failed to settle bets for match {m_id}: {e}")
         except Exception as e:
-            logger.exception(f"Failed to confirm match {m_id}")
-            
+            # Матч уже сохранён — побочные эффекты не повод отменять публикацию.
+            logger.warning(f"Post-confirm side effects failed for match {m_id}: {e}")
+
         official_text = build_formatted_match_post(
             round_number=g.get('round_number'),
             home_team=g.get('home_team'),
@@ -535,19 +569,48 @@ async def cb_draft_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     admin_name = f"@{query.from_user.username}" if query.from_user.username else (query.from_user.first_name or "Администратор")
     original_text = query.message.caption if query.message.photo else query.message.text
     cleaned_text = (original_text or "").replace("⏳ <i>Ожидает подтверждения администратором...</i>", "").strip()
-    new_caption = f"{cleaned_text}\n\n✅ <b>Одобрено администратором {html.escape(admin_name)}.</b>"
+    # Отчёт о прошлой неудачной попытке не должен накапливаться при повторах.
+    # message.text приходит без разметки, поэтому режем по «голому» маркеру.
+    cleaned_text = cleaned_text.split("⚠️")[0].strip()
+
+    if failed_games:
+        # В черновике оставляем только несохранённые игры: повторное нажатие
+        # доподтвердит их и не продублирует уже опубликованные.
+        draft["games"] = [g for _, g, _ in failed_games]
+        draft["is_multi"] = len(failed_games) > 1
+        saved_count = len(games) - len(failed_games)
+        fail_lines = "\n".join(
+            f"• Игра {g.get('game_num', i + 1)} "
+            f"({html.escape(str(g.get('home_team') or '?'))} — {html.escape(str(g.get('away_team') or '?'))}): "
+            f"{html.escape(err)}"
+            for i, g, err in failed_games
+        )
+        new_caption = (
+            f"{cleaned_text}\n\n"
+            f"⚠️ <b>Сохранено игр: {saved_count} из {len(games)}.</b>\n"
+            f"Не занесены в базу:\n{fail_lines}\n\n"
+            f"<i>Нажмите «Подтвердить» ещё раз или занесите результат вручную.</i>"
+        )
+        keep_markup = True
+    else:
+        drafts.pop(draft_uuid, None)
+        new_caption = f"{cleaned_text}\n\n✅ <b>Одобрено администратором {html.escape(admin_name)}.</b>"
+        keep_markup = False
+
     if query.message.photo:
         try:
             if len(new_caption) <= 1024:
-                await query.edit_message_caption(caption=new_caption, parse_mode="HTML")
+                await query.edit_message_caption(caption=new_caption, parse_mode="HTML", reply_markup=query.message.reply_markup if keep_markup else None)
             else:
-                await query.edit_message_caption(caption=new_caption[:1015] + "...", parse_mode="HTML")
+                await query.edit_message_caption(caption=new_caption[:1015] + "...", parse_mode="HTML", reply_markup=query.message.reply_markup if keep_markup else None)
         except Exception:
-            await query.edit_message_reply_markup(reply_markup=None)
+            if not keep_markup:
+                await query.edit_message_reply_markup(reply_markup=None)
             await query.message.reply_text(new_caption, parse_mode="HTML")
     else:
-        await query.edit_message_text(text=new_caption, parse_mode="HTML")
-        
+        await query.edit_message_text(text=new_caption, parse_mode="HTML", reply_markup=query.message.reply_markup if keep_markup else None)
+
+
     from handlers.cabinet import refresh_league_table, refresh_debts_summary
     await refresh_debts_summary(context)
     await refresh_league_table(context)
