@@ -45,24 +45,32 @@ def _schema():
 
 
 @pytest.fixture(scope="module", autouse=True)
-def _isolate_db_path():
+def _isolate_db_path(tmp_path_factory):
     """
-    Restore `database.DB_PATH` after every test module.
+    Give every test module its own database file.
 
-    A dozen test files point the global DB_PATH at their own temp file and
-    never put it back (test_phase9_*.py, test_phase5_advanced_betting.py,
-    test_phase2_architecture.py, ...). Serially that used to go unnoticed;
-    it means every file running afterwards silently writes into the previous
-    file's database. Snapshotting per module keeps files independent without
-    touching the intra-file behaviour they rely on.
+    Sharing one file per worker made files order-dependent in two ways: a dozen
+    of them point the global DB_PATH at their own temp file and never put it
+    back (test_phase9_*.py, test_phase5_advanced_betting.py,
+    test_phase2_architecture.py, ...), and files that clean up by id range
+    (`DELETE FROM users WHERE telegram_id >= 778000`) tripped over child rows
+    another file had left behind, failing with FOREIGN KEY constraint failed.
+    A fresh file per module removes both by construction; `init_db()` on an
+    empty file costs ~40 ms, which parallel workers absorb.
     """
     import config
     import database
 
     orig_db, orig_cfg = database.DB_PATH, config.DB_PATH
-    yield
-    database.DB_PATH, config.DB_PATH = orig_db, orig_cfg
+
     database.close_thread_connection()
+    database.DB_PATH = config.DB_PATH = str(tmp_path_factory.mktemp("db") / "league.db")
+    database.init_db()
+
+    yield
+
+    database.close_thread_connection()
+    database.DB_PATH, config.DB_PATH = orig_db, orig_cfg
 
 
 @pytest.fixture(autouse=True)
