@@ -25,6 +25,7 @@ class StateStore {
       matchLive: null,
       matchMarkets: [],
       standings: [],
+      standingsForm: {},
       results: [],
       topScorers: [],
       myBets: [],
@@ -150,10 +151,12 @@ class StateStore {
     this.notify();
   }
 
-  setTournamentData(standings, results, topScorers) {
+  setTournamentData(standings, results, topScorers, form = null) {
     if (standings) this.state.standings = standings;
     if (results) this.state.results = results;
     if (topScorers) this.state.topScorers = topScorers;
+    // Форма последних матчей приходит вместе с таблицей; пустой ответ её не стирает.
+    if (form) this.state.standingsForm = form;
     this.notify();
   }
 

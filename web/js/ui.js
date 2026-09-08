@@ -615,7 +615,27 @@ export class UIRenderer {
     `;
   }
 
-  static renderTournaments(standings, results, topScorers, activeTab = 'standings') {
+  /**
+   * Нормализует строку таблицы к одному набору полей: бэкенд отдаёт разные
+   * названия колонок в зависимости от источника, поэтому читаем защитно.
+   */
+  static normalizeStandingsRow(s) {
+    const gf = s.goals_scored ?? s.goals_for ?? 0;
+    const ga = s.goals_conceded ?? s.goals_against ?? 0;
+    return {
+      team: s.team_name || s.team || s.player_team || s.name || 'Команда',
+      played: s.played ?? s.games ?? 0,
+      wins: s.wins ?? s.won ?? 0,
+      draws: s.draws ?? s.drawn ?? 0,
+      losses: s.losses ?? s.lost ?? 0,
+      gf,
+      ga,
+      diff: gf - ga,
+      points: s.points ?? 0
+    };
+  }
+
+  static renderTournaments(standings, results, topScorers, activeTab = 'standings', form = {}, sort = null) {
     const container = document.getElementById('tournaments-content-container');
     if (!container) return;
 
@@ -624,48 +644,76 @@ export class UIRenderer {
         container.innerHTML = '<div style="text-align: center; padding: 40px; color: var(--text-muted);">Таблица пока пуста.</div>';
         return;
       }
+
+      const sortKey = sort?.key || 'points';
+      const sortDir = sort?.dir || 'desc';
+      const columns = [
+        { key: 'team', label: 'Клуб', title: 'Клуб' },
+        { key: 'played', label: 'И', title: 'Игры' },
+        { key: 'wins', label: 'В', title: 'Победы' },
+        { key: 'draws', label: 'Н', title: 'Ничьи' },
+        { key: 'losses', label: 'П', title: 'Поражения' },
+        { key: 'gf', label: 'ЗГ', title: 'Забитые голы' },
+        { key: 'ga', label: 'ПГ', title: 'Пропущенные голы' },
+        { key: 'diff', label: 'Р-Г', title: 'Разница мячей' },
+        { key: 'points', label: 'О', title: 'Очки' }
+      ];
+
+      // Исходный порядок = позиция в таблице; сохраняем её до пересортировки,
+      // чтобы при сортировке по любой колонке было видно реальное место.
+      const rows = standings.map((s, idx) => ({ ...UIRenderer.normalizeStandingsRow(s), position: idx + 1 }));
+
+      const dirMul = sortDir === 'asc' ? 1 : -1;
+      const sorted = [...rows].sort((a, b) => {
+        if (sortKey === 'team') return dirMul * a.team.localeCompare(b.team, 'ru');
+        const delta = (a[sortKey] ?? 0) - (b[sortKey] ?? 0);
+        if (delta !== 0) return dirMul * delta;
+        // Тай-брейк — исходное место, чтобы порядок не «прыгал» между рендерами.
+        return a.position - b.position;
+      });
+
+      const isDefaultOrder = sortKey === 'points' && sortDir === 'desc';
+      const arrow = sortDir === 'asc' ? '▲' : '▼';
+
       container.innerHTML = `
         <div style="background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 10px; overflow-x: auto;">
           <table class="standings-table">
             <thead>
               <tr>
-                <th>Клуб</th>
-                <th>И</th>
-                <th>В</th>
-                <th>Н</th>
-                <th>П</th>
-                <th>Р/Г</th>
-                <th>О</th>
+                ${columns.map(c => `
+                  <th class="sortable${sortKey === c.key ? ' sorted' : ''}" data-sort-key="${c.key}" title="${c.title}">
+                    ${c.label}${sortKey === c.key ? `<span class="sort-arrow">${arrow}</span>` : ''}
+                  </th>
+                `).join('')}
+                <th title="Последние 5 матчей">Форма</th>
               </tr>
             </thead>
             <tbody>
-              ${standings.map((s, idx) => {
-                const teamName = s.team_name || s.team || s.player_team || s.name || 'Команда';
-                const played = s.played ?? s.games ?? 0;
-                const wins = s.wins ?? s.won ?? 0;
-                const draws = s.draws ?? s.drawn ?? 0;
-                const losses = s.losses ?? s.lost ?? 0;
-                const gf = s.goals_scored ?? s.goals_for ?? 0;
-                const ga = s.goals_conceded ?? s.goals_against ?? 0;
-                const diff = gf - ga;
-                const diffStr = diff > 0 ? `+${diff}` : `${diff}`;
-                const points = s.points ?? 0;
+              ${sorted.map(r => {
+                const diffStr = r.diff > 0 ? `+${r.diff}` : `${r.diff}`;
+                const formList = (form && (form[r.team.toLowerCase()] || form[r.team])) || [];
+                const formHtml = formList.length
+                  ? formList.map(o => `<span class="form-dot form-${String(o).toLowerCase()}">${o}</span>`).join('')
+                  : '<span style="color: var(--text-muted); font-size: 0.7rem;">—</span>';
 
                 return `
                   <tr>
                     <td style="text-align: left;">
                       <div style="display: flex; align-items: center; gap: 8px;">
-                        <span class="standings-pos-pill ${idx < 3 ? 'top' : 'mid'}">${idx + 1}</span>
-                        ${renderTeamLogoHtml(teamName, 22)}
-                        <span style="font-weight: 700; color: #fff;">${teamName}</span>
+                        <span class="standings-pos-pill ${isDefaultOrder && r.position <= 3 ? 'top' : 'mid'}">${r.position}</span>
+                        ${renderTeamLogoHtml(r.team, 22)}
+                        <span style="font-weight: 700; color: #fff;">${r.team}</span>
                       </div>
                     </td>
-                    <td>${played}</td>
-                    <td>${wins}</td>
-                    <td>${draws}</td>
-                    <td>${losses}</td>
-                    <td style="color: ${diff > 0 ? 'var(--color-success)' : diff < 0 ? 'var(--color-danger)' : 'var(--text-secondary)'}; font-weight: 700;">${diffStr}</td>
-                    <td style="font-weight: 900; color: var(--accent-gold); font-size: 0.95rem;">${points}</td>
+                    <td>${r.played}</td>
+                    <td>${r.wins}</td>
+                    <td>${r.draws}</td>
+                    <td>${r.losses}</td>
+                    <td>${r.gf}</td>
+                    <td>${r.ga}</td>
+                    <td style="color: ${r.diff > 0 ? 'var(--color-success)' : r.diff < 0 ? 'var(--color-danger)' : 'var(--text-secondary)'}; font-weight: 700;">${diffStr}</td>
+                    <td style="font-weight: 900; color: var(--accent-gold); font-size: 0.95rem;">${r.points}</td>
+                    <td><div class="form-strip">${formHtml}</div></td>
                   </tr>
                 `;
               }).join('')}

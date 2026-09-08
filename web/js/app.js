@@ -12,6 +12,8 @@ import { ParticleEffects } from './effects.js';
 class AppController {
   constructor() {
     this.currentTournamentTab = 'standings';
+    // Сортировка таблицы: по умолчанию как её отдаёт бэкенд — по очкам, вниз.
+    this.standingsSort = { key: 'points', dir: 'desc' };
     this.init();
   }
 
@@ -27,7 +29,7 @@ class AppController {
       UIRenderer.renderRecommendations(state.recommendations);
       UIRenderer.renderMatches(state.tours, state.selectedTour, state.marketCategoryFilter, state.searchQuery, state.matchStatusFilter, state.selectedDivisionId);
       UIRenderer.renderMatchCenter(state.matchDetail, state.matchStats, state.matchH2H, state.matchInsights, state.matchLive, state.matchMarkets, state.matchCenterSubTab);
-      UIRenderer.renderTournaments(state.standings, state.results, state.topScorers, this.currentTournamentTab);
+      UIRenderer.renderTournaments(state.standings, state.results, state.topScorers, this.currentTournamentTab, state.standingsForm, this.standingsSort);
       UIRenderer.renderPredictionsHistory(state.myBets, state.myBetsFilter);
       UIRenderer.renderSavedCoupons(state.savedCoupons);
       UIRenderer.renderProfile(state.user, state.progression, state.myStats, state.achievements);
@@ -155,6 +157,17 @@ class AppController {
     }
   }
 
+  renderTournamentTab(tab = null) {
+    UIRenderer.renderTournaments(
+      store.state.standings,
+      store.state.results,
+      store.state.topScorers,
+      tab || this.currentTournamentTab,
+      store.state.standingsForm,
+      this.standingsSort
+    );
+  }
+
   async fetchTournamentData(divisionId = null) {
     try {
       const targetDiv = divisionId || store.state.selectedDivisionId || 1;
@@ -166,7 +179,8 @@ class AppController {
       store.setTournamentData(
         stRes.status === 'ok' ? stRes.standings : [],
         resRes.status === 'ok' ? resRes.results : [],
-        topRes.status === 'ok' ? topRes.top_scorers : []
+        topRes.status === 'ok' ? topRes.top_scorers : [],
+        stRes.status === 'ok' ? (stRes.form || {}) : {}
       );
     } catch (e) {
       console.warn("Could not load tournament data:", e);
@@ -394,13 +408,31 @@ class AppController {
         this.currentTournamentTab = tab;
         [btnStandings, btnResults, btnScorers].forEach(b => b.classList.remove('active'));
         activeBtn.classList.add('active');
-        UIRenderer.renderTournaments(store.state.standings, store.state.results, store.state.topScorers, tab);
+        this.renderTournamentTab(tab);
         tgBridge.hapticImpact('light');
       };
 
       btnStandings.addEventListener('click', () => setTab('standings', btnStandings));
       btnResults.addEventListener('click', () => setTab('results', btnResults));
       btnScorers.addEventListener('click', () => setTab('scorers', btnScorers));
+    }
+
+    // 9b. Сортировка таблицы: делегированный клик по шапке (она перерисовывается)
+    const tournamentsContainer = document.getElementById('tournaments-content-container');
+    if (tournamentsContainer) {
+      tournamentsContainer.addEventListener('click', (e) => {
+        const th = e.target.closest('th[data-sort-key]');
+        if (!th) return;
+        const key = th.dataset.sortKey;
+        if (this.standingsSort.key === key) {
+          this.standingsSort.dir = this.standingsSort.dir === 'desc' ? 'asc' : 'desc';
+        } else {
+          // Клуб сортируем по алфавиту, числовые колонки — сразу от большего.
+          this.standingsSort = { key, dir: key === 'team' ? 'asc' : 'desc' };
+        }
+        this.renderTournamentTab(this.currentTournamentTab);
+        tgBridge.hapticImpact('light');
+      });
     }
 
     // 10. History Filter Chips

@@ -126,9 +126,18 @@ async def handle_get_standings(request: web.Request) -> web.Response:
         logger.warning(f"Error fetching standings: {e}")
         standings = []
 
+    # Last-5 form per team, used by the sortable Mini App table.
+    # Failing form must not take the table down with it.
+    try:
+        form = await asyncio.to_thread(database.get_teams_recent_form, 5, div_id, s_id)
+    except Exception as e:
+        logger.warning(f"Error fetching recent form: {e}")
+        form = {}
+
     return web.json_response({
         "status": "ok",
-        "standings": standings
+        "standings": standings,
+        "form": form
     })
 
 
