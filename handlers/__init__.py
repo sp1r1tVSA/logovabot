@@ -23,7 +23,6 @@ from handlers.squad_ai import squad_ai_apply
 from handlers.base import (
     start,
     show_main_menu,
-    show_tournaments,
     show_divisions_list,
     show_division_menu,
     show_division_table,
@@ -360,7 +359,6 @@ def _register_user_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("fetch_photos", admin_fetch_photos))
 
     app.add_handler(MessageHandler(filters.Regex("^👤 Мой кабинет$"), show_cabinet))
-    app.add_handler(MessageHandler(filters.Regex("^🏆 Турниры$"), show_tournaments))
     app.add_handler(MessageHandler(filters.Regex("^💬 Поддержка$"), show_support))
     
     from handlers.drafts import handle_draft_media, cb_draft_confirm, cb_draft_reject
@@ -371,7 +369,6 @@ def _register_user_handlers(app: Application) -> None:
 
     app.add_handler(CallbackQueryHandler(cb_refresh_division_table_topic, pattern=r"^refresh_div_table_\d+$"))
     app.add_handler(CallbackQueryHandler(show_cabinet, pattern="^menu_cabinet$"))
-    app.add_handler(CallbackQueryHandler(show_tournaments, pattern="^menu_tournaments$"))
     app.add_handler(CallbackQueryHandler(show_divisions_list, pattern="^(menu_divisions|menu_league)$"))
     app.add_handler(CallbackQueryHandler(show_division_menu, pattern=r"^division_view:(\d+):(\d+)$"))
     app.add_handler(CallbackQueryHandler(show_division_table, pattern=r"^division_table:(\d+):(\d+)$"))

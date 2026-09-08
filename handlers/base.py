@@ -13,7 +13,7 @@ from config import ADMIN_IDS, CLUBS
 from services.graphics.table_generator import generate_league_table_image
 from services.graphics import top_stats_generator
 from constants import (
-    CB_MAIN_MENU, CB_MENU_CABINET, CB_MENU_TOURNAMENTS,
+    CB_MAIN_MENU, CB_MENU_CABINET,
     CB_MENU_DIVISIONS, CB_MENU_SUPPORT,
     CB_ADMIN_MAIN_MENU
 )
@@ -134,10 +134,7 @@ def get_main_inline_keyboard(telegram_id: int) -> InlineKeyboardMarkup:
     elif webapp_url and webapp_url.startswith("http"):
         keyboard.append([InlineKeyboardButton("🔥 Logovo.bet", url=webapp_url)])
 
-    keyboard.extend([
-        [InlineKeyboardButton("👤 Мой Кабинет", callback_data=CB_MENU_CABINET)],
-        [InlineKeyboardButton("🏆 Турниры", callback_data=CB_MENU_TOURNAMENTS)]
-    ])
+    keyboard.append([InlineKeyboardButton("👤 Мой Кабинет", callback_data=CB_MENU_CABINET)])
     if is_admin(telegram_id):
         keyboard.append([InlineKeyboardButton("👑 Админ-панель", callback_data=CB_ADMIN_MAIN_MENU)])
         
@@ -533,37 +530,6 @@ async def show_division_assists(update: Update, context: ContextTypes.DEFAULT_TY
         parse_mode="HTML",
         reply_markup=markup
     )
-
-async def show_tournaments(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    query = update.callback_query
-    if query:
-        await query.answer()
-
-    text = (
-        "🏆 <b>Турниры</b>\n\n"
-        "Выберите интересующий соревновательный раздел:"
-    )
-
-    keyboard = [
-        [InlineKeyboardButton("🏆 Дивизионы", callback_data=CB_MENU_DIVISIONS)],
-        [InlineKeyboardButton("« Назад в меню", callback_data="main_menu")]
-    ]
-    markup = InlineKeyboardMarkup(keyboard)
-
-    if query:
-        target_chat_id = query.message.chat_id if query.message else (update.effective_chat.id if update.effective_chat else update.effective_user.id)
-        thread_id = query.message.message_thread_id if query.message and query.message.is_topic_message else None
-        try:
-            await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
-        except Exception:
-            try:
-                await query.message.delete()
-            except Exception:
-                pass
-            await context.bot.send_message(chat_id=target_chat_id, message_thread_id=thread_id, text=text, parse_mode="HTML", reply_markup=markup)
-    elif update.message:
-        await update.message.reply_text(text, parse_mode="HTML", reply_markup=markup)
-
 
 async def show_round_matches(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query

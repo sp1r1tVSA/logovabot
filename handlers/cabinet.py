@@ -1024,7 +1024,7 @@ async def club_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 def is_valid_name(text: str) -> bool:
     """Validate entered text."""
-    system_buttons = ["👤 Мой кабинет", "🏆 Турниры", "📊 Рейтинги", "💬 Поддержка", "⚙️ Админ-панель", "Отмена", "/cancel", "/start"]
+    system_buttons = ["👤 Мой кабинет", "📊 Рейтинги", "💬 Поддержка", "⚙️ Админ-панель", "Отмена", "/cancel", "/start"]
     if text in system_buttons:
         return False
     if len(text) < 2 or len(text) > 50:
