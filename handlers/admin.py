@@ -16,7 +16,7 @@ from handlers.cabinet import notify_match_confirmed, safe_send_notification, cb_
 import config
 from config import MAX_WARNS_LIMIT, GROUP_ID
 
-from scripts.schedule_parser import parse_schedule_text, create_matches_from_parsed_schedule
+from handlers.squad_ai import offer_recognized_squad
 from services.graphics import player_photos
 from services.tournament_validator import RoundRobinValidator
 import logging
@@ -993,7 +993,6 @@ ADMIN_EXPECT_MATCH_SCORE = 205
 ADMIN_WAITING_FOR_DEADLINE = 209
 ADMIN_WAITING_FOR_BATCH_ROUNDS = 210
 ADMIN_WAITING_FOR_BATCH_DEADLINE = 211
-ADMIN_EXPECT_MATCH_SCHEDULE_INPUT = 212
 
 # Conversation States for Admin Division management
 ADMIN_EXPECT_DIV_NAME = 230
@@ -2019,7 +2018,6 @@ async def admin_manage_matches_info(update: Update, context: ContextTypes.DEFAUL
     
     keyboard = [
         [InlineKeyboardButton("🎲 Сгенерировать (Round Robin)", callback_data="admin_generate_matches_confirm")],
-        [InlineKeyboardButton("📝 Создание матчей (текст)", callback_data="admin_create_matches_start")],
         [InlineKeyboardButton("📅 Открыть туры (массово)", callback_data="admin_open_batch_prompt")],
         [InlineKeyboardButton("⏰ Просроченные", callback_data="admin_list_overdue")]
     ]
@@ -3077,77 +3075,6 @@ async def admin_edit_club_text(update: Update, context: ContextTypes.DEFAULT_TYP
     return ConversationHandler.END
 
 @admin_only
-async def admin_create_matches_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Prompt admin to provide schedule text or .txt file."""
-    query = update.callback_query
-    if not query or not is_admin(query.from_user.id):
-        return ConversationHandler.END
-    await query.answer()
-
-    text = (
-        "📝 **Создание матчей и туров (Ввод расписания)**\n\n"
-        "Отправьте список туров и парных матчей текстом в сообщении или прикрепите `.txt` файл с расписанием.\n\n"
-        "**Пример формата:**\n"
-        "```\n"
-        "1 Тур\n"
-        "Спортинг - Ривер Плейт\n"
-        "Бока Хуниорс - Бенфика\n\n"
-        "2 Тур\n"
-        "Бенфика - Спортинг\n"
-        "```"
-    )
-    keyboard = [[InlineKeyboardButton("Отмена", callback_data="admin_manage_matches_info")]]
-    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
-    return ADMIN_EXPECT_MATCH_SCHEDULE_INPUT
-
-@admin_only
-async def admin_receive_schedule_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Process incoming text or file with schedule and create matches in DB."""
-    user = update.effective_user
-    if not user or not is_admin(user.id):
-        return ConversationHandler.END
-
-    raw_text = ""
-    if update.message.document:
-        doc = update.message.document
-        if not doc.file_name.lower().endswith(('.txt', '.text', '.log', '.csv')):
-            await update.message.reply_text("❌ Пожалуйста, отправьте текстовый файл формата `.txt` или введите текст прямо в чат.")
-            return ADMIN_EXPECT_MATCH_SCHEDULE_INPUT
-        file = await context.bot.get_file(doc.file_id)
-        byte_data = await file.download_as_bytearray()
-        raw_text = byte_data.decode('utf-8', errors='ignore')
-    elif update.message.text:
-        raw_text = update.message.text.strip()
-    else:
-        await update.message.reply_text("❌ Отправьте текстовое сообщение или файл `.txt` с расписанием.")
-        return ADMIN_EXPECT_MATCH_SCHEDULE_INPUT
-
-    rounds_data, parse_errors = parse_schedule_text(raw_text)
-    if not rounds_data:
-        err_msg = "❌ Не удалось найти ни одного тура или матча в отправленном тексте.\n\n"
-        if parse_errors:
-            err_msg += "Ошибки:\n" + "\n".join(parse_errors[:5])
-        keyboard = [[InlineKeyboardButton("« Назад к управлению", callback_data="admin_manage_matches_info")]]
-        await update.message.reply_text(err_msg, reply_markup=InlineKeyboardMarkup(keyboard))
-        return ConversationHandler.END
-
-    r_cnt, m_cnt, unmatched = create_matches_from_parsed_schedule(rounds_data)
-    
-    msg = f"🎉 **Создание матчей завершено!**\n\n"
-    msg += f"• **Создано туров:** {r_cnt}\n"
-    msg += f"• **Занесено матчей в базу:** {m_cnt}\n"
-    
-    if unmatched:
-        msg += f"\n⚠️ **Следующие клубы из списка не найдены в базе зарегистрированных игроков:**\n"
-        for u_team in unmatched:
-            msg += f"• `{u_team}`\n"
-        msg += "\n_Зарегистрируйте этих игроков в админке или перепроверьте написание названия клубов._"
-
-    keyboard = [[InlineKeyboardButton("« Вернуться к матчам", callback_data="admin_manage_matches_info")]]
-    await update.message.reply_text(msg, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
-    return ConversationHandler.END
-
-@admin_only
 async def admin_set_score_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Redirect admin to full interactive manual match result entry (score + goal scorers + assists)."""
     query = update.callback_query
@@ -4129,8 +4056,8 @@ async def admin_squad_upload_start(update: Update, context: ContextTypes.DEFAULT
 
     text = (
         f"📊 <b>Загрузка состава для {html.escape(club)}</b>\n\n"
-        "Отправьте список футболистов, каждый с новой строки.\n\n"
-        "Пример:\n"
+        "📸 Пришлите <b>скриншот состава</b> — игроки будут распознаны ИИ.\n\n"
+        "Либо отправьте список футболистов текстом, каждый с новой строки:\n"
         "<code>Viktor Gyökeres\n"
         "Francisco Trincão\n"
         "Pedro Gonçalves</code>"
@@ -4138,6 +4065,23 @@ async def admin_squad_upload_start(update: Update, context: ContextTypes.DEFAULT
     keyboard = [[InlineKeyboardButton("❌ Отмена", callback_data="admin_manage_squads")]]
     await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
     return ADMIN_EXPECT_SQUAD_TEXT
+
+
+@admin_only
+async def admin_squad_upload_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Recognize a squad screenshot and offer to apply it to the club's roster."""
+    club = context.user_data.pop("admin_squad_club", None)
+    if not club:
+        await update.message.reply_text("❌ Ошибка: не найден клуб. Попробуйте снова.")
+        return ConversationHandler.END
+
+    await offer_recognized_squad(
+        update, context,
+        club=club,
+        file_id=update.message.photo[-1].file_id,
+        back_cb=f"admin_squad_view_{club}",
+    )
+    return ConversationHandler.END
 
 
 @admin_only

@@ -4052,6 +4052,19 @@ def clear_squad(team_name: str) -> int:
         return cursor.rowcount
 
 
+def replace_squad(team_name: str, player_names: list) -> tuple[int, int]:
+    """
+    Replace a club's squad with `player_names`. Returns (deleted, added).
+
+    The nested transaction() calls join the outer scope, so the roster is never
+    left empty if adding the new players raises.
+    """
+    with transaction():
+        deleted = clear_squad(team_name)
+        added = add_squad(team_name, player_names)
+        return deleted, added
+
+
 def remove_player_from_squad(team_name: str, player_name: str) -> bool:
     """Remove a single player from a club's squad."""
     with transaction() as conn:

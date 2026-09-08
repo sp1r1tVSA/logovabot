@@ -1,0 +1,122 @@
+"""
+AI-assisted squad recognition shared by the admin roster panel and the cabinet.
+
+Lives in its own module because `handlers/admin.py` already imports from
+`handlers/cabinet.py` — both need this, so it cannot sit in either.
+"""
+
+import asyncio
+import html
+import logging
+
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.ext import ContextTypes
+
+import database
+from services.ai.squad_recognizer import recognize_squad_screenshot_bytes
+
+logger = logging.getLogger(__name__)
+
+PENDING_KEY = "squad_ai_pending"
+
+
+async def recognize_squad_photo(context: ContextTypes.DEFAULT_TYPE, file_id: str) -> list[dict] | None:
+    """Download a Telegram photo and read its squad off the screen. None on failure."""
+    try:
+        f_obj = await context.bot.get_file(file_id)
+        img_bytes = bytes(await f_obj.download_as_bytearray())
+    except Exception as e:
+        logger.exception(f"Failed to download squad photo {file_id}: {e}")
+        return None
+
+    return await asyncio.to_thread(recognize_squad_screenshot_bytes, img_bytes)
+
+
+def build_review_message(club: str, players: list[dict], current_count: int) -> tuple[str, InlineKeyboardMarkup]:
+    """Render the recognized roster with apply/replace/cancel controls."""
+    lines = [f"🤖 <b>Распознан состав клуба {html.escape(club)}</b>", ""]
+    for idx, p in enumerate(players, 1):
+        pos = p.get("position")
+        suffix = f" — <i>{html.escape(pos)}</i>" if pos else ""
+        lines.append(f"{idx}. {html.escape(p['player_name'])}{suffix}")
+    lines.append("")
+    lines.append(f"Найдено футболистов: <b>{len(players)}</b>. Сейчас в составе: <b>{current_count}</b>.")
+    lines.append("")
+    lines.append("Проверьте список и выберите действие:")
+
+    keyboard = [
+        [InlineKeyboardButton("➕ Добавить к составу", callback_data="squadai_add")],
+        [InlineKeyboardButton("🔄 Заменить состав", callback_data="squadai_replace")],
+        [InlineKeyboardButton("❌ Отмена", callback_data="squadai_cancel")],
+    ]
+    return "\n".join(lines), InlineKeyboardMarkup(keyboard)
+
+
+async def offer_recognized_squad(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    club: str,
+    file_id: str,
+    back_cb: str,
+) -> None:
+    """Run recognition on `file_id` and reply with the review keyboard."""
+    message = update.effective_message
+    status = await message.reply_text("🤖 Распознаю состав, подождите…")
+
+    players = await recognize_squad_photo(context, file_id)
+
+    if players is None:
+        await status.edit_text(
+            "❌ Не удалось распознать состав (ИИ недоступен). Попробуйте позже или введите игроков текстом.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Назад", callback_data=back_cb)]]),
+        )
+        return
+
+    if not players:
+        await status.edit_text(
+            "🤷 На скриншоте не найдено ни одного футболиста. Пришлите скриншот экрана состава покрупнее.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Назад", callback_data=back_cb)]]),
+        )
+        return
+
+    current = await asyncio.to_thread(database.get_squad, club)
+    context.user_data[PENDING_KEY] = {"club": club, "players": players, "back_cb": back_cb}
+
+    text, markup = build_review_message(club, players, len(current))
+    await status.edit_text(text, parse_mode="HTML", reply_markup=markup)
+
+
+async def squad_ai_apply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle the add / replace / cancel buttons of a pending recognition."""
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+
+    pending = context.user_data.pop(PENDING_KEY, None)
+    if not pending:
+        await query.edit_message_text("⌛ Результат распознавания устарел. Загрузите состав заново.")
+        return
+
+    club, players, back_cb = pending["club"], pending["players"], pending["back_cb"]
+    back_kb = InlineKeyboardMarkup([[InlineKeyboardButton("👥 Просмотреть состав", callback_data=back_cb)]])
+
+    if query.data == "squadai_cancel":
+        await query.edit_message_text(
+            f"❌ Распознанный состав клуба <b>{html.escape(club)}</b> не сохранён.",
+            parse_mode="HTML",
+            reply_markup=back_kb,
+        )
+        return
+
+    if query.data == "squadai_replace":
+        deleted, added = await asyncio.to_thread(database.replace_squad, club, players)
+        text = (
+            f"🔄 Состав клуба <b>{html.escape(club)}</b> обновлён.\n"
+            f"Удалено: <b>{deleted}</b>, записано: <b>{added}</b>."
+        )
+    else:
+        added = await asyncio.to_thread(database.add_squad, club, players)
+        text = f"✅ В состав клуба <b>{html.escape(club)}</b> добавлено футболистов: <b>{added}</b>."
+
+    await query.edit_message_text(text, parse_mode="HTML", reply_markup=back_kb)

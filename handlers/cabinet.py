@@ -3565,6 +3565,19 @@ async def save_squad_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         except Exception as e:
             logger.exception(f"Error sending squad photo to topic: {e}")
 
+    team_name = db_user.get("team_name") if db_user else None
+    if team_name:
+        from handlers.squad_ai import offer_recognized_squad
+        try:
+            await offer_recognized_squad(
+                update, context,
+                club=team_name,
+                file_id=photo_id,
+                back_cb="cabinet_my_squad",
+            )
+        except Exception as e:
+            logger.exception(f"Squad recognition failed for {team_name}: {e}")
+
     return ConversationHandler.END
 
 async def cancel_upload_squad(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:

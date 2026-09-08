@@ -17,6 +17,7 @@ import telegram.error
 from handlers.base import is_global_admin, is_logovo_access_allowed
 
 from handlers.chat import handle_ai_chat
+from handlers.squad_ai import squad_ai_apply
 
 # Import base handlers
 from handlers.base import (
@@ -160,9 +161,6 @@ from handlers.admin import (
     admin_edit_club_start,
     admin_edit_club_text,
     ADMIN_EXPECT_NEW_CLUB,
-    admin_create_matches_start,
-    admin_receive_schedule_input,
-    ADMIN_EXPECT_MATCH_SCHEDULE_INPUT,
     admin_set_score_start,
     admin_set_score_text,
     ADMIN_EXPECT_MATCH_SCORE,
@@ -221,6 +219,7 @@ from handlers.admin import (
     admin_squad_del_player,
     admin_squad_upload_start,
     admin_squad_upload_text,
+    admin_squad_upload_photo,
     admin_squad_add_player_start,
     admin_squad_add_player_text,
     admin_squad_clear,
@@ -598,32 +597,16 @@ def _register_admin_handlers(app: Application) -> None:
     )
     app.add_handler(admin_batch_round_conv)
 
-    admin_create_matches_conv = ConversationHandler(
-        entry_points=[
-            CallbackQueryHandler(admin_create_matches_start, pattern="^admin_create_matches_start$")
-        ],
-        states={
-            ADMIN_EXPECT_MATCH_SCHEDULE_INPUT: [
-                MessageHandler(filters.TEXT | filters.Document.ALL, admin_receive_schedule_input)
-            ]
-        },
-        fallbacks=[
-            CallbackQueryHandler(admin_manage_matches_info, pattern="^admin_manage_matches_info$"),
-            CommandHandler("cancel", admin_manage_matches_info)
-        ],
-        allow_reentry=True,
-        per_message=False,
-        conversation_timeout=300
-    )
-    app.add_handler(admin_create_matches_conv)
-
     admin_squad_conv = ConversationHandler(
         entry_points=[
             CallbackQueryHandler(admin_squad_upload_start, pattern="^admin_squad_upload_.*$"),
             CallbackQueryHandler(admin_squad_add_player_start, pattern="^admin_squad_add_player_.*$")
         ],
         states={
-            ADMIN_EXPECT_SQUAD_TEXT: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_squad_upload_text)],
+            ADMIN_EXPECT_SQUAD_TEXT: [
+                MessageHandler(filters.PHOTO, admin_squad_upload_photo),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, admin_squad_upload_text),
+            ],
             ADMIN_EXPECT_SINGLE_PLAYER: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_squad_add_player_text)],
         },
         fallbacks=[
@@ -753,6 +736,7 @@ def _register_admin_handlers(app: Application) -> None:
     app.add_handler(CallbackQueryHandler(admin_squad_del_player, pattern="^admin_squad_del_p_.*$"))
     app.add_handler(CallbackQueryHandler(admin_squad_clear, pattern="^admin_squad_clear_.*$"))
     app.add_handler(CallbackQueryHandler(admin_squad_add_missing, pattern="^admin_squad_add_missing_.*$"))
+    app.add_handler(CallbackQueryHandler(squad_ai_apply, pattern="^squadai_(add|replace|cancel)$"))
     app.add_handler(CommandHandler("force_update", admin_force_update))
     app.add_handler(CallbackQueryHandler(admin_force_update, pattern="^admin_force_update$"))
     app.add_handler(CommandHandler("test_ai", admin_test_ai))
