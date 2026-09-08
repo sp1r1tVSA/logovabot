@@ -26,7 +26,15 @@ class TestPhase2Architecture(unittest.IsolatedAsyncioTestCase):
     @classmethod
     def setUpClass(cls):
         cls.test_db = "test_phase2.db"
+        cls.orig_db_path = database.DB_PATH
         database.DB_PATH = cls.test_db
+
+    @classmethod
+    def tearDownClass(cls):
+        # Не оставлять глобальный DB_PATH переключённым — иначе все тесты,
+        # которые выполняются после этого файла, пишут в test_phase2.db.
+        database.DB_PATH = cls.orig_db_path
+        database.close_thread_connection()
 
     def setUp(self):
         if os.path.exists(self.test_db):
@@ -306,7 +314,13 @@ class TestPhase2ApiIntegration(AioHTTPTestCase):
     @classmethod
     def setUpClass(cls):
         cls.test_db = "test_phase2_api.db"
+        cls.orig_db_path = database.DB_PATH
         database.DB_PATH = cls.test_db
+
+    @classmethod
+    def tearDownClass(cls):
+        database.DB_PATH = cls.orig_db_path
+        database.close_thread_connection()
 
     async def get_application(self):
         if os.path.exists(self.test_db):

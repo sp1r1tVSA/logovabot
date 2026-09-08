@@ -99,6 +99,19 @@ from handlers.cabinet import (
 # Import admin handlers
 from handlers.admin import (
     show_admin_panel,
+    show_super_admin_panel,
+    show_division_admin_panel,
+    admin_div_admins_hub,
+    admin_div_admins_view,
+    admin_div_admin_remove,
+    admin_div_admin_add_start,
+    admin_div_admin_add_receive,
+    admin_div_admin_cancel,
+    ADMIN_EXPECT_DIV_ADMIN_REF,
+    admin_div_manage_matches,
+    admin_div_round_matches,
+    admin_div_broadcast_debts,
+    admin_div_manage_players,
     admin_toggle_chat_mode,
     admin_list_players,
     admin_generate_matches_confirm,
@@ -648,6 +661,26 @@ def _register_admin_handlers(app: Application) -> None:
     )
     app.add_handler(admin_div_conv)
 
+    # RBAC: назначение админа дивизиона (супер-админ)
+    admin_div_admin_conv = ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(admin_div_admin_add_start, pattern="^admin_div_admin_add_\\d+$"),
+        ],
+        states={
+            ADMIN_EXPECT_DIV_ADMIN_REF: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_div_admin_add_receive)],
+        },
+        fallbacks=[
+            CallbackQueryHandler(admin_div_admins_view, pattern="^admin_div_admins_view_\\d+$"),
+            CallbackQueryHandler(admin_div_admins_hub, pattern="^admin_div_admins_hub$"),
+            CommandHandler("cancel", admin_div_admin_cancel),
+        ],
+        allow_reentry=True,
+        per_message=False,
+        per_user=True,
+        conversation_timeout=300
+    )
+    app.add_handler(admin_div_admin_conv)
+
     app.add_handler(CommandHandler("set_div_topic", admin_set_div_topic_cmd))
     register_topic_management_handlers(app)
 
@@ -658,6 +691,19 @@ def _register_admin_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("set_warns_topic", admin_set_warns_topic))
 
     app.add_handler(CallbackQueryHandler(show_admin_panel, pattern="^admin_main_menu$"))
+
+    # RBAC: панели и изолированные точки входа админа дивизиона
+    app.add_handler(CallbackQueryHandler(show_division_admin_panel, pattern=r"^admin_div_panel:\d+$"))
+    app.add_handler(CallbackQueryHandler(admin_div_manage_matches, pattern=r"^admin_div_manage_matches:\d+$"))
+    app.add_handler(CallbackQueryHandler(admin_div_round_matches, pattern=r"^admin_div_round:\d+:\d+$"))
+    app.add_handler(CallbackQueryHandler(admin_div_broadcast_debts, pattern=r"^admin_div_broadcast_debts:\d+$"))
+    app.add_handler(CallbackQueryHandler(admin_div_manage_players, pattern=r"^(admin_div_manage_players:\d+|admin_div_players:\d+:\d+)$"))
+
+    # RBAC: управление админами дивизионов (супер-админ)
+    app.add_handler(CallbackQueryHandler(admin_div_admins_hub, pattern="^admin_div_admins_hub$"))
+    app.add_handler(CallbackQueryHandler(admin_div_admins_view, pattern="^admin_div_admins_view_\\d+$"))
+    app.add_handler(CallbackQueryHandler(admin_div_admin_remove, pattern="^admin_div_admin_del_\\d+_-?\\d+$"))
+
     app.add_handler(CallbackQueryHandler(admin_divs_hub, pattern="^admin_divs_hub$"))
     app.add_handler(CallbackQueryHandler(admin_div_view, pattern="^admin_div_view_\\d+$"))
     app.add_handler(CallbackQueryHandler(admin_div_toggle, pattern="^admin_div_toggle_\\d+$"))

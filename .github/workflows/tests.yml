@@ -1,0 +1,38 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      # conftest.py points every worker at its own temp SQLite file, so no
+      # league.db is needed. The values below are deliberately fake: the API
+      # tests only need *a* token to sign Telegram initData with and *an* id
+      # to treat as global admin. Real values live solely in the server .env
+      # and must never be added here or as repository secrets.
+      - name: Run tests
+        env:
+          TELEGRAM_BOT_TOKEN: "123456:CI-DUMMY-TOKEN"
+          ADMIN_IDS: "999999999"
+          GEMINI_API_KEY: ""
+          GEMINI_CHAT_API_KEY: ""
+          SPORTS_API_KEY: ""
+        run: python -m pytest tests/

@@ -1,0 +1,6 @@
+# Dev-only dependencies. Runtime deps live in requirements.txt and must stay
+# free of test tooling — the worker installs only that file.
+-r requirements.txt
+
+pytest>=8.0
+pytest-xdist>=3.5

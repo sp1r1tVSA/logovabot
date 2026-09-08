@@ -28,6 +28,42 @@ def get_connection() -> sqlite3.Connection:
 _tx_local = threading.local()
 
 
+def _thread_connection() -> sqlite3.Connection:
+    """
+    Return this thread's cached connection, opening one on first use.
+
+    Opening a connection is expensive: `PRAGMA journal_mode=WAL` alone costs
+    several milliseconds because it has to touch the WAL file and its locks.
+    Since transaction() used to open and close a connection on every call,
+    that overhead dominated. Caching one connection per thread keeps each
+    transaction at roughly a millisecond.
+
+    The cache is keyed by DB_PATH so that swapping `database.DB_PATH` (which
+    several tests do) transparently drops the stale connection.
+    """
+    conn = getattr(_tx_local, "conn", None)
+    if conn is not None and getattr(_tx_local, "conn_path", None) == DB_PATH:
+        return conn
+
+    close_thread_connection()
+    conn = get_connection()
+    _tx_local.conn = conn
+    _tx_local.conn_path = DB_PATH
+    return conn
+
+
+def close_thread_connection() -> None:
+    """Drop this thread's cached connection (on error or DB_PATH change)."""
+    conn = getattr(_tx_local, "conn", None)
+    _tx_local.conn = None
+    _tx_local.conn_path = None
+    if conn is not None:
+        try:
+            conn.close()
+        except sqlite3.Error:
+            pass
+
+
 @contextmanager
 def transaction() -> Generator[sqlite3.Connection, None, None]:
     """Provide a transactional scope around database operations.
@@ -37,14 +73,17 @@ def transaction() -> Generator[sqlite3.Connection, None, None]:
     independent one. Commit happens only when the OUTERMOST scope exits;
     a rollback rolls back the entire multi-step operation. This makes
     composite actions (e.g. confirm match + update cup series) atomic.
+
+    The underlying connection is cached per thread and stays open between
+    scopes; only the transaction boundary (commit/rollback) is per-scope.
     """
     stack = getattr(_tx_local, "stack", None)
     if stack:
-        # Nested scope: reuse the outer connection, never commit/close here.
+        # Nested scope: reuse the outer connection, never commit here.
         yield stack[-1]
         return
 
-    conn = get_connection()
+    conn = _thread_connection()
     _tx_local.stack = [conn]
     try:
         yield conn
@@ -55,10 +94,12 @@ def transaction() -> Generator[sqlite3.Connection, None, None]:
         except sqlite3.Error:
             pass
         logger.exception("Transaction rolled back due to error")
+        # Never hand a connection of unknown state to the next caller.
+        close_thread_connection()
         raise
     finally:
         _tx_local.stack = []
-        conn.close()
+
 
 def init_db() -> None:
     """Initialize the database tables."""
@@ -782,6 +823,7 @@ def init_db() -> None:
                 new_value TEXT,
                 division_id INTEGER DEFAULT NULL,
                 season_id INTEGER DEFAULT NULL,
+                reason TEXT DEFAULT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY(admin_id) REFERENCES users(telegram_id)
             )
@@ -791,6 +833,8 @@ def init_db() -> None:
         for col_name, col_type in (
             ("division_id", "INTEGER DEFAULT NULL"),
             ("season_id", "INTEGER DEFAULT NULL"),
+            # services/odds_engine.py writes this column on market suspend/unsuspend.
+            ("reason", "TEXT DEFAULT NULL"),
         ):
             try:
                 cursor.execute(f"ALTER TABLE admin_audit_log ADD COLUMN {col_name} {col_type}")
@@ -8218,6 +8262,56 @@ def get_division_admins(division_id: int) -> list[int]:
         cursor = conn.cursor()
         cursor.execute("SELECT user_id FROM division_admins WHERE division_id = ?", (division_id,))
         return [r["user_id"] for r in cursor.fetchall()]
+
+
+def get_division_admins_detailed(division_id: int) -> list[dict]:
+    """List division admins together with their profile info (username, team name)."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT da.user_id, u.username, u.team_name
+            FROM division_admins da
+            LEFT JOIN users u ON u.telegram_id = da.user_id
+            WHERE da.division_id = ?
+            ORDER BY LOWER(COALESCE(u.username, '')) ASC, da.user_id ASC
+        """, (division_id,))
+        return [dict(r) for r in cursor.fetchall()]
+
+
+def get_admin_divisions(user_id: int) -> list[dict]:
+    """
+    List the divisions a user is bound to in `division_admins`.
+    Returns full division rows (empty list for global admins that have no explicit binding).
+    """
+    if not user_id:
+        return []
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT d.*
+            FROM division_admins da
+            JOIN divisions d ON d.id = da.division_id
+            WHERE da.user_id = ?
+            ORDER BY d.sort_order ASC, d.id ASC
+        """, (user_id,))
+        return [dict(r) for r in cursor.fetchall()]
+
+
+def get_division_rounds(division_id: int) -> list[int]:
+    """Get all round numbers that have matches in the given division (active season)."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        act = get_active_season()
+        s_id = act["id"] if act else 1
+        cursor.execute("""
+            SELECT DISTINCT round_number
+            FROM matches
+            WHERE round_number > 0
+              AND (season_id = ? OR season_id IS NULL)
+              AND division_id = ?
+            ORDER BY round_number ASC
+        """, (s_id, division_id))
+        return [row["round_number"] for row in cursor.fetchall()]
 
 
 def bind_division_topic(
