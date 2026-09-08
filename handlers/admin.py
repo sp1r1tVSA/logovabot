@@ -1595,24 +1595,26 @@ async def admin_div_view(update: Update, context: ContextTypes.DEFAULT_TYPE, div
         return
 
     users = await asyncio.to_thread(database.get_division_users, div_id)
-    drafts_tid = await asyncio.to_thread(database.get_division_topic, div_id, "drafts")
-    results_tid = await asyncio.to_thread(database.get_division_topic, div_id, "results")
-    tables_tid = await asyncio.to_thread(database.get_division_topic, div_id, "tables")
+    topics_map = await asyncio.to_thread(database.get_division_topics_map, div_id)
 
     status_str = "🟢 Активен" if division.get("is_active") else "🔴 Отключен"
-    drafts_str = f"<code>{drafts_tid}</code>" if drafts_tid else "<i>По умолчанию (общий)</i>"
-    results_str = f"<code>{results_tid}</code>" if results_tid else "<i>По умолчанию (общий)</i>"
-    tables_str = f"<code>{tables_tid}</code>" if tables_tid else "<i>По умолчанию (общий)</i>"
+    # Raw message_thread_id values are meaningless to an admin and read like
+    # counters next to "Участников", so show only whether a topic is bound.
+    topic_lines = "\n".join(
+        f"{database.TOPIC_DISPLAY_NAMES.get(topic_type, topic_type)} — "
+        f"{'✅' if topics_map.get(topic_type, {}).get('message_thread_id') else '❌ не задан'}"
+        for topic_type in database.PRIMARY_DIVISION_TOPICS
+    )
+    bound_count = sum(
+        1 for topic_type in database.PRIMARY_DIVISION_TOPICS
+        if topics_map.get(topic_type, {}).get("message_thread_id")
+    )
 
     text = (
-        f"🏆 <b>Дивизион: {html.escape(division['name'])}</b>\n\n"
-        f"• <b>Код:</b> <code>{division['code']}</code>\n"
-        f"• <b>Статус:</b> {status_str}\n"
-        f"• <b>Участников:</b> {len(users)}\n\n"
-        f"📌 <b>Привязанные топики супергруппы:</b>\n"
-        f"• 📸 <b>Драфты (скриншоты):</b> {drafts_str}\n"
-        f"• 📢 <b>Результаты:</b> {results_str}\n"
-        f"• 📊 <b>Таблицы:</b> {tables_str}\n"
+        f"🏆 <b>{html.escape(division['name'])}</b>\n\n"
+        f"{status_str}  •  👥 Участников: {len(users)}\n\n"
+        f"📌 <b>Топики группы</b> ({bound_count}/{len(database.PRIMARY_DIVISION_TOPICS)}):\n"
+        f"{topic_lines}\n"
     )
 
     toggle_btn_text = "🔴 Отключить" if division.get("is_active") else "🟢 Включить"
@@ -1663,21 +1665,23 @@ async def admin_div_topics_menu(update: Update, context: ContextTypes.DEFAULT_TY
         await query.edit_message_text("❌ Дивизион не найден.")
         return
 
-    drafts_tid = await asyncio.to_thread(database.get_division_topic, div_id, "drafts")
-    results_tid = await asyncio.to_thread(database.get_division_topic, div_id, "results")
-    tables_tid = await asyncio.to_thread(database.get_division_topic, div_id, "tables")
+    topics_map = await asyncio.to_thread(database.get_division_topics_map, div_id)
 
-    keyboard = [
-        [InlineKeyboardButton(f"📸 Драфты: {drafts_tid or 'Общий'}", callback_data=f"admin_div_settopic_{div_id}_drafts")],
-        [InlineKeyboardButton(f"📢 Результаты: {results_tid or 'Общий'}", callback_data=f"admin_div_settopic_{div_id}_results")],
-        [InlineKeyboardButton(f"📊 Таблицы: {tables_tid or 'Общий'}", callback_data=f"admin_div_settopic_{div_id}_tables")],
-        [InlineKeyboardButton("« К дивизиону", callback_data=f"admin_div_view_{div_id}")]
-    ]
+    keyboard = []
+    for topic_type in database.PRIMARY_DIVISION_TOPICS:
+        tid = topics_map.get(topic_type, {}).get("message_thread_id")
+        label = database.TOPIC_DISPLAY_NAMES.get(topic_type, topic_type)
+        keyboard.append([InlineKeyboardButton(
+            f"{label}: {tid or 'Общий'}",
+            callback_data=f"admin_div_settopic_{div_id}_{topic_type}"
+        )])
+    keyboard.append([InlineKeyboardButton("« К дивизиону", callback_data=f"admin_div_view_{div_id}")])
 
+    types_hint = "|".join(database.PRIMARY_DIVISION_TOPICS)
     text = (
         f"📌 <b>Настройка тем для «{html.escape(division['name'])}»</b>\n\n"
         f"Нажмите на нужный тип топика, чтобы привязать числовой ID темы (message_thread_id) или сбросить на общий топик.\n\n"
-        f"<i>💡 Вы также можете отправить команду <code>/set_div_topic {division['code']} [drafts|results|tables]</code> прямо внутри нужного топика группы!</i>"
+        f"<i>💡 Вы также можете отправить команду <code>/set_div_topic {division['code']} [{types_hint}]</code> прямо внутри нужного топика группы!</i>"
     )
     await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
 
@@ -1805,9 +1809,10 @@ async def admin_div_settopic_prompt(update: Update, context: ContextTypes.DEFAUL
     context.user_data["div_topic_div_id"] = div_id
     context.user_data["div_topic_type"] = topic_type
 
+    label = database.TOPIC_DISPLAY_NAMES.get(database.normalize_topic_type(topic_type), topic_type)
     keyboard = [[InlineKeyboardButton("« Отмена", callback_data=f"admin_div_topics_{div_id}")]]
     await query.edit_message_text(
-        f"📌 <b>Привязка топика «{topic_type}»</b>\n\n"
+        f"📌 <b>Привязка топика «{label}»</b>\n\n"
         f"Отправьте числовой ID темы в супергруппе (<code>message_thread_id</code>).\n\n"
         f"• Отправьте <code>0</code> или <code>none</code>, чтобы сбросить тему на глобальную по умолчанию.\n"
         f"• Или напишите в нужном топике команду <code>/set_div_topic {div_id} {topic_type}</code>.",
@@ -1873,20 +1878,23 @@ async def admin_set_div_topic_cmd(update: Update, context: ContextTypes.DEFAULT_
         await update.message.reply_text("⚠️ Вызовите команду внутри нужного форум-топика супергруппы!")
         return
 
+    types_hint = "|".join(database.PRIMARY_DIVISION_TOPICS)
     args = context.args or []
     if len(args) < 2:
         await update.message.reply_text(
-            "⚠️ <b>Использование:</b> <code>/set_div_topic [ID_или_КОД_дивизиона] [drafts|results|tables]</code>\n\n"
-            "Пример: <code>/set_div_topic 1 drafts</code>",
+            f"⚠️ <b>Использование:</b> <code>/set_div_topic [ID_или_КОД_дивизиона] [{types_hint}]</code>\n\n"
+            "Пример: <code>/set_div_topic 1 draft</code>",
             parse_mode="HTML"
         )
         return
 
     target = args[0].strip()
-    topic_type = args[1].strip().lower()
+    # normalize_topic_type also accepts the Russian and plural aliases
+    # ("черновик", "drafts", "составы", ...) listed in CANONICAL_TOPIC_TYPES.
+    topic_type = database.normalize_topic_type(args[1])
 
-    if topic_type not in ("drafts", "results", "tables"):
-        await update.message.reply_text("❌ Неверный тип топика. Разрешены: `drafts`, `results`, `tables`.")
+    if topic_type not in database.PRIMARY_DIVISION_TOPICS:
+        await update.message.reply_text(f"❌ Неверный тип топика. Разрешены: <code>{types_hint}</code>.", parse_mode="HTML")
         return
 
     division = None

@@ -8213,6 +8213,10 @@ TOPIC_DISPLAY_NAMES = {
     "warns": "⚠️ ПРЕДУПРЕЖДЕНИЯ"
 }
 
+# The topics that actually exist in a division's forum, in display order.
+# "tables" and "warns" are still valid routing keys (read by handlers/base.py
+# and handlers/admin.py with a fallback), but no group has such a topic, so the
+# admin panel does not list them.
 PRIMARY_DIVISION_TOPICS = ["draft", "previews", "results", "reports", "lineups"]
 
 def normalize_topic_type(topic_type: str) -> str:

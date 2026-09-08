@@ -621,7 +621,12 @@ def _register_admin_handlers(app: Application) -> None:
         entry_points=[
             CallbackQueryHandler(admin_div_create_start, pattern="^admin_div_create_start$"),
             CallbackQueryHandler(admin_div_rename_start, pattern="^admin_div_rename_\\d+$"),
-            CallbackQueryHandler(admin_div_settopic_prompt, pattern="^admin_div_settopic_\\d+_(drafts|results|tables)$"),
+            # Must stay a literal: tests/test_production_audit.py scrapes patterns
+            # from the source text. Kept in sync with database.PRIMARY_DIVISION_TOPICS
+            # by tests/test_division_topic_coverage.py. "drafts" and "tables" are no
+            # longer offered as buttons but stay accepted, so buttons in already-sent
+            # messages keep working.
+            CallbackQueryHandler(admin_div_settopic_prompt, pattern="^admin_div_settopic_\\d+_(draft|drafts|previews|results|reports|lineups|tables)$"),
         ],
         states={
             ADMIN_EXPECT_DIV_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_div_create_receive)],
