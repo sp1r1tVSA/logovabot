@@ -3940,17 +3940,17 @@ def find_user_by_ref(ref: str) -> dict | None:
     with transaction() as conn:
         cursor = conn.cursor()
         if ref_clean.isdigit():
-            cursor.execute("SELECT telegram_id, username, team_name, role, warn_count FROM users WHERE telegram_id = ?", (int(ref_clean),))
+            cursor.execute("SELECT telegram_id, username, team_name, role, warn_count, division_id FROM users WHERE telegram_id = ?", (int(ref_clean),))
             r = cursor.fetchone()
             if r:
                 return dict(r)
-        
-        cursor.execute("SELECT telegram_id, username, team_name, role, warn_count FROM users WHERE LOWER(username) = LOWER(?)", (ref_clean,))
+
+        cursor.execute("SELECT telegram_id, username, team_name, role, warn_count, division_id FROM users WHERE LOWER(username) = LOWER(?)", (ref_clean,))
         r = cursor.fetchone()
         if r:
             return dict(r)
-            
-        cursor.execute("SELECT telegram_id, username, team_name, role, warn_count FROM users WHERE LOWER(team_name) = LOWER(?)", (ref_clean,))
+
+        cursor.execute("SELECT telegram_id, username, team_name, role, warn_count, division_id FROM users WHERE LOWER(team_name) = LOWER(?)", (ref_clean,))
         r = cursor.fetchone()
         if r:
             return dict(r)
@@ -8298,6 +8298,35 @@ def get_division_by_group(chat_id: int) -> dict | None:
         """, (chat_id,))
         fallback_row = cursor.fetchone()
         return dict(fallback_row) if fallback_row else None
+
+
+def get_division_group_chat_id(division_id: int | None) -> int | None:
+    """
+    Group chat a division lives in, or None if it is not bound to one.
+
+    Prefers the explicit divisions.group_chat_id; if the group was never bound
+    directly (topics were assigned one by one), falls back to the chat that most
+    of the division's topics sit in.
+    """
+    if not division_id:
+        return None
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT group_chat_id FROM divisions WHERE id = ?", (division_id,))
+        row = cursor.fetchone()
+        if row and row["group_chat_id"]:
+            return int(row["group_chat_id"])
+
+        cursor.execute("""
+            SELECT group_chat_id, COUNT(*) AS bindings
+            FROM division_topics
+            WHERE division_id = ? AND group_chat_id IS NOT NULL
+            GROUP BY group_chat_id
+            ORDER BY bindings DESC, group_chat_id ASC
+            LIMIT 1
+        """, (division_id,))
+        row = cursor.fetchone()
+        return int(row["group_chat_id"]) if row and row["group_chat_id"] else None
 
 
 def assign_user_division(telegram_id: int, division_id: int | None) -> None:

@@ -1986,37 +1986,6 @@ async def admin_confirm_delete_player(update: Update, context: ContextTypes.DEFA
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
 @admin_only
-async def admin_delete_player_execute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Execute player deletion and tech loss confirmation."""
-    query = update.callback_query
-    if not query or not is_admin(query.from_user.id):
-        return
-    await query.answer()
-    
-    player_id = int(query.data.replace("admin_delete_player_execute_", ""))
-    player = await asyncio.to_thread(database.get_user, player_id)
-    
-    if not player:
-        keyboard = [[InlineKeyboardButton("« Назад к списку", callback_data="admin_list_players_page_0")]]
-        await query.edit_message_text("❌ Игрок не найден.", reply_markup=InlineKeyboardMarkup(keyboard))
-        return
-        
-    success, msg = await asyncio.to_thread(database.remove_player, str(player_id))
-    keyboard = [[InlineKeyboardButton("« Назад к списку", callback_data="admin_list_players_page_0")]]
-    
-    if success:
-        await query.edit_message_text(f"✅ {msg}", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
-        
-        group_id = await asyncio.to_thread(database.get_group_id)
-        if group_id:
-            try:
-                await context.bot.send_message(chat_id=group_id, text=f"📢 **Изменение состава лиги!**\n\n{msg}", parse_mode="Markdown")
-            except Exception as e:
-                logger.exception("Не удалось отправить уведомление в группу")
-    else:
-        await query.edit_message_text(f"❌ {msg}", reply_markup=InlineKeyboardMarkup(keyboard))
-
-@admin_only
 async def admin_manage_matches_info(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Display list of rounds for match management."""
     query = update.callback_query
@@ -3487,9 +3456,21 @@ async def admin_remove_player_command(update: Update, context: ContextTypes.DEFA
         return
         
     target = args[0].strip()
+    # Разрешаем ссылку в игрока до удаления — потом строки в users уже не будет.
+    player = await asyncio.to_thread(database.find_user_by_ref, target)
+
     success, msg = await asyncio.to_thread(database.remove_player, target)
     if success:
         await update.message.reply_text(f"✅ {msg}", parse_mode="Markdown")
+        if player:
+            username_str = f"@{player['username']}" if player.get("username") else f"ID: {player['telegram_id']}"
+            await _announce_player_exclusion(
+                context,
+                player.get("division_id"),
+                int(player["telegram_id"]),
+                username_str,
+                player.get("team_name") or "без названия"
+            )
     else:
         await update.message.reply_text(f"❌ Ошибка: {msg}")
 
@@ -3840,6 +3821,52 @@ async def admin_edit_div_execute(update: Update, context: ContextTypes.DEFAULT_T
     await query.answer("✅ Дивизион обновлен!", show_alert=False)
     await admin_view_player(update, context, player_id=p_id)
 
+async def _announce_player_exclusion(
+    context: ContextTypes.DEFAULT_TYPE,
+    division_id: int | None,
+    user_id: int,
+    username_str: str,
+    team_str: str
+) -> None:
+    """
+    Объявить об исключении игрока в его дивизионе и убрать его из группы.
+
+    Уведомление уходит только игрокам дивизиона: у игрока без дивизиона нет
+    группы, в которую можно написать, поэтому такой вызов молча выходит.
+    Сообщение идёт в тему General (без message_thread_id), затем игрок кикается.
+    """
+    if not division_id:
+        return
+
+    group_id = await asyncio.to_thread(database.get_division_group_chat_id, division_id)
+    if not group_id:
+        logger.info(f"Player {user_id} excluded: division {division_id} has no bound group, notice skipped.")
+        return
+
+    notice_text = (
+        f"📢 <b>Изменение состава лиги!</b>\n\n"
+        f"Игрок <b>{html.escape(username_str)}</b> покинул клуб <b>{html.escape(team_str)}</b>.\n"
+        f"Клуб свободен и ждёт нового владельца!"
+    )
+    try:
+        # Без message_thread_id сообщение попадает в General форума.
+        await context.bot.send_message(chat_id=group_id, text=notice_text, parse_mode="HTML")
+    except (BadRequest, TelegramError) as e:
+        logger.warning(f"Could not announce exclusion of player {user_id} in group {group_id}: {e}")
+
+    # Админа из группы не выкидываем: исключение из лиги — не повод терять доступ.
+    if is_global_admin(user_id):
+        logger.info(f"Player {user_id} excluded but kept in group {group_id}: global admin.")
+        return
+
+    try:
+        # Кик = бан + немедленный разбан, иначе игрок не сможет вернуться в лигу.
+        await context.bot.ban_chat_member(chat_id=group_id, user_id=user_id)
+        await context.bot.unban_chat_member(chat_id=group_id, user_id=user_id, only_if_banned=True)
+    except (BadRequest, TelegramError) as e:
+        logger.warning(f"Could not remove player {user_id} from group {group_id}: {e}")
+
+
 @admin_only
 async def admin_delete_player_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show confirmation screen before deleting a player."""
@@ -3864,6 +3891,8 @@ async def admin_delete_player_confirm(update: Update, context: ContextTypes.DEFA
         f"Вы действительно хотите исключить <b>{html.escape(username_str)}</b> (Клуб: <b>{html.escape(team_str)}</b>)?\n\n"
         f"Клуб <b>{html.escape(team_str)}</b> освободится для нового участника. Матчи останутся несыгранными."
     )
+    if player["division_id"]:
+        text += "\n\n🚪 Игрок будет объявлен выбывшим в своём дивизионе и удалён из группы."
 
     keyboard = [
         [InlineKeyboardButton("✅ Да, исключить", callback_data=f"admin_delete_player_execute_{p_id}")],
@@ -3873,7 +3902,7 @@ async def admin_delete_player_confirm(update: Update, context: ContextTypes.DEFA
 
 @admin_only
 async def admin_delete_player_execute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Execute player deletion and notify reports topic."""
+    """Execute player deletion, announce it in the player's division and kick them."""
     query = update.callback_query
     if not query or not is_admin(query.from_user.id):
         return
@@ -3888,6 +3917,8 @@ async def admin_delete_player_execute(update: Update, context: ContextTypes.DEFA
 
     username_str = f"@{player['username']}" if player['username'] else f"ID: {p_id}"
     team_str = player['team_name'] or 'без названия'
+    # Дивизион читаем до удаления: remove_player стирает строку пользователя.
+    division_id = player["division_id"]
 
     success, msg = await asyncio.to_thread(database.remove_player, str(p_id))
     if success:
@@ -3896,22 +3927,7 @@ async def admin_delete_player_execute(update: Update, context: ContextTypes.DEFA
         except Exception as e:
             logger.warning(f"Failed to update debts in warns on player delete: {e}")
 
-    # Send notice to Reports Topic
-    main_group_id = await asyncio.to_thread(database.get_group_id)
-    reports_topic_id = await asyncio.to_thread(database.get_config, "reports_topic_id")
-    if main_group_id:
-        try:
-            notice_text = (
-                f"📢 <b>Изменение состава лиги!</b>\n\n"
-                f"Игрок <b>{html.escape(username_str)}</b> покинул клуб <b>{html.escape(team_str)}</b>.\n"
-                f"Клуб свободен и ждёт нового владельца!"
-            )
-            kwargs = {"chat_id": main_group_id, "text": notice_text, "parse_mode": "HTML"}
-            if reports_topic_id:
-                kwargs["message_thread_id"] = int(reports_topic_id)
-            await context.bot.send_message(**kwargs)
-        except Exception as e:
-            logger.exception("Failed to post player deletion notice to reports topic")
+        await _announce_player_exclusion(context, division_id, p_id, username_str, team_str)
 
     await query.answer(f"✅ {msg}", show_alert=True)
     await admin_list_players_page(update, context, page=0)
