@@ -78,6 +78,15 @@ def register_jobs(application: Application) -> None:
     except Exception as e:
         logger.warning(f"Could not register Phase 6 background jobs: {e}")
 
+    # Round analytics: превью открытого тура и итоги сыгранного в топик АНАЛИТИКА.
+    # Отдельный try/except — падение аналитики не должно ронять остальные джобы.
+    try:
+        from handlers.admin import job_post_round_preview, job_post_round_digest
+        application.job_queue.run_repeating(job_post_round_preview, interval=600, first=120)
+        application.job_queue.run_repeating(job_post_round_digest, interval=900, first=150)
+    except Exception as e:
+        logger.warning(f"Could not register round analytics jobs: {e}")
+
 def main() -> None:
     """Initialize and run the Telegram bot application."""
     if not TOKEN:

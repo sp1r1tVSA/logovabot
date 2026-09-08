@@ -252,6 +252,19 @@ def init_db() -> None:
             cursor.execute("ALTER TABLE round_reminders ADD COLUMN division_id INTEGER DEFAULT 1")
         except sqlite3.OperationalError:
             pass
+        # Idempotency ledger for the auto-posted round preview / digest.
+        # Deliberately NOT round_reminders: update_round_status() wipes that table
+        # whenever a deadline is (re)set, which would re-post the same content.
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS round_content_posts (
+                division_id INTEGER NOT NULL,
+                round_number INTEGER NOT NULL,
+                content_type TEXT NOT NULL,
+                message_id INTEGER,
+                posted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY(division_id, round_number, content_type)
+            )
+        """)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS debt_reminders (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2200,11 +2213,16 @@ def archive_season(season_id: int, actor_user_id: int | None = None) -> tuple[bo
         return True, f"Сезон #{season_id} перенесён в архив."
 
 
-def get_standings(division_id: int | None = None, season_id: int | None = None) -> list[dict]:
-    """Calculate the standings of registered players dynamically, strictly scoped by division and season."""
+def get_standings(division_id: int | None = None, season_id: int | None = None, up_to_round: int | None = None) -> list[dict]:
+    """Calculate the standings of registered players dynamically, strictly scoped by division and season.
+
+    up_to_round caps the table at that round inclusive, so callers can compare
+    "before" and "after" snapshots (used by the round digest to draw movement
+    arrows). None keeps the full-season behaviour.
+    """
     with transaction() as conn:
         cursor = conn.cursor()
-        
+
         target_season_id = season_id
         if target_season_id is None:
             act = get_active_season()
@@ -2243,11 +2261,12 @@ def get_standings(division_id: int | None = None, season_id: int | None = None) 
                 FROM matches m
                 LEFT JOIN users u1 ON LOWER(m.player1_team) = LOWER(u1.team_name)
                 LEFT JOIN users u2 ON LOWER(m.player2_team) = LOWER(u2.team_name)
-                WHERE m.status = 'confirmed' 
+                WHERE m.status = 'confirmed'
                   AND (m.tournament_type IS NULL OR m.tournament_type = 'league')
                   AND m.division_id = ?
                   AND (m.season_id = ? OR m.season_id IS NULL)
-            """, (division_id, target_season_id))
+                  AND (? IS NULL OR m.round_number <= ?)
+            """, (division_id, target_season_id, up_to_round, up_to_round))
         else:
             from config import KPL_TEAMS
             cursor.execute("SELECT telegram_id, team_name, username FROM users WHERE team_name IS NOT NULL AND team_name != ''")
@@ -2282,11 +2301,12 @@ def get_standings(division_id: int | None = None, season_id: int | None = None) 
                 FROM matches m
                 LEFT JOIN users u1 ON LOWER(m.player1_team) = LOWER(u1.team_name)
                 LEFT JOIN users u2 ON LOWER(m.player2_team) = LOWER(u2.team_name)
-                WHERE m.status = 'confirmed' 
+                WHERE m.status = 'confirmed'
                   AND (m.tournament_type IS NULL OR m.tournament_type = 'league')
                   AND (m.season_id = ? OR m.season_id IS NULL)
                   AND (m.division_id = 1 OR m.division_id IS NULL)
-            """, (target_season_id,))
+                  AND (? IS NULL OR m.round_number <= ?)
+            """, (target_season_id, up_to_round, up_to_round))
         
         matches = cursor.fetchall()
 
@@ -2833,6 +2853,73 @@ def get_open_rounds_with_deadlines(division_id: int | None = None, season_id: in
         cursor.execute(query, tuple(params))
         return [dict(row) for row in cursor.fetchall()]
 
+
+def get_rounds_pending_preview(season_id: int | None = None) -> list[dict]:
+    """Open rounds with a deadline whose АНАЛИТИКА preview has not been posted yet."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        target_season_id = season_id
+        if target_season_id is None:
+            act = get_active_season()
+            target_season_id = act["id"] if act else 1
+
+        cursor.execute("""
+            SELECT r.division_id, r.round_number, r.season_id, r.deadline
+            FROM rounds r
+            LEFT JOIN round_content_posts p
+                   ON p.division_id = r.division_id
+                  AND p.round_number = r.round_number
+                  AND p.content_type = 'preview'
+            WHERE r.is_open = 1
+              AND r.deadline IS NOT NULL
+              AND r.deadline != ''
+              AND (r.season_id = ? OR r.season_id IS NULL)
+              AND p.round_number IS NULL
+            ORDER BY r.division_id, r.round_number
+        """, (target_season_id,))
+        return [dict(row) for row in cursor.fetchall()]
+
+
+def get_rounds_pending_digest(season_id: int | None = None) -> list[dict]:
+    """
+    Finished rounds whose АНАЛИТИКА digest has not been posted yet.
+
+    A round qualifies once it has at least one confirmed match and either every
+    match of the round is confirmed or the round has been closed by an admin.
+    """
+    with transaction() as conn:
+        cursor = conn.cursor()
+        target_season_id = season_id
+        if target_season_id is None:
+            act = get_active_season()
+            target_season_id = act["id"] if act else 1
+
+        cursor.execute("""
+            SELECT r.division_id,
+                   r.round_number,
+                   r.season_id,
+                   COUNT(m.id) AS matches_total,
+                   SUM(CASE WHEN m.status = 'confirmed' THEN 1 ELSE 0 END) AS matches_confirmed
+            FROM rounds r
+            JOIN matches m
+              ON m.round_number = r.round_number
+             AND m.division_id = r.division_id
+             AND (m.tournament_type IS NULL OR m.tournament_type = 'league')
+             AND (m.season_id = r.season_id OR m.season_id IS NULL)
+            LEFT JOIN round_content_posts p
+                   ON p.division_id = r.division_id
+                  AND p.round_number = r.round_number
+                  AND p.content_type = 'digest'
+            WHERE (r.season_id = ? OR r.season_id IS NULL)
+              AND p.round_number IS NULL
+            GROUP BY r.division_id, r.round_number, r.season_id, r.is_open
+            HAVING matches_confirmed > 0
+               AND (matches_confirmed = matches_total OR r.is_open = 0)
+            ORDER BY r.division_id, r.round_number
+        """, (target_season_id,))
+        return [dict(row) for row in cursor.fetchall()]
+
+
 def get_teams_recent_form(limit: int = 5, division_id: int | None = None, season_id: int | None = None) -> dict[str, list[str]]:
     """
     Retrieve the last `limit` confirmed match outcomes for each team by team_name.
@@ -2962,6 +3049,38 @@ def record_reminder_sent(round_number: int, reminder_type: str, division_id: int
             "INSERT OR REPLACE INTO round_reminders (division_id, round_number, reminder_type) VALUES (?, ?, ?)",
             (div_id, round_number, reminder_type)
         )
+
+
+def has_round_content_post(division_id: int, round_number: int, content_type: str) -> bool:
+    """Whether the preview/digest for this round has already been published."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT 1 FROM round_content_posts WHERE division_id = ? AND round_number = ? AND content_type = ?",
+            (division_id, round_number, content_type)
+        )
+        return cursor.fetchone() is not None
+
+
+def record_round_content_post(division_id: int, round_number: int, content_type: str, message_id: int | None = None) -> None:
+    """Mark the preview/digest for this round as published."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT OR REPLACE INTO round_content_posts (division_id, round_number, content_type, message_id) VALUES (?, ?, ?, ?)",
+            (division_id, round_number, content_type, message_id)
+        )
+
+
+def clear_round_content_post(division_id: int, round_number: int, content_type: str) -> None:
+    """Drop the published marker so the content can be regenerated (manual admin re-run)."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "DELETE FROM round_content_posts WHERE division_id = ? AND round_number = ? AND content_type = ?",
+            (division_id, round_number, content_type)
+        )
+
 
 def admin_set_match_score(match_id: int, player1_score: int, player2_score: int, admin_id: int | None = None) -> None:
     """Manually set match score and confirm it by admin, clearing any previous match events."""
@@ -4510,6 +4629,45 @@ def get_top_assists(limit: int = 20, division_id: int | None = None, season_id: 
         params.append(limit)
         cursor.execute(query, tuple(params))
         return [dict(row) for row in cursor.fetchall()]
+
+
+def get_round_player_stats(round_number: int, division_id: int | None = None, season_id: int | None = None) -> list[dict]:
+    """Goals and assists per player within a single round (confirmed league matches only).
+
+    Powers the "player of the round" block of the round digest. Sorted by
+    goals + assists, then goals, so the top row is the standout performer.
+    """
+    with transaction() as conn:
+        cursor = conn.cursor()
+        target_season_id = season_id
+        if target_season_id is None:
+            act = get_active_season()
+            target_season_id = act["id"] if act else 1
+
+        query = """
+            SELECT
+                me.player_name,
+                me.team_name,
+                SUM(CASE WHEN me.event_type = 'goal' THEN me.count ELSE 0 END) AS goals,
+                SUM(CASE WHEN me.event_type = 'assist' THEN me.count ELSE 0 END) AS assists
+            FROM match_events me
+            JOIN matches m ON me.match_id = m.id
+            WHERE (m.tournament_type IS NULL OR m.tournament_type = 'league')
+              AND m.round_number = ?
+              AND m.status = 'confirmed'
+              AND (m.season_id = ? OR m.season_id IS NULL)
+        """
+        params = [round_number, target_season_id]
+        if division_id is not None:
+            query += " AND m.division_id = ?"
+            params.append(division_id)
+        query += """
+            GROUP BY me.player_name, me.team_name
+            ORDER BY (goals + assists) DESC, goals DESC, me.player_name ASC
+        """
+        cursor.execute(query, tuple(params))
+        return [dict(row) for row in cursor.fetchall()]
+
 
 def get_recent_confirmed_matches(limit: int = 15) -> list[dict]:
     """Retrieve recent confirmed matches across the league."""
@@ -8197,6 +8355,9 @@ CANONICAL_TOPIC_TYPES = {
     "squads": "lineups",
     "squad": "lineups",
     "составы": "lineups",
+    "analytics": "analytics",
+    "analytic": "analytics",
+    "аналитика": "analytics",
     "tables": "tables",
     "таблицы": "tables",
     "warns": "warns",
@@ -8209,6 +8370,7 @@ TOPIC_DISPLAY_NAMES = {
     "results": "🎛 РЕЗУЛЬТАТЫ",
     "reports": "📞 ОТЧЁТЫ",
     "lineups": "🗺 СОСТАВЫ",
+    "analytics": "📈 АНАЛИТИКА",
     "tables": "📊 ТАБЛИЦЫ",
     "warns": "⚠️ ПРЕДУПРЕЖДЕНИЯ"
 }
@@ -8217,7 +8379,7 @@ TOPIC_DISPLAY_NAMES = {
 # "tables" and "warns" are still valid routing keys (read by handlers/base.py
 # and handlers/admin.py with a fallback), but no group has such a topic, so the
 # admin panel does not list them.
-PRIMARY_DIVISION_TOPICS = ["draft", "previews", "results", "reports", "lineups"]
+PRIMARY_DIVISION_TOPICS = ["draft", "previews", "results", "reports", "lineups", "analytics"]
 
 def normalize_topic_type(topic_type: str) -> str:
     raw = str(topic_type).strip().lower()

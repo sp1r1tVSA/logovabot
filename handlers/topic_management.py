@@ -22,7 +22,8 @@ SHORT_TO_TYPE = {
     "p": "previews",
     "r": "results",
     "rep": "reports",
-    "l": "lineups"
+    "l": "lineups",
+    "a": "analytics"
 }
 
 TYPE_TO_SHORT = {v: k for k, v in SHORT_TO_TYPE.items()}
@@ -36,6 +37,7 @@ def _build_topic_type_keyboard(division_id: int, action_prefix: str = "set_top")
         [InlineKeyboardButton("🎛 РЕЗУЛЬТАТЫ", callback_data=f"{action_prefix}:{division_id}:r")],
         [InlineKeyboardButton("📞 ОТЧЁТЫ", callback_data=f"{action_prefix}:{division_id}:rep")],
         [InlineKeyboardButton("🗺 СОСТАВЫ", callback_data=f"{action_prefix}:{division_id}:l")],
+        [InlineKeyboardButton("📈 АНАЛИТИКА", callback_data=f"{action_prefix}:{division_id}:a")],
         [InlineKeyboardButton("❌ Отмена", callback_data="top_cancel")]
     ]
     return InlineKeyboardMarkup(buttons)
@@ -678,8 +680,8 @@ def register_topic_management_handlers(app) -> None:
     app.add_handler(CommandHandler(["bind_group", "privyazat_gruppu"], cmd_bind_group))
 
     # 3. Callbacks
-    app.add_handler(CallbackQueryHandler(cb_set_topic, pattern="^set_top:\\d+:(d|p|r|rep|l)$"))
-    app.add_handler(CallbackQueryHandler(cb_reassign_topic_confirm, pattern="^reassign_top:\\d+:(d|p|r|rep|l)$"))
+    app.add_handler(CallbackQueryHandler(cb_set_topic, pattern="^set_top:\\d+:(d|p|r|rep|l|a)$"))
+    app.add_handler(CallbackQueryHandler(cb_reassign_topic_confirm, pattern="^reassign_top:\\d+:(d|p|r|rep|l|a)$"))
     app.add_handler(CallbackQueryHandler(cb_unbind_topic_confirm, pattern="^unbind_confirm:-?\\d+:-?\\d+$"))
     app.add_handler(CallbackQueryHandler(cb_bind_group, pattern=r"^bind_group:(\d+)$"))
     app.add_handler(CallbackQueryHandler(cb_top_cancel, pattern="^top_cancel$"))

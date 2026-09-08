@@ -4762,6 +4762,142 @@ async def job_post_debts_to_warns(context: ContextTypes.DEFAULT_TYPE) -> None:
     await _post_or_update_debts_in_warns(context)
 
 
+# ─── Round analytics: превью тура и итоги тура в топик АНАЛИТИКА ────────────
+#
+# Обе публикации одноразовые: факт отправки пишется в round_content_posts
+# (а не в round_reminders — тот чистится при каждой установке дедлайна).
+
+async def _resolve_analytics_topic(division_id: int) -> tuple[int, int] | None:
+    """(group_chat_id, message_thread_id) топика АНАЛИТИКА дивизиона или None."""
+    from services.topic_cache import topic_cache
+
+    div_topic = topic_cache.get_by_division(division_id, "analytics")
+    if not div_topic:
+        topics_map = await asyncio.to_thread(database.get_division_topics_map, division_id)
+        div_topic = topics_map.get("analytics")
+
+    if not div_topic or not div_topic.get("group_chat_id") or not div_topic.get("message_thread_id"):
+        return None
+    return int(div_topic["group_chat_id"]), int(div_topic["message_thread_id"])
+
+
+async def post_round_preview(
+    context: ContextTypes.DEFAULT_TYPE,
+    division_id: int,
+    round_number: int,
+    season_id: int | None = None,
+    force: bool = False,
+) -> bool:
+    """Собрать и опубликовать превью тура. Возвращает True, если пост ушёл."""
+    from services import round_preview
+
+    if not force and await asyncio.to_thread(database.has_round_content_post, division_id, round_number, "preview"):
+        return False
+
+    topic = await _resolve_analytics_topic(division_id)
+    if not topic:
+        logger.info(f"Round preview skipped: division {division_id} has no АНАЛИТИКА topic bound.")
+        return False
+    group_id, topic_id = topic
+
+    payload = await asyncio.to_thread(round_preview.build_preview_payload, division_id, round_number, season_id)
+    if not payload.get("fixtures"):
+        logger.info(f"Round preview skipped: division {division_id} round {round_number} has no fixtures.")
+        return False
+
+    text = await asyncio.to_thread(round_preview.generate_preview_text, payload)
+
+    try:
+        msg = await context.bot.send_message(
+            chat_id=group_id, text=text, parse_mode="HTML", message_thread_id=topic_id
+        )
+    except (BadRequest, TelegramError) as e:
+        logger.warning(f"Could not post round {round_number} preview to division {division_id}: {e}")
+        return False
+
+    await asyncio.to_thread(
+        database.record_round_content_post, division_id, round_number, "preview", msg.message_id
+    )
+    return True
+
+
+async def post_round_digest(
+    context: ContextTypes.DEFAULT_TYPE,
+    division_id: int,
+    round_number: int,
+    season_id: int | None = None,
+    force: bool = False,
+) -> bool:
+    """Собрать и опубликовать итоги тура (картинка + подпись). True, если пост ушёл."""
+    from services import round_preview
+    from services.graphics.round_digest_generator import generate_round_digest_image
+
+    if not force and await asyncio.to_thread(database.has_round_content_post, division_id, round_number, "digest"):
+        return False
+
+    topic = await _resolve_analytics_topic(division_id)
+    if not topic:
+        logger.info(f"Round digest skipped: division {division_id} has no АНАЛИТИКА topic bound.")
+        return False
+    group_id, topic_id = topic
+
+    payload = await asyncio.to_thread(round_preview.build_digest_payload, division_id, round_number, season_id)
+    if not payload.get("results"):
+        logger.info(f"Round digest skipped: division {division_id} round {round_number} has no confirmed matches.")
+        return False
+
+    img_buf = await asyncio.to_thread(generate_round_digest_image, payload)
+    caption = await asyncio.to_thread(round_preview.generate_digest_caption, payload)
+
+    try:
+        msg = await context.bot.send_photo(
+            chat_id=group_id, photo=img_buf, caption=caption,
+            parse_mode="HTML", message_thread_id=topic_id
+        )
+    except (BadRequest, TelegramError) as e:
+        logger.warning(f"Could not post round {round_number} digest to division {division_id}: {e}")
+        return False
+
+    await asyncio.to_thread(
+        database.record_round_content_post, division_id, round_number, "digest", msg.message_id
+    )
+    return True
+
+
+async def job_post_round_preview(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Периодический джоб: превью только что открытых туров в топик АНАЛИТИКА."""
+    pending = await asyncio.to_thread(database.get_rounds_pending_preview)
+    for r in pending:
+        try:
+            await post_round_preview(
+                context,
+                division_id=r.get("division_id") or 1,
+                round_number=r["round_number"],
+                season_id=r.get("season_id"),
+            )
+        except Exception:
+            logger.exception(
+                f"Round preview job failed for division {r.get('division_id')} round {r.get('round_number')}"
+            )
+
+
+async def job_post_round_digest(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Периодический джоб: итоги сыгранных/закрытых туров в топик АНАЛИТИКА."""
+    pending = await asyncio.to_thread(database.get_rounds_pending_digest)
+    for r in pending:
+        try:
+            await post_round_digest(
+                context,
+                division_id=r.get("division_id") or 1,
+                round_number=r["round_number"],
+                season_id=r.get("season_id"),
+            )
+        except Exception:
+            logger.exception(
+                f"Round digest job failed for division {r.get('division_id')} round {r.get('round_number')}"
+            )
+
+
 # Prevents concurrent runs (scheduled tick + manual /check_debts trigger)
 # from double-issuing auto-warns for the same overdue match.
 _debt_tracker_lock = asyncio.Lock()
@@ -5077,6 +5213,85 @@ async def admin_check_debts_command(update: Update, context: ContextTypes.DEFAUL
 
     # Trigger job right now
     await job_debt_lifecycle_tracker(context)
+
+
+async def _admin_divisions_for(user_id: int) -> list[dict]:
+    """Дивизионы, которыми админ вправе управлять (глобальный админ — все активные)."""
+    if is_global_admin(user_id):
+        return await asyncio.to_thread(database.get_active_divisions)
+    return await asyncio.to_thread(database.get_admin_divisions, user_id)
+
+
+async def _admin_round_content_command(update: Update, context: ContextTypes.DEFAULT_TYPE, content_type: str) -> None:
+    """Общая реализация /round_preview и /round_digest: ручной прогон публикации."""
+    user_id = update.effective_user.id
+    if not is_admin(user_id):
+        await update.message.reply_text("❌ Нет прав.")
+        return
+
+    label = "Превью тура" if content_type == "preview" else "Итоги тура"
+    poster = post_round_preview if content_type == "preview" else post_round_digest
+    pending_fetch = (
+        database.get_rounds_pending_preview if content_type == "preview" else database.get_rounds_pending_digest
+    )
+
+    explicit_round = None
+    if context.args and str(context.args[0]).strip().lstrip("-").isdigit():
+        explicit_round = int(str(context.args[0]).strip())
+
+    divisions = await _admin_divisions_for(user_id)
+    if not divisions:
+        await update.message.reply_text("⚠️ Нет дивизионов, доступных для управления.")
+        return
+    allowed_ids = {d["id"] for d in divisions}
+
+    targets: list[tuple[int, int]] = []
+    if explicit_round is not None:
+        targets = [(div_id, explicit_round) for div_id in sorted(allowed_ids)]
+    else:
+        pending = await asyncio.to_thread(pending_fetch)
+        targets = [
+            ((r.get("division_id") or 1), r["round_number"])
+            for r in pending
+            if (r.get("division_id") or 1) in allowed_ids
+        ]
+
+    if not targets:
+        await update.message.reply_text(f"ℹ️ {label}: нечего публиковать — всё уже отправлено.")
+        return
+
+    await update.message.reply_text(f"🔄 <i>{label}: запускаю публикацию ({len(targets)})...</i>", parse_mode="HTML")
+
+    sent, skipped = 0, []
+    for div_id, round_number in targets:
+        try:
+            ok = await poster(
+                context, division_id=div_id, round_number=round_number,
+                force=(explicit_round is not None),
+            )
+            if ok:
+                sent += 1
+            else:
+                skipped.append(f"дивизион {div_id}, тур {round_number}")
+        except Exception as e:
+            logger.exception(f"Manual {content_type} failed for division {div_id} round {round_number}")
+            skipped.append(f"дивизион {div_id}, тур {round_number} — ошибка: {e}")
+
+    lines = [f"✅ <b>{label}</b>: опубликовано {sent} из {len(targets)}."]
+    if skipped:
+        lines.append("\n<i>Пропущено:</i>")
+        lines.extend(f"• {html.escape(s)}" for s in skipped[:10])
+    await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+
+
+async def admin_round_preview_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/round_preview [номер тура] — опубликовать превью тура в топик АНАЛИТИКА."""
+    await _admin_round_content_command(update, context, "preview")
+
+
+async def admin_round_digest_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/round_digest [номер тура] — опубликовать итоги тура в топик АНАЛИТИКА."""
+    await _admin_round_content_command(update, context, "digest")
 
 
 @admin_only

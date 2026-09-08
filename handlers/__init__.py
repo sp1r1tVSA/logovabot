@@ -241,6 +241,8 @@ from handlers.admin import (
     admin_reset_debts_command,
     admin_check_debts_command,
     admin_unwarn_command,
+    admin_round_preview_command,
+    admin_round_digest_command,
 )
 
 from handlers.topic_management import (
@@ -626,7 +628,7 @@ def _register_admin_handlers(app: Application) -> None:
             # by tests/test_division_topic_coverage.py. "drafts" and "tables" are no
             # longer offered as buttons but stay accepted, so buttons in already-sent
             # messages keep working.
-            CallbackQueryHandler(admin_div_settopic_prompt, pattern="^admin_div_settopic_\\d+_(draft|drafts|previews|results|reports|lineups|tables)$"),
+            CallbackQueryHandler(admin_div_settopic_prompt, pattern="^admin_div_settopic_\\d+_(draft|drafts|previews|results|reports|lineups|analytics|tables)$"),
         ],
         states={
             ADMIN_EXPECT_DIV_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_div_create_receive)],
@@ -764,6 +766,9 @@ def _register_admin_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("unwarn", admin_unwarn_command))
     app.add_handler(CommandHandler("check_debts", admin_check_debts_command))
     app.add_handler(CommandHandler("debug_debts", admin_check_debts_command))
+    # Ручной прогон автопостинга в топик АНАЛИТИКА (обычно этим занимаются джобы)
+    app.add_handler(CommandHandler("round_preview", admin_round_preview_command))
+    app.add_handler(CommandHandler("round_digest", admin_round_digest_command))
 
 def register_all_handlers(application: Application) -> None:
     """Register all command, message, and callback handlers to the application."""
