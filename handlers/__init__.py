@@ -708,7 +708,10 @@ def _register_admin_handlers(app: Application) -> None:
     app.add_handler(CallbackQueryHandler(admin_edit_div_execute, pattern="^admin_ediv_-?\\d+_(\\d+|none)$"))
     app.add_handler(CallbackQueryHandler(admin_div_players_menu, pattern="^admin_div_players_menu$"))
     app.add_handler(CallbackQueryHandler(admin_list_div_players, pattern="^admin_list_div_players_"))
-    app.add_handler(CallbackQueryHandler(admin_confirm_delete_player, pattern="^(admin_confirm_delete_player|admin_delete_player_confirm)_-?\\d+$"))
+    # Two separate confirm screens with near-identical names: each parses its own
+    # prefix out of callback_data, so they must not share a pattern.
+    app.add_handler(CallbackQueryHandler(admin_confirm_delete_player, pattern="^admin_confirm_delete_player_-?\\d+$"))
+    app.add_handler(CallbackQueryHandler(admin_delete_player_confirm, pattern="^admin_delete_player_confirm_-?\\d+$"))
     app.add_handler(CallbackQueryHandler(admin_delete_player_execute, pattern="^admin_delete_player_execute_-?\\d+$"))
     app.add_handler(CallbackQueryHandler(admin_manage_round, pattern="^admin_manage_round_\\d+$"))
     app.add_handler(CallbackQueryHandler(admin_toggle_round_bets, pattern="^admin_bets_(open|close)_round_\\d+$"))
