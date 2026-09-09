@@ -487,11 +487,17 @@ def init_db() -> None:
             )
         """)
 
+        # Seed-only. Значение по умолчанию выставляется ТОЛЬКО при отсутствии записи.
+        # Раньше здесь стоял `ON CONFLICT(feature_key) DO UPDATE SET status = 'public'`,
+        # из-за чего каждый вызов init_db() (то есть каждый рестарт бота) затирал
+        # настройку администратора и молча открывал рынок всем. Теперь init_db()
+        # идемпотентен относительно betting_market: существующая запись — в любом
+        # статусе — остаётся нетронутой. Менять флаг можно только через
+        # set_feature_flag().
         cursor.execute("""
             INSERT INTO feature_flags (feature_key, status)
             VALUES ('betting_market', 'public')
-            ON CONFLICT(feature_key) DO UPDATE SET status = 'public'
-            WHERE status != 'disabled'
+            ON CONFLICT(feature_key) DO NOTHING
         """)
 
         # High-performance Telegram file_id deduplication & media caching
