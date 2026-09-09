@@ -4,6 +4,7 @@ import database
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 from services.graphics import player_photos
+from services.graphics.division_theme import draw_division_badge, resolve_theme
 from services.graphics.table_generator import TEAM_LOGO_MAP, load_font
 
 # Project root directory (services/graphics -> services -> root)
@@ -100,6 +101,8 @@ def generate_top_stats_image(
         badge_border = ASSIST_BORDER
         raw_data = database.get_top_assists(limit, division_id=division_id, season_id=season_id)
 
+    theme = resolve_theme(division_id=division_id, division_name=division_name)
+
     # ── 2x Scaled Fonts ────────────────────────────────────────────────────
     font_title    = load_font(26 * SCALE, bold=True)
     font_subtitle = load_font(12 * SCALE, bold=True)
@@ -109,6 +112,7 @@ def generate_top_stats_image(
     font_stat_val = load_font(22 * SCALE, bold=True)
     font_stat_lbl = load_font(10 * SCALE, bold=True)
     font_footer   = load_font(11 * SCALE)
+    font_badge    = load_font(12 * SCALE, bold=True)
 
     # ── 2x Scaled Geometry ─────────────────────────────────────────────────
     HEADER_H   = 90 * SCALE
@@ -141,10 +145,15 @@ def generate_top_stats_image(
     draw.text((PAD + 18 * SCALE, y + 2 * SCALE), title_text, fill=WHITE, font=font_title)
     draw.text((PAD + 18 * SCALE, y + 34 * SCALE), subtitle_text, fill=MUTED, font=font_subtitle)
 
+    # Плашка дивизиона в правом верхнем углу; сезонная пилюля сдвигается левее.
+    # Цветная полоса слева от заголовка остаётся семантической (голы/пасы).
+    badge_w = draw_division_badge(draw, theme, WIDTH - PAD, y + 10 * SCALE, font_badge, SCALE)
+    right_edge = WIDTH - PAD - (badge_w + 16 * SCALE if badge_w else 0)
+
     # Top right season badge pill
     pill_text = "КПЛ 2026"
     pw = int(draw.textlength(pill_text, font=font_subtitle))
-    px = WIDTH - PAD - pw - 24 * SCALE
+    px = right_edge - pw - 12 * SCALE
     _draw_rounded_rect(
         draw,
         (px - 12 * SCALE, y + 8 * SCALE, px + pw + 12 * SCALE, y + 36 * SCALE),

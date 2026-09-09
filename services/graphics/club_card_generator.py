@@ -2,6 +2,7 @@ import os
 import io
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
+from services.graphics.division_theme import draw_division_badge, resolve_theme
 from services.graphics.table_generator import get_team_logo_filename, load_font, clean_and_prepare_logo, resize_logo_proportional
 
 # Project root directory (services/graphics -> services -> root)
@@ -85,9 +86,12 @@ def _clean_white_background_if_needed(img: Image.Image) -> Image.Image:
     return img
 
 
-def generate_club_card(data: dict, avatar_path: str | None = None) -> io.BytesIO:
+def generate_club_card(data: dict, avatar_path: str | None = None, division_id: int | None = None) -> io.BytesIO:
     """
     Generate an immaculate, clean and balanced Club Stats Card.
+
+    division_id picks the division accent (top line + pill). Without it the club
+    itself is used to look the division up, so old call sites keep working.
     """
     team_name    = data.get("team_name", "Клуб")
     manager      = data.get("manager")
@@ -100,6 +104,14 @@ def generate_club_card(data: dict, avatar_path: str | None = None) -> io.BytesIO
     top_assists  = data.get("top_assists") or []
     squad_count  = data.get("squad_count", 0)
     debts_count  = data.get("debts_count", 0)
+
+    # Акцент дивизиона: верхняя линия и плашка. Золото кубка, зелёный/жёлтый/
+    # красный формы и цвета мест — семантические, темой не трогаются.
+    theme = resolve_theme(
+        division_id=division_id,
+        division_name=data.get("division_name"),
+        team_name=team_name,
+    )
 
     # ── Fonts ──────────────────────────────────────────────────────────────
     font_title   = load_font(28 * SCALE, bold=True)
@@ -131,7 +143,7 @@ def generate_club_card(data: dict, avatar_path: str | None = None) -> io.BytesIO
     draw = ImageDraw.Draw(img)
 
     # Top accent line
-    draw.line([(CARD_PADDING, 4 * SCALE), (CARD_WIDTH - CARD_PADDING, 4 * SCALE)], fill=CUP_GOLD, width=3 * SCALE)
+    draw.line([(CARD_PADDING, 4 * SCALE), (CARD_WIDTH - CARD_PADDING, 4 * SCALE)], fill=theme.accent, width=3 * SCALE)
 
     curr_y = CARD_PADDING
 
@@ -209,6 +221,9 @@ def generate_club_card(data: dict, avatar_path: str | None = None) -> io.BytesIO
     
     pb_bbox = draw.textbbox((0, 0), pts_text, font=font_badge_sm)
     draw.text((badge_x + (badge_w - (pb_bbox[2] - pb_bbox[0])) // 2, badge_y + 35 * SCALE), pts_text, font=font_badge_sm, fill=WHITE)
+
+    # Плашка дивизиона под бейджем места
+    draw_division_badge(draw, theme, CARD_WIDTH - CARD_PADDING, badge_y + badge_h + 6 * SCALE, font_badge_sm, SCALE)
 
     curr_y += HEADER_H + 10 * SCALE
 

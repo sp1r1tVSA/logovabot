@@ -24,6 +24,7 @@ import tempfile
 from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageChops
 from pathlib import Path
 from services.graphics import player_photos
+from services.graphics.division_theme import resolve_theme
 from services.graphics.table_generator import get_team_logo_filename, clean_and_prepare_logo
 
 try:
@@ -691,7 +692,17 @@ def render_master_static_card(player_data: dict, style_id: str = "toty_gold") ->
     # 9. Bottom Finial & Edition Badge (Positioned safely above tapering shield walls)
     foot_y = grid_y + int(140 * SCALE)
     title_short = cfg['title'].split(' / ')[0].strip()
-    foot_text = f"★ {title_short} • КПЛ 2026 ★"
+
+    # Дивизион здесь только текстом. Цвет карточки кодирует редкость стиля
+    # (TOTY, ICON, обычная) — подмешивать в него акцент дивизиона нельзя,
+    # иначе карточка перестанет читаться как коллекционная.
+    division_theme = resolve_theme(
+        division_id=player_data.get("division_id"),
+        division_name=player_data.get("division_name"),
+        team_name=team_name,
+    )
+    edition_tail = division_theme.label or "КПЛ 2026"
+    foot_text = f"★ {title_short} • {edition_tail} ★"
 
     # Clamp font and width to always maintain comfortable padding from shield borders
     max_text_w = int(220 * SCALE)

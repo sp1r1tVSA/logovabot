@@ -5786,6 +5786,50 @@ def get_division_teams(division_id: int, season_id: int | None = None) -> list[s
     return sorted(result)
 
 
+def get_team_division_id(team_name: str, season_id: int | None = None) -> int | None:
+    """
+    Determine which division a club currently plays in.
+
+    The manager's registration is the primary source; scheduled matches are the
+    fallback for clubs without an assigned manager. Returns None when the club
+    cannot be attributed to any division.
+    """
+    if not team_name:
+        return None
+
+    canon = resolve_team_name(team_name) or team_name.strip()
+    if not canon:
+        return None
+
+    target_season_id = season_id
+    if target_season_id is None:
+        act = get_active_season()
+        target_season_id = act["id"] if act else 1
+
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT division_id, team_name FROM users "
+            "WHERE division_id IS NOT NULL AND team_name IS NOT NULL AND team_name != ''"
+        )
+        for row in cursor.fetchall():
+            if teams_match(row["team_name"], canon):
+                return int(row["division_id"])
+
+        cursor.execute("""
+            SELECT division_id, COUNT(*) AS n
+            FROM matches
+            WHERE division_id IS NOT NULL
+              AND (season_id = ? OR season_id IS NULL)
+              AND (player1_team = ? OR player2_team = ?)
+            GROUP BY division_id
+            ORDER BY n DESC
+            LIMIT 1
+        """, (target_season_id, canon, canon))
+        row = cursor.fetchone()
+        return int(row["division_id"]) if row else None
+
+
 def get_clubs_summary_for_division(division_id: int, season_id: int | None = None) -> list[dict]:
     """
     Get summary list of clubs for a specific division for the clubs catalog.

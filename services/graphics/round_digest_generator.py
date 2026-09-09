@@ -14,6 +14,7 @@ import os
 
 from PIL import Image, ImageDraw
 
+from services.graphics.division_theme import draw_division_badge, resolve_theme
 from services.graphics.table_generator import (
     LOGOS_DIR,
     SCALE,
@@ -97,18 +98,27 @@ def generate_round_digest_image(payload: dict) -> io.BytesIO:
     font_score = load_font(22 * SCALE, bold=True)
     font_row = load_font(14 * SCALE)
     font_row_bold = load_font(14 * SCALE, bold=True)
+    font_badge = load_font(12 * SCALE, bold=True)
 
     margin = 35 * SCALE
     inner_right = width - margin
 
+    # Акцент дивизиона: только заголовок и плашка. Красный у «РАЗГРОМА ТУРА» и
+    # стрелки падения остаётся семантическим и теме не подчиняется.
+    theme = resolve_theme(
+        division_id=payload.get("division_id"),
+        division_name=payload.get("division_name"),
+    )
+
     # ─── Шапка ───
-    draw.text((margin, 26 * SCALE), f"ИТОГИ ТУРА {payload.get('round_number', '')}", fill=RED_ACCENT, font=font_title)
+    draw.text((margin, 26 * SCALE), f"ИТОГИ ТУРА {payload.get('round_number', '')}", fill=theme.accent, font=font_title)
     draw.text(
         (margin, 62 * SCALE),
         str(payload.get("division_name") or ""),
         fill=TEXT_HEADER,
         font=font_subtitle,
     )
+    draw_division_badge(draw, theme, inner_right, 26 * SCALE, font_badge, SCALE)
     summary = f"Матчей: {payload.get('matches_played', 0)}  •  Голов: {payload.get('goals_total', 0)}"
     draw.text((inner_right, 62 * SCALE), summary, fill=TEXT_HEADER, font=font_subtitle, anchor="ra")
 

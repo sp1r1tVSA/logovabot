@@ -5,6 +5,8 @@ from PIL import Image, ImageDraw, ImageFont
 
 from pathlib import Path
 
+from services.graphics.division_theme import draw_division_badge, resolve_theme
+
 # Project root directory (services/graphics -> services -> root)
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 BASE_DIR = str(PROJECT_ROOT)
@@ -135,10 +137,18 @@ def resize_logo_proportional(img: Image.Image, max_w: int, max_h: int) -> tuple[
     return resized, new_w, new_h
 
 
-def generate_league_table_image(standings: list[dict] | None = None, form_map: dict[str, list[str]] | None = None, division_name: str | None = None) -> io.BytesIO:
+def generate_league_table_image(
+    standings: list[dict] | None = None,
+    form_map: dict[str, list[str]] | None = None,
+    division_name: str | None = None,
+    division_id: int | None = None,
+) -> io.BytesIO:
     """
     Generate a 2x supersampled, high-res graphic image of the league table.
     Returns io.BytesIO PNG buffer.
+
+    division_id selects the division accent colour; without it the theme falls
+    back to division_name and then to the neutral default.
     """
     if standings is None:
         standings = database.get_standings()
@@ -166,7 +176,11 @@ def generate_league_table_image(standings: list[dict] | None = None, form_map: d
     header_text_color  = (156, 163, 175)   # #9CA3AF
     primary_text_color = (255, 255, 255)
     muted_text_color   = (209, 213, 219)
-    red_accent_color   = (239, 68, 68)
+
+    # Акцент дивизиона. Позиционные цвета строк (зона вылета, лидер, форма)
+    # остаются семантическими и теме не подчиняются.
+    theme = resolve_theme(division_id=division_id, division_name=division_name)
+    accent_color = theme.accent
 
     # Canvas
     img = Image.new("RGBA", (width, height), bg_color)
@@ -179,12 +193,14 @@ def generate_league_table_image(standings: list[dict] | None = None, form_map: d
     font_row_text   = load_font(15 * SCALE, bold=False)
     font_row_bold   = load_font(15 * SCALE, bold=True)
     font_footer     = load_font(13 * SCALE)
+    font_badge      = load_font(12 * SCALE, bold=True)
 
     # Header
     title_str = f"СЕЗОН 2 • {division_name.upper()}" if division_name else "ТУРНИРНАЯ ТАБЛИЦА"
     subtitle_str = f"Турнирная таблица дивизиона {division_name}" if division_name else "Standings"
-    draw.text((35 * SCALE, 25 * SCALE), title_str, fill=red_accent_color, font=font_title)
+    draw.text((35 * SCALE, 25 * SCALE), title_str, fill=accent_color, font=font_title)
     draw.text((35 * SCALE, 58 * SCALE), subtitle_str, fill=header_text_color, font=font_subtitle)
+    draw_division_badge(draw, theme, width - 35 * SCALE, 25 * SCALE, font_badge, SCALE)
 
     # Column X offsets (scaled)
     col_x = {

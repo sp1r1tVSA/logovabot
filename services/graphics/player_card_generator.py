@@ -3,6 +3,7 @@ import io
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 from services.graphics.table_generator import TEAM_LOGO_MAP, load_font
+from services.graphics.division_theme import draw_division_badge, resolve_theme
 from services.graphics import player_photos
 
 # Project root directory (services/graphics -> services -> root)
@@ -39,9 +40,12 @@ def _draw_rounded_rect(draw: ImageDraw.ImageDraw, xy: tuple, radius: int, fill: 
     draw.rounded_rectangle(xy, radius=radius, fill=fill, outline=outline, width=width)
 
 
-def generate_player_card(stats: dict) -> io.BytesIO:
+def generate_player_card(stats: dict, division_id: int | None = None) -> io.BytesIO:
     """
     Generate a high-res 2x supersampled player stats card image.
+
+    division_id picks the division accent (portrait ring + pill). Without it the
+    player's club is used to look the division up.
 
     stats dict expected:
       {
@@ -70,7 +74,15 @@ def generate_player_card(stats: dict) -> io.BytesIO:
     league_assists = stats.get("league_assists", total_assists)
     cup_goals      = stats.get("cup_goals", 0)
     cup_assists    = stats.get("cup_assists", 0)
-    
+
+    # Акцент дивизиона: кольцо портрета и плашка. Зелёный «голы», синий «пасы»
+    # и золото кубка — семантические, темой не трогаются.
+    theme = resolve_theme(
+        division_id=division_id,
+        division_name=stats.get("division_name"),
+        team_name=team_name,
+    )
+
     items: list[dict] = stats.get("items", [])
     if not items and stats.get("rounds"):
         for rn, rd in sorted(stats["rounds"].items(), key=lambda x: int(x[0])):
@@ -165,7 +177,7 @@ def generate_player_card(stats: dict) -> io.BytesIO:
 
     draw.ellipse(
         [photo_x - 2 * SCALE, photo_y - 2 * SCALE, photo_x + PHOTO_D + 2 * SCALE, photo_y + PHOTO_D + 2 * SCALE],
-        outline=BORDER_COLOR, width=2 * SCALE
+        outline=theme.accent, width=2 * SCALE
     )
 
     # ── Club logo badge ────────────────────────────────────────────────
@@ -208,6 +220,9 @@ def generate_player_card(stats: dict) -> io.BytesIO:
     sl_y = y + 6 * SCALE
     _draw_rounded_rect(draw, (sl_x - 10 * SCALE, sl_y - 4 * SCALE, sl_x + sl_w + 10 * SCALE, sl_y + 24 * SCALE), radius=6 * SCALE, fill=SURFACE_COLOR, outline=BORDER_COLOR)
     draw.text((sl_x, sl_y), season_label, fill=MUTED, font=font_season)
+
+    # Плашка дивизиона под бейджем сезона
+    draw_division_badge(draw, theme, CARD_WIDTH - CARD_PADDING, sl_y + 32 * SCALE, font_season, SCALE)
 
     y += HEADER_H + SECTION_GAP
 

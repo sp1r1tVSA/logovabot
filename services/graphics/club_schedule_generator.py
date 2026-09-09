@@ -2,6 +2,7 @@ import os
 import io
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
+from services.graphics.division_theme import draw_division_badge, resolve_theme
 from services.graphics.table_generator import get_team_logo_filename, load_font, clean_and_prepare_logo, resize_logo_proportional
 
 # Project root directory (services/graphics -> services -> root)
@@ -129,14 +130,25 @@ def _get_club_logo(team_name: str, max_w: int, max_h: int | None = None) -> tupl
         return None, 0, 0
 
 
-def generate_club_schedule(data: dict, max_matches: int = 12) -> io.BytesIO:
+def generate_club_schedule(data: dict, max_matches: int = 12, division_id: int | None = None) -> io.BytesIO:
     """
     Generate high-resolution 2x supersampled Schedule & Results Card.
+
+    division_id picks the division accent (top line + pill). Without it the club
+    itself is used to look the division up, so old call sites keep working.
     """
     team_name     = data.get("team_name", "Клуб")
     played_count  = data.get("played_count", 0)
     pending_count = data.get("pending_count", 0)
     matches       = (data.get("matches") or [])[:max_matches]
+
+    # Акцент дивизиона: верхняя линия и плашка. Цвета результатов матчей
+    # (победа/ничья/поражение) семантические и темой не трогаются.
+    theme = resolve_theme(
+        division_id=division_id,
+        division_name=data.get("division_name"),
+        team_name=team_name,
+    )
 
     # ── Fonts ──────────────────────────────────────────────────────────────
     font_title    = load_font(26 * SCALE, bold=True)
@@ -170,8 +182,8 @@ def generate_club_schedule(data: dict, max_matches: int = 12) -> io.BytesIO:
     _draw_vertical_gradient(img, BG_GRAD_TOP, BG_GRAD_BOT)
     draw = ImageDraw.Draw(img)
 
-    # Accent Top Gold Bar
-    draw.line([(CARD_PADDING, 4 * SCALE), (CARD_WIDTH - CARD_PADDING, 4 * SCALE)], fill=CUP_GOLD, width=3 * SCALE)
+    # Accent Top Bar
+    draw.line([(CARD_PADDING, 4 * SCALE), (CARD_WIDTH - CARD_PADDING, 4 * SCALE)], fill=theme.accent, width=3 * SCALE)
 
     curr_y = CARD_PADDING
 
@@ -211,6 +223,9 @@ def generate_club_schedule(data: dict, max_matches: int = 12) -> io.BytesIO:
     sp_text2 = f"ПРЕДСТОИТ: {pending_count}"
     draw.text((stat_pill_x + 14 * SCALE, stat_pill_y + 8 * SCALE), sp_text1, font=font_badge_sm, fill=CUP_GOLD)
     draw.text((stat_pill_x + 14 * SCALE, stat_pill_y + 28 * SCALE), sp_text2, font=font_badge_sm, fill=WHITE)
+
+    # Плашка дивизиона под пилюлей со статистикой
+    draw_division_badge(draw, theme, CARD_WIDTH - CARD_PADDING, stat_pill_y + stat_pill_h + 6 * SCALE, font_badge_sm, SCALE)
 
     curr_y += HEADER_H + 12 * SCALE
 
