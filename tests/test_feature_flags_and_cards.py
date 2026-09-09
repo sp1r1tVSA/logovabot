@@ -91,7 +91,7 @@ class TestFeatureFlagsAndCards(unittest.TestCase):
             "total_assists": 5,
             "matches_played": 8,
         }
-        for theme in ["gold_rare", "totw", "icon"]:
+        for theme in ["kpl_standard", "kpl_star", "kpl_prime"]:
             buf = generate_ea_fc_card(card_data, theme_name=theme)
             self.assertIsNotNone(buf)
             self.assertGreater(len(buf.getvalue()), 10000)

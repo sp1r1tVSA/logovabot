@@ -1,18 +1,19 @@
 """
 fc_card_generator.py
 
-Ultimate AAA EA FC 25 & Esports Card Generator with 10 Top-Tier Motion Design Styles:
+Генератор EA FC карточек игрока. Дизайн определяют ровно две оси:
 
- 1. toty_gold      — «TOTY Celestial Gold» (Божественное жидкое золото 24K)
- 2. void_eclipse   — «Void Eclipse / Dark Matter» (Черная дыра, сингулярность)
- 3. cyber_hud      — «Cyberpunk 2077 / Neo-Tokyo» (Лазерный HUD, глитч)
- 4. hyper_glass    — «Liquid Crystal / Hyper-Glass» (Изумрудная призма, каустика)
- 5. inferno_magma  — «Inferno Overdrive / Magma» (Раскаленная лава, горящие угли)
- 6. glacial_frost  — «Glacial Frost / Diamond» (Арктический лед, алмазный иней)
- 7. anime_sakuga   — «Anime Sakuga / Blue Lock» (Аура эгоиста, манга-молнии)
- 8. royal_24k      — «Royal 24K Velvet & Ingot» (Банковский слиток, бархат)
- 9. aero_carbon    — «Red Bull Velocity / Aero Carbon» (Кованый карбон, F1 телеметрия)
-10. ucl_night      — «UEFA Champions Night» (Звездный купол, хром ЛЧ)
+  ДИАПАЗОН OVR  → тир (ось редкости, владеет «металлом» карточки)
+      kpl_standard  — до 85, графитовый титан и стальной кант
+      kpl_star      — 86-92, сапфировый неон и лазерный трейсер
+      kpl_prime     — 93+, 24K золото и угли
+
+  ДИВИЗИОН      → фирменный слой (вторичный кант, подтон подложки,
+                   цвет частиц и узор фона)
+
+3 тира × 5 дивизионов = 15 непохожих карточек. Других стилей нет:
+тир всегда выбирается через get_kpl_tier_by_ovr, произвольные названия
+стилей извне не приходят.
 """
 
 import os
@@ -49,7 +50,7 @@ WIDTH = 460 * SCALE
 HEIGHT = 690 * SCALE
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 10 DESIGN STYLES CONFIGURATION METADATA
+# ТИРЫ ПО ДИАПАЗОНУ OVR — базовая палитра до наложения слоя дивизиона
 # ─────────────────────────────────────────────────────────────────────────────
 
 CARD_STYLES = {
@@ -89,126 +90,6 @@ CARD_STYLES = {
         "glow_rgb": (255, 190, 0),
         "desc": "24K Золото и базальтовое пламя (Рейтинг 93+)",
     },
-    "toty_gold": {
-        "title": "EA FC 24 SPECIAL ITEM",
-        "bg_top": (8, 14, 28),             # Dark Navy Obsidian
-        "bg_bot": (4, 6, 12),              # Deep Stadium Night
-        "border_primary": (245, 208, 97),  # 24K Polished Gold Foil
-        "border_secondary": (195, 155, 60),# Brushed Gold Bevel
-        "accent": (255, 225, 120),
-        "text_primary": (255, 255, 255),
-        "text_secondary": (245, 208, 97),
-        "glow_rgb": (255, 215, 0),
-        "desc": "Dark navy obsidian & 24k polished gold special item",
-    },
-    "void_eclipse": {
-        "title": "VOID ECLIPSE / DARK MATTER",
-        "bg_top": (24, 12, 42),
-        "bg_bot": (4, 4, 8),
-        "border_primary": (138, 43, 226),
-        "border_secondary": (0, 245, 255),
-        "accent": (0, 245, 255),
-        "text_primary": (255, 255, 255),
-        "text_secondary": (180, 120, 255),
-        "glow_rgb": (138, 43, 226),
-        "desc": "Гравитационная сингулярность и аккреционный диск",
-    },
-    "cyber_hud": {
-        "title": "CYBERPUNK 2077 / NEO-TOKYO",
-        "bg_top": (18, 22, 32),
-        "bg_bot": (9, 10, 15),
-        "border_primary": (0, 255, 224),
-        "border_secondary": (255, 0, 85),
-        "accent": (255, 230, 0),
-        "text_primary": (255, 255, 255),
-        "text_secondary": (0, 255, 224),
-        "glow_rgb": (0, 220, 255),
-        "desc": "Неоновый лазерный интерфейс дополненной реальности",
-    },
-    "hyper_glass": {
-        "title": "LIQUID CRYSTAL / HYPER-GLASS",
-        "bg_top": (8, 38, 28),
-        "bg_bot": (4, 16, 12),
-        "border_primary": (0, 255, 136),
-        "border_secondary": (0, 229, 255),
-        "accent": (0, 255, 136),
-        "text_primary": (255, 255, 255),
-        "text_secondary": (180, 255, 220),
-        "glow_rgb": (0, 255, 136),
-        "desc": "Преломляющееся сапфирово-изумрудное стекло с каустикой",
-    },
-    "inferno_magma": {
-        "title": "INFERNO OVERDRIVE / MAGMA",
-        "bg_top": (52, 16, 6),
-        "bg_bot": (10, 3, 2),
-        "border_primary": (255, 59, 0),
-        "border_secondary": (255, 174, 0),
-        "accent": (255, 174, 0),
-        "text_primary": (255, 250, 240),
-        "text_secondary": (255, 140, 50),
-        "glow_rgb": (255, 80, 0),
-        "desc": "Раскаленная магма и искры вулканического базальта",
-    },
-    "glacial_frost": {
-        "title": "GLACIAL FROST / DIAMOND",
-        "bg_top": (14, 32, 54),
-        "bg_bot": (6, 11, 20),
-        "border_primary": (112, 214, 255),
-        "border_secondary": (232, 247, 255),
-        "accent": (112, 214, 255),
-        "text_primary": (255, 255, 255),
-        "text_secondary": (180, 230, 255),
-        "glow_rgb": (100, 210, 255),
-        "desc": "Вечный арктический лед с кристаллами алмазного инея",
-    },
-    "anime_sakuga": {
-        "title": "ANIME SAKUGA / BLUE LOCK",
-        "bg_top": (20, 22, 28),
-        "bg_bot": (8, 9, 12),
-        "border_primary": (0, 255, 240),
-        "border_secondary": (255, 255, 255),
-        "accent": (0, 255, 240),
-        "text_primary": (255, 255, 255),
-        "text_secondary": (0, 255, 240),
-        "glow_rgb": (0, 255, 240),
-        "desc": "Экспрессивная манга-тушь и молнии ауры эгоиста",
-    },
-    "royal_24k": {
-        "title": "ROYAL 24K VELVET & INGOT",
-        "bg_top": (46, 10, 24),
-        "bg_bot": (13, 11, 9),
-        "border_primary": (212, 175, 55),
-        "border_secondary": (255, 237, 179),
-        "accent": (212, 175, 55),
-        "text_primary": (255, 252, 240),
-        "text_secondary": (212, 175, 55),
-        "glow_rgb": (212, 175, 55),
-        "desc": "Лимитированный золотой слиток на королевском бархате",
-    },
-    "aero_carbon": {
-        "title": "RED BULL VELOCITY / AERO CARBON",
-        "bg_top": (28, 30, 36),
-        "bg_bot": (14, 14, 18),
-        "border_primary": (255, 24, 1),
-        "border_secondary": (0, 229, 255),
-        "accent": (255, 24, 1),
-        "text_primary": (255, 255, 255),
-        "text_secondary": (255, 80, 80),
-        "glow_rgb": (255, 24, 1),
-        "desc": "Кованый карбон F1 и телеметрия ветрового туннеля",
-    },
-    "ucl_night": {
-        "title": "UEFA CHAMPIONS NIGHT",
-        "bg_top": (6, 18, 48),
-        "bg_bot": (2, 6, 23),
-        "border_primary": (0, 212, 255),
-        "border_secondary": (226, 232, 240),
-        "accent": (0, 212, 255),
-        "text_primary": (255, 255, 255),
-        "text_secondary": (180, 230, 255),
-        "glow_rgb": (0, 212, 255),
-        "desc": "Звездная ночь Лиги Чемпионов и зеркальный хром",
-    }
 }
 
 
@@ -340,24 +221,25 @@ def get_kpl_tier_by_ovr(ovr: int | float | str) -> str:
 
 
 def _normalize_style_key(style_name: str) -> str:
+    """
+    Привести любое имя стиля к одному из трёх тиров.
+
+    Алиасы оставлены только для тиров: старые «легендарные» стили удалены,
+    и всё неизвестное осознанно падает в STANDARD — незнакомое имя не должно
+    случайно выдавать игроку самую редкую карточку.
+    """
     s = str(style_name).lower().strip()
     alias_map = {
-        # KPL League Official Formats
-        "standard": "kpl_standard", "kpl_standard": "kpl_standard", "base": "kpl_standard", "tier1": "kpl_standard", "bronze": "kpl_standard", "silver": "kpl_standard",
-        "star": "kpl_star", "kpl_star": "kpl_star", "tier2": "kpl_star", "rare": "kpl_star", "elite": "kpl_star", "inform": "kpl_star", "totw": "kpl_star",
-        "prime": "kpl_prime", "kpl_prime": "kpl_prime", "tier3": "kpl_prime", "mvp": "kpl_prime", "legend": "kpl_prime", "toty": "kpl_prime", "toty_gold": "kpl_prime",
-        # Legacy & Specialized Themes
-        "void": "void_eclipse", "void_eclipse": "void_eclipse", "eclipse": "void_eclipse", "dark_matter": "void_eclipse",
-        "cyber": "cyber_hud", "cyber_hud": "cyber_hud", "cyberpunk": "cyber_hud",
-        "glass": "hyper_glass", "hyper_glass": "hyper_glass", "crystal": "hyper_glass", "emerald": "hyper_glass",
-        "inferno": "inferno_magma", "inferno_magma": "inferno_magma", "magma": "inferno_magma", "fire": "inferno_magma",
-        "frost": "glacial_frost", "glacial_frost": "glacial_frost", "ice": "glacial_frost",
-        "anime": "anime_sakuga", "anime_sakuga": "anime_sakuga", "sakuga": "anime_sakuga", "blue_lock": "anime_sakuga",
-        "royal": "royal_24k", "royal_24k": "royal_24k", "gold_bar": "royal_24k", "luxury": "royal_24k",
-        "aero": "aero_carbon", "aero_carbon": "aero_carbon", "carbon": "aero_carbon", "velocity": "aero_carbon",
-        "ucl": "ucl_night", "ucl_night": "ucl_night", "champions": "ucl_night"
+        "standard": "kpl_standard", "base": "kpl_standard", "tier1": "kpl_standard",
+        "bronze": "kpl_standard", "silver": "kpl_standard",
+        "star": "kpl_star", "tier2": "kpl_star", "rare": "kpl_star",
+        "elite": "kpl_star", "inform": "kpl_star", "totw": "kpl_star",
+        "prime": "kpl_prime", "tier3": "kpl_prime", "mvp": "kpl_prime",
+        "legend": "kpl_prime", "toty": "kpl_prime", "gold": "kpl_prime",
     }
-    return alias_map.get(s, s if s in CARD_STYLES else "kpl_prime")
+    if s in CARD_STYLES:
+        return s
+    return alias_map.get(s, "kpl_standard")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -369,12 +251,7 @@ def _normalize_style_key(style_name: str) -> str:
 #
 # Дивизион владеет фирменным слоем: вторичный кант, подтон подложки, цвет
 # частиц/лазера и узор фона. Отсюда 3 × 5 = 15 непохожих карточек.
-#
-# Легендарные стили (toty_gold, void_eclipse и прочие) — самостоятельные
-# коллекционные предметы, они не тиры и дивизионом не красятся.
 # ─────────────────────────────────────────────────────────────────────────────
-
-DIVISION_TIER_STYLES = ("kpl_standard", "kpl_star", "kpl_prime")
 
 # Узор фона у каждого дивизиона свой: карточки должны различаться не только
 # оттенком, но и структурой — иначе на глаз это один и тот же дизайн.
@@ -402,13 +279,13 @@ def build_division_style(style_id: str, theme) -> dict:
     Собрать финальную палитру карточки: тир по OVR + фирменный слой дивизиона.
 
     Возвращает копию CARD_STYLES — базовый словарь не мутируется.
-    Для нетировых стилей и неизвестного дивизиона палитра остаётся исходной.
+    Для неизвестного дивизиона палитра остаётся чистой палитрой тира.
     """
     cfg = dict(CARD_STYLES[style_id])
     accent = getattr(theme, "accent", None)
     code = getattr(theme, "code", "") or ""
 
-    if style_id not in DIVISION_TIER_STYLES or not accent or code not in DIVISION_PATTERNS:
+    if not accent or code not in DIVISION_PATTERNS:
         cfg["division_accent"] = cfg["border_secondary"]
         cfg["division_pattern"] = None
         return cfg
@@ -557,7 +434,7 @@ def _generate_jersey_silhouette(width: int, height: int, collar_y: int, plaque_y
 # 🎨 MASTER STATIC CARD GENERATOR (Authentic EA Sports FC FUT Shield Engine)
 # ═════════════════════════════════════════════════════════════════════════════
 
-def render_master_static_card(player_data: dict, style_id: str = "toty_gold") -> Image.Image:
+def render_master_static_card(player_data: dict, style_id: str = "kpl_prime") -> Image.Image:
     """Render authentic high resolution EA FC 25 Ultimate Team Card Shield."""
     style_id = _normalize_style_key(style_id)
     ovr, position, player_name, team_name, pac, sho, pas, dri, def_stat, phy = _extract_card_data(player_data)
@@ -853,7 +730,7 @@ def render_master_static_card(player_data: dict, style_id: str = "toty_gold") ->
     return img
 
 
-def generate_ea_fc_card(player_data: dict, theme_name: str = "toty_gold") -> io.BytesIO:
+def generate_ea_fc_card(player_data: dict, theme_name: str = "kpl_prime") -> io.BytesIO:
     """Generate static PNG player card for any of the 10 styles."""
     style_id = _normalize_style_key(theme_name)
     img = render_master_static_card(player_data, style_id=style_id)
@@ -934,7 +811,7 @@ def _draw_laser_perimeter_runner(fx_draw, pts: list[tuple[int, int]], progress: 
     fx_draw.ellipse([(hx - 3, hy - 3), (hx + 3, hy + 3)], fill=(255, 255, 255, 250))
 
 
-def render_animated_card_frames(player_data: dict, anim_style: str = "toty_gold") -> tuple[list[Image.Image], float, int, int]:
+def render_animated_card_frames(player_data: dict, anim_style: str = "kpl_prime") -> tuple[list[Image.Image], float, int, int]:
     """
     Render raw high-resolution frames of the animated FUT card without palette loss.
     Returns: (frames, fps, anim_w, anim_h)
@@ -1026,7 +903,9 @@ def render_animated_card_frames(player_data: dict, anim_style: str = "toty_gold"
             fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(1))
 
         # ─── 0. PRIME MVP (OVR 93+): 24K Gold Specular Foil, Gold Border Laser & Micro Embers ─────
-        elif style_id in ["kpl_prime", "toty_gold"]:
+        # else, а не elif: _normalize_style_key всегда возвращает один из трёх
+        # тиров, поэтому у кадра не может остаться пустой ветки эффектов.
+        else:
             shimmer = _create_shimmer_streak(anim_w, anim_h, t, color=(255, 225, 120), alpha=60)
             frame = Image.alpha_composite(frame, shimmer)
             # High-tech gold laser runner along shield borders
@@ -1043,114 +922,13 @@ def render_animated_card_frames(player_data: dict, anim_style: str = "toty_gold"
                 fx_draw.ellipse([(cur_x - rad, cur_y - rad), (cur_x + rad, cur_y + rad)], fill=p_col)
             fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(1))
 
-        # ─── 2. VOID ECLIPSE: Accretion Disk & Subtle Gravitational Stardust ───
-        elif style_id == "void_eclipse":
-            _draw_laser_perimeter_runner(fx_draw, shield_pts, t, color=(138, 43, 226), trail_len=0.20)
-            cx, cy = anim_w // 2, int(anim_h * 0.27)
-            for (px_rel, py_rel, spd, rad, phase) in particles[:14]:
-                dist = (1.0 - (t * spd + py_rel) % 1.0) * 200
-                ang = phase + (2 * math.pi * t)
-                sx = cx + int(dist * math.cos(ang))
-                sy = cy + int(dist * math.sin(ang))
-                p_alpha = int(200 * (dist / 200.0))
-                fx_draw.ellipse([(sx - rad, sy - rad), (sx + rad, sy + rad)], fill=(0, 245, 255, p_alpha))
-            fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(1))
-
-        # ─── 3. CYBER HUD: Scanning Laser & Tech Corner Accents ───────────────
-        elif style_id == "cyber_hud":
-            laser_y = int((t * anim_h * 1.2) % anim_h)
-            fx_draw.line([(16, laser_y), (anim_w - 16, laser_y)], fill=(0, 255, 224, 160), width=2)
-            fx_draw.line([(16, laser_y - 2), (anim_w - 16, laser_y - 2)], fill=(255, 0, 85, 100), width=1)
-            _draw_laser_perimeter_runner(fx_draw, shield_pts, t, color=(0, 255, 224), trail_len=0.18)
-            fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(1))
-
-        # ─── 4. HYPER GLASS: Fluid Caustics & Prismatic Shimmer ──────────────
-        elif style_id == "hyper_glass":
-            shimmer = _create_shimmer_streak(anim_w, anim_h, t, color=(0, 255, 136), alpha=55)
-            frame = Image.alpha_composite(frame, shimmer)
-            _draw_laser_perimeter_runner(fx_draw, shield_pts, t, color=(0, 255, 136), trail_len=0.20)
-            fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(1))
-
-        # ─── 5. INFERNO MAGMA: Molten Border Tracer & Rising Sparks ──────────
-        elif style_id == "inferno_magma":
-            _draw_laser_perimeter_runner(fx_draw, shield_pts, t, color=(255, 80, 0), trail_len=0.24)
-            for (px_rel, py_rel, spd, rad, phase) in particles[:16]:
-                cur_y_pct = (py_rel - spd * t) % 1.0
-                cur_x = int(px_rel * (anim_w - 60) + 30 + math.sin(phase + 2 * math.pi * t) * 12)
-                cur_y = int(cur_y_pct * (anim_h - 100) + 40)
-                p_alpha = int(220 * math.sin(math.pi * cur_y_pct))
-                fx_draw.ellipse([(cur_x - rad, cur_y - rad), (cur_x + rad, cur_y + rad)], fill=(255, 200, 50, p_alpha))
-            fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(1))
-
-        # ─── 6. GLACIAL FROST: Sub-Zero Diamond Star Glitter ─────────────────
-        elif style_id == "glacial_frost":
-            shimmer = _create_shimmer_streak(anim_w, anim_h, t, color=(160, 230, 255), alpha=50)
-            frame = Image.alpha_composite(frame, shimmer)
-            _draw_laser_perimeter_runner(fx_draw, shield_pts, t, color=(112, 214, 255), trail_len=0.20)
-            for (px_rel, py_rel, spd, rad, phase) in particles[:12]:
-                cur_t = (t * spd + py_rel) % 1.0
-                star_a = int(230 * math.sin(math.pi * cur_t))
-                star_x = int(px_rel * (anim_w - 60) + 30)
-                star_y = int(py_rel * (anim_h - 120) + 50)
-                s_len = int(rad * 3)
-                fx_draw.line([(star_x - s_len, star_y), (star_x + s_len, star_y)], fill=(255, 255, 255, star_a), width=1)
-                fx_draw.line([(star_x, star_y - s_len), (star_x, star_y + s_len)], fill=(180, 235, 255, star_a), width=1)
-            fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(1))
-
-        # ─── 7. ANIME SAKUGA: Lightning Laser Runner & Speed Sparks ──────────
-        elif style_id == "anime_sakuga":
-            _draw_laser_perimeter_runner(fx_draw, shield_pts, t, color=(0, 255, 240), trail_len=0.25)
-            if f_idx % 4 == 0:
-                cx, cy = anim_w // 2, int(anim_h * 0.28)
-                l_points = [(cx - 90, cy - 40)]
-                for step_i in range(4):
-                    prev_x, prev_y = l_points[-1]
-                    next_x = prev_x + random.randint(25, 50)
-                    next_y = prev_y + random.randint(-25, 25)
-                    l_points.append((next_x, next_y))
-                for pt_idx in range(len(l_points) - 1):
-                    fx_draw.line([l_points[pt_idx], l_points[pt_idx + 1]], fill=(255, 255, 255, 180), width=2)
-            fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(1))
-
-        # ─── 8. ROYAL 24K: Clean Velvet Gold Sheen & Border Glide ────────────
-        elif style_id == "royal_24k":
-            shimmer = _create_shimmer_streak(anim_w, anim_h, t, color=(255, 237, 179), alpha=55)
-            frame = Image.alpha_composite(frame, shimmer)
-            _draw_laser_perimeter_runner(fx_draw, shield_pts, t, color=(212, 175, 55), trail_len=0.20)
-            fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(1))
-
-        # ─── 9. AERO CARBON: F1 Telemetry Laser & Speed Streamlines ──────────
-        elif style_id == "aero_carbon":
-            _draw_laser_perimeter_runner(fx_draw, shield_pts, t, color=(255, 24, 1), trail_len=0.22)
-            for s_idx in range(4):
-                stream_y = int((anim_h * 0.25) + s_idx * 90 + math.sin(t * 2 * math.pi + s_idx) * 10)
-                s_prog = (t + s_idx * 0.22) % 1.0
-                stream_x = int(s_prog * anim_w)
-                fx_draw.line([(stream_x, stream_y), (stream_x + 50, stream_y)], fill=(0, 229, 255, 140), width=2)
-            fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(1))
-
-        # ─── 10. UCL NIGHT: Cosmic Cyan Laser & Constellation Stardust ───────
-        else:
-            shimmer = _create_shimmer_streak(anim_w, anim_h, t, color=(180, 230, 255), alpha=55)
-            frame = Image.alpha_composite(frame, shimmer)
-            _draw_laser_perimeter_runner(fx_draw, shield_pts, t, color=(0, 212, 255), trail_len=0.22)
-            for (px_rel, py_rel, spd, rad, phase) in particles[:12]:
-                cur_t = (t * spd + py_rel) % 1.0
-                star_a = int(220 * math.sin(math.pi * cur_t))
-                star_x = int(px_rel * (anim_w - 60) + 30)
-                star_y = int(py_rel * (anim_h - 120) + 50)
-                s_len = int(rad * 2.5)
-                fx_draw.line([(star_x - s_len, star_y), (star_x + s_len, star_y)], fill=(255, 255, 255, star_a), width=1)
-                fx_draw.line([(star_x, star_y - s_len), (star_x, star_y + s_len)], fill=(0, 212, 255, star_a), width=1)
-            fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(1))
-
         frame = Image.alpha_composite(frame, fx_layer)
         frames.append(frame.convert("RGB"))
 
     return frames, fps, anim_w, anim_h
 
 
-def generate_animated_ea_fc_card(player_data: dict, anim_style: str = "toty_gold") -> io.BytesIO:
+def generate_animated_ea_fc_card(player_data: dict, anim_style: str = "kpl_prime") -> io.BytesIO:
     """
     Generate high-definition animated card directly as H.264 MP4 without palette loss.
     """

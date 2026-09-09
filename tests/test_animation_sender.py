@@ -125,7 +125,7 @@ class TestAnimationPipeline(unittest.TestCase):
             "total_assists": 10,
             "matches_played": 14,
         }
-        frames, fps, anim_w, anim_h = fc_card_generator.render_animated_card_frames(player_data, "toty_gold")
+        frames, fps, anim_w, anim_h = fc_card_generator.render_animated_card_frames(player_data, "kpl_prime")
         self.assertEqual(len(frames), 24)
         self.assertEqual(fps, 24.0)
         self.assertEqual(anim_w, 480)

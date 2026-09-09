@@ -78,13 +78,21 @@ class TestBuildDivisionStyle(unittest.TestCase):
             self.assertEqual(cfg["border_secondary"], base["border_secondary"], tier)
             self.assertIsNone(cfg["division_pattern"], tier)
 
-    def test_legendary_styles_are_not_touched_by_divisions(self):
-        """Спецкарточки — отдельные коллекционные предметы, а не тиры."""
-        for style in ("toty_gold", "void_eclipse", "ucl_night"):
-            cfg = fc.build_division_style(style, THEMES["DIV_4"])
-            self.assertEqual(cfg["bg_top"], fc.CARD_STYLES[style]["bg_top"], style)
-            self.assertEqual(cfg["border_secondary"], fc.CARD_STYLES[style]["border_secondary"], style)
-            self.assertIsNone(cfg["division_pattern"], style)
+
+class TestOnlyTheThreeTiersExist(unittest.TestCase):
+    """Легендарные стили удалены: система — ровно «дивизион × диапазон OVR»."""
+
+    def test_style_table_holds_exactly_the_three_tiers(self):
+        self.assertEqual(tuple(fc.CARD_STYLES), TIERS)
+
+    def test_aliases_resolve_only_into_tiers(self):
+        for name in ("prime", "mvp", "toty", "star", "totw", "standard", "bronze"):
+            self.assertIn(fc._normalize_style_key(name), TIERS, name)
+
+    def test_unknown_name_falls_back_to_standard_not_to_the_rarest(self):
+        """Незнакомое имя не должно случайно выдавать самую редкую карточку."""
+        for name in ("toty_gold", "void_eclipse", "ucl_night", "", "???"):
+            self.assertEqual(fc._normalize_style_key(name), "kpl_standard", name)
 
 
 class TestPatternLayer(unittest.TestCase):
