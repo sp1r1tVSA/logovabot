@@ -201,17 +201,14 @@ class TestMiniAppAccessCallSites(AioHTTPTestCase):
         return f"/api/markets/{self.ids['market_id']}/odds-history?selection_key=p1"
 
     def _assert_allowed(self, url: str, status: int, body: str) -> None:
-        """
-        Разрешённый доступ = прежнее успешное поведение endpoint'а.
-        У /live в существующем контракте ключ "status" перезаписан статусом матча
-        (дубль ключа в литерале ответа) — контракт не меняем, проверяем match_id.
-        """
+        """Разрешённый доступ = прежнее успешное поведение endpoint'а."""
         self.assertEqual(status, 200, f"{url}: {body}")
         data = json.loads(body)
+        self.assertEqual(data.get("status"), "ok", url)
         if url.endswith("/live"):
+            # FIX-08: статус матча живёт в match_status и не затирает "status".
             self.assertEqual(data.get("match_id"), self.ids["match_id"], url)
-        else:
-            self.assertEqual(data.get("status"), "ok", url)
+            self.assertIn("match_status", data, url)
 
     async def _assert_restricted(self, url: str, headers: dict) -> str:
         resp = await self.client.get(url, headers=headers)

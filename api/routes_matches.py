@@ -445,10 +445,15 @@ async def handle_get_match_live(request: web.Request) -> web.Response:
         """, (match_id,))
         events = [dict(r) for r in cursor.fetchall()]
 
+    # "status" — статус API-операции, "match_status" — статус самого матча.
+    # Раньше оба лежали под ключом "status" в одном литерале, и статус матча
+    # затирал "ok": клиент (app.js: `liveRes.status === 'ok'`) никогда не
+    # признавал ответ успешным. Имя "match_status" уже используется в
+    # routes_markets / routes_live / routes_admin_live.
     return web.json_response({
         "status": "ok",
         "match_id": match_id,
-        "status": m["status"],
+        "match_status": m["status"],
         "live_minute": m["live_minute"],
         "score1": m["player1_score"] or 0,
         "score2": m["player2_score"] or 0,

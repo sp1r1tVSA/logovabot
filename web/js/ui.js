@@ -356,8 +356,13 @@ export class UIRenderer {
 
     const t1 = matchDetail.team1_name || matchDetail.player1_team || 'Хозяева';
     const t2 = matchDetail.team2_name || matchDetail.player2_team || 'Гости';
-    const s1 = live?.score1 ?? matchDetail.player1_score ?? '-';
-    const s2 = live?.score2 ?? matchDetail.player2_score ?? '-';
+    // live.score* берём только для реально идущего матча: у несыгранного endpoint
+    // отдаёт 0 вместо NULL, и счёт «-» превратился бы в «0 : 0».
+    // (До исправления контракта /live клиент вообще не признавал ответ успешным,
+    //  поэтому live всегда был null и ветка не работала.)
+    const liveNow = live?.match_status === 'live' ? live : null;
+    const s1 = liveNow?.score1 ?? matchDetail.player1_score ?? '-';
+    const s2 = liveNow?.score2 ?? matchDetail.player2_score ?? '-';
     const matchId = matchDetail.id || matchDetail.match_id;
     const tourNum = matchDetail.round_number || 1;
 
