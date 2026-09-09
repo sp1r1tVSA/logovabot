@@ -360,6 +360,121 @@ def _normalize_style_key(style_name: str) -> str:
     return alias_map.get(s, s if s in CARD_STYLES else "kpl_prime")
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# ДИЗАЙН КАРТОЧКИ = ДИАПАЗОН OVR × ДИВИЗИОН
+#
+# Диапазон OVR владеет «металлом»: border_primary, свечение, цвет шиммера и
+# семейство анимации (сталь → неон → золото). Это ось редкости, размывать её
+# нельзя, иначе PRIME перестанет читаться как PRIME.
+#
+# Дивизион владеет фирменным слоем: вторичный кант, подтон подложки, цвет
+# частиц/лазера и узор фона. Отсюда 3 × 5 = 15 непохожих карточек.
+#
+# Легендарные стили (toty_gold, void_eclipse и прочие) — самостоятельные
+# коллекционные предметы, они не тиры и дивизионом не красятся.
+# ─────────────────────────────────────────────────────────────────────────────
+
+DIVISION_TIER_STYLES = ("kpl_standard", "kpl_star", "kpl_prime")
+
+# Узор фона у каждого дивизиона свой: карточки должны различаться не только
+# оттенком, но и структурой — иначе на глаз это один и тот же дизайн.
+DIVISION_PATTERNS = {
+    "DIV_1": "stripes",
+    "DIV_2": "chevrons",
+    "DIV_3": "hexes",
+    "DIV_4": "arcs",
+    "DIV_5": "dots",
+}
+
+# Насколько акцент дивизиона подмешивается в подложку. Верх виден сильнее
+# (там свечение и игрок), низ почти чёрный — там подтон только угадывается.
+_BG_TOP_MIX = 0.20
+_BG_BOT_MIX = 0.10
+
+
+def _mix(base: tuple, accent: tuple, amount: float) -> tuple:
+    """Подмешать акцент дивизиона в базовый цвет тира."""
+    return tuple(int(b + (a - b) * amount) for b, a in zip(base[:3], accent[:3]))
+
+
+def build_division_style(style_id: str, theme) -> dict:
+    """
+    Собрать финальную палитру карточки: тир по OVR + фирменный слой дивизиона.
+
+    Возвращает копию CARD_STYLES — базовый словарь не мутируется.
+    Для нетировых стилей и неизвестного дивизиона палитра остаётся исходной.
+    """
+    cfg = dict(CARD_STYLES[style_id])
+    accent = getattr(theme, "accent", None)
+    code = getattr(theme, "code", "") or ""
+
+    if style_id not in DIVISION_TIER_STYLES or not accent or code not in DIVISION_PATTERNS:
+        cfg["division_accent"] = cfg["border_secondary"]
+        cfg["division_pattern"] = None
+        return cfg
+
+    cfg["border_secondary"] = accent
+    cfg["bg_top"] = _mix(cfg["bg_top"], accent, _BG_TOP_MIX)
+    cfg["bg_bot"] = _mix(cfg["bg_bot"], accent, _BG_BOT_MIX)
+    cfg["division_accent"] = accent
+    cfg["division_pattern"] = DIVISION_PATTERNS[code]
+    return cfg
+
+
+def _draw_division_pattern(width: int, height: int, pattern: str | None, color: tuple, alpha: int = 26) -> Image.Image | None:
+    """
+    Фактура подложки, своя у каждого дивизиона. Рисуется под игроком и HUD,
+    поэтому держим низкую альфу: это текстура, а не элемент интерфейса.
+    """
+    if not pattern:
+        return None
+
+    layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    d = ImageDraw.Draw(layer)
+    ink = tuple(color[:3]) + (alpha,)
+    lw = max(1, int(2 * SCALE))
+
+    if pattern == "stripes":
+        step = int(38 * SCALE)
+        for x in range(-height, width + height, step):
+            d.line([(x, 0), (x + height, height)], fill=ink, width=lw)
+
+    elif pattern == "chevrons":
+        step = int(46 * SCALE)
+        arm = int(60 * SCALE)
+        for y in range(-step, height + step, step):
+            for x in range(0, width + arm, arm * 2):
+                d.line([(x, y + arm // 2), (x + arm, y), (x + arm * 2, y + arm // 2)], fill=ink, width=lw)
+
+    elif pattern == "hexes":
+        r = int(26 * SCALE)
+        dx = int(r * 1.5)
+        dy = int(r * math.sqrt(3))
+        for row, y in enumerate(range(-dy, height + dy, dy)):
+            for col, x in enumerate(range(-dx, width + dx, dx)):
+                cy = y + (dy // 2 if col % 2 else 0)
+                pts = [
+                    (x + r * math.cos(math.radians(60 * k)), cy + r * math.sin(math.radians(60 * k)))
+                    for k in range(6)
+                ]
+                d.polygon(pts, outline=ink, width=lw)
+
+    elif pattern == "arcs":
+        cx, cy = width // 2, int(height * 0.28)
+        for r in range(int(40 * SCALE), int(560 * SCALE), int(42 * SCALE)):
+            d.ellipse([(cx - r, cy - r), (cx + r, cy + r)], outline=ink, width=lw)
+
+    elif pattern == "dots":
+        step = int(30 * SCALE)
+        rad = max(1, int(2.5 * SCALE))
+        for row, y in enumerate(range(0, height + step, step)):
+            offset = step // 2 if row % 2 else 0
+            for x in range(offset, width + step, step):
+                d.ellipse([(x - rad, y - rad), (x + rad, y + rad)], fill=ink)
+
+    return layer
+
+
 def _generate_jersey_silhouette(width: int, height: int, collar_y: int, plaque_y: int, cfg: dict) -> Image.Image:
     """
     Render a sleek, authentic athletic esports/football jersey silhouette
@@ -445,8 +560,15 @@ def _generate_jersey_silhouette(width: int, height: int, collar_y: int, plaque_y
 def render_master_static_card(player_data: dict, style_id: str = "toty_gold") -> Image.Image:
     """Render authentic high resolution EA FC 25 Ultimate Team Card Shield."""
     style_id = _normalize_style_key(style_id)
-    cfg = CARD_STYLES[style_id]
     ovr, position, player_name, team_name, pac, sho, pas, dri, def_stat, phy = _extract_card_data(player_data)
+
+    # Диапазон OVR задаёт тир, дивизион — фирменный слой поверх него.
+    division_theme = resolve_theme(
+        division_id=player_data.get("division_id"),
+        division_name=player_data.get("division_name"),
+        team_name=team_name,
+    )
+    cfg = build_division_style(style_id, division_theme)
 
     img = Image.new("RGBA", (WIDTH, HEIGHT), (6, 8, 14, 255))
     draw = ImageDraw.Draw(img)
@@ -501,6 +623,11 @@ def render_master_static_card(player_data: dict, style_id: str = "toty_gold") ->
         s_draw.line([(left_x, y), (right_x, y)], fill=(r, g, b, 255))
 
     img.paste(shield_bg, (0, 0), shield_mask)
+
+    # 3b. Фирменная фактура дивизиона — внутри щита, под игроком и HUD.
+    pattern_layer = _draw_division_pattern(WIDTH, HEIGHT, cfg.get("division_pattern"), cfg["division_accent"])
+    if pattern_layer is not None:
+        img.paste(pattern_layer, (0, 0), ImageChops.multiply(pattern_layer.split()[3], shield_mask))
 
     # 4. Metallic Shield 3D Bevel Borders
     draw = ImageDraw.Draw(img)
@@ -693,14 +820,6 @@ def render_master_static_card(player_data: dict, style_id: str = "toty_gold") ->
     foot_y = grid_y + int(140 * SCALE)
     title_short = cfg['title'].split(' / ')[0].strip()
 
-    # Дивизион здесь только текстом. Цвет карточки кодирует редкость стиля
-    # (TOTY, ICON, обычная) — подмешивать в него акцент дивизиона нельзя,
-    # иначе карточка перестанет читаться как коллекционная.
-    division_theme = resolve_theme(
-        division_id=player_data.get("division_id"),
-        division_name=player_data.get("division_name"),
-        team_name=team_name,
-    )
     edition_tail = division_theme.label or "СЕЗОН 2026"
     foot_text = f"★ {title_short} • {edition_tail} ★"
 
@@ -821,7 +940,13 @@ def render_animated_card_frames(player_data: dict, anim_style: str = "toty_gold"
     Returns: (frames, fps, anim_w, anim_h)
     """
     style_id = _normalize_style_key(anim_style)
-    cfg = CARD_STYLES[style_id]
+    division_theme = resolve_theme(
+        division_id=player_data.get("division_id"),
+        division_name=player_data.get("division_name"),
+        team_name=player_data.get("team_name"),
+    )
+    cfg = build_division_style(style_id, division_theme)
+    div_accent = cfg["division_accent"]
 
     # 1. Base High-Res Static Render & Resize to 480x680 (Aspect Ratio Preserved)
     base_img = render_master_static_card(player_data, style_id=style_id)
@@ -875,14 +1000,14 @@ def render_animated_card_frames(player_data: dict, anim_style: str = "toty_gold"
         fx_layer = Image.new("RGBA", (anim_w, anim_h), (0, 0, 0, 0))
         fx_draw = ImageDraw.Draw(fx_layer)
 
-        # ─── 0. KPL STANDARD (OVR <= 85): Clean Steel Sheen & Ruby Perimeter Laser ───
+        # ─── 0. STANDARD (OVR <= 85): Clean Steel Sheen & Division Perimeter Laser ───
         if style_id == "kpl_standard":
             shimmer = _create_shimmer_streak(anim_w, anim_h, t, color=(220, 228, 240), alpha=50)
             frame = Image.alpha_composite(frame, shimmer)
-            _draw_laser_perimeter_runner(fx_draw, shield_pts, t, color=(239, 68, 68), trail_len=0.18)
+            _draw_laser_perimeter_runner(fx_draw, shield_pts, t, color=div_accent, trail_len=0.18)
             fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(1))
 
-        # ─── 0. KPL STAR (OVR 86-92): Prismatic Cyan Sheen, Laser Tracer & Stardust ───
+        # ─── 0. STAR (OVR 86-92): Prismatic Cyan Sheen, Laser Tracer & Stardust ───
         elif style_id == "kpl_star":
             shimmer = _create_shimmer_streak(anim_w, anim_h, t, color=(0, 230, 255), alpha=55)
             frame = Image.alpha_composite(frame, shimmer)
@@ -895,10 +1020,12 @@ def render_animated_card_frames(player_data: dict, anim_style: str = "toty_gold"
                 star_a = int(220 * math.sin(math.pi * cur_y_pct))
                 s_len = int(rad * 2.5)
                 fx_draw.line([(star_x - s_len, star_y), (star_x + s_len, star_y)], fill=(255, 255, 255, star_a), width=1)
-                fx_draw.line([(star_x, star_y - s_len), (star_x, star_y + s_len)], fill=(0, 230, 255, star_a), width=1)
+                # Вертикальный штрих искры — в цвете дивизиона, горизонтальный
+                # остаётся белым: тир по-прежнему читается по неону тира.
+                fx_draw.line([(star_x, star_y - s_len), (star_x, star_y + s_len)], fill=div_accent + (star_a,), width=1)
             fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(1))
 
-        # ─── 0. KPL PRIME MVP (OVR 93+): 24K Gold Specular Foil, Gold Border Laser & Micro Embers ─────
+        # ─── 0. PRIME MVP (OVR 93+): 24K Gold Specular Foil, Gold Border Laser & Micro Embers ─────
         elif style_id in ["kpl_prime", "toty_gold"]:
             shimmer = _create_shimmer_streak(anim_w, anim_h, t, color=(255, 225, 120), alpha=60)
             frame = Image.alpha_composite(frame, shimmer)
@@ -910,8 +1037,9 @@ def render_animated_card_frames(player_data: dict, anim_style: str = "toty_gold"
                 cur_x = int(px_rel * (anim_w - 70) + 35 + math.sin(phase + 2 * math.pi * t) * 10)
                 cur_y = int(cur_y_pct * (anim_h - 100) + 40)
                 p_alpha = int(210 * math.sin(math.pi * cur_y_pct))
+                # Угли чередуются: золото тира и акцент дивизиона.
                 is_gold = (rad % 2 == 0)
-                p_col = (255, 215, 0, p_alpha) if is_gold else (239, 68, 68, p_alpha)
+                p_col = (255, 215, 0, p_alpha) if is_gold else div_accent + (p_alpha,)
                 fx_draw.ellipse([(cur_x - rad, cur_y - rad), (cur_x + rad, cur_y + rad)], fill=p_col)
             fx_layer = fx_layer.filter(ImageFilter.GaussianBlur(1))
 
