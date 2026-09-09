@@ -111,16 +111,34 @@ validate_telegram_data = validate_telegram_init_data
 
 
 def check_user_access(user_id: int) -> bool:
-    """Check if user has access to Logovo.bet."""
+    """
+    Check if user has access to Logovo.bet.
+
+    FAIL-CLOSED. Проверка доступа имеет ровно два допустимых исхода: ALLOW и
+    REJECT. Внутренняя поломка проверки (ошибка БД при чтении feature-флага,
+    сбой lockdown/RBAC-запроса, любое неожиданное исключение) — это НЕ
+    разрешение: доступ отклоняется, событие пишется в лог уровня ERROR, а
+    вызывающий route отдаёт свой обычный 403 access_restricted.
+
+    Отсутствие строки флага ошибкой не является: get_feature_flag штатно
+    возвращает существующий default проекта, и эта семантика сохранена.
+    """
     if not user_id or user_id <= 0:
         return False
-    if not is_logovo_access_allowed(user_id):
-        return False
-    if is_admin(user_id):
-        return True
     try:
+        if not is_logovo_access_allowed(user_id):
+            return False
+        if is_admin(user_id):
+            return True
         flag = database.get_feature_flag("betting_market", default="public")
         return flag in ("public", "all", "enabled")
     except Exception:
-        return True
+        # Никакого permissive fallback: даже если default флага — 'public',
+        # НЕ прочитанная проверка не может разрешить доступ.
+        logger.exception(
+            "FEATURE_ACCESS_UNAVAILABLE: feature access check failed — access denied "
+            "(fail-closed). feature_key=betting_market user_id=%s",
+            user_id
+        )
+        return False
 
