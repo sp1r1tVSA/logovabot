@@ -135,7 +135,6 @@ class TestLiveResponseStatusContract(AioHTTPTestCase):
         self._orig_db_path = database.DB_PATH
         self._tmp_path = _open_temp_db()
         self.ids = _seed()
-        database.set_feature_flag("betting_market", "public")
         super().setUp()
         self.headers = {
             "X-Telegram-Init-Data": generate_valid_init_data(

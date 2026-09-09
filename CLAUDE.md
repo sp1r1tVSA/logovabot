@@ -144,9 +144,9 @@ compare against `config.ADMIN_IDS` inline:
 take effect without a restart. Keep that behaviour.
 
 **Lockdown:** `LOGOVO_LOCKDOWN=true` restricts the bot to global admins via the group=-1
-guard. Feature rollout is separately gated by `feature_flags` — e.g. `betting_market`
-defaults to `admin_only`, and only flips the Mini App menu button on for everyone at
-`public`.
+guard. It is the only rollout gate — Mini App access (`api/auth.py::check_user_access`) and
+the betting handlers defer to it and nothing else. That check is deliberately FAIL-CLOSED:
+any internal error must reject, never allow.
 
 ---
 

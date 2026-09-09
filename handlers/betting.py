@@ -31,15 +31,10 @@ OUTCOME_TITLES = {
 
 
 def _check_betting_access(user_id: int) -> bool:
-    """Check if Logovo.bet is accessible to the user (admin_only while closed or in Lockdown)."""
+    """Check if Logovo.bet is accessible to the user (global admins only while in Lockdown)."""
     from handlers.base import is_logovo_access_allowed
-    if not is_logovo_access_allowed(user_id):
-        return False
-    if is_admin(user_id):
-        return True
     try:
-        flag = database.get_feature_flag("betting_market")
-        return flag == "public"
+        return is_logovo_access_allowed(user_id)
     except Exception:
         return False
 

@@ -125,23 +125,21 @@ class TestBettingEngine(unittest.TestCase):
             conn.execute("DELETE FROM bet_markets WHERE match_id IN (8881, 8882)")
 
     def test_betting_access_control(self):
+        from unittest.mock import patch
         from handlers.betting import _check_betting_access
         import config
 
         admin_id = config.ADMIN_IDS[0] if config.ADMIN_IDS else 12345
         regular_user = 777888999
 
-        # Set flag to admin_only (Lab mode)
-        database.set_feature_flag("betting_market", "admin_only")
-        self.assertTrue(_check_betting_access(admin_id))
-        self.assertFalse(_check_betting_access(regular_user))
+        with patch.object(config, "is_global_lockdown_enabled", return_value=False):
+            self.assertTrue(_check_betting_access(admin_id))
+            self.assertTrue(_check_betting_access(regular_user))
 
-        # Set flag to public
-        database.set_feature_flag("betting_market", "public")
-        self.assertTrue(_check_betting_access(regular_user))
-
-        # Set back to admin_only for safe lab isolation
-        database.set_feature_flag("betting_market", "admin_only")
+        # Lockdown: доступ остаётся только у глобальных админов.
+        with patch.object(config, "is_global_lockdown_enabled", return_value=True):
+            self.assertTrue(_check_betting_access(admin_id))
+            self.assertFalse(_check_betting_access(regular_user))
 
 
 if __name__ == "__main__":

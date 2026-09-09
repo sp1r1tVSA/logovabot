@@ -1,35 +1,31 @@
 """
 tests/test_feature_access_fail_closed.py
 
-FIX-06 — AUTH-01: проверка доступа Mini App к feature-флагу должна быть FAIL-CLOSED.
+AUTH-01: проверка доступа Mini App должна быть FAIL-CLOSED.
 
-Инвариант: у обязательной проверки feature access ровно два допустимых исхода.
+Инвариант: у обязательной проверки доступа ровно два допустимых исхода.
 
-    public                  -> ALLOW
-    admin_only + user       -> REJECT (существующая RBAC-семантика)
-    admin_only + admin      -> ALLOW
-    disabled                -> REJECT
-    строки флага нет        -> существующий безопасный default проекта
+    lockdown выключен       -> ALLOW
+    lockdown + обычный user -> REJECT
+    lockdown + глобальный админ -> ALLOW
+    невалидный user_id      -> REJECT
     sqlite3.OperationalError-> REJECT
     любое исключение        -> REJECT
 
 Никогда: EXCEPTION -> ALLOW.
 
 Сценарии:
- 1. public -> доступ разрешён.
- 2. disabled -> доступ запрещён.
- 3. admin_only + обычный пользователь -> отказ.
- 4. admin_only + глобальный админ -> доступ.
- 5. Строки флага нет -> штатный fallback get_feature_flag (default 'public').
- 6. sqlite3.OperationalError при чтении флага -> отказ.
- 7. RuntimeError при проверке -> отказ.
+ 1. Обычный доступ разрешён.
+ 2. Lockdown: обычный пользователь отклонён.
+ 3. Lockdown: глобальный админ проходит.
+ 4. Невалидный user_id отклонён без исключений.
+ 5. sqlite3.OperationalError внутри проверки -> отказ.
+ 6. RuntimeError внутри проверки -> отказ.
+ 7. Внутренняя ошибка пишется в лог уровня ERROR с traceback и без секретов.
  8. REST: при сбое проверки защищённый endpoint не выполняет бизнес-операцию.
  9. REST: ответ без stack trace и текста внутреннего исключения.
-10. Внутренняя ошибка пишется в лог уровня ERROR с feature key и traceback.
-11/12/13. betting_market public / admin_only / disabled на реальном REST-пути.
-14. Сбой чтения betting_market НЕ откатывается на permissive default 'public'.
-15. Совместимость с FIX-05: admin_only переживает init_db() и виден проверке доступа.
-16. Прямой детектор fail-open: сломанная проверка -> REJECT, а не ALLOW.
+10. REST: контрольный успешный путь.
+11. REST: lockdown отклоняет обычного пользователя (403 от middleware).
 """
 
 import json
@@ -135,28 +131,13 @@ def _balance() -> int:
         return row[0] if row else 0
 
 
-def _flag_reader_that_explodes(exc: Exception):
-    """
-    Подменяет database.get_feature_flag так, что ломается ТОЛЬКО чтение
-    betting_market; остальные флаги читаются штатно.
-    """
-    real = database.get_feature_flag
-
-    def _side_effect(key, default="admin_only"):
-        if key == "betting_market":
-            raise exc
-        return real(key, default)
-
-    return _side_effect
-
-
 def _assert_no_internals_leaked(testcase, body: str) -> None:
     for needle in (
         "Traceback",
         "RuntimeError",
         "OperationalError",
         "sqlite3",
-        "simulated feature access failure",
+        "simulated access check failure",
         "simulated db failure",
         os.sep + "api" + os.sep + "auth.py",
     ):
@@ -180,70 +161,54 @@ class TestFeatureAccessFailClosed(unittest.TestCase):
     def tearDown(self) -> None:
         _drop_temp_db(self._tmp_path, self._orig_db_path)
 
-    # --- 1. public ---------------------------------------------------------
-    def test_01_public_allows_access(self):
-        database.set_feature_flag("betting_market", "public")
-        self.assertTrue(check_user_access(USER_ID))
+    # --- 1. штатный доступ ---------------------------------------------------
+    def test_01_regular_user_is_allowed(self):
+        with patch.object(config, "is_global_lockdown_enabled", return_value=False):
+            self.assertTrue(check_user_access(USER_ID))
 
-    # --- 2. disabled -------------------------------------------------------
-    def test_02_disabled_rejects_access(self):
-        database.set_feature_flag("betting_market", "disabled")
-        self.assertFalse(check_user_access(USER_ID))
+    # --- 2. lockdown отклоняет обычного пользователя -------------------------
+    def test_02_lockdown_rejects_regular_user(self):
+        with patch.object(config, "is_global_lockdown_enabled", return_value=True):
+            self.assertFalse(check_user_access(USER_ID))
 
-    # --- 3. admin_only + обычный пользователь -------------------------------
-    def test_03_admin_only_rejects_regular_user(self):
-        database.set_feature_flag("betting_market", "admin_only")
-        self.assertFalse(check_user_access(USER_ID))
+    # --- 3. lockdown пропускает глобального админа ---------------------------
+    def test_03_lockdown_allows_global_admin(self):
+        with patch.object(config, "is_global_lockdown_enabled", return_value=True):
+            self.assertTrue(
+                check_user_access(ADMIN_ID),
+                "Существующая RBAC-семантика: глобальный админ проходит при lockdown"
+            )
 
-    # --- 4. admin_only + админ ---------------------------------------------
-    def test_04_admin_only_allows_admin(self):
-        database.set_feature_flag("betting_market", "admin_only")
-        self.assertTrue(
-            check_user_access(ADMIN_ID),
-            "Существующая RBAC-семантика: глобальный админ проходит при admin_only"
-        )
+    # --- 4. невалидный user_id -----------------------------------------------
+    def test_04_invalid_user_id_is_rejected(self):
+        self.assertFalse(check_user_access(0))
+        self.assertFalse(check_user_access(-5))
+        self.assertFalse(check_user_access(None))
 
-    # --- 5. отсутствующий флаг ---------------------------------------------
-    def test_05_missing_flag_uses_existing_default(self):
-        """Строки нет — это НЕ ошибка: работает штатный default проекта ('public')."""
-        with database.transaction() as conn:
-            conn.cursor().execute("DELETE FROM feature_flags WHERE feature_key = 'betting_market'")
-        with database.transaction() as conn:
-            row = conn.cursor().execute(
-                "SELECT status FROM feature_flags WHERE feature_key = 'betting_market'"
-            ).fetchone()
-        self.assertIsNone(row, "Строка флага должна отсутствовать")
-
-        self.assertEqual(database.get_feature_flag("betting_market", default="public"), "public")
-        self.assertTrue(check_user_access(USER_ID), "Существующий fallback-контракт не должен меняться")
-
-    # --- 6. ошибка БД -------------------------------------------------------
-    def test_06_database_error_rejects_access(self):
-        database.set_feature_flag("betting_market", "public")
+    # --- 5. ошибка БД --------------------------------------------------------
+    def test_05_database_error_rejects_access(self):
         with patch.object(
-            database, "get_feature_flag",
-            side_effect=_flag_reader_that_explodes(sqlite3.OperationalError("simulated db failure"))
+            api_auth, "is_logovo_access_allowed",
+            side_effect=sqlite3.OperationalError("simulated db failure")
         ):
             self.assertFalse(
                 check_user_access(USER_ID),
-                "Ошибка БД при чтении флага не может разрешать доступ"
+                "Ошибка БД внутри проверки не может разрешать доступ"
             )
 
-    # --- 7. неожиданное исключение ------------------------------------------
-    def test_07_unexpected_exception_rejects_access(self):
-        database.set_feature_flag("betting_market", "public")
+    # --- 6. неожиданное исключение -------------------------------------------
+    def test_06_unexpected_exception_rejects_access(self):
         with patch.object(
-            database, "get_feature_flag",
-            side_effect=_flag_reader_that_explodes(RuntimeError("simulated feature access failure"))
+            api_auth, "is_logovo_access_allowed",
+            side_effect=RuntimeError("simulated access check failure")
         ):
             self.assertFalse(check_user_access(USER_ID))
 
-    # --- 10. ERROR-лог ------------------------------------------------------
-    def test_10_internal_error_is_logged_at_error_level(self):
-        database.set_feature_flag("betting_market", "public")
+    # --- 7. ERROR-лог ---------------------------------------------------------
+    def test_07_internal_error_is_logged_at_error_level(self):
         with patch.object(
-            database, "get_feature_flag",
-            side_effect=_flag_reader_that_explodes(RuntimeError("simulated feature access failure"))
+            api_auth, "is_logovo_access_allowed",
+            side_effect=RuntimeError("simulated access check failure")
         ):
             with self.assertLogs("api.auth", level="ERROR") as captured:
                 allowed = check_user_access(USER_ID)
@@ -253,66 +218,11 @@ class TestFeatureAccessFailClosed(unittest.TestCase):
         self.assertEqual(record.levelno, logging.ERROR)
         self.assertIsNotNone(record.exc_info, "Ожидается logger.exception с traceback на сервере")
         msg = record.getMessage()
-        self.assertIn("betting_market", msg)
         self.assertIn(str(USER_ID), msg)
         # Секреты в лог не попадают.
         self.assertNotIn(TOKEN, msg)
         for forbidden in ("initData", "init_data", "hash="):
             self.assertNotIn(forbidden, msg)
-
-    # --- 14. отсутствие permissive fallback ---------------------------------
-    def test_14_flag_read_failure_does_not_fall_back_to_public(self):
-        """
-        Контроль + сбой: тот же пользователь при работающей проверке проходит,
-        а при сломанном чтении betting_market — нет. Значит отказ вызван именно
-        fail-closed, а не посторонней причиной, и никакого отката на 'public' нет.
-        """
-        database.set_feature_flag("betting_market", "public")
-        self.assertTrue(check_user_access(USER_ID), "Контроль: при исправной проверке доступ есть")
-
-        with patch.object(
-            database, "get_feature_flag",
-            side_effect=_flag_reader_that_explodes(sqlite3.OperationalError("simulated db failure"))
-        ):
-            self.assertFalse(check_user_access(USER_ID))
-
-    # --- 15. совместимость с FIX-05 -----------------------------------------
-    def test_15_fix05_persistence_compatibility(self):
-        """admin_only переживает init_db(), и проверка доступа видит именно его."""
-        database.set_feature_flag("betting_market", "admin_only")
-        database.init_db()
-
-        self.assertEqual(database.get_feature_flag("betting_market"), "admin_only")
-        self.assertFalse(check_user_access(USER_ID))
-        self.assertTrue(check_user_access(ADMIN_ID))
-
-    # --- 16. прямой детектор fail-open --------------------------------------
-    def test_16_fail_open_detector(self):
-        """
-        Ловит старую реализацию `except Exception: return True`.
-        Проверка ломается на каждом из внутренних шагов по очереди — доступа быть не должно.
-        """
-        database.set_feature_flag("betting_market", "public")
-
-        breakages = (
-            ("get_feature_flag", database, "get_feature_flag",
-             _flag_reader_that_explodes(RuntimeError("simulated feature access failure"))),
-            ("is_logovo_access_allowed", api_auth, "is_logovo_access_allowed",
-             RuntimeError("simulated feature access failure")),
-            ("is_admin", api_auth, "is_admin",
-             sqlite3.OperationalError("simulated db failure")),
-        )
-        for label, target, attr, effect in breakages:
-            with self.subTest(broken=label):
-                with patch.object(target, attr, side_effect=effect):
-                    self.assertFalse(
-                        check_user_access(USER_ID),
-                        f"Сбой в {label} не может превращаться в разрешение доступа"
-                    )
-
-        # Невалидный user_id по-прежнему отклоняется без всяких исключений.
-        self.assertFalse(check_user_access(0))
-        self.assertFalse(check_user_access(-5))
 
 
 # --------------------------------------------------------------------------
@@ -351,11 +261,9 @@ class TestFeatureAccessFailClosedRestPath(AioHTTPTestCase):
             }]
         }
 
-    # --- 11. public на REST-пути --------------------------------------------
+    # --- 10. контрольный успешный путь ---------------------------------------
     @unittest_run_loop
-    async def test_11_rest_public_allows_business_operation(self):
-        """Контроль: при betting_market = public защищённый endpoint работает."""
-        database.set_feature_flag("betting_market", "public")
+    async def test_10_rest_allows_business_operation(self):
         before_bets, before_balance = _bet_count(), _balance()
 
         resp = await self.client.post("/api/predictions", json=self._payload("fa06-ok"), headers=self.headers)
@@ -364,42 +272,31 @@ class TestFeatureAccessFailClosedRestPath(AioHTTPTestCase):
         self.assertEqual(_bet_count(), before_bets + 1)
         self.assertEqual(_balance(), before_balance - 100)
 
-    # --- 12. admin_only на REST-пути -----------------------------------------
+    # --- 11. lockdown на REST-пути --------------------------------------------
     @unittest_run_loop
-    async def test_12_rest_admin_only_rejects_regular_user(self):
-        database.set_feature_flag("betting_market", "admin_only")
+    async def test_11_rest_lockdown_rejects_regular_user(self):
+        """На HTTP-пути lockdown перехватывает middleware раньше route'а — свой 403."""
         before_bets, before_balance = _bet_count(), _balance()
 
-        resp = await self.client.post("/api/predictions", json=self._payload("fa06-adm"), headers=self.headers)
+        with patch.object(config, "is_global_lockdown_enabled", return_value=True):
+            resp = await self.client.post(
+                "/api/predictions", json=self._payload("fa06-lock"), headers=self.headers
+            )
 
         self.assertEqual(resp.status, 403)
         data = await resp.json()
-        self.assertEqual(data.get("error"), "access_restricted")
-        self.assertEqual((_bet_count(), _balance()), (before_bets, before_balance))
-
-    # --- 13. disabled на REST-пути -------------------------------------------
-    @unittest_run_loop
-    async def test_13_rest_disabled_rejects(self):
-        database.set_feature_flag("betting_market", "disabled")
-        before_bets, before_balance = _bet_count(), _balance()
-
-        resp = await self.client.post("/api/predictions", json=self._payload("fa06-dis"), headers=self.headers)
-
-        self.assertEqual(resp.status, 403)
-        data = await resp.json()
-        self.assertEqual(data.get("error"), "access_restricted")
+        self.assertEqual(data.get("error"), "LOGOVO_LOCKDOWN")
         self.assertEqual((_bet_count(), _balance()), (before_bets, before_balance))
 
     # --- 8. бизнес-операция не выполняется при сбое проверки ------------------
     @unittest_run_loop
-    async def test_08_rest_feature_error_runs_no_business_operation(self):
+    async def test_08_rest_access_error_runs_no_business_operation(self):
         """Сбой проверки доступа -> ставка не создана, баланс не тронут."""
-        database.set_feature_flag("betting_market", "public")
         before_bets, before_balance = _bet_count(), _balance()
 
         with patch.object(
-            database, "get_feature_flag",
-            side_effect=_flag_reader_that_explodes(sqlite3.OperationalError("simulated db failure"))
+            api_auth, "is_logovo_access_allowed",
+            side_effect=sqlite3.OperationalError("simulated db failure")
         ), patch.object(database, "place_user_bet", side_effect=AssertionError(
             "place_user_bet не должен вызываться после сбоя проверки доступа"
         )):
@@ -412,13 +309,11 @@ class TestFeatureAccessFailClosedRestPath(AioHTTPTestCase):
 
     # --- 9. безопасный HTTP-ответ ---------------------------------------------
     @unittest_run_loop
-    async def test_09_rest_feature_error_response_is_safe(self):
+    async def test_09_rest_access_error_response_is_safe(self):
         """Ответ соответствует существующему контракту 403 access_restricted, без внутренностей."""
-        database.set_feature_flag("betting_market", "public")
-
         with patch.object(
-            database, "get_feature_flag",
-            side_effect=_flag_reader_that_explodes(RuntimeError("simulated feature access failure"))
+            api_auth, "is_logovo_access_allowed",
+            side_effect=RuntimeError("simulated access check failure")
         ):
             resp = await self.client.post(
                 "/api/predictions", json=self._payload("fa06-fail-rt"), headers=self.headers

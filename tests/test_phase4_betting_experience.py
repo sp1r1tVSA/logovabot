@@ -614,7 +614,6 @@ class TestPhase4ApiEndpoints(AioHTTPTestCase):
         super().setUp()
         self.user_id = 998001
         self.init_data = make_valid_telegram_init_data(self.user_id, "p4_api_user")
-        database.set_feature_flag("betting_market", "public")
         database.get_or_create_wallet(self.user_id)
         with database.transaction() as conn:
             conn.cursor().execute(

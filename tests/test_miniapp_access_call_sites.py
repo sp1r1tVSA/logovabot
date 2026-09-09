@@ -1,11 +1,11 @@
 """
 tests/test_miniapp_access_call_sites.py
 
-FIX-07 — пропущенные call sites проверки feature access в Mini App API.
+FIX-07 — пропущенные call sites проверки доступа в Mini App API.
 
 FIX-06 сделал саму check_user_access() fail-closed, но нашёл два места, где её
 просто не вызывали: успешной HMAC-аутентификации хватало, чтобы получить данные,
-закрытые политикой betting_market.
+закрытые политикой доступа.
 
   1. api/routes_markets.py -> handle_get_odds_history()  (GET /api/markets/{id}/odds-history)
   2. api/routes_matches.py -> защищённые Mini App endpoints (/api/matches*, /api/recommendations)
@@ -13,23 +13,20 @@ FIX-06 сделал саму check_user_access() fail-closed, но нашёл д
 Инвариант: аутентификация != авторизация. После get_authenticated_user()
 защищённый endpoint обязан вызвать check_user_access() ДО любой бизнес-операции.
 
-    disabled                  -> 403 access_restricted
-    admin_only + пользователь -> 403 access_restricted
-    admin_only + админ        -> обычный успешный ответ
-    public                    -> обычный успешный ответ
-    сбой проверки             -> 403, бизнес-операция не вызвана
+    доступ запрещён -> 403 access_restricted
+    доступ разрешён -> обычный успешный ответ
+    сбой проверки   -> 403, бизнес-операция не вызвана
 
 Сценарии:
- 01. odds-history: disabled -> 403 access_restricted.
- 02. odds-history: admin_only + обычный пользователь -> 403.
- 03. odds-history: public -> история возвращается.
- 04. odds-history: сбой проверки -> 403 и odds_engine.get_odds_history() НЕ вызван.
- 05. routes_matches: каждый защищённый endpoint при disabled -> 403.
- 06. routes_matches: каждый защищённый endpoint при public -> прежнее успешное поведение.
- 07. routes_matches: admin_only -> обычный пользователь 403, глобальный админ проходит.
- 08. Ответы не содержат stack trace, внутренних ошибок, initData и токена.
+ 01. odds-history: доступ запрещён -> 403 access_restricted.
+ 02. odds-history: доступ разрешён -> история возвращается.
+ 03. odds-history: сбой проверки -> 403 и odds_engine.get_odds_history() НЕ вызван.
+ 04. routes_matches: каждый защищённый endpoint при запрете -> 403.
+ 05. routes_matches: каждый защищённый endpoint при разрешении -> прежнее успешное поведение.
+ 06. Ответы не содержат stack trace, внутренних ошибок, initData и токена.
 """
 
+import contextlib
 import json
 import os
 import sqlite3
@@ -43,6 +40,8 @@ from aiohttp.test_utils import AioHTTPTestCase, unittest_run_loop
 import config
 import database
 import services.odds_engine as odds_engine
+from api import auth as api_auth
+from api import routes_markets, routes_matches
 from api.server import create_app
 from config import TOKEN
 from tests.test_phase9_security import generate_valid_init_data
@@ -128,7 +127,7 @@ def _assert_no_internals_leaked(testcase, body: str) -> None:
         "RuntimeError",
         "OperationalError",
         "sqlite3",
-        "simulated feature access failure",
+        "simulated access check failure",
         "simulated db failure",
         "initData",
         "init_data",
@@ -144,16 +143,19 @@ def _assert_no_internals_leaked(testcase, body: str) -> None:
     testcase.assertNotIn(TOKEN, body, "Токен бота не должен попадать в ответ")
 
 
-def _flag_reader_that_explodes(exc: Exception):
-    """Ломает чтение ТОЛЬКО betting_market; остальные флаги читаются штатно."""
-    real = database.get_feature_flag
+@contextlib.contextmanager
+def _access_denied():
+    """Проверка доступа отвечает DENIED во всех модулях с защищёнными endpoint'ами."""
+    with patch.object(routes_markets, "check_user_access", return_value=False), \
+         patch.object(routes_matches, "check_user_access", return_value=False):
+        yield
 
-    def _side_effect(key, default="admin_only"):
-        if key == "betting_market":
-            raise exc
-        return real(key, default)
 
-    return _side_effect
+@contextlib.contextmanager
+def _access_check_explodes(exc: Exception):
+    """Ломает внутренность реальной check_user_access, не подменяя её саму."""
+    with patch.object(api_auth, "is_logovo_access_allowed", side_effect=exc):
+        yield
 
 
 class TestMiniAppAccessCallSites(AioHTTPTestCase):
@@ -170,11 +172,6 @@ class TestMiniAppAccessCallSites(AioHTTPTestCase):
         self.headers = {
             "X-Telegram-Init-Data": generate_valid_init_data(
                 {"id": USER_ID, "username": "callsite_user"}, TOKEN
-            )
-        }
-        self.admin_headers = {
-            "X-Telegram-Init-Data": generate_valid_init_data(
-                {"id": ADMIN_ID, "username": "callsite_admin"}, TOKEN
             )
         }
 
@@ -219,24 +216,16 @@ class TestMiniAppAccessCallSites(AioHTTPTestCase):
         self.assertEqual(data.get("error"), "access_restricted", url)
         return body
 
-    # --- 01. odds-history: disabled -----------------------------------------
+    # --- 01. odds-history: доступ запрещён ------------------------------------
     @unittest_run_loop
-    async def test_01_odds_history_disabled_rejects(self):
-        database.set_feature_flag("betting_market", "disabled")
-        await self._assert_restricted(self._odds_history_url(), self.headers)
+    async def test_01_odds_history_denied_rejects(self):
+        with _access_denied():
+            await self._assert_restricted(self._odds_history_url(), self.headers)
 
-    # --- 02. odds-history: admin_only + обычный пользователь ------------------
+    # --- 02. odds-history: доступ разрешён -------------------------------------
     @unittest_run_loop
-    async def test_02_odds_history_admin_only_rejects_regular_user(self):
-        database.set_feature_flag("betting_market", "admin_only")
-        await self._assert_restricted(self._odds_history_url(), self.headers)
-
-    # --- 03. odds-history: public --------------------------------------------
-    @unittest_run_loop
-    async def test_03_odds_history_public_returns_history(self):
+    async def test_02_odds_history_returns_history(self):
         """Контроль: при разрешённом доступе структура ответа прежняя."""
-        database.set_feature_flag("betting_market", "public")
-
         resp = await self.client.get(self._odds_history_url(), headers=self.headers)
         body = await resp.text()
 
@@ -248,73 +237,52 @@ class TestMiniAppAccessCallSites(AioHTTPTestCase):
         self.assertIn("history", data)
         self.assertIsInstance(data["history"], list)
 
-    # --- 04. odds-history: сбой проверки -> бизнес-операция не выполняется ----
+    # --- 03. odds-history: сбой проверки -> бизнес-операция не выполняется ----
     @unittest_run_loop
-    async def test_04_odds_history_access_failure_runs_no_business_operation(self):
+    async def test_03_odds_history_access_failure_runs_no_business_operation(self):
         """
         Детектор порядка: check_user_access() -> DENIED -> 403,
         а НЕ get_odds_history() -> потом проверка.
         """
-        database.set_feature_flag("betting_market", "public")
-
-        with patch.object(
-            database, "get_feature_flag",
-            side_effect=_flag_reader_that_explodes(sqlite3.OperationalError("simulated db failure"))
-        ), patch.object(odds_engine, "get_odds_history", side_effect=AssertionError(
-            "get_odds_history не должен вызываться при запрещённом доступе"
-        )) as spy:
+        with _access_check_explodes(sqlite3.OperationalError("simulated db failure")), \
+             patch.object(odds_engine, "get_odds_history", side_effect=AssertionError(
+                 "get_odds_history не должен вызываться при запрещённом доступе"
+             )) as spy:
             body = await self._assert_restricted(self._odds_history_url(), self.headers)
 
         spy.assert_not_called()
         _assert_no_internals_leaked(self, body)
 
-    # --- 05. routes_matches: disabled ----------------------------------------
+    # --- 04. routes_matches: доступ запрещён -----------------------------------
     @unittest_run_loop
-    async def test_05_protected_match_endpoints_disabled_reject(self):
-        database.set_feature_flag("betting_market", "disabled")
-        for url in self._protected_match_endpoints():
-            with self.subTest(endpoint=url):
-                await self._assert_restricted(url, self.headers)
+    async def test_04_protected_match_endpoints_denied_reject(self):
+        with _access_denied():
+            for url in self._protected_match_endpoints():
+                with self.subTest(endpoint=url):
+                    await self._assert_restricted(url, self.headers)
 
-    # --- 06. routes_matches: public ------------------------------------------
+    # --- 05. routes_matches: доступ разрешён -----------------------------------
     @unittest_run_loop
-    async def test_06_protected_match_endpoints_public_keep_working(self):
+    async def test_05_protected_match_endpoints_keep_working(self):
         """Контроль: разрешённый доступ не сломан — прежние 200 и status=ok."""
-        database.set_feature_flag("betting_market", "public")
         for url in self._protected_match_endpoints():
             with self.subTest(endpoint=url):
                 resp = await self.client.get(url, headers=self.headers)
                 self._assert_allowed(url, resp.status, await resp.text())
 
-    # --- 07. routes_matches: admin_only --------------------------------------
+    # --- 06. безопасность ответов ---------------------------------------------
     @unittest_run_loop
-    async def test_07_protected_match_endpoints_admin_only(self):
-        """Обычный пользователь получает 403, существующая RBAC админа не тронута."""
-        database.set_feature_flag("betting_market", "admin_only")
-        for url in self._protected_match_endpoints():
-            with self.subTest(endpoint=url, role="user"):
-                await self._assert_restricted(url, self.headers)
-            with self.subTest(endpoint=url, role="admin"):
-                resp = await self.client.get(url, headers=self.admin_headers)
-                self._assert_allowed(url, resp.status, await resp.text())
-
-    # --- 08. безопасность ответов ---------------------------------------------
-    @unittest_run_loop
-    async def test_08_denied_responses_leak_nothing(self):
-        database.set_feature_flag("betting_market", "disabled")
-        for url in [self._odds_history_url()] + self._protected_match_endpoints():
-            with self.subTest(endpoint=url):
-                resp = await self.client.get(url, headers=self.headers)
-                body = await resp.text()
-                self.assertEqual(resp.status, 403, url)
-                _assert_no_internals_leaked(self, body)
+    async def test_06_denied_responses_leak_nothing(self):
+        with _access_denied():
+            for url in [self._odds_history_url()] + self._protected_match_endpoints():
+                with self.subTest(endpoint=url):
+                    resp = await self.client.get(url, headers=self.headers)
+                    body = await resp.text()
+                    self.assertEqual(resp.status, 403, url)
+                    _assert_no_internals_leaked(self, body)
 
         # Тот же контракт при внутреннем сбое проверки: 403, а не 500 со стеком.
-        database.set_feature_flag("betting_market", "public")
-        with patch.object(
-            database, "get_feature_flag",
-            side_effect=_flag_reader_that_explodes(RuntimeError("simulated feature access failure"))
-        ):
+        with _access_check_explodes(RuntimeError("simulated access check failure")):
             for url in [self._odds_history_url()] + self._protected_match_endpoints():
                 with self.subTest(endpoint=url, mode="access_check_failure"):
                     resp = await self.client.get(url, headers=self.headers)

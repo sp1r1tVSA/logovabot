@@ -87,7 +87,6 @@ PRESERVED_TABLES = [
     "division_topics",
     "division_admins",
     "system_config",
-    "feature_flags",
     "schema_migrations",
     "admin_audit_log",
     "sports_providers",

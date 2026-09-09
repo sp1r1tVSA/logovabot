@@ -72,7 +72,6 @@ class TestBettingApiV2(AioHTTPTestCase):
                 VALUES (?, 1, 1, 'Интер', 'Милан', 'live', 65, 2, 1)
             """, (self.m1_id,))
 
-        database.set_feature_flag("betting_market", "public")
         database.get_or_create_wallet(self.user_id)
 
     def tearDown(self):

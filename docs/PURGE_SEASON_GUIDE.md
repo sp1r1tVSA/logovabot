@@ -20,7 +20,7 @@
 | **Финансовые транзакции** (`coin_transactions`) | **СОХРАНЯЮТСЯ 100%** (полная финансовая история депозитов, переводов, бонусов). |
 | **Прогресс и достижения** (`user_progression`, `achievements_catalog`, `user_achievements`) | **СОХРАНЯЮТСЯ 100%** (уровни, опыт XP, титулы, рамки и полученные ачивки). Сбрасываются серии ставок: `current_streak = 0, best_streak = 0`. |
 | **Архитектура дивизионов** (`divisions`, `division_topics`, `division_admins`) | **СОХРАНЯЮТСЯ 100%** (DIV_1..DIV_5 и админы готовы к привязке нового сезона). |
-| **Системные настройки** (`system_config`, `feature_flags`, `tournaments`, `schema_migrations`) | **СОХРАНЯЮТСЯ 100%**. |
+| **Системные настройки** (`system_config`, `tournaments`, `schema_migrations`) | **СОХРАНЯЮТСЯ 100%**. |
 
 ---
 
