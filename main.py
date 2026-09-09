@@ -10,6 +10,13 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
 )
+
+# httpx пишет на INFO полный URL запроса, а токен бота — часть пути Telegram API.
+# На INFO это отправляло бы токен в journalctl в каждой строке; поднимаем порог до
+# WARNING, чтобы сетевые ошибки было видно, а секрет в логи не попадал.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+
 logger = logging.getLogger(__name__)
 
 async def post_init(application: Application) -> None:
