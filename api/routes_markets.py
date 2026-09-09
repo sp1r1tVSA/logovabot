@@ -153,6 +153,14 @@ async def handle_get_odds_history(request: web.Request) -> web.Response:
     if not user_info or "id" not in user_info:
         return web.json_response({"status": "error", "error": "unauthorized"}, status=401)
 
+    user_id = user_info["id"]
+    if not check_user_access(user_id):
+        return web.json_response({
+            "status": "error",
+            "error": "access_restricted",
+            "message": "Logovo.bet временно недоступен."
+        }, status=403)
+
     try:
         market_id = int(request.match_info["id"])
     except (KeyError, ValueError):

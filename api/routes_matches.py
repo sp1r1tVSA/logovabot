@@ -17,6 +17,19 @@ from api.auth import get_authenticated_user, check_user_access
 logger = logging.getLogger(__name__)
 
 
+def _access_restricted_response() -> web.Response:
+    """
+    Единый ответ политики доступа Logovo.bet — тот же контракт, что в
+    routes_markets / routes_predictions / routes_wallet / routes_gamification.
+    Проверку выполняет существующая check_user_access(); здесь только её ответ.
+    """
+    return web.json_response({
+        "status": "error",
+        "error": "access_restricted",
+        "message": "Logovo.bet временно недоступен."
+    }, status=403)
+
+
 async def handle_get_matches(request: web.Request) -> web.Response:
     """
     GET /api/matches?tour=5&status=scheduled
@@ -26,6 +39,9 @@ async def handle_get_matches(request: web.Request) -> web.Response:
     user_info = get_authenticated_user(init_data)
     if not user_info or "id" not in user_info:
         return web.json_response({"status": "error", "error": "unauthorized"}, status=401)
+
+    if not check_user_access(user_info["id"]):
+        return _access_restricted_response()
 
     tour_param = request.query.get("tour")
     status_param = request.query.get("status")
@@ -113,6 +129,9 @@ async def handle_get_match_detail(request: web.Request) -> web.Response:
     if not user_info or "id" not in user_info:
         return web.json_response({"status": "error", "error": "unauthorized"}, status=401)
 
+    if not check_user_access(user_info["id"]):
+        return _access_restricted_response()
+
     try:
         match_id = int(request.match_info["id"])
     except (KeyError, ValueError):
@@ -121,7 +140,7 @@ async def handle_get_match_detail(request: web.Request) -> web.Response:
     with database.transaction() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT m.*, 
+            SELECT m.*,
                    COALESCE(m.player1_team, 'Хозяева') as team1_name,
                    COALESCE(m.player2_team, 'Гости') as team2_name,
                    t.name as tournament_name
@@ -163,6 +182,9 @@ async def handle_get_match_stats(request: web.Request) -> web.Response:
     user_info = get_authenticated_user(init_data)
     if not user_info or "id" not in user_info:
         return web.json_response({"status": "error", "error": "unauthorized"}, status=401)
+
+    if not check_user_access(user_info["id"]):
+        return _access_restricted_response()
 
     try:
         match_id = int(request.match_info["id"])
@@ -245,6 +267,9 @@ async def handle_get_match_h2h(request: web.Request) -> web.Response:
     if not user_info or "id" not in user_info:
         return web.json_response({"status": "error", "error": "unauthorized"}, status=401)
 
+    if not check_user_access(user_info["id"]):
+        return _access_restricted_response()
+
     try:
         match_id = int(request.match_info["id"])
     except (KeyError, ValueError):
@@ -320,6 +345,9 @@ async def handle_get_match_insights(request: web.Request) -> web.Response:
     if not user_info or "id" not in user_info:
         return web.json_response({"status": "error", "error": "unauthorized"}, status=401)
 
+    if not check_user_access(user_info["id"]):
+        return _access_restricted_response()
+
     try:
         match_id = int(request.match_info["id"])
     except (KeyError, ValueError):
@@ -394,6 +422,9 @@ async def handle_get_match_live(request: web.Request) -> web.Response:
     if not user_info or "id" not in user_info:
         return web.json_response({"status": "error", "error": "unauthorized"}, status=401)
 
+    if not check_user_access(user_info["id"]):
+        return _access_restricted_response()
+
     try:
         match_id = int(request.match_info["id"])
     except (KeyError, ValueError):
@@ -458,6 +489,9 @@ async def handle_get_recommendations(request: web.Request) -> web.Response:
         return web.json_response({"status": "error", "error": "unauthorized"}, status=401)
 
     user_id = user_info["id"]
+    if not check_user_access(user_id):
+        return _access_restricted_response()
+
     limit_str = request.query.get("limit", "5")
     limit = int(limit_str) if limit_str and limit_str.isdigit() else 5
     limit = max(1, min(limit, 50))
