@@ -203,7 +203,8 @@ class TestRiskEngineDeadlineBranch(unittest.TestCase):
         database.create_round(self.round_number, deadline=deadline, division_id=self.div_id)
         with database.transaction() as conn:
             conn.execute(
-                "UPDATE rounds SET is_open = 1, deadline = ? WHERE division_id = ? AND round_number = ?",
+                # Линия открыта, тур ещё не открыт для игры — состояние, в котором принимаются ставки.
+                "UPDATE rounds SET is_open = 0, bets_open = 1, deadline = ? WHERE division_id = ? AND round_number = ?",
                 (deadline, self.div_id, self.round_number),
             )
         return database.create_match(

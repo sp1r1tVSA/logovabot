@@ -11,7 +11,8 @@ tests/test_early_betting_line.py
 5. Risk engine пропускает ставку на закрытый тур с открытой линией.
 6. Risk engine отклоняет ставку после закрытия линии.
 7. set_round_bets_open() возвращает False для тура без матчей.
-8. update_round_status(is_open=True) синхронно открывает линию, закрытие — закрывает.
+8. update_round_status(is_open=True) закрывает линию тура: открытый для игры тур
+   прогнозы не принимает; закрытие тура линию тоже не открывает.
 9. Открытие тура N автоматически открывает раннюю линию на тур N+1.
 """
 
@@ -143,12 +144,19 @@ class TestEarlyBettingLine(unittest.TestCase):
         self.assertFalse(database.set_round_bets_open(ROUND_NO_MATCHES, True, division_id=1, season_id=1))
 
     # --- 8-9. Sync with is_open ------------------------------------------
-    def test_08_opening_and_closing_round_syncs_line(self):
+    def test_08_opening_round_closes_its_betting_line(self):
+        # Линия выставлена заранее — тур ещё не начался, прогнозы принимаются.
+        self.assertTrue(database.set_round_bets_open(ROUND_PLAY, True, division_id=1, season_id=1))
+        info = database.get_round_info(ROUND_PLAY, division_id=1, season_id=1)
+        self.assertEqual(info["bets_open"], 1, "Предусловие: линия тура открыта")
+
+        # Тур открыт для игры → приём прогнозов на него прекращается.
         database.update_round_status(ROUND_PLAY, is_open=True, division_id=1, season_id=1)
         info = database.get_round_info(ROUND_PLAY, division_id=1, season_id=1)
         self.assertEqual(info["is_open"], 1)
-        self.assertEqual(info["bets_open"], 1)
+        self.assertEqual(info["bets_open"], 0, "Открытый для игры тур прогнозы не принимает")
 
+        # Закрытие тура линию обратно не открывает.
         database.update_round_status(ROUND_PLAY, is_open=False, division_id=1, season_id=1)
         info = database.get_round_info(ROUND_PLAY, division_id=1, season_id=1)
         self.assertEqual(info["is_open"], 0)

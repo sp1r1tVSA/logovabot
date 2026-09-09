@@ -66,6 +66,12 @@ class TestPhase3Operations(unittest.TestCase):
             c.execute("INSERT INTO division_topics (division_id, topic_type, message_thread_id, group_chat_id) VALUES (991, 'reports', 2222, -100123)")
             c.execute("INSERT INTO division_topics (division_id, topic_type, message_thread_id, group_chat_id) VALUES (992, 'results', 3333, -100123)")
 
+            # Round 1 with an open betting line: ставки принимаются только при
+            # is_open = 0 AND bets_open = 1.
+            c.execute(
+                "INSERT INTO rounds (round_number, division_id, season_id, is_open, bets_open) VALUES (1, 991, 998, 0, 1)"
+            )
+
             # Setup test wallets
             c.execute("INSERT INTO user_wallets (user_id, balance) VALUES (?, 1000)", (self.user1_id,))
             c.execute("INSERT INTO user_wallets (user_id, balance) VALUES (?, 50)", (self.user2_id,))

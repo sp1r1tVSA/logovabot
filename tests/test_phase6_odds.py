@@ -36,10 +36,10 @@ class TestPhase6Odds(unittest.TestCase):
             cursor.execute("DELETE FROM markets WHERE match_id >= 99200")
             cursor.execute("DELETE FROM matches WHERE id >= 99200")
 
-            # Seed open round 6 for division 1
+            # Seed round 6 for division 1 with an open betting line
             cursor.execute("""
-                INSERT OR REPLACE INTO rounds (division_id, round_number, is_open)
-                VALUES (1, 6, 1)
+                INSERT OR REPLACE INTO rounds (division_id, round_number, is_open, bets_open)
+                VALUES (1, 6, 0, 1)
             """)
 
             # Seed test match

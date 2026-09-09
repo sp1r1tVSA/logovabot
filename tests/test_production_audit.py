@@ -126,6 +126,11 @@ def test_place_user_bet_no_double_debit_on_idempotency_conflict():
             INSERT INTO bet_markets (match_id, tour, team1_name, team2_name, odd_p1, odd_x, odd_p2, is_active)
             VALUES (?, 1, 'Arsenal', 'Chelsea', 2.0, 3.0, 3.5, 1)
         """, (m_id,))
+        # Приём ставок разрешён только при открытой линии на ещё не открытом туре.
+        cursor.execute("""
+            INSERT OR REPLACE INTO rounds (round_number, division_id, season_id, is_open, bets_open)
+            VALUES (1, 1, 1, 0, 1)
+        """)
 
     # First bet placement
     idemp_key = "unique-key-102"
@@ -182,6 +187,8 @@ def test_cashout_idempotency_and_no_double_payout():
         cursor.execute("INSERT INTO user_wallets (user_id, balance) VALUES (?, 1000)", (test_uid,))
         cursor.execute("INSERT INTO matches (id, round_number, player1_team, player2_team, status) VALUES (?, 1, 'T1', 'T2', 'scheduled')", (m_id,))
         cursor.execute("INSERT INTO bet_markets (match_id, tour, team1_name, team2_name, odd_p1, odd_x, odd_p2, is_active) VALUES (?, 1, 'T1', 'T2', 2.0, 3.0, 3.5, 1)", (m_id,))
+        # Приём ставок разрешён только при открытой линии на ещё не открытом туре.
+        cursor.execute("INSERT OR REPLACE INTO rounds (round_number, division_id, season_id, is_open, bets_open) VALUES (1, 1, 1, 0, 1)")
 
     # Place bet
     ok, bet_id = database.place_user_bet(

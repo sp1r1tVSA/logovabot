@@ -179,48 +179,22 @@ class RiskEngine:
                         message=f"Матч #{m_id} уже сыгран или завершен."
                     )
 
-                # Check round deadline and betting availability.
-                # Приём прогнозов разрешён, если тур открыт для игры (is_open)
-                # ЛИБО для него заранее открыта линия (bets_open).
+                # Единое серверное правило приёма ставок на тур —
+                # то же, что применяет database.place_user_bet:
+                # ставка разрешена только при rounds.is_open = 0 AND rounds.bets_open = 1.
                 r_num = match_row["round_number"] if "round_number" in match_row.keys() else None
                 m_div_id = match_row["division_id"] if "division_id" in match_row.keys() and match_row["division_id"] is not None else 1
-                if r_num:
-                    cursor.execute(
-                        "SELECT is_open, COALESCE(bets_open, 0) AS bets_open, deadline FROM rounds WHERE division_id = ? AND round_number = ?",
-                        (m_div_id, r_num)
+                m_season_id = match_row["season_id"] if "season_id" in match_row.keys() else None
+                allowed, _gate_reason, gate_message = database.evaluate_round_betting_gate(
+                    cursor, r_num, m_div_id, m_season_id
+                )
+                if not allowed:
+                    return RiskDecision(
+                        decision="REJECT",
+                        allowed=False,
+                        reason="MARKET_SUSPENDED",
+                        message=gate_message
                     )
-                    r_row = cursor.fetchone()
-                    if not r_row:
-                        cursor.execute(
-                            "SELECT is_open, COALESCE(bets_open, 0) AS bets_open, deadline FROM rounds "
-                            "WHERE round_number = ? ORDER BY is_open DESC, bets_open DESC, id DESC LIMIT 1",
-                            (r_num,)
-                        )
-                        r_row = cursor.fetchone()
-                    if r_row:
-                        if not (r_row["is_open"] or r_row["bets_open"]):
-                            return RiskDecision(
-                                decision="REJECT",
-                                allowed=False,
-                                reason="MARKET_SUSPENDED",
-                                message=f"Приём прогнозов на Тур {r_num} закрыт."
-                            )
-                        if r_row["deadline"]:
-                            raw_dl = str(r_row["deadline"]).strip()
-                            dl_dt = None
-                            for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
-                                try:
-                                    dl_dt = datetime.datetime.strptime(raw_dl[:19], fmt)
-                                    break
-                                except ValueError:
-                                    pass
-                            if dl_dt and datetime.datetime.now() > dl_dt:
-                                return RiskDecision(
-                                    decision="REJECT",
-                                    allowed=False,
-                                    reason="MARKET_SUSPENDED",
-                                    message=f"Дедлайн для прогнозов на Тур {r_num} истек."
-                                )
 
                 # Fetch market & selection records
                 odd_val = None

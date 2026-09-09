@@ -82,8 +82,8 @@ class Phase5TestBase(unittest.TestCase):
             self.season_id = cursor.lastrowid
 
             cursor.execute(
-                """INSERT INTO rounds (division_id, round_number, season_id, is_open)
-                   VALUES (?, 1, ?, 1)""",
+                """INSERT INTO rounds (division_id, round_number, season_id, is_open, bets_open)
+                   VALUES (?, 1, ?, 0, 1)""",
                 (self.division_id, self.season_id)
             )
 

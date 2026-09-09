@@ -100,11 +100,13 @@ class TestPhase41ProductionAcceptance(unittest.TestCase):
             c.execute("INSERT INTO user_wallets (user_id, balance) VALUES (?, 1000)", (self.user_a_id,))
             c.execute("INSERT INTO user_wallets (user_id, balance) VALUES (?, 500)", (self.user_b_id,))
 
-            # Setup open test round 88 across all 5 divisions
+            # Setup test round 88 across all 5 divisions with an OPEN betting line
+            # (линия открыта, тур ещё не открыт для игры — единственное состояние,
+            #  в котором принимаются ставки).
             for d in range(1, 6):
                 c.execute("""
-                    INSERT OR REPLACE INTO rounds (round_number, division_id, is_open, deadline, season_id)
-                    VALUES (88, ?, 1, '2029-12-31 23:59:59', 1)
+                    INSERT OR REPLACE INTO rounds (round_number, division_id, is_open, bets_open, deadline, season_id)
+                    VALUES (88, ?, 0, 1, '2029-12-31 23:59:59', 1)
                 """, (d,))
 
             # Setup 1 test match per division (99701 to 99705)
@@ -618,7 +620,7 @@ class TestPhase41ApiAcceptance(AioHTTPTestCase):
             c.execute("INSERT OR REPLACE INTO user_wallets (user_id, balance) VALUES (?, 1000)", (self.user_a_id,))
             c.execute("INSERT OR REPLACE INTO user_wallets (user_id, balance) VALUES (?, 500)", (self.user_b_id,))
 
-            c.execute("INSERT OR REPLACE INTO rounds (round_number, division_id, is_open, deadline, season_id) VALUES (88, 1, 1, '2029-12-31 23:59:59', 1)")
+            c.execute("INSERT OR REPLACE INTO rounds (round_number, division_id, is_open, bets_open, deadline, season_id) VALUES (88, 1, 0, 1, '2029-12-31 23:59:59', 1)")
             c.execute("""
                 INSERT OR REPLACE INTO matches (id, round_number, division_id, season_id, player1_team, player2_team, status)
                 VALUES (99701, 88, 1, 1, 'Club 1A', 'Club 1B', 'scheduled')

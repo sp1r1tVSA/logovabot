@@ -33,7 +33,7 @@ class TestPhase9Exposure(unittest.TestCase):
             self.season_id = cursor.lastrowid
 
             # Div 1 Match & Market
-            cursor.execute("INSERT INTO rounds (division_id, round_number, season_id, is_open) VALUES (1, 1, ?, 1)", (self.season_id,))
+            cursor.execute("INSERT INTO rounds (division_id, round_number, season_id, is_open, bets_open) VALUES (1, 1, ?, 0, 1)", (self.season_id,))
             cursor.execute("INSERT INTO matches (division_id, season_id, round_number, player1_team, player2_team, status) VALUES (1, ?, 1, 'Real', 'Barca', 'open')", (self.season_id,))
             self.match_div1 = cursor.lastrowid
             cursor.execute("INSERT INTO markets (match_id, market_key, market_name, status) VALUES (?, '1x2', 'Match Winner', 'open')", (self.match_div1,))
@@ -44,7 +44,7 @@ class TestPhase9Exposure(unittest.TestCase):
             self.sel_p2_div1 = cursor.lastrowid
 
             # Div 2 Match & Market
-            cursor.execute("INSERT INTO rounds (division_id, round_number, season_id, is_open) VALUES (2, 1, ?, 1)", (self.season_id,))
+            cursor.execute("INSERT INTO rounds (division_id, round_number, season_id, is_open, bets_open) VALUES (2, 1, ?, 0, 1)", (self.season_id,))
             cursor.execute("INSERT INTO matches (division_id, season_id, round_number, player1_team, player2_team, status) VALUES (2, ?, 1, 'Milan', 'Inter', 'open')", (self.season_id,))
             self.match_div2 = cursor.lastrowid
             cursor.execute("INSERT INTO markets (match_id, market_key, market_name, status) VALUES (?, '1x2', 'Match Winner', 'open')", (self.match_div2,))

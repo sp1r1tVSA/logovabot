@@ -67,6 +67,11 @@ class TestPhase9Security(AioHTTPTestCase):
             cursor.execute("INSERT INTO division_admins (user_id, division_id) VALUES (?, 1)", (self.div_admin_id,))
 
             cursor.execute("DELETE FROM matches WHERE id = ?", (self.match_id,))
+            # Ставки принимаются только при is_open = 0 AND bets_open = 1.
+            cursor.execute("""
+                INSERT OR REPLACE INTO rounds (round_number, division_id, season_id, is_open, bets_open)
+                VALUES (1, 1, 1, 0, 1)
+            """)
             cursor.execute("""
                 INSERT INTO matches (id, division_id, season_id, round_number, player1_team, player2_team, status)
                 VALUES (?, 1, 1, 1, 'Real', 'Barca', 'open')

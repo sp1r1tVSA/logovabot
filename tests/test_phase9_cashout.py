@@ -30,7 +30,7 @@ class TestPhase9Cashout(unittest.TestCase):
             cursor.execute("INSERT OR REPLACE INTO users (telegram_id, username, role) VALUES (?, 'cashout_user', 'user')", (self.user_id,))
             cursor.execute("INSERT INTO seasons (name, status) VALUES ('Cashout Season', 'active')")
             self.season_id = cursor.lastrowid
-            cursor.execute("INSERT INTO rounds (division_id, round_number, season_id, is_open) VALUES (1, 1, ?, 1)", (self.season_id,))
+            cursor.execute("INSERT INTO rounds (division_id, round_number, season_id, is_open, bets_open) VALUES (1, 1, ?, 0, 1)", (self.season_id,))
 
             cursor.execute("""
                 INSERT INTO matches (id, division_id, season_id, round_number, player1_team, player2_team, status)

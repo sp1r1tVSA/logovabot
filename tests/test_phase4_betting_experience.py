@@ -104,19 +104,19 @@ class TestPhase4BettingExperience(unittest.TestCase):
                       (self.user2_id, "p4_user2", "Chelsea P4", 2, "player"))
 
             # Setup test rounds
-            # Round 95: Open, valid future deadline
+            # Round 95: betting line open (is_open=0, bets_open=1), valid future deadline
             future_dl = (datetime.datetime.now() + datetime.timedelta(days=2)).strftime("%Y-%m-%d %H:%M:%S")
-            c.execute("INSERT INTO rounds (round_number, is_open, deadline, division_id) VALUES (95, 1, ?, 1)", (future_dl,))
+            c.execute("INSERT INTO rounds (round_number, is_open, bets_open, deadline, division_id) VALUES (95, 0, 1, ?, 1)", (future_dl,))
 
             # Round 96: Closed
-            c.execute("INSERT INTO rounds (round_number, is_open, deadline, division_id) VALUES (96, 0, ?, 1)", (future_dl,))
+            c.execute("INSERT INTO rounds (round_number, is_open, bets_open, deadline, division_id) VALUES (96, 0, 0, ?, 1)", (future_dl,))
 
-            # Round 97: Open, but deadline in past
+            # Round 97: line open, but deadline in past
             past_dl = (datetime.datetime.now() - datetime.timedelta(hours=2)).strftime("%Y-%m-%d %H:%M:%S")
-            c.execute("INSERT INTO rounds (round_number, is_open, deadline, division_id) VALUES (97, 1, ?, 1)", (past_dl,))
+            c.execute("INSERT INTO rounds (round_number, is_open, bets_open, deadline, division_id) VALUES (97, 0, 1, ?, 1)", (past_dl,))
 
-            # Round 98: Division 2 open round
-            c.execute("INSERT INTO rounds (round_number, is_open, deadline, division_id) VALUES (98, 1, ?, 2)", (future_dl,))
+            # Round 98: Division 2 round with an open line
+            c.execute("INSERT INTO rounds (round_number, is_open, bets_open, deadline, division_id) VALUES (98, 0, 1, ?, 2)", (future_dl,))
 
             # Setup test matches
             # Match 99501: Round 95, scheduled, Division 1

@@ -129,6 +129,13 @@ class Phase61RedTeamTestBase(unittest.TestCase):
 
             cursor.execute("INSERT INTO division_admins (user_id, division_id) VALUES (886603, 1)")
 
+            # Seed rounds with an OPEN betting line: ставки принимаются только
+            # при is_open = 0 AND bets_open = 1.
+            cursor.execute("""
+                INSERT OR REPLACE INTO rounds (round_number, division_id, season_id, is_open, bets_open)
+                VALUES (1, 1, 1, 0, 1), (1, 2, 1, 0, 1)
+            """)
+
             # Seed matches (Match 886601 = Div 1, Match 886602 = Div 2)
             cursor.execute("""
                 INSERT INTO matches (id, season_id, division_id, round_number, player1_team, player2_team, status, player1_score, player2_score)

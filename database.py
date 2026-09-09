@@ -382,12 +382,19 @@ def init_db() -> None:
         ):
             try:
                 cursor.execute(f"ALTER TABLE rounds ADD COLUMN {col_name} {col_type}")
-                if col_name == "bets_open":
-                    # Разовый бэкфилл: у туров, уже открытых для игры, линия открыта.
-                    # Выполняется только в момент добавления колонки.
-                    cursor.execute("UPDATE rounds SET bets_open = 1 WHERE is_open = 1")
             except sqlite3.OperationalError:
                 pass
+
+        # Инвариант линии: тур, открытый для игры, ставки не принимает.
+        # Состояние is_open = 1 AND bets_open = 1 недопустимо; ранний бэкфилл
+        # этой колонки его создавал — нормализуем один раз.
+        cursor.execute("SELECT 1 FROM schema_migrations WHERE version = '011_round_betting_cutoff'")
+        if not cursor.fetchone():
+            cursor.execute("UPDATE rounds SET bets_open = 0, bets_opened_at = NULL WHERE is_open = 1")
+            cursor.execute("""
+                INSERT OR IGNORE INTO schema_migrations (version, description)
+                VALUES ('011_round_betting_cutoff', 'Round betting cutoff: is_open=1 implies bets_open=0')
+            """)
 
         # Safely migration-add new columns to user_bets, bet_items, coin_transactions, user_wallets
         for col_name, col_type in (
@@ -3330,7 +3337,8 @@ def open_rounds_batch(start_round: int, end_round: int, deadline: str, division_
     if act and act.get("status") not in ("active", None):
         raise ValueError(f"Cannot open rounds in season #{s_id} with status '{act.get('status')}'")
 
-    with transaction() as conn:
+    # Сериализуется с приёмом ставок — см. update_round_status.
+    with _bet_placement_lock, transaction() as conn:
         cursor = conn.cursor()
         for r_num in range(start_round, end_round + 1):
             cursor.execute(
@@ -3342,19 +3350,30 @@ def open_rounds_batch(start_round: int, end_round: int, deadline: str, division_
                 "UPDATE rounds SET is_open = 1, deadline = ? WHERE (season_id = ? OR season_id IS NULL) AND division_id = ? AND round_number >= ? AND round_number <= ?",
                 (deadline, s_id, division_id, start_round, end_round)
             )
+            cursor.execute(
+                "UPDATE rounds SET bets_open = 0, bets_opened_at = NULL WHERE (season_id = ? OR season_id IS NULL) AND division_id = ? AND round_number >= ? AND round_number <= ?",
+                (s_id, division_id, start_round, end_round)
+            )
         else:
             cursor.execute(
                 "UPDATE rounds SET is_open = 1, deadline = ? WHERE (season_id = ? OR season_id IS NULL) AND round_number >= ? AND round_number <= ?",
                 (deadline, s_id, start_round, end_round)
             )
+            cursor.execute(
+                "UPDATE rounds SET bets_open = 0, bets_opened_at = NULL WHERE (season_id = ? OR season_id IS NULL) AND round_number >= ? AND round_number <= ?",
+                (s_id, start_round, end_round)
+            )
 
-    # 🎰 Auto-generate betting lines for opened rounds
-    for r_num in range(start_round, end_round + 1):
-        try:
-            from services.betting_engine import generate_round_markets
-            generate_round_markets(r_num, division_id=div_id, season_id=s_id)
-        except Exception as e:
-            logger.exception(f"Error generating round markets for round {r_num}: {e}")
+        # 🎰 Тур, открытый для игры, ставки не принимает: линия закрывается
+        # в обеих схемах, а не генерируется. То же правило, что в update_round_status.
+        # Каждое закрытие идёт в пределах конкретного (season, division, round):
+        # открытие туров Дивизиона 1 не гасит линию Дивизиона 2 и других сезонов.
+        for r_num in range(start_round, end_round + 1):
+            if division_id is not None:
+                close_round_betting_line(cursor, r_num, division_id=division_id, season_id=s_id)
+            else:
+                for scope_div_id in _round_scope_divisions(cursor, r_num, s_id):
+                    close_round_betting_line(cursor, r_num, division_id=scope_div_id, season_id=s_id)
 
 def get_open_pending_matches() -> list[dict]:
     """Get all pending matches where the round is open and not extended, scoped by division and season."""
@@ -3447,13 +3466,18 @@ def get_match_frozen_seconds(match_id: int) -> float:
         return total
 
 def get_matches_by_round(round_number: int, division_id: int | None = None) -> list[dict]:
-    """Retrieve all matches for a specific round with player details, optionally filtered by division."""
+    """Retrieve all matches for a specific round with player details, optionally filtered by division.
+
+    `season_id` включён в выборку намеренно: вызывающие (в частности
+    `services.betting_engine.generate_round_markets`) досеивают матчи по сезону
+    в Python, и без этой колонки их фильтр молча пропускал матчи чужих сезонов.
+    """
     with transaction() as conn:
         cursor = conn.cursor()
         if division_id is not None:
             cursor.execute("""
-                SELECT 
-                    m.id, m.round_number, m.division_id, u1.telegram_id AS player1_id, u2.telegram_id AS player2_id,
+                SELECT
+                    m.id, m.round_number, m.division_id, m.season_id, u1.telegram_id AS player1_id, u2.telegram_id AS player2_id,
                     m.player1_score, m.player2_score, m.status,
                     u1.username AS player1_nickname, COALESCE(m.player1_team, u1.team_name, 'Команда 1') AS player1_team,
                     u2.username AS player2_nickname, COALESCE(m.player2_team, u2.team_name, 'Команда 2') AS player2_team
@@ -3467,8 +3491,8 @@ def get_matches_by_round(round_number: int, division_id: int | None = None) -> l
             act = get_active_season()
             s_id = act["id"] if act else 1
             cursor.execute("""
-                SELECT 
-                    m.id, m.round_number, m.division_id, u1.telegram_id AS player1_id, u2.telegram_id AS player2_id,
+                SELECT
+                    m.id, m.round_number, m.division_id, m.season_id, u1.telegram_id AS player1_id, u2.telegram_id AS player2_id,
                     m.player1_score, m.player2_score, m.status,
                     u1.username AS player1_nickname, COALESCE(m.player1_team, u1.team_name, 'Команда 1') AS player1_team,
                     u2.username AS player2_nickname, COALESCE(m.player2_team, u2.team_name, 'Команда 2') AS player2_team
@@ -4361,6 +4385,195 @@ def get_round_info(round_number: int, division_id: int | None = None, season_id:
         return dict(row) if row else None
 
 
+def _round_scope_divisions(cursor, round_number: int, season_id: int) -> list[int]:
+    """Дивизионы, которых касается операция над туром внутри ОДНОГО сезона.
+
+    Нужна там, где вызывающий не задал дивизион явно — это глобальная
+    админ-операция «открыть/закрыть тур N по всей лиге». Вместо одного
+    незаскоупленного UPDATE такая операция раскладывается на конкретные
+    (season_id, division_id, round_number) и выполняется по каждому из них,
+    так что запись всегда идёт в пределах своего scope.
+
+    Учитываются и дивизионы, у которых есть строка тура, и дивизионы, у которых
+    есть матчи этого тура (у матча `division_id` может быть NULL — по принятому
+    в проекте соглашению это дивизион 1, см. `place_user_bet`).
+    """
+    divs: set[int] = set()
+    cursor.execute(
+        "SELECT DISTINCT division_id FROM rounds WHERE season_id = ? AND round_number = ?",
+        (season_id, round_number)
+    )
+    for row in cursor.fetchall():
+        if row["division_id"] is not None:
+            divs.add(row["division_id"])
+    cursor.execute(
+        "SELECT DISTINCT COALESCE(division_id, 1) AS div FROM matches "
+        "WHERE round_number = ? AND COALESCE(season_id, 1) = ?",
+        (round_number, season_id)
+    )
+    for row in cursor.fetchall():
+        divs.add(row["div"])
+    return sorted(divs)
+
+
+def close_round_betting_line(cursor, round_number: int, division_id: int, season_id: int) -> None:
+    """Закрыть линию тура во ВСЕХ схемах разом — строго в пределах одного scope.
+
+    Scope операции — `season_id + division_id + round_number`. Закрытие линии
+    Тура 5 Дивизиона 1 Сезона 2026 не должно касаться ни Дивизиона 2 того же
+    сезона, ни Тура 5 другого сезона, ни соседнего тура.
+
+    Legacy `bet_markets` не хранит division/season — его единственная связь со
+    scope это `match_id`, поэтому он закрывается через подзапрос по `matches`,
+    а не по `WHERE tour = ?` (последнее гасило линию во всех дивизионах и всех
+    сезонах сразу). Одновременно закрываются реляционные `markets` /
+    `market_selections`, из которых берёт коэффициенты Mini App.
+
+    Уже рассчитанные рынки ('settled'/'voided') не трогаются.
+    Вызывается ВНУТРИ уже открытой транзакции.
+    """
+    if division_id is None or season_id is None:
+        raise ValueError(
+            "close_round_betting_line requires explicit division_id and season_id: "
+            "глобальный scope для операций с линией недопустим"
+        )
+
+    scope_params = (round_number, division_id, season_id)
+
+    # Legacy schema (Telegram): scope берётся из матча, других связей у таблицы нет.
+    cursor.execute(
+        "UPDATE bet_markets SET is_active = 0 "
+        "WHERE match_id IN ("
+        "    SELECT id FROM matches WHERE round_number = ? "
+        "    AND COALESCE(division_id, 1) = ? AND COALESCE(season_id, 1) = ?"
+        ")",
+        scope_params
+    )
+    cursor.execute(
+        "UPDATE markets SET status = 'closed' "
+        "WHERE status IN ('open', 'suspended') "
+        "AND match_id IN ("
+        "    SELECT id FROM matches WHERE round_number = ? "
+        "    AND COALESCE(division_id, 1) = ? AND COALESCE(season_id, 1) = ?"
+        ")",
+        scope_params
+    )
+    cursor.execute(
+        "UPDATE market_selections SET status = 'locked' "
+        "WHERE status = 'active' "
+        "AND market_id IN ("
+        "    SELECT id FROM markets WHERE match_id IN ("
+        "        SELECT id FROM matches WHERE round_number = ? "
+        "        AND COALESCE(division_id, 1) = ? AND COALESCE(season_id, 1) = ?"
+        "    )"
+        ")",
+        scope_params
+    )
+
+
+def reopen_round_betting_line(cursor, round_number: int, division_id: int, season_id: int) -> None:
+    """Вернуть в линию реляционные рынки тура, ранее закрытые `close_round_betting_line`.
+
+    Scope тот же — `season_id + division_id + round_number`: переоткрытие линии
+    одного дивизиона не должно открывать линию соседнего.
+
+    Затрагивает только рынки в статусе 'closed' у ещё не сыгранных матчей.
+    Рассчитанные ('settled'/'voided') и вручную приостановленные ('suspended')
+    рынки не трогаются. Вызывается ВНУТРИ уже открытой транзакции.
+    """
+    if division_id is None or season_id is None:
+        raise ValueError(
+            "reopen_round_betting_line requires explicit division_id and season_id: "
+            "глобальный scope для операций с линией недопустим"
+        )
+
+    scope_params = (round_number, division_id, season_id)
+
+    cursor.execute(
+        "UPDATE markets SET status = 'open' "
+        "WHERE status = 'closed' "
+        "AND match_id IN ("
+        "    SELECT id FROM matches WHERE round_number = ? "
+        "    AND status IN ('scheduled', 'pending', 'live', 'open') "
+        "    AND COALESCE(division_id, 1) = ? AND COALESCE(season_id, 1) = ?"
+        ")",
+        scope_params
+    )
+    cursor.execute(
+        "UPDATE market_selections SET status = 'active' "
+        "WHERE status = 'locked' "
+        "AND market_id IN ("
+        "    SELECT id FROM markets WHERE status = 'open' AND match_id IN ("
+        "        SELECT id FROM matches WHERE round_number = ? "
+        "        AND status IN ('scheduled', 'pending', 'live', 'open') "
+        "        AND COALESCE(division_id, 1) = ? AND COALESCE(season_id, 1) = ?"
+        "    )"
+        ")",
+        scope_params
+    )
+
+
+def evaluate_round_betting_gate(
+    cursor,
+    round_number: int | None,
+    division_id: int | None,
+    season_id: int | None = None,
+) -> tuple[bool, str | None, str | None]:
+    """ЕДИНОЕ серверное правило приёма ставок на тур.
+
+    Ставка разрешена ТОЛЬКО когда тур ещё не открыт для игры, а линия открыта:
+
+        rounds.is_open = 0  AND  rounds.bets_open = 1
+
+    Проверяется строка ровно того тура, которому принадлежит матч:
+    `season_id + division_id + round_number`. Совпадения только по номеру тура
+    недостаточно — Тур 5 Дивизиона 2 не может разрешить ставку в Дивизионе 1,
+    и Тур 5 прошлого сезона не может разрешить ставку в текущем.
+    `UNIQUE(season_id, division_id, round_number)` гарантирует, что такой строки
+    не больше одной, поэтому выборка точная, без ORDER BY и без подстановок.
+
+    Любое другое состояние — отказ. Отсутствие строки нужного тура — тоже отказ:
+    разрешающего fallback здесь нет и быть не должно.
+
+    Возвращает (allowed, reason, message). Вызывается внутри транзакции.
+    Используется и `place_user_bet`, и `RiskEngine`, чтобы Telegram, Mini App
+    и REST API проверялись одним и тем же инвариантом.
+    """
+    if not round_number:
+        return False, "ROUND_UNKNOWN", "Матч не привязан к туру — приём прогнозов недоступен."
+
+    # У матча `division_id` может быть NULL (legacy-строки) — по принятому в
+    # проекте соглашению это дивизион 1. `season_id` у матча NOT NULL, но если
+    # scope всё же не задан, берём активный сезон, а не «любой».
+    div_id = division_id if division_id is not None else 1
+    if season_id is None:
+        act = get_active_season()
+        season_id = act["id"] if act else 1
+
+    cursor.execute(
+        "SELECT is_open, COALESCE(bets_open, 0) AS bets_open, deadline FROM rounds "
+        "WHERE round_number = ? AND division_id = ? AND season_id = ? "
+        "LIMIT 1",
+        (round_number, div_id, season_id)
+    )
+    r_row = cursor.fetchone()
+    if not r_row:
+        return False, "ROUND_NOT_FOUND", f"Тур {round_number} не найден — приём прогнозов недоступен."
+
+    if r_row["is_open"]:
+        return False, "ROUND_STARTED", f"Тур {round_number} уже открыт — приём прогнозов закрыт."
+
+    if not r_row["bets_open"]:
+        return False, "LINE_CLOSED", f"Приём прогнозов на Тур {round_number} закрыт."
+
+    if r_row["deadline"]:
+        dl_dt = _parse_round_deadline(r_row["deadline"])
+        if dl_dt and datetime.datetime.now() > dl_dt:
+            return False, "DEADLINE_PASSED", f"Дедлайн для прогнозов на Тур {round_number} истек."
+
+    return True, None, None
+
+
 def update_round_status(round_number: int, is_open: bool, deadline: str | None = None, division_id: int | None = None, season_id: int | None = None) -> None:
     """Open/close a round. When opening without an explicit deadline, any stale
     stored deadline is cleared so it cannot instantly mark matches as overdue.
@@ -4377,7 +4590,9 @@ def update_round_status(round_number: int, is_open: bool, deadline: str | None =
         if act and act.get("status") not in ("active", None):
             raise ValueError(f"Cannot open round in season #{s_id} with status '{act.get('status')}'")
 
-    with transaction() as conn:
+    # Смена состояния тура сериализуется с приёмом ставок: пока идёт place_user_bet,
+    # тур не может открыться «в середине» проверки, и наоборот.
+    with _bet_placement_lock, transaction() as conn:
         cursor = conn.cursor()
         if is_open:
             if division_id is not None:
@@ -4407,13 +4622,15 @@ def update_round_status(round_number: int, is_open: bool, deadline: str | None =
                     "UPDATE rounds SET is_open = ? WHERE (season_id = ? OR season_id IS NULL) AND division_id = ? AND round_number = ?",
                     (0, s_id, division_id, round_number)
                 )
-                cursor.execute("UPDATE bet_markets SET is_active = 0 WHERE tour = ?", (round_number,))
 
-            # Открытие тура для игры всегда открывает и линию; закрытие — закрывает.
+            # Открытие тура для игры ЗАКРЫВАЕТ приём прогнозов на него; закрытие
+            # тура линию тоже не открывает. Состояние is_open=1 AND bets_open=1
+            # для production-тура недостижимо.
             cursor.execute(
-                "UPDATE rounds SET bets_open = ? WHERE (season_id = ? OR season_id IS NULL) AND division_id = ? AND round_number = ?",
-                (1 if is_open else 0, s_id, division_id, round_number)
+                "UPDATE rounds SET bets_open = 0, bets_opened_at = NULL WHERE (season_id = ? OR season_id IS NULL) AND division_id = ? AND round_number = ?",
+                (s_id, division_id, round_number)
             )
+            close_round_betting_line(cursor, round_number, division_id=division_id, season_id=s_id)
 
             if deadline is not None:
                 cursor.execute(
@@ -4437,25 +4654,26 @@ def update_round_status(round_number: int, is_open: bool, deadline: str | None =
                     "UPDATE rounds SET is_open = ? WHERE (season_id = ? OR season_id IS NULL) AND round_number = ?",
                     (0, s_id, round_number)
                 )
-                # 🎰 Close betting line when round is closed
-                cursor.execute("UPDATE bet_markets SET is_active = 0 WHERE tour = ?", (round_number,))
 
+            # 🎰 Открытие тура для игры закрывает его линию (и закрытие — тоже).
             cursor.execute(
-                "UPDATE rounds SET bets_open = ? WHERE (season_id = ? OR season_id IS NULL) AND round_number = ?",
-                (1 if is_open else 0, s_id, round_number)
+                "UPDATE rounds SET bets_open = 0, bets_opened_at = NULL WHERE (season_id = ? OR season_id IS NULL) AND round_number = ?",
+                (s_id, round_number)
             )
+            # Дивизион не задан — это глобальная админ-операция по всей лиге.
+            # Линия при этом закрывается не одним общим UPDATE, а отдельно по
+            # каждому конкретному (season, division, round): сезон s_id чужие
+            # сезоны не затрагивает ни при каких обстоятельствах.
+            for scope_div_id in _round_scope_divisions(cursor, round_number, s_id):
+                close_round_betting_line(cursor, round_number, division_id=scope_div_id, season_id=s_id)
 
             if deadline is not None:
                 cursor.execute("DELETE FROM round_reminders WHERE round_number = ?", (round_number,))
 
     if is_open:
-        # 🎰 Auto-generate betting line when round is opened
-        try:
-            from services.betting_engine import generate_round_markets
-            generate_round_markets(round_number, division_id=division_id, season_id=s_id)
-        except Exception as e:
-            logger.exception(f"Error generating betting line for round {round_number}: {e}")
-
+        # 🎰 Линия тура N здесь НЕ генерируется: открытие тура для игры её закрывает.
+        # Ставки на тур принимаются заранее — до его открытия (см. set_round_bets_open).
+        #
         # 🎰 Ранняя линия: как только тур N открыт для игры, приём прогнозов на
         # тур N+1 открывается автоматически, чтобы линия всегда была на шаг впереди.
         try:
@@ -4487,19 +4705,33 @@ def set_round_bets_open(
         if season and season.get("status") not in ("active", None):
             return False
 
-    with transaction() as conn:
+    # Сериализуется с приёмом ставок — см. update_round_status.
+    with _bet_placement_lock, transaction() as conn:
         cursor = conn.cursor()
 
         if bets_open:
-            # Нет матчей — нечего выставлять в линию.
+            # Тур, уже открытый для игры, в линию не возвращается:
+            # состояние is_open = 1 AND bets_open = 1 недопустимо.
+            cursor.execute(
+                "SELECT 1 FROM rounds WHERE round_number = ? AND is_open = 1 "
+                "AND (? IS NULL OR division_id = ?) AND (season_id = ? OR season_id IS NULL) LIMIT 1",
+                (round_number, division_id, division_id, s_id)
+            )
+            if cursor.fetchone():
+                return False
+
+            # Нет матчей — нечего выставлять в линию. Матчи считаются строго
+            # в пределах scope: у матча division_id = NULL означает дивизион 1
+            # (то же соглашение, что в place_user_bet и close_round_betting_line).
             if division_id is not None:
                 cursor.execute(
-                    "SELECT COUNT(*) AS c FROM matches WHERE round_number = ? AND (division_id = ? OR division_id IS NULL) AND (season_id = ? OR season_id IS NULL)",
+                    "SELECT COUNT(*) AS c FROM matches WHERE round_number = ? "
+                    "AND COALESCE(division_id, 1) = ? AND COALESCE(season_id, 1) = ?",
                     (round_number, division_id, s_id)
                 )
             else:
                 cursor.execute(
-                    "SELECT COUNT(*) AS c FROM matches WHERE round_number = ? AND (season_id = ? OR season_id IS NULL)",
+                    "SELECT COUNT(*) AS c FROM matches WHERE round_number = ? AND COALESCE(season_id, 1) = ?",
                     (round_number, s_id)
                 )
             if (cursor.fetchone()["c"] or 0) == 0:
@@ -4523,8 +4755,21 @@ def set_round_bets_open(
             )
         changed = cursor.rowcount
 
-        if not bets_open:
-            cursor.execute("UPDATE bet_markets SET is_active = 0 WHERE tour = ?", (round_number,))
+        # Синхронизация линии всегда идёт по конкретному (season, division, round).
+        # Если дивизион не задан (глобальная админ-операция), она раскладывается
+        # на каждый затронутый дивизион ЭТОГО сезона — чужие сезоны не трогаются.
+        scope_divs = [division_id] if division_id is not None else _round_scope_divisions(cursor, round_number, s_id)
+
+        for scope_div_id in scope_divs:
+            if not bets_open:
+                # Закрываем линию в ОБЕИХ схемах: legacy bet_markets (Telegram)
+                # и реляционные markets/market_selections (Mini App).
+                close_round_betting_line(cursor, round_number, division_id=scope_div_id, season_id=s_id)
+            else:
+                # Повторное открытие линии: рынки, закрытые ранее, возвращаются в игру.
+                # Без этого reopen оставил бы markets='closed'/selections='locked',
+                # и линия была бы видна, но неставима.
+                reopen_round_betting_line(cursor, round_number, division_id=scope_div_id, season_id=s_id)
 
     if changed == 0:
         return False
@@ -6428,11 +6673,23 @@ def get_open_betting_tours(division_id: int | None = None, season_id: int | None
     """
     Retrieve all currently open tours that have unplayed matches
     and where the round deadline has not expired.
-    Тур попадает в линию, если он открыт для игры (`is_open = 1`) либо для него
-    заранее открыт приём прогнозов (`bets_open = 1`).
+    Тур попадает в линию ровно по тому же правилу, что применяет
+    `evaluate_round_betting_gate`: линия открыта (`bets_open = 1`), а тур
+    ещё не открыт для игры (`is_open = 0`). Список не может показать тур,
+    ставку на который сервер всё равно отклонит.
+
+    Scope: матчи джойнятся к своему туру по полному ключу
+    `season_id + division_id + round_number`, поэтому тур одного дивизиона
+    никогда не «подхватывает» матчи другого. Сезон не задан — берётся активный,
+    а не «все сразу»: линия завершённого сезона в списке появиться не должна.
+    Дивизион не задан — возвращаются туры всех дивизионов активного сезона,
+    каждый со своим `division_id` (существующий контракт Telegram-меню ставок).
     """
     with transaction() as conn:
         cursor = conn.cursor()
+        if season_id is None:
+            act = get_active_season()
+            season_id = act["id"] if act else 1
         query = """
             SELECT
                 r.round_number, r.deadline, r.division_id, r.season_id,
@@ -6440,16 +6697,17 @@ def get_open_betting_tours(division_id: int | None = None, season_id: int | None
                 COUNT(m.id) as total_matches,
                 SUM(CASE WHEN m.status NOT IN ('confirmed', 'completed') THEN 1 ELSE 0 END) as unplayed_matches
             FROM rounds r
-            JOIN matches m ON r.round_number = m.round_number AND (r.division_id = m.division_id OR r.division_id IS NULL OR m.division_id IS NULL)
-            WHERE (r.is_open = 1 OR COALESCE(r.bets_open, 0) = 1)
+            JOIN matches m
+              ON m.round_number = r.round_number
+             AND COALESCE(m.division_id, 1) = r.division_id
+             AND COALESCE(m.season_id, 1) = r.season_id
+            WHERE r.is_open = 0 AND COALESCE(r.bets_open, 0) = 1
+              AND r.season_id = ?
         """
-        params = []
+        params = [season_id]
         if division_id is not None:
-            query += " AND (r.division_id = ? OR r.division_id IS NULL)"
+            query += " AND r.division_id = ?"
             params.append(division_id)
-        if season_id is not None:
-            query += " AND (r.season_id = ? OR r.season_id IS NULL)"
-            params.append(season_id)
 
         query += """
             GROUP BY r.round_number, r.deadline, r.division_id, r.season_id, r.is_open, r.bets_open
@@ -6465,8 +6723,12 @@ def get_open_betting_tours(division_id: int | None = None, season_id: int | None
             dl_str = row["deadline"]
             dl_dt = _parse_round_deadline(dl_str)
             if dl_dt and now > dl_dt:
-                # Deadline passed: close the betting market for this tour
-                cursor.execute("UPDATE bet_markets SET is_active = 0 WHERE tour = ?", (r_num,))
+                # Deadline passed: закрываем линию тура в обеих схемах, а не только в legacy.
+                close_round_betting_line(
+                    cursor, r_num,
+                    division_id=row["division_id"],
+                    season_id=row["season_id"]
+                )
                 continue
 
             open_tours.append({
@@ -6483,25 +6745,43 @@ def get_open_betting_tours(division_id: int | None = None, season_id: int | None
         return open_tours
 
 
-def get_active_bet_markets(tour: int | None = None, division_id: int | None = None) -> list[dict]:
-    """Retrieve open betting markets for unplayed matches in open or pre-opened rounds."""
+def get_active_bet_markets(
+    tour: int | None = None,
+    division_id: int | None = None,
+    season_id: int | None = None
+) -> list[dict]:
+    """Retrieve open betting markets for unplayed matches in open or pre-opened rounds.
+
+    Scope: legacy `bet_markets` не хранит division/season, поэтому scope берётся
+    у матча, а строка тура джойнится по полному ключу
+    `season_id + division_id + round_number`. Открытая линия Дивизиона 2
+    не может сделать «активным» рынок Дивизиона 1 и наоборот.
+    Сезон не задан — берётся активный, а не «любой».
+    """
     with transaction() as conn:
         cursor = conn.cursor()
+        if season_id is None:
+            act = get_active_season()
+            season_id = act["id"] if act else 1
         query = """
             SELECT bm.*, m.status as match_status, m.round_number, m.division_id, r.deadline, r.is_open,
                    COALESCE(r.bets_open, 0) AS bets_open
             FROM bet_markets bm
             JOIN matches m ON bm.match_id = m.id
-            JOIN rounds r ON m.round_number = r.round_number AND (r.division_id = m.division_id OR r.division_id IS NULL OR m.division_id IS NULL)
+            JOIN rounds r
+              ON r.round_number = m.round_number
+             AND r.division_id = COALESCE(m.division_id, 1)
+             AND r.season_id = COALESCE(m.season_id, 1)
             WHERE bm.is_active = 1 AND m.status NOT IN ('confirmed', 'completed')
               AND (r.is_open = 1 OR COALESCE(r.bets_open, 0) = 1)
+              AND COALESCE(m.season_id, 1) = ?
         """
-        params = []
+        params = [season_id]
         if tour is not None:
             query += " AND bm.tour = ?"
             params.append(tour)
         if division_id is not None:
-            query += " AND (m.division_id = ? OR m.division_id IS NULL)"
+            query += " AND COALESCE(m.division_id, 1) = ?"
             params.append(division_id)
         query += " ORDER BY bm.tour ASC, bm.id ASC"
         cursor.execute(query, params)
@@ -6518,14 +6798,22 @@ def get_active_bet_markets(tour: int | None = None, division_id: int | None = No
 
 
 def get_bet_market_by_match_id(match_id: int) -> dict | None:
-    """Fetch market odds for a specific match ID if its round accepts bets."""
+    """Fetch market odds for a specific match ID if ITS OWN round accepts bets.
+
+    Scope: строка тура берётся строго по `season_id + division_id + round_number`
+    самого матча. Джойн только по номеру тура позволял открытому туру чужого
+    дивизиона или прошлого сезона сделать матч «доступным для ставки».
+    """
     with transaction() as conn:
         cursor = conn.cursor()
         cursor.execute("""
             SELECT bm.*, r.is_open, COALESCE(r.bets_open, 0) AS bets_open, r.deadline
             FROM bet_markets bm
             JOIN matches m ON bm.match_id = m.id
-            JOIN rounds r ON m.round_number = r.round_number
+            JOIN rounds r
+              ON r.round_number = m.round_number
+             AND r.division_id = COALESCE(m.division_id, 1)
+             AND r.season_id = COALESCE(m.season_id, 1)
             WHERE bm.match_id = ?
               AND (r.is_open = 1 OR COALESCE(r.bets_open, 0) = 1)
               AND m.status NOT IN ('confirmed', 'completed')
@@ -6597,15 +6885,31 @@ def place_user_bet(
                                    "message": "Ключ идемпотентности уже использован для другой ставки."}
                 return True, existing["id"]
 
-        # Phase 9: Risk Engine Evaluation
+        # Phase 9: Risk Engine Evaluation.
+        #
+        # Риск-контроль работает FAIL-CLOSED. Внутренняя поломка RiskEngine
+        # (ошибка БД, отсутствующая таблица лимитов, сбой exposure-запроса, любой
+        # неожиданный exception) — это НЕ разрешение. Такая ставка отклоняется:
+        # монеты не списываются, купон не создаётся, транзакция не считается
+        # успешной, idempotency-запись не появляется. Пользователю уходит обычный
+        # безопасный отказ без деталей исключения.
+        div_id = None
+        risk_ctx_round = None
+        risk_ctx_season = None
         try:
             from services.risk_engine import RiskEngine
             first_m_id = selections[0].get("match_id") if selections else None
-            div_id = None
             if first_m_id:
-                cursor.execute("SELECT division_id FROM matches WHERE id = ?", (first_m_id,))
+                cursor.execute(
+                    "SELECT division_id, round_number, season_id FROM matches WHERE id = ?",
+                    (first_m_id,)
+                )
                 m_r = cursor.fetchone()
-                div_id = m_r["division_id"] if m_r and "division_id" in m_r.keys() else None
+                if m_r:
+                    keys = m_r.keys()
+                    div_id = m_r["division_id"] if "division_id" in keys else None
+                    risk_ctx_round = m_r["round_number"] if "round_number" in keys else None
+                    risk_ctx_season = m_r["season_id"] if "season_id" in keys else None
 
             risk_decision = RiskEngine.evaluate_bet(
                 user_id=user_id,
@@ -6613,30 +6917,50 @@ def place_user_bet(
                 selections=selections,
                 division_id=div_id
             )
-            if not risk_decision.allowed:
-                if risk_decision.reason == "MIN_STAKE":
-                    return False, "Минимальная сумма прогноза — 10 🪙."
-                if risk_decision.reason == "MAX_STAKE":
-                    return False, {"error": "MAX_BET_EXCEEDED", "max_bet": _MAX_BET,
-                                   "message": f"Максимальная сумма ставки — {_MAX_BET:,} 🪙."}
-                if risk_decision.reason == "MAX_PAYOUT":
-                    return False, {"error": "MAX_PAYOUT_EXCEEDED", "max_payout": _MAX_PAYOUT,
-                                   "message": f"Потенциальный выигрыш превышает максимум {_MAX_PAYOUT:,} 🪙."}
-                if risk_decision.reason == "INSUFFICIENT_BALANCE":
-                    wallet = get_or_create_wallet(user_id)
-                    return False, f"Недостаточно монет на балансе (Баланс: {wallet['balance']} 🪙)."
-                if risk_decision.reason in ("MARKET_SUSPENDED", "INVALID_MARKET"):
-                    return False, risk_decision.message or "Рынок на данный исход временно приостановлен или закрыт."
+            if risk_decision is None or not hasattr(risk_decision, "allowed"):
+                # Некорректные внутренние данные риск-движка — тоже внутренняя ошибка.
+                raise RuntimeError("RiskEngine returned a malformed decision object")
+        except Exception:
+            # Только внутренняя ошибка риск-движка. Бизнес-отказы RiskEngine
+            # возвращаются ниже как обычные REJECT и сюда не попадают.
+            _risk_match_ids = [s.get("match_id") for s in selections if isinstance(s, dict)]
+            logger.exception(
+                "RISK_CHECK_UNAVAILABLE: RiskEngine failed during place_user_bet — "
+                "bet rejected (fail-closed). "
+                f"user_id={user_id} amount={amount} match_ids={_risk_match_ids} "
+                f"round_number={risk_ctx_round} division_id={div_id} season_id={risk_ctx_season}"
+            )
+            try:
+                conn.rollback()
+            except sqlite3.Error:
+                pass
+            return False, {
+                "error": "RISK_CHECK_UNAVAILABLE",
+                "message": "Не удалось проверить прогноз. Ставка не принята, монеты не списаны. Попробуйте позже."
+            }
 
-                err_dict = {
-                    "error": risk_decision.reason,
-                    "message": risk_decision.message,
-                }
-                if risk_decision.max_allowed_stake is not None:
-                    err_dict["max_allowed_stake"] = risk_decision.max_allowed_stake
-                return False, err_dict
-        except Exception as e:
-            logger.debug(f"RiskEngine evaluation fallback: {e}")
+        if not risk_decision.allowed:
+            if risk_decision.reason == "MIN_STAKE":
+                return False, "Минимальная сумма прогноза — 10 🪙."
+            if risk_decision.reason == "MAX_STAKE":
+                return False, {"error": "MAX_BET_EXCEEDED", "max_bet": _MAX_BET,
+                               "message": f"Максимальная сумма ставки — {_MAX_BET:,} 🪙."}
+            if risk_decision.reason == "MAX_PAYOUT":
+                return False, {"error": "MAX_PAYOUT_EXCEEDED", "max_payout": _MAX_PAYOUT,
+                               "message": f"Потенциальный выигрыш превышает максимум {_MAX_PAYOUT:,} 🪙."}
+            if risk_decision.reason == "INSUFFICIENT_BALANCE":
+                wallet = get_or_create_wallet(user_id)
+                return False, f"Недостаточно монет на балансе (Баланс: {wallet['balance']} 🪙)."
+            if risk_decision.reason in ("MARKET_SUSPENDED", "INVALID_MARKET"):
+                return False, risk_decision.message or "Рынок на данный исход временно приостановлен или закрыт."
+
+            err_dict = {
+                "error": risk_decision.reason,
+                "message": risk_decision.message,
+            }
+            if risk_decision.max_allowed_stake is not None:
+                err_dict["max_allowed_stake"] = risk_decision.max_allowed_stake
+            return False, err_dict
 
         wallet = get_or_create_wallet(user_id)
         if wallet["balance"] < amount:
@@ -6669,29 +6993,16 @@ def place_user_bet(
             if match_row["status"] not in ("scheduled", "pending", "live", "open"):
                 return False, f"Матч #{m_id} уже сыгран или завершен."
 
-            # Check round deadline if present (scoped by division)
+            # Единое серверное правило приёма ставок на тур: is_open = 0 AND bets_open = 1.
+            # То же самое правило применяет RiskEngine — Telegram, Mini App и REST API
+            # проверяются одним инвариантом. Разрешающего fallback здесь нет:
+            # если строки тура нет, ставка отклоняется.
             r_num = match_row["round_number"] if "round_number" in match_row.keys() else None
             m_div_id = match_row["division_id"] if "division_id" in match_row.keys() and match_row["division_id"] is not None else 1
-            if r_num:
-                cursor.execute("SELECT is_open, deadline FROM rounds WHERE division_id = ? AND round_number = ?", (m_div_id, r_num))
-                r_row = cursor.fetchone()
-                if not r_row:
-                    cursor.execute("SELECT is_open, deadline FROM rounds WHERE round_number = ? ORDER BY is_open DESC, id DESC LIMIT 1", (r_num,))
-                    r_row = cursor.fetchone()
-                if r_row:
-                    if not r_row["is_open"]:
-                        return False, f"Приём прогнозов на Тур {r_num} закрыт."
-                    if r_row["deadline"]:
-                        raw_dl = str(r_row["deadline"]).strip()
-                        dl_dt = None
-                        for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
-                            try:
-                                dl_dt = datetime.datetime.strptime(raw_dl[:19], fmt)
-                                break
-                            except ValueError:
-                                pass
-                        if dl_dt and datetime.datetime.now() > dl_dt:
-                            return False, f"Дедлайн для прогнозов на Тур {r_num} истек."
+            m_season_id = match_row["season_id"] if "season_id" in match_row.keys() else None
+            allowed, _reason, gate_message = evaluate_round_betting_gate(cursor, r_num, m_div_id, m_season_id)
+            if not allowed:
+                return False, gate_message
 
             # Determine odds value from relational schema or legacy bet_markets
             odd_val = None

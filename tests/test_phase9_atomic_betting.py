@@ -31,7 +31,7 @@ class TestPhase9AtomicBetting(unittest.TestCase):
             cursor.execute("INSERT INTO seasons (name, status) VALUES ('Atomic Season', 'active')")
             self.season_id = cursor.lastrowid
 
-            cursor.execute("INSERT INTO rounds (division_id, round_number, season_id, is_open) VALUES (1, 1, ?, 1)", (self.season_id,))
+            cursor.execute("INSERT INTO rounds (division_id, round_number, season_id, is_open, bets_open) VALUES (1, 1, ?, 0, 1)", (self.season_id,))
 
             # Match 1: open
             cursor.execute("""

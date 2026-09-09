@@ -39,7 +39,7 @@ class TestPhase9DivisionSeasonIsolation(unittest.TestCase):
             self.season2_id = cursor.lastrowid
 
             # Div 1 Season 1 Match
-            cursor.execute("INSERT INTO rounds (division_id, round_number, season_id, is_open) VALUES (1, 1, ?, 1)", (self.season1_id,))
+            cursor.execute("INSERT INTO rounds (division_id, round_number, season_id, is_open, bets_open) VALUES (1, 1, ?, 0, 1)", (self.season1_id,))
             cursor.execute("""
                 INSERT INTO matches (id, division_id, season_id, round_number, player1_team, player2_team, status)
                 VALUES (991, 1, ?, 1, 'Div1TeamA', 'Div1TeamB', 'open')
@@ -51,7 +51,7 @@ class TestPhase9DivisionSeasonIsolation(unittest.TestCase):
             """)
 
             # Div 2 Season 1 Match
-            cursor.execute("INSERT INTO rounds (division_id, round_number, season_id, is_open) VALUES (2, 1, ?, 1)", (self.season1_id,))
+            cursor.execute("INSERT INTO rounds (division_id, round_number, season_id, is_open, bets_open) VALUES (2, 1, ?, 0, 1)", (self.season1_id,))
             cursor.execute("""
                 INSERT INTO matches (id, division_id, season_id, round_number, player1_team, player2_team, status)
                 VALUES (992, 2, ?, 1, 'Div2TeamA', 'Div2TeamB', 'open')
@@ -63,7 +63,7 @@ class TestPhase9DivisionSeasonIsolation(unittest.TestCase):
             """)
 
             # Div 1 Season 2 Match
-            cursor.execute("INSERT INTO rounds (division_id, round_number, season_id, is_open) VALUES (1, 1, ?, 1)", (self.season2_id,))
+            cursor.execute("INSERT INTO rounds (division_id, round_number, season_id, is_open, bets_open) VALUES (1, 1, ?, 0, 1)", (self.season2_id,))
             cursor.execute("""
                 INSERT INTO matches (id, division_id, season_id, round_number, player1_team, player2_team, status)
                 VALUES (993, 1, ?, 1, 'Div1S2TeamA', 'Div1S2TeamB', 'open')
