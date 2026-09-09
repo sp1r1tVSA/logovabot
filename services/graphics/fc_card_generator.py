@@ -54,7 +54,7 @@ HEIGHT = 690 * SCALE
 
 CARD_STYLES = {
     "kpl_standard": {
-        "title": "КПЛ STANDARD",
+        "title": "STANDARD",
         "bg_top": (16, 18, 26),             # Titanium Graphite
         "bg_bot": (8, 9, 14),               # Deep Matte Obsidian
         "border_primary": (210, 215, 225),  # Steel Silver
@@ -63,10 +63,10 @@ CARD_STYLES = {
         "text_primary": (255, 255, 255),
         "text_secondary": (210, 215, 225),
         "glow_rgb": (180, 190, 210),
-        "desc": "Графитовый титан и рубиновый кант КПЛ (Рейтинг до 85)",
+        "desc": "Графитовый титан и рубиновый кант (Рейтинг до 85)",
     },
     "kpl_star": {
-        "title": "КПЛ STAR EDITION",
+        "title": "STAR EDITION",
         "bg_top": (10, 18, 38),             # Midnight Sapphire
         "bg_bot": (5, 8, 18),               # Deep Indigo
         "border_primary": (0, 230, 255),    # Electric Laser Cyan
@@ -75,10 +75,10 @@ CARD_STYLES = {
         "text_primary": (255, 255, 255),
         "text_secondary": (0, 230, 255),
         "glow_rgb": (0, 200, 255),
-        "desc": "Сапфирово-рубиновый неон КПЛ (Рейтинг 86-92)",
+        "desc": "Сапфирово-рубиновый неон (Рейтинг 86-92)",
     },
     "kpl_prime": {
-        "title": "КПЛ PRIME MVP",
+        "title": "PRIME MVP",
         "bg_top": (26, 14, 18),             # Royal Obsidian & Crimson
         "bg_bot": (8, 5, 8),                # Deep Flame Void
         "border_primary": (255, 215, 0),    # 24K Polished Gold
@@ -87,7 +87,7 @@ CARD_STYLES = {
         "text_primary": (255, 255, 255),
         "text_secondary": (255, 215, 0),
         "glow_rgb": (255, 190, 0),
-        "desc": "24K Золото и базальтовое пламя КПЛ (Рейтинг 93+)",
+        "desc": "24K Золото и базальтовое пламя (Рейтинг 93+)",
     },
     "toty_gold": {
         "title": "EA FC 24 SPECIAL ITEM",
@@ -701,7 +701,7 @@ def render_master_static_card(player_data: dict, style_id: str = "toty_gold") ->
         division_name=player_data.get("division_name"),
         team_name=team_name,
     )
-    edition_tail = division_theme.label or "КПЛ 2026"
+    edition_tail = division_theme.label or "СЕЗОН 2026"
     foot_text = f"★ {title_short} • {edition_tail} ★"
 
     # Clamp font and width to always maintain comfortable padding from shield borders

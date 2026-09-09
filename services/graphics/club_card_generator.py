@@ -189,7 +189,7 @@ def generate_club_card(data: dict, avatar_path: str | None = None, division_id: 
 
     # Clean Unified Subline
     debt_str = f"Долги: {debts_count}" if debts_count > 0 else "Без долгов"
-    sub_text = f"Заявка: {squad_count} игр.   •   {debt_str}   •   КПЛ 2026"
+    sub_text = f"Заявка: {squad_count} игр.   •   {debt_str}   •   СЕЗОН 2026"
     
     sub_y = curr_y + 50 * SCALE
     draw.text((text_x, sub_y), f"Заявка: {squad_count} игр.   •   ", font=font_sub, fill=TEXT_SECONDARY)
@@ -200,12 +200,12 @@ def generate_club_card(data: dict, avatar_path: str | None = None, division_id: 
     draw.text((text_x + w1, sub_y), debt_str, font=font_sub, fill=debt_color)
     
     w2 = draw.textlength(debt_str, font=font_sub)
-    draw.text((text_x + w1 + w2, sub_y), "   •   КПЛ 2026", font=font_sub, fill=MUTED)
+    draw.text((text_x + w1 + w2, sub_y), "   •   СЕЗОН 2026", font=font_sub, fill=MUTED)
 
     # Rank Badge on Right
     rank = l_stats.get("rank", 0)
     pts = l_stats.get("points", 0)
-    rank_text = f"#{rank} МЕСТО" if rank > 0 else "ЛИГА КПЛ"
+    rank_text = f"#{rank} МЕСТО" if rank > 0 else "ЛИГА"
     pts_text  = f"{pts} PTS"
 
     badge_w = 126 * SCALE
@@ -314,7 +314,7 @@ def generate_club_card(data: dict, avatar_path: str | None = None, division_id: 
         o_w = cup.get("opp_wins", 0)
         status = cup.get("status", "active")
         
-        title_text = f"КУБОК КПЛ 2026  •  {stage_display}"
+        title_text = f"КУБОК 2026  •  {stage_display}"
         draw.text((CARD_PADDING + 18 * SCALE, curr_y + 14 * SCALE), title_text, font=font_row_hd, fill=CUP_GOLD)
 
         cup_desc = f"Серия против «{opp}»  |  Счёт серии: {c_w} : {o_w}  |  {'Завершена' if status == 'completed' else 'В процессе'}"

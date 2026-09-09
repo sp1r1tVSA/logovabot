@@ -151,7 +151,7 @@ def generate_top_stats_image(
     right_edge = WIDTH - PAD - (badge_w + 16 * SCALE if badge_w else 0)
 
     # Top right season badge pill
-    pill_text = "КПЛ 2026"
+    pill_text = "СЕЗОН 2026"
     pw = int(draw.textlength(pill_text, font=font_subtitle))
     px = right_edge - pw - 12 * SCALE
     _draw_rounded_rect(

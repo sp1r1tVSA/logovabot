@@ -58,7 +58,7 @@ def generate_player_card(stats: dict, division_id: int | None = None) -> io.Byte
         "cup_goals": int,
         "cup_assists": int,
         "items": [
-            {"title": "Кубок КПЛ" or "Тур 1", "goals": int, "assists": int, "total": int, "is_cup": bool},
+            {"title": "Кубок" or "Тур 1", "goals": int, "assists": int, "total": int, "is_cup": bool},
             ...
         ],
         "rounds": dict (fallback)
@@ -90,7 +90,7 @@ def generate_player_card(stats: dict, division_id: int | None = None) -> io.Byte
             g = rd.get("goals", 0)
             a = rd.get("assists", 0)
             items.append({
-                "title": "Кубок КПЛ" if is_c else f"Тур {rn}",
+                "title": "Кубок" if is_c else f"Тур {rn}",
                 "goals": g,
                 "assists": a,
                 "total": g + a,
@@ -353,7 +353,7 @@ def generate_player_card(stats: dict, division_id: int | None = None) -> io.Byte
     # 4. FOOTER
     # ══════════════════════════════════════════════════════════════════════
     draw.line([(CARD_PADDING, y), (CARD_WIDTH - CARD_PADDING, y)], fill=BORDER_COLOR, width=1 * SCALE)
-    footer_text = "КПЛ 2026  •  Player Card"
+    footer_text = "СЕЗОН 2026  •  Player Card"
     ft_w = int(draw.textlength(footer_text, font=font_label))
     draw.text(
         ((CARD_WIDTH - ft_w) // 2, y + 10 * SCALE),

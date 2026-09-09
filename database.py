@@ -5167,7 +5167,7 @@ def get_player_card_stats(player_name: str, team_name: str) -> dict:
             
             key = -1 if is_cup else rn
             if key not in rounds_dict:
-                title = "Кубок КПЛ" if is_cup else f"Тур {rn}"
+                title = "Кубок" if is_cup else f"Тур {rn}"
                 rounds_dict[key] = {
                     "round_key": key,
                     "title": title,

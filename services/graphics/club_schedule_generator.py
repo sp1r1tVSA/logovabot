@@ -208,7 +208,7 @@ def generate_club_schedule(data: dict, max_matches: int = 12, division_id: int |
     draw.text((text_x, curr_y + 2 * SCALE), team_name.upper(), font=font_title, fill=WHITE)
 
     _draw_calendar_icon(draw, text_x, curr_y + 45 * SCALE, size=13 * SCALE, color=TEXT_SECONDARY)
-    sub_title = "РАСПИСАНИЕ И РЕЗУЛЬТАТЫ МАТЧЕЙ • КПЛ 2026"
+    sub_title = "РАСПИСАНИЕ И РЕЗУЛЬТАТЫ МАТЧЕЙ • СЕЗОН 2026"
     draw.text((text_x + 18 * SCALE, curr_y + 44 * SCALE), sub_title, font=font_sub, fill=TEXT_SECONDARY)
 
     # Right Stats Pill (Played / Upcoming)
