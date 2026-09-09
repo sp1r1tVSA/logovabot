@@ -4842,6 +4842,87 @@ async def post_round_preview(
     return True
 
 
+def _build_potr_card_data(payload: dict) -> dict | None:
+    """
+    Собрать данные для EA FC карточки игрока тура.
+
+    Карточка строится на СЕЗОННЫХ цифрах игрока: по статистике одного тура
+    рейтинг вышел бы заниженным и почти всегда давал бы обычный стиль,
+    что занижает игрока. Показатели самого тура уходят в подпись.
+    Синхронная функция — вызывать через asyncio.to_thread.
+    """
+    potr = payload.get("player_of_the_round") or {}
+    player_name = (potr.get("player_name") or "").strip()
+    team_name = (potr.get("team_name") or "").strip()
+    if not player_name or not team_name:
+        return None
+
+    try:
+        stats = database.get_player_card_stats(player_name, team_name) or {}
+    except Exception:
+        logger.exception(f"Could not load season stats for player of the round '{player_name}' ({team_name})")
+        stats = {}
+
+    card_data = dict(stats)
+    card_data.setdefault("player_name", player_name)
+    card_data.setdefault("team_name", team_name)
+    # Сезонных событий может не быть только при рассинхроне — тогда падаем на цифры тура.
+    if not card_data.get("total_goals") and not card_data.get("total_assists"):
+        card_data["total_goals"] = int(potr.get("goals") or 0)
+        card_data["total_assists"] = int(potr.get("assists") or 0)
+
+    # Дивизион нужен карточке для подписи в подвале.
+    card_data["division_id"] = payload.get("division_id")
+    card_data["division_name"] = payload.get("division_name")
+    return card_data
+
+
+async def _post_player_of_the_round_card(
+    context: ContextTypes.DEFAULT_TYPE,
+    group_id: int,
+    topic_id: int | None,
+    payload: dict,
+) -> bool:
+    """Анимированная карточка игрока тура вслед за итогами. True, если ушла."""
+    from services.animation_sender import send_high_quality_animation
+    from services.graphics.fc_card_generator import (
+        calculate_fut_attributes,
+        generate_animated_ea_fc_card,
+        get_kpl_tier_by_ovr,
+    )
+
+    card_data = await asyncio.to_thread(_build_potr_card_data, payload)
+    if not card_data:
+        return False
+
+    ovr = card_data.get("ovr") or calculate_fut_attributes(card_data)["ovr"]
+    tier = get_kpl_tier_by_ovr(ovr)
+
+    buf = await asyncio.to_thread(generate_animated_ea_fc_card, card_data, tier)
+
+    potr = payload.get("player_of_the_round") or {}
+    round_goals = int(potr.get("goals") or 0)
+    round_assists = int(potr.get("assists") or 0)
+    caption = (
+        f"🏅 <b>ИГРОК {payload.get('round_number')} ТУРА</b>\n"
+        f"<b>{html.escape(str(card_data['player_name']))}</b> · "
+        f"{html.escape(str(card_data['team_name']))}\n"
+        f"В туре: {round_goals}+{round_assists} · "
+        f"за сезон: {int(card_data.get('total_goals') or 0)}+{int(card_data.get('total_assists') or 0)}"
+    )
+
+    await send_high_quality_animation(
+        context.bot,
+        group_id,
+        buf,
+        caption=caption,
+        parse_mode="HTML",
+        filename=f"potr_{tier}.mp4",
+        message_thread_id=topic_id,
+    )
+    return True
+
+
 async def post_round_digest(
     context: ContextTypes.DEFAULT_TYPE,
     division_id: int,
@@ -4882,6 +4963,16 @@ async def post_round_digest(
     await asyncio.to_thread(
         database.record_round_content_post, division_id, round_number, "digest", msg.message_id
     )
+
+    # Карточка игрока тура — довесок к итогам. Её падение (нет ffmpeg, нет
+    # игрока, Telegram отказал) не должно отменять уже опубликованный дайджест.
+    try:
+        await _post_player_of_the_round_card(context, group_id, topic_id, payload)
+    except Exception:
+        logger.exception(
+            f"Could not post player-of-the-round card for division {division_id} round {round_number}"
+        )
+
     return True
 
 
