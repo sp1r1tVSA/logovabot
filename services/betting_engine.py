@@ -115,7 +115,7 @@ def generate_round_markets(tour: int, division_id: int | None = None, season_id:
     """
     Generate or update odds markets for all unplayed matches of a tour, optionally filtered by division and season.
     """
-    matches = database.get_matches_by_round(tour, division_id=division_id)
+    matches = database.get_matches_by_round(tour, division_id=division_id, season_id=season_id)
     if season_id is not None:
         matches = [m for m in matches if m.get("season_id") in (season_id, None)]
     markets = []

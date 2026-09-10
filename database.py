@@ -2671,9 +2671,17 @@ def get_active_match_by_teams(team1: str, team2: str, caption: str | None = None
     target_round = int(round_match.group(1)) if round_match else None
     
     now = datetime.datetime.now()
-    
+
+    active_season = get_active_season()
+    active_season_id = active_season["id"] if active_season else 1
+
     with transaction() as conn:
         cursor = conn.cursor()
+        # `rounds` уникален по (season_id, division_id, round_number): джойн только
+        # по round_number подтягивал is_open/deadline произвольного дивизиона или
+        # сезона, из-за чего скоринг кандидатов считал чужой дедлайн. Матчи тоже
+        # ограничены активным сезоном — иначе незакрытая игра прошлого сезона
+        # могла выиграть матчинг у текущей.
         cursor.execute("""
             SELECT 
                 m.id, m.status, m.tournament_type, m.round_number, m.cup_stage, m.cup_series_id, m.game_num_in_series,
@@ -2687,11 +2695,18 @@ def get_active_match_by_teams(team1: str, team2: str, caption: str | None = None
             FROM matches m
             LEFT JOIN users u1 ON LOWER(m.player1_team) = LOWER(u1.team_name)
             LEFT JOIN users u2 ON LOWER(m.player2_team) = LOWER(u2.team_name)
-            LEFT JOIN rounds r ON m.round_number = r.round_number AND (m.tournament_type IS NULL OR m.tournament_type = 'league')
+            LEFT JOIN rounds r
+                   ON m.round_number = r.round_number
+                  AND (m.tournament_type IS NULL OR m.tournament_type = 'league')
+                  AND r.division_id = COALESCE(m.division_id, 1)
+                  AND r.season_id = COALESCE(m.season_id, ?)
             LEFT JOIN cup_series s ON m.cup_series_id = s.id
-            WHERE m.status IN ('pending', 'reported', 'disputed')
-               OR (m.status = 'confirmed' AND (SELECT COUNT(*) FROM match_events me WHERE me.match_id = m.id) = 0)
-        """)
+            WHERE (m.season_id = ? OR m.season_id IS NULL)
+              AND (
+                    m.status IN ('pending', 'reported', 'disputed')
+                    OR (m.status = 'confirmed' AND (SELECT COUNT(*) FROM match_events me WHERE me.match_id = m.id) = 0)
+              )
+        """, (active_season_id, active_season_id))
         rows = cursor.fetchall()
         
         candidates = []
@@ -3379,16 +3394,23 @@ def get_match_frozen_seconds(match_id: int) -> float:
                 total += max(0.0, (datetime.datetime.now() - f_at).total_seconds())
         return total
 
-def get_matches_by_round(round_number: int, division_id: int | None = None) -> list[dict]:
+def get_matches_by_round(round_number: int, division_id: int | None = None, season_id: int | None = None) -> list[dict]:
     """Retrieve all matches for a specific round with player details, optionally filtered by division.
 
     `season_id` включён в выборку намеренно: вызывающие (в частности
     `services.betting_engine.generate_round_markets`) досеивают матчи по сезону
     в Python, и без этой колонки их фильтр молча пропускал матчи чужих сезонов.
+
+    Тур сам по себе не уникален: номер повторяется в каждом сезоне, поэтому
+    выборка по дивизиону тоже ограничена сезоном (по умолчанию — активным).
     """
     with transaction() as conn:
         cursor = conn.cursor()
         if division_id is not None:
+            target_season_id = season_id
+            if target_season_id is None:
+                act = get_active_season()
+                target_season_id = act["id"] if act else 1
             cursor.execute("""
                 SELECT
                     m.id, m.round_number, m.division_id, m.season_id, u1.telegram_id AS player1_id, u2.telegram_id AS player2_id,
@@ -3399,8 +3421,9 @@ def get_matches_by_round(round_number: int, division_id: int | None = None) -> l
                 LEFT JOIN users u1 ON LOWER(m.player1_team) = LOWER(u1.team_name)
                 LEFT JOIN users u2 ON LOWER(m.player2_team) = LOWER(u2.team_name)
                 WHERE m.round_number = ? AND m.division_id = ?
+                  AND (m.season_id = ? OR m.season_id IS NULL)
                 ORDER BY m.id ASC
-            """, (round_number, division_id))
+            """, (round_number, division_id, target_season_id))
         else:
             act = get_active_season()
             s_id = act["id"] if act else 1

@@ -2716,7 +2716,7 @@ async def cb_confirm_ai_final(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     await asyncio.to_thread(database.confirm_and_finalize_match, match_id, h_score, a_score, events, reporter_id=user_id, photo_id=photo_id)
     await refresh_debts_summary(context)
-    await refresh_league_table(context)
+    await refresh_league_table(context, division_id=match.get("division_id"))
 
     # Short "debt closed" note appended to result posts when applicable
     debt_note = await build_debt_footer(match)
@@ -2892,7 +2892,7 @@ async def submit_report_to_guest(update: Update, context: ContextTypes.DEFAULT_T
         await asyncio.to_thread(database.delete_pending_report, match_id)
         await notify_match_confirmed(context, match_id)
         await refresh_debts_summary(context)
-        await refresh_league_table(context)
+        await refresh_league_table(context, division_id=match.get("division_id"))
 
         try:
             await query.edit_message_caption(
@@ -3066,7 +3066,7 @@ async def cb_guest_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     # Full post-confirmation pipeline: PMs to both players, debt rewards, group post
     await notify_match_confirmed(context, match_id)
     await refresh_debts_summary(context)
-    await refresh_league_table(context)
+    await refresh_league_table(context, division_id=match.get("division_id"))
 
     reporter_tag = f"@{pending['reporter_id']}"
     try:
@@ -3199,11 +3199,16 @@ async def refresh_debts_summary(context: ContextTypes.DEFAULT_TYPE) -> None:
         logger.warning(f"Failed to refresh debts summary: {e}")
 
 
-async def refresh_league_table(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Refresh the graphic league table in the reports topic after a match result is recorded."""
+async def refresh_league_table(context: ContextTypes.DEFAULT_TYPE, division_id: int | None = None) -> None:
+    """
+    Refresh the graphic league table in the ОТЧЁТЫ topic after a match result.
+
+    division_id=None означает «все активные дивизионы»: без него вызов молча
+    ничего не делал, потому что post_league_table_to_reports выходит на None.
+    """
     try:
         from handlers.base import post_league_table_to_reports
-        await post_league_table_to_reports(context)
+        await post_league_table_to_reports(context, division_id=division_id)
     except Exception as e:
         logger.warning(f"Failed to refresh league table: {e}")
 
@@ -3524,7 +3529,10 @@ async def save_squad_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await update.message.reply_text("✅ Состав успешно сохранен!")
     await show_my_squad(update, context)
 
-    db_user = await asyncio.to_thread(database.get_user, user_id)
+    # database.get_user отдаёт sqlite3.Row — у него нет .get(), поэтому обращение
+    # к division_id роняло весь блок публикации состава в топик СОСТАВЫ.
+    db_user_row = await asyncio.to_thread(database.get_user, user_id)
+    db_user = dict(db_user_row) if db_user_row else None
     u_div_id = db_user.get("division_id") if db_user else None
     target_chat_id = None
     target_topic_id = None

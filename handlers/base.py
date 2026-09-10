@@ -649,6 +649,12 @@ async def post_league_table_to_reports(context: ContextTypes.DEFAULT_TYPE, divis
     from services.topic_cache import topic_cache
 
     if division_id is None:
+        # Раньше здесь был безусловный return, и все вызовы без division_id
+        # (подтверждение результата, кнопка «Обновить таблицы») молча ничего
+        # не делали. Без дивизиона обновляем таблицу каждого активного.
+        divisions = await asyncio.to_thread(database.get_active_divisions)
+        for d in divisions:
+            await post_league_table_to_reports(context, division_id=d["id"])
         return
 
     div_topic = topic_cache.get_by_division(division_id, "reports")

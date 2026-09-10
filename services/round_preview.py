@@ -91,7 +91,7 @@ def build_preview_payload(division_id: int, round_number: int, season_id: int | 
     division = database.get_division(division_id) or {}
     standings = database.get_standings(division_id=division_id, season_id=season_id)
     form_map = database.get_teams_recent_form(5, division_id=division_id, season_id=season_id)
-    matches = database.get_matches_by_round(round_number, division_id=division_id)
+    matches = database.get_matches_by_round(round_number, division_id=division_id, season_id=season_id)
     round_info = database.get_round_info(round_number, division_id=division_id, season_id=season_id) or {}
 
     fixtures = []
@@ -164,7 +164,7 @@ def build_preview_payload(division_id: int, round_number: int, season_id: int | 
 def build_digest_payload(division_id: int, round_number: int, season_id: int | None = None) -> dict:
     """Чистые числа для итогов тура: результаты, игрок тура, разгром, движение."""
     division = database.get_division(division_id) or {}
-    matches = database.get_matches_by_round(round_number, division_id=division_id)
+    matches = database.get_matches_by_round(round_number, division_id=division_id, season_id=season_id)
     played = [
         m for m in matches
         if m.get("status") == "confirmed"

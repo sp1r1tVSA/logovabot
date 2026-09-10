@@ -30,30 +30,37 @@ async def handle_draft_media(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
         
     thread_id = msg.message_thread_id
+    chat_id = update.effective_chat.id
     target_division_id = None
 
-    drafts_topic_id_str = database.get_config("drafts_topic_id")
-    legacy_topic_id = None
-    if drafts_topic_id_str:
-        try:
-            legacy_topic_id = int(drafts_topic_id_str)
-        except ValueError:
-            pass
-
-    if legacy_topic_id is not None and thread_id == legacy_topic_id:
-        target_division_id = None
+    # Привязка дивизиона имеет приоритет над легаси-конфигом: раньше глобальный
+    # drafts_topic_id сравнивался с «голым» thread_id ДО поиска биндинга, и
+    # совпадение обнуляло division_id — черновик дивизиона уходил в поиск матча
+    # по всем дивизионам сразу.
+    binding = topic_cache.get_by_topic(chat_id, thread_id)
+    if binding and binding.get("topic_type") in ("draft", "drafts"):
+        target_division_id = binding["division_id"]
     else:
-        chat_id = update.effective_chat.id if update.effective_chat else None
-        binding = topic_cache.get_by_topic(chat_id, thread_id)
-        if binding and binding.get("topic_type") in ("draft", "drafts"):
-            target_division_id = binding["division_id"]
+        div = await asyncio.to_thread(database.get_division_by_topic, thread_id, "drafts", chat_id)
+        if div:
+            target_division_id = div["id"]
         else:
-            div = await asyncio.to_thread(database.get_division_by_topic, thread_id, "drafts", chat_id)
-            if div:
-                target_division_id = div["id"]
-            else:
+            # Легаси-инсталляции без привязок: только тот же топик в той же группе.
+            legacy_topic_id = None
+            drafts_topic_id_str = await asyncio.to_thread(database.get_config, "drafts_topic_id")
+            if drafts_topic_id_str:
+                try:
+                    legacy_topic_id = int(drafts_topic_id_str)
+                except ValueError:
+                    legacy_topic_id = None
+            if legacy_topic_id is None or thread_id != legacy_topic_id:
                 return  # Message is in a topic not configured for drafts
-        
+            main_group_id = await asyncio.to_thread(database.get_group_id)
+            if main_group_id and chat_id != int(main_group_id):
+                return  # Legacy topic id from another group — не наш черновик
+            target_division_id = None
+
+
     user_id = update.effective_user.id
     
     # Key by media_group_id or by user in topic for consecutive photos
@@ -428,16 +435,40 @@ async def _process_draft_group_delayed(buffer_key: str, update: Update, context:
 
 from telegram.ext import CallbackQueryHandler
 from handlers.admin import is_admin
+from handlers.base import is_global_admin
+
+
+def _draft_division_ids(draft: dict) -> set[int]:
+    """Дивизионы всех игр черновика (пусто — легаси-черновик без дивизиона)."""
+    games = draft.get("games") or [draft]
+    return {int(g["division_id"]) for g in games if g.get("division_id")}
+
+
+async def _can_manage_draft(user_id: int, draft: dict) -> bool:
+    """
+    Черновик дивизиона может подтвердить/отклонить только супер-админ или
+    админ этого дивизиона: is_admin() истинен для админа ЛЮБОГО дивизиона.
+    """
+    if is_global_admin(user_id):
+        return True
+    div_ids = _draft_division_ids(draft)
+    if not div_ids:
+        return is_admin(user_id)  # легаси-черновик вне дивизионов
+    for div_id in div_ids:
+        if not await asyncio.to_thread(database.is_division_admin, user_id, div_id):
+            return False
+    return True
+
 
 async def cb_draft_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     if not query: return
     await query.answer()
-    
+
     if not is_admin(query.from_user.id):
         await query.answer("Только администратор может подтверждать черновики!", show_alert=True)
         return
-        
+
     draft_uuid = query.data.replace("draft_conf_", "")
     drafts = context.bot_data.get("drafts", {})
     if draft_uuid not in drafts:
@@ -448,7 +479,13 @@ async def cb_draft_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     # Черновик забираем только после успешного сохранения: иначе неудачное
     # подтверждение оставляло бы админа без данных и без возможности повторить.
     draft = drafts[draft_uuid]
+    if not await _can_manage_draft(query.from_user.id, draft):
+        await query.answer("⛔ У вас нет прав на дивизион этого черновика!", show_alert=True)
+        return
+
     games = draft.get("games", [draft])
+    # Снимаем до цикла: при частичном провале draft["games"] переписывается.
+    draft_division_ids = _draft_division_ids(draft)
     main_group_id = await asyncio.to_thread(database.get_group_id)
     results_topic_id = (await asyncio.to_thread(database.get_config, "results_topic_id")) or (await asyncio.to_thread(database.get_config, "reports_topic_id"))
 
@@ -613,7 +650,8 @@ async def cb_draft_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     from handlers.cabinet import refresh_league_table, refresh_debts_summary
     await refresh_debts_summary(context)
-    await refresh_league_table(context)
+    for div_id in (draft_division_ids or {None}):
+        await refresh_league_table(context, division_id=div_id)
 
 async def cb_draft_reject(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
@@ -626,8 +664,12 @@ async def cb_draft_reject(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         
     draft_uuid = query.data.replace("draft_rej_", "")
     drafts = context.bot_data.get("drafts", {})
+    draft = drafts.get(draft_uuid)
+    if draft is not None and not await _can_manage_draft(query.from_user.id, draft):
+        await query.answer("⛔ У вас нет прав на дивизион этого черновика!", show_alert=True)
+        return
     drafts.pop(draft_uuid, None)
-    
+
     admin_name = f"@{query.from_user.username}" if query.from_user.username else (query.from_user.first_name or "Администратор")
     original_text = query.message.caption if query.message.photo else query.message.text
     cleaned_text = (original_text or "").replace("⏳ <i>Ожидает подтверждения администратором...</i>", "").strip()

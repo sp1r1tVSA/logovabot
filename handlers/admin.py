@@ -113,6 +113,49 @@ async def _ensure_division_access(update: Update, div_id: int) -> bool:
     return True
 
 
+async def _ensure_super_admin(update: Update) -> bool:
+    """Раздел только для супер-админа: is_admin() истинен и для админа дивизиона."""
+    user = update.effective_user
+    if not user or not is_global_admin(user.id):
+        await _deny_access(update, "⛔ Раздел доступен только супер-админу")
+        return False
+    return True
+
+
+async def _resolve_division_group_chat(div_id: int) -> int | None:
+    """
+    Группа, в которой живут топики дивизиона: сначала любой уже привязанный
+    топик этого дивизиона, затем основная группа лиги. Нужна там, где админ
+    вводит голый message_thread_id — без chat_id привязка нероутируема.
+    """
+    topics_map = await asyncio.to_thread(database.get_division_topics_map, div_id)
+    for entry in topics_map.values():
+        chat = entry.get("group_chat_id")
+        if chat:
+            return int(chat)
+    main_group = await asyncio.to_thread(database.get_group_id)
+    return int(main_group) if main_group else None
+
+
+async def _ensure_match_access(update: Update, match: dict | None) -> bool:
+    """
+    Карточка матча и любые действия над ней — только для супер-админа или
+    админа дивизиона этого матча. Без проверки админ дивизиона 1 мог открыть
+    admin_view_match_<id> чужого матча и проставить по нему ТП/сброс.
+    """
+    user = update.effective_user
+    if not user:
+        return False
+    if is_global_admin(user.id):
+        return True
+    div_id = (match or {}).get("division_id")
+    if div_id is None:
+        # Легаси-матч вне дивизионов остаётся за супер-админом.
+        await _deny_access(update, "⛔ У вас нет прав на этот матч")
+        return False
+    return await _ensure_division_access(update, int(div_id))
+
+
 @admin_only
 async def show_super_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Полная админ-панель — только для глобальных (супер) админов."""
@@ -1551,7 +1594,7 @@ async def admin_div_manage_players(update: Update, context: ContextTypes.DEFAULT
 async def admin_divs_hub(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Hub menu displaying all divisions with status and quick management actions."""
     query = update.callback_query
-    if not query or not is_admin(query.from_user.id):
+    if not query or not await _ensure_super_admin(update):
         return
     await query.answer()
 
@@ -1580,7 +1623,7 @@ async def admin_divs_hub(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 async def admin_div_view(update: Update, context: ContextTypes.DEFAULT_TYPE, div_id: int | None = None) -> None:
     """Detailed division card with settings and topic bindings."""
     query = update.callback_query
-    if not query or not is_admin(query.from_user.id):
+    if not query or not await _ensure_super_admin(update):
         return
     await query.answer()
 
@@ -1636,7 +1679,7 @@ async def admin_div_view(update: Update, context: ContextTypes.DEFAULT_TYPE, div
 async def admin_div_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Toggle division active status."""
     query = update.callback_query
-    if not query or not is_admin(query.from_user.id):
+    if not query or not await _ensure_super_admin(update):
         return
 
     div_id = int(query.data.replace("admin_div_toggle_", ""))
@@ -1655,7 +1698,7 @@ async def admin_div_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 async def admin_div_topics_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Menu to manage topic bindings for a division."""
     query = update.callback_query
-    if not query or not is_admin(query.from_user.id):
+    if not query or not await _ensure_super_admin(update):
         return
     await query.answer()
 
@@ -1690,7 +1733,7 @@ async def admin_div_topics_menu(update: Update, context: ContextTypes.DEFAULT_TY
 async def admin_div_create_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Start division creation conversation."""
     query = update.callback_query
-    if not query or not is_admin(query.from_user.id):
+    if not query or not await _ensure_super_admin(update):
         return ConversationHandler.END
     await query.answer()
 
@@ -1708,7 +1751,7 @@ async def admin_div_create_start(update: Update, context: ContextTypes.DEFAULT_T
 async def admin_div_create_receive(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Receive new division name, generate code, and insert into DB."""
     user = update.effective_user
-    if not user or not is_admin(user.id):
+    if not user or not await _ensure_super_admin(update):
         return ConversationHandler.END
 
     name = update.message.text.strip()
@@ -1749,7 +1792,7 @@ async def admin_div_create_receive(update: Update, context: ContextTypes.DEFAULT
 async def admin_div_rename_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Start division rename conversation."""
     query = update.callback_query
-    if not query or not is_admin(query.from_user.id):
+    if not query or not await _ensure_super_admin(update):
         return ConversationHandler.END
     await query.answer()
 
@@ -1770,7 +1813,7 @@ async def admin_div_rename_start(update: Update, context: ContextTypes.DEFAULT_T
 async def admin_div_rename_receive(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Receive new name and update division in DB."""
     user = update.effective_user
-    if not user or not is_admin(user.id):
+    if not user or not await _ensure_super_admin(update):
         return ConversationHandler.END
 
     div_id = context.user_data.get("rename_div_id")
@@ -1798,7 +1841,7 @@ async def admin_div_rename_receive(update: Update, context: ContextTypes.DEFAULT
 async def admin_div_settopic_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Prompt for topic ID input."""
     query = update.callback_query
-    if not query or not is_admin(query.from_user.id):
+    if not query or not await _ensure_super_admin(update):
         return ConversationHandler.END
     await query.answer()
 
@@ -1826,7 +1869,7 @@ async def admin_div_settopic_prompt(update: Update, context: ContextTypes.DEFAUL
 async def admin_div_settopic_receive(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Receive topic ID and bind in database."""
     user = update.effective_user
-    if not user or not is_admin(user.id):
+    if not user or not await _ensure_super_admin(update):
         return ConversationHandler.END
 
     div_id = context.user_data.get("div_topic_div_id")
@@ -1835,18 +1878,47 @@ async def admin_div_settopic_receive(update: Update, context: ContextTypes.DEFAU
         await update.message.reply_text("❌ Ошибка сессии настройки топика.")
         return ConversationHandler.END
 
+    from services.topic_cache import topic_cache
+
     val = update.message.text.strip().lower()
     if val in ("0", "none", "нет", "сброс"):
+        old = topic_cache.get_by_division(div_id, topic_type)
         await asyncio.to_thread(database.set_division_topic, div_id, topic_type, None)
+        if old and old.get("group_chat_id") and old.get("message_thread_id"):
+            topic_cache.remove_topic(int(old["group_chat_id"]), int(old["message_thread_id"]))
         msg = f"✅ Топик «{topic_type}» сброшен на глобальный по умолчанию."
     else:
         try:
             tid = int(val)
-            await asyncio.to_thread(database.set_division_topic, div_id, topic_type, tid)
-            msg = f"✅ Топик «{topic_type}» успешно установлен на ID: <code>{tid}</code>!"
         except ValueError:
             await update.message.reply_text("❌ Введите корректный числовой ID топика (или 0 для сброса):")
             return ADMIN_EXPECT_DIV_TOPIC_ID
+
+        # Голый thread_id без чата нероутируем: и topic_cache.get_by_topic, и
+        # database.get_division_by_topic ищут по паре (group_chat_id,
+        # message_thread_id), поэтому строка с group_chat_id IS NULL не находится
+        # никогда. Берём чат уже привязанного топика дивизиона, иначе — основную
+        # группу лиги. Кэш обновляем точечно: иначе привязка мертва до рестарта.
+        chat_id = await _resolve_division_group_chat(div_id)
+        if chat_id is None:
+            await update.message.reply_text(
+                "❌ Не удалось определить группу дивизиона. Привяжите топик командой "
+                "<code>/set_div_topic</code> прямо внутри нужного топика супергруппы.",
+                parse_mode="HTML"
+            )
+            return ConversationHandler.END
+
+        await asyncio.to_thread(database.set_division_topic, div_id, topic_type, tid, chat_id)
+        division = await asyncio.to_thread(database.get_division, div_id)
+        topic_cache.set_topic(
+            division_id=div_id,
+            group_chat_id=chat_id,
+            message_thread_id=tid,
+            topic_type=topic_type,
+            division_name=(division or {}).get("name", ""),
+            division_code=(division or {}).get("code", "")
+        )
+        msg = f"✅ Топик «{topic_type}» успешно установлен на ID: <code>{tid}</code>!"
 
     keyboard = [[InlineKeyboardButton("« К настройке топиков", callback_data=f"admin_div_topics_{div_id}")],
                 [InlineKeyboardButton("« К дивизиону", callback_data=f"admin_div_view_{div_id}")]]
@@ -1908,7 +1980,28 @@ async def admin_set_div_topic_cmd(update: Update, context: ContextTypes.DEFAULT_
         return
 
     div_id = division["id"]
-    await asyncio.to_thread(database.set_division_topic, div_id, topic_type, thread_id)
+    # Привязку топика дивизиона делает супер-админ или админ этого дивизиона:
+    # is_admin() выше истинен для админа ЛЮБОГО дивизиона.
+    if not is_global_admin(user.id) and not await asyncio.to_thread(database.is_division_admin, user.id, div_id):
+        await update.message.reply_text("⛔ У вас нет прав на этот дивизион.")
+        return
+
+    # group_chat_id обязателен: без него строка division_topics не находится ни
+    # через topic_cache.get_by_topic, ни через get_division_by_topic, и привязка
+    # остаётся нерабочей. Кэш обновляем точечно — иначе он живёт до рестарта.
+    chat_id = update.effective_chat.id
+    await asyncio.to_thread(database.set_division_topic, div_id, topic_type, thread_id, chat_id)
+
+    from services.topic_cache import topic_cache
+    topic_cache.set_topic(
+        division_id=div_id,
+        group_chat_id=chat_id,
+        message_thread_id=thread_id,
+        topic_type=topic_type,
+        division_name=division.get("name", ""),
+        division_code=division.get("code", "")
+    )
+
     await update.message.reply_text(
         f"✅ Тема «{topic_type}» для дивизиона <b>{html.escape(division['name'])}</b> успешно привязана к этому топику (ID: <code>{thread_id}</code>)!",
         parse_mode="HTML"
@@ -2344,7 +2437,16 @@ async def admin_round_matches(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     round_number = int(query.data.replace("admin_round_matches_", ""))
     matches = await asyncio.to_thread(database.get_matches_by_round, round_number)
-    
+
+    # Глобальный список тура — общий для всех дивизионов; админу дивизиона
+    # показываем только его матчи, иначе он попадал в чужие карточки матчей.
+    if not is_global_admin(query.from_user.id):
+        allowed = {d["id"] for d in await asyncio.to_thread(database.get_admin_divisions, query.from_user.id)}
+        if not allowed:
+            await _deny_access(update, "⛔ У вас нет прав на этот дивизион")
+            return
+        matches = [m for m in matches if m.get("division_id") in allowed]
+
     keyboard = []
     for m in matches:
         opp1 = m["player1_nickname"]
@@ -2398,7 +2500,10 @@ async def admin_view_match(update: Update, context: ContextTypes.DEFAULT_TYPE, m
         keyboard = [[InlineKeyboardButton("« Назад", callback_data="admin_manage_matches_info")]]
         await query.edit_message_text("❌ Матч не найден.", reply_markup=InlineKeyboardMarkup(keyboard))
         return
-        
+
+    if not await _ensure_match_access(update, match):
+        return
+
     header_title = f"⚽️ <b>Карточка матча #{match['id']} (Тур {match.get('round_number', '?')})</b>"
     back_button = InlineKeyboardButton("« Назад", callback_data="admin_manage_matches_info")
 
@@ -2478,6 +2583,9 @@ async def admin_view_match_photo(update: Update, context: ContextTypes.DEFAULT_T
 
     if not match:
         await safe_edit_or_reply(query, context, "❌ Матч не найден.")
+        return
+
+    if not await _ensure_match_access(update, match):
         return
 
     photo_id = match.get("photo_id")
@@ -2632,6 +2740,8 @@ async def admin_set_tp_home_execute(update: Update, context: ContextTypes.DEFAUL
     if not query or not is_admin(query.from_user.id): return
     await query.answer()
     match_id = int(query.data.replace("admin_tp_home_", ""))
+    if not await _ensure_match_access(update, await asyncio.to_thread(database.get_match, match_id)):
+        return
     await asyncio.to_thread(database.set_technical_result, match_id, 1, 0)
     await _notify_group_about_tp(context, match_id, "home")
     await _process_tp_debt_rewards(context, match_id)
@@ -2644,6 +2754,8 @@ async def admin_set_tp_away_execute(update: Update, context: ContextTypes.DEFAUL
     if not query or not is_admin(query.from_user.id): return
     await query.answer()
     match_id = int(query.data.replace("admin_tp_away_", ""))
+    if not await _ensure_match_access(update, await asyncio.to_thread(database.get_match, match_id)):
+        return
     await asyncio.to_thread(database.set_technical_result, match_id, 0, 1)
     await _notify_group_about_tp(context, match_id, "away")
     await _process_tp_debt_rewards(context, match_id)
@@ -2656,6 +2768,8 @@ async def admin_set_tp_draw_execute(update: Update, context: ContextTypes.DEFAUL
     if not query or not is_admin(query.from_user.id): return
     await query.answer()
     match_id = int(query.data.replace("admin_tp_draw_", ""))
+    if not await _ensure_match_access(update, await asyncio.to_thread(database.get_match, match_id)):
+        return
     await asyncio.to_thread(database.set_technical_result, match_id, 0, 0)
     await _notify_group_about_tp(context, match_id, "draw")
     await _process_tp_debt_rewards(context, match_id)
@@ -2672,7 +2786,10 @@ async def admin_reset_match_execute(update: Update, context: ContextTypes.DEFAUL
     
     match_id = int(query.data.replace("admin_reset_match_execute_", ""))
     match = await asyncio.to_thread(database.get_match, match_id)
-    
+
+    if match and not await _ensure_match_access(update, match):
+        return
+
     if not match:
         keyboard = [[InlineKeyboardButton("« Назад", callback_data="admin_manage_matches_info")]]
         await query.edit_message_text("❌ Матч не найден.", reply_markup=InlineKeyboardMarkup(keyboard))
@@ -3065,6 +3182,8 @@ async def admin_set_score_start(update: Update, context: ContextTypes.DEFAULT_TY
     await query.answer()
     
     match_id = int(query.data.replace("admin_set_score_start_", ""))
+    if not await _ensure_match_access(update, await asyncio.to_thread(database.get_match, match_id)):
+        return ConversationHandler.END
     context.user_data["is_admin_reporting"] = True
     query.data = f"cb_report_choice_manual_{match_id}"
     await cb_report_choice_manual(update, context)

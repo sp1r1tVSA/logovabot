@@ -4,6 +4,7 @@ import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import database
+from services.topic_cache import topic_cache
 from handlers.admin import (
     admin_divs_hub,
     admin_div_view,
@@ -29,11 +30,17 @@ class TestDivisionAdminManagement(unittest.IsolatedAsyncioTestCase):
         self.div_code = f"ADM_{uid}"
         self.div_id = database.create_division(name="Тестовый Дивизион", code=self.div_code)
         self.admin_id = 940001
+        # Привязка топика невозможна без группы: строка division_topics без
+        # group_chat_id не находится ни через topic_cache, ни через SQL-роутинг.
+        self.group_chat_id = -1001234567890
+        database.set_config("group_id", str(self.group_chat_id))
 
     def _build_mock_update(self, callback_data: str = None, message_text: str = None, thread_id: int = None):
         update = MagicMock()
         update.effective_user = MagicMock()
         update.effective_user.id = self.admin_id
+        update.effective_chat = MagicMock()
+        update.effective_chat.id = self.group_chat_id
 
         if callback_data:
             query = MagicMock()
@@ -137,6 +144,13 @@ class TestDivisionAdminManagement(unittest.IsolatedAsyncioTestCase):
             await admin_div_settopic_receive(update_msg, context)
             tid = database.get_division_topic(self.div_id, "drafts")
             self.assertEqual(tid, 8888)
+            # Привязка обязана быть роутируемой: (group_chat_id, thread_id)
+            topics_map = database.get_division_topics_map(self.div_id)
+            self.assertEqual(topics_map["draft"]["group_chat_id"], self.group_chat_id)
+            self.assertEqual(
+                topic_cache.get_by_topic(self.group_chat_id, 8888)["division_id"],
+                self.div_id,
+            )
 
             # 3. Clear topic by sending 0
             context.user_data = {"div_topic_div_id": self.div_id, "div_topic_type": "drafts"}
@@ -153,6 +167,12 @@ class TestDivisionAdminManagement(unittest.IsolatedAsyncioTestCase):
 
             res_tid = database.get_division_topic(self.div_id, "results")
             self.assertEqual(res_tid, 9999)
+            topics_map = database.get_division_topics_map(self.div_id)
+            self.assertEqual(topics_map["results"]["group_chat_id"], self.group_chat_id)
+            self.assertEqual(
+                topic_cache.get_by_topic(self.group_chat_id, 9999)["division_id"],
+                self.div_id,
+            )
 
     async def test_admin_div_create_flow(self):
         """Test creating a new division via interactive conversation."""
