@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import database
 from handlers.admin import (
     generate_round_robin_fixtures,
-    admin_generate_matches_confirm,
     admin_gen_div_select,
     admin_generate_matches_execute,
 )
@@ -109,25 +108,20 @@ class TestRoundRobinLifecycle(unittest.IsolatedAsyncioTestCase):
 
         with patch("handlers.base.is_admin", return_value=True), \
              patch("handlers.admin.is_admin", return_value=True):
-            # 1. Open generation menu
-            await admin_generate_matches_confirm(update, context)
-            self.assertTrue(query.edit_message_text.called)
-            args, kwargs = query.edit_message_text.call_args
-            self.assertIn("Генерация расписания", args[0])
-
-            # 2. Select Division A
+            # 1. Генерация запускается только из карточки матчей дивизиона
             query.data = f"admin_gen_div_{self.div_a_id}"
             await admin_gen_div_select(update, context)
+            self.assertTrue(query.edit_message_text.called)
             args, kwargs = query.edit_message_text.call_args
             self.assertIn("Подтверждение генерации расписания", args[0])
 
-            # 3. Execute generation for Division A
+            # 2. Execute generation for Division A
             query.data = f"admin_gen_exec_{self.div_a_id}"
             await admin_generate_matches_execute(update, context)
             args, kwargs = query.edit_message_text.call_args
             self.assertIn("Расписание успешно сгенерировано!", args[0])
 
-            # 4. Verify matches in DB
+            # 3. Verify matches in DB
             matches_a = database.get_matches_by_round(1, division_id=self.div_a_id)
             self.assertTrue(len(matches_a) > 0)
             for m in matches_a:

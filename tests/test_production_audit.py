@@ -452,6 +452,9 @@ def test_all_inline_buttons_match_registered_handlers():
                     sample = "pcard_1"
                 elif sample == "back_cb":
                     sample = "cb_clubs_catalog"
+                elif sample == "home_cb":
+                    # _div_home_cb: карточка дивизиона супер-админу, своя панель — дивадмину
+                    sample = "admin_div_view_1"
                 elif sample in ("cancel_cb", "manual_cb"):
                     sample = "cabinet_view_match_1"
 

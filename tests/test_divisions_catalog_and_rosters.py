@@ -9,7 +9,6 @@ from handlers.cabinet import (
     show_clubs_catalog_for_division,
 )
 from handlers.admin import (
-    admin_manage_squads,
     admin_rosters_for_division,
     _build_debts_summary,
     _post_or_update_debts_for_division,
@@ -147,28 +146,8 @@ class TestDivisionsCatalogAndRosters(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("view_club_Arsenal", buttons_cb)
         self.assertIn("cb_clubs_catalog", buttons_cb)
 
-    async def test_admin_manage_squads_divisions(self):
-        """Test Step 1 of Admin Squad Management: lists active divisions."""
-        update = self._build_mock_update(callback_data="admin_manage_squads")
-        context = MagicMock()
-
-        with patch("handlers.base.is_admin", return_value=True), \
-             patch("handlers.admin.is_admin", return_value=True):
-            await admin_manage_squads(update, context)
-
-        update.callback_query.edit_message_text.assert_called_once()
-        args, kwargs = update.callback_query.edit_message_text.call_args
-        text = args[0]
-        reply_markup = kwargs.get("reply_markup")
-
-        self.assertIn("Управление составами", text)
-        buttons_cb = [b.callback_data for row in reply_markup.inline_keyboard for b in row]
-        self.assertIn(f"admin_roster_div:{self.div_a_id}", buttons_cb)
-        self.assertIn(f"admin_roster_div:{self.div_b_id}", buttons_cb)
-        self.assertIn("admin_main_menu", buttons_cb)
-
     async def test_admin_rosters_for_division(self):
-        """Test Step 2 of Admin Squad Management: shows clubs for selected division."""
+        """Составы дивизиона — единственная точка входа, глобального списка больше нет."""
         update = self._build_mock_update(callback_data=f"admin_roster_div:{self.div_a_id}")
         context = MagicMock()
         context.user_data = {}
@@ -189,7 +168,12 @@ class TestDivisionsCatalogAndRosters(unittest.IsolatedAsyncioTestCase):
         self.assertIn("admin_squad_view_Real Madrid", buttons_cb)
         self.assertIn("admin_squad_view_Barcelona", buttons_cb)
         self.assertNotIn("admin_squad_view_Arsenal", buttons_cb)
-        self.assertIn("admin_manage_squads", buttons_cb)
+        # Возврат — в карточку своего дивизиона, а не в глобальный экран составов
+        self.assertIn(f"admin_div_view_{self.div_a_id}", buttons_cb)
+        self.assertNotIn("admin_manage_squads", buttons_cb)
+        # Утилита «добавить из матчей» работает в скоупе дивизиона
+        self.assertIn(f"admin_squad_add_missing_div:{self.div_a_id}", buttons_cb)
+        self.assertNotIn("admin_squad_add_missing_all", buttons_cb)
 
     async def test_build_debts_summary_with_division_filter(self):
         """Test _build_debts_summary correctly isolates unplayed matches by division."""

@@ -74,7 +74,7 @@ class TestDivisionAdminManagement(unittest.IsolatedAsyncioTestCase):
 
             self.assertTrue(update.callback_query.edit_message_text.called)
             args, kwargs = update.callback_query.edit_message_text.call_args
-            self.assertIn("Управление дивизионами лиги", args[0])
+            self.assertIn("Дивизионы", args[0])
 
             # Check keyboard contains create button
             markup = kwargs.get("reply_markup")

@@ -109,12 +109,14 @@ from handlers.admin import (
     admin_div_admin_cancel,
     ADMIN_EXPECT_DIV_ADMIN_REF,
     admin_div_manage_matches,
+    admin_div_round,
     admin_div_round_matches,
     admin_div_broadcast_debts,
+    admin_div_debts_menu,
+    admin_div_debts_dm,
     admin_div_manage_players,
     admin_toggle_chat_mode,
     admin_list_players,
-    admin_generate_matches_confirm,
     admin_gen_div_select,
     admin_generate_matches_execute,
     admin_manage_players_info,
@@ -122,8 +124,6 @@ from handlers.admin import (
     admin_view_player,
     admin_confirm_delete_player,
     admin_delete_player_execute,
-    admin_manage_matches_info,
-    admin_manage_round,
     admin_toggle_round_bets,
     admin_extend_match_execute,
     admin_list_overdue,
@@ -210,8 +210,6 @@ from handlers.admin import (
     admin_set_reports_topic,
     admin_set_results_topic,
     admin_set_warns_topic,
-    admin_manage_squads,
-    admin_manage_rosters,
     admin_rosters_for_division,
     admin_view_squad,
     admin_squad_rm_menu,
@@ -228,9 +226,6 @@ from handlers.admin import (
     admin_stub,
     admin_fetch_photos,
     admin_force_update,
-    admin_broadcast_menu,
-    admin_broadcast_all_debts_execute,
-    admin_send_debts_to_warns,
     admin_test_ai,
     admin_warn_confirm,
     admin_warn_execute,
@@ -561,7 +556,7 @@ def _register_admin_handlers(app: Application) -> None:
 
     admin_round_deadline_conv = ConversationHandler(
         entry_points=[
-            CallbackQueryHandler(admin_open_round_prompt, pattern="^admin_open_round_\\d+$")
+            CallbackQueryHandler(admin_open_round_prompt, pattern=r"^admin_div_round_open:\d+:\d+$")
         ],
         states={
             ADMIN_WAITING_FOR_DEADLINE: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_open_round_save)]
@@ -579,7 +574,7 @@ def _register_admin_handlers(app: Application) -> None:
 
     admin_batch_round_conv = ConversationHandler(
         entry_points=[
-            CallbackQueryHandler(admin_open_batch_prompt, pattern="^admin_open_batch_prompt$")
+            CallbackQueryHandler(admin_open_batch_prompt, pattern=r"^admin_batch_open_div:\d+$")
         ],
         states={
             ADMIN_WAITING_FOR_BATCH_ROUNDS: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_open_batch_rounds)],
@@ -609,7 +604,7 @@ def _register_admin_handlers(app: Application) -> None:
             ADMIN_EXPECT_SINGLE_PLAYER: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_squad_add_player_text)],
         },
         fallbacks=[
-            CallbackQueryHandler(admin_manage_squads, pattern="^(admin_manage_squads|admin_manage_rosters)$"),
+            CallbackQueryHandler(admin_view_squad, pattern="^admin_squad_view_.*$"),
             CommandHandler("cancel", admin_cancel_player_action)
         ],
         allow_reentry=True,
@@ -682,7 +677,10 @@ def _register_admin_handlers(app: Application) -> None:
     # RBAC: панели и изолированные точки входа админа дивизиона
     app.add_handler(CallbackQueryHandler(show_division_admin_panel, pattern=r"^admin_div_panel:\d+$"))
     app.add_handler(CallbackQueryHandler(admin_div_manage_matches, pattern=r"^admin_div_manage_matches:\d+$"))
-    app.add_handler(CallbackQueryHandler(admin_div_round_matches, pattern=r"^admin_div_round:\d+:\d+$"))
+    app.add_handler(CallbackQueryHandler(admin_div_round, pattern=r"^admin_div_round:\d+:\d+$"))
+    app.add_handler(CallbackQueryHandler(admin_div_round_matches, pattern=r"^admin_div_round_matches:\d+:\d+$"))
+    app.add_handler(CallbackQueryHandler(admin_div_debts_menu, pattern=r"^admin_div_debts_menu:\d+$"))
+    app.add_handler(CallbackQueryHandler(admin_div_debts_dm, pattern=r"^admin_div_debts_dm:\d+$"))
     app.add_handler(CallbackQueryHandler(admin_div_broadcast_debts, pattern=r"^admin_div_broadcast_debts:\d+$"))
     app.add_handler(CallbackQueryHandler(admin_div_manage_players, pattern=r"^(admin_div_manage_players:\d+|admin_div_players:\d+:\d+)$"))
 
@@ -696,10 +694,8 @@ def _register_admin_handlers(app: Application) -> None:
     app.add_handler(CallbackQueryHandler(admin_div_toggle, pattern="^admin_div_toggle_\\d+$"))
     app.add_handler(CallbackQueryHandler(admin_div_topics_menu, pattern="^admin_div_topics_\\d+$"))
     app.add_handler(CallbackQueryHandler(admin_toggle_chat_mode, pattern="^admin_toggle_chat_mode$"))
-    app.add_handler(CallbackQueryHandler(admin_generate_matches_confirm, pattern="^admin_generate_matches_confirm$"))
-    app.add_handler(CallbackQueryHandler(admin_gen_div_select, pattern="^admin_gen_div_(\\d+|none)$"))
-    app.add_handler(CallbackQueryHandler(admin_generate_matches_execute, pattern="^(admin_generate_matches_execute|admin_gen_exec_(\\d+|none))$"))
-    app.add_handler(CallbackQueryHandler(admin_manage_matches_info, pattern="^admin_manage_matches_info$"))
+    app.add_handler(CallbackQueryHandler(admin_gen_div_select, pattern=r"^admin_gen_div_\d+$"))
+    app.add_handler(CallbackQueryHandler(admin_generate_matches_execute, pattern=r"^admin_gen_exec_\d+$"))
     app.add_handler(CallbackQueryHandler(admin_manage_players_menu, pattern="^admin_manage_players$"))
     app.add_handler(CallbackQueryHandler(admin_manage_players_menu, pattern="^admin_manage_players_info$"))
     app.add_handler(CallbackQueryHandler(admin_list_players_page, pattern="^admin_list_players_page_\\d+$"))
@@ -715,9 +711,8 @@ def _register_admin_handlers(app: Application) -> None:
     app.add_handler(CallbackQueryHandler(admin_confirm_delete_player, pattern="^admin_confirm_delete_player_-?\\d+$"))
     app.add_handler(CallbackQueryHandler(admin_delete_player_confirm, pattern="^admin_delete_player_confirm_-?\\d+$"))
     app.add_handler(CallbackQueryHandler(admin_delete_player_execute, pattern="^admin_delete_player_execute_-?\\d+$"))
-    app.add_handler(CallbackQueryHandler(admin_manage_round, pattern="^admin_manage_round_\\d+$"))
-    app.add_handler(CallbackQueryHandler(admin_toggle_round_bets, pattern="^admin_bets_(open|close)_round_\\d+$"))
-    app.add_handler(CallbackQueryHandler(admin_close_round, pattern="^admin_close_round_\\d+$"))
+    app.add_handler(CallbackQueryHandler(admin_toggle_round_bets, pattern=r"^admin_div_bets_(open|close):\d+:\d+$"))
+    app.add_handler(CallbackQueryHandler(admin_close_round, pattern=r"^admin_div_round_close:\d+:\d+$"))
     app.add_handler(CallbackQueryHandler(admin_remind_round, pattern="^admin_remind_round_\\d+$"))
     app.add_handler(CallbackQueryHandler(admin_toggle_remind_match, pattern="^admin_toggle_remind_match_\\d+_\\d+$"))
     app.add_handler(CallbackQueryHandler(admin_toggle_remind_all, pattern="^admin_toggle_remind_all_\\d+$"))
@@ -730,13 +725,12 @@ def _register_admin_handlers(app: Application) -> None:
     app.add_handler(CallbackQueryHandler(admin_set_tp_home_execute, pattern="^admin_tp_home_\\d+$"))
     app.add_handler(CallbackQueryHandler(admin_set_tp_away_execute, pattern="^admin_tp_away_\\d+$"))
     app.add_handler(CallbackQueryHandler(admin_set_tp_draw_execute, pattern="^admin_tp_draw_\\d+$"))
-    app.add_handler(CallbackQueryHandler(admin_list_overdue, pattern="^admin_list_overdue$"))
+    app.add_handler(CallbackQueryHandler(admin_list_overdue, pattern=r"^admin_div_overdue:\d+$"))
     app.add_handler(CallbackQueryHandler(admin_extend_match_execute, pattern="^admin_extend_match_\\d+$"))
     app.add_handler(CallbackQueryHandler(admin_toggle_role, pattern="^admin_toggle_role_-?\\d+_(player|admin)$"))
     app.add_handler(CallbackQueryHandler(admin_delete_options, pattern="^admin_delete_options_-?\\d+$"))
     app.add_handler(CallbackQueryHandler(admin_confirm_wipe_player, pattern="^admin_confirm_wipe_player_-?\\d+$"))
     app.add_handler(CallbackQueryHandler(admin_wipe_player_execute, pattern="^admin_wipe_player_execute_-?\\d+$"))
-    app.add_handler(CallbackQueryHandler(admin_manage_squads, pattern="^(admin_manage_squads|admin_manage_rosters)$"))
     app.add_handler(CallbackQueryHandler(admin_rosters_for_division, pattern=r"^admin_roster_div:(\d+)$"))
     app.add_handler(CallbackQueryHandler(admin_view_squad, pattern="^admin_squad_view_.*$"))
     app.add_handler(CallbackQueryHandler(admin_squad_rm_menu, pattern="^admin_squad_rm_menu_.*$"))
@@ -747,9 +741,6 @@ def _register_admin_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("force_update", admin_force_update))
     app.add_handler(CallbackQueryHandler(admin_force_update, pattern="^admin_force_update$"))
     app.add_handler(CommandHandler("test_ai", admin_test_ai))
-    app.add_handler(CallbackQueryHandler(admin_broadcast_menu, pattern="^admin_broadcast_menu$"))
-    app.add_handler(CallbackQueryHandler(admin_broadcast_all_debts_execute, pattern="^admin_broadcast_all_debts_execute$"))
-    app.add_handler(CallbackQueryHandler(admin_send_debts_to_warns, pattern="^(admin_send_debts_to_warns|admin_send_debts_to_division_topics)$"))
     app.add_handler(CallbackQueryHandler(admin_fetch_photos, pattern="^admin_fetch_photos_cb$"))
     app.add_handler(CallbackQueryHandler(admin_stub, pattern="^admin_matches_stub$"))
 

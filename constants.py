@@ -19,8 +19,6 @@ CB_PLAYER_CARD = "player_card_"
 # Admin Navigation & Actions
 CB_ADMIN_MAIN_MENU = "admin_main_menu"
 CB_ADMIN_MANAGE_PLAYERS = "admin_manage_players"
-CB_ADMIN_MANAGE_SQUADS = "admin_manage_squads"
-CB_ADMIN_MANAGE_MATCHES_INFO = "admin_manage_matches_info"
 CB_ADMIN_CANCEL_MATCH_ACTION = "admin_cancel_match_action"
 CB_ADMIN_CANCEL_PLAYER_ACTION = "admin_cancel_player_action"
 CB_ADMIN_BROADCAST_STUB = "admin_broadcast_stub"

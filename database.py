@@ -2403,15 +2403,6 @@ def clear_all_matches() -> None:
         cursor = conn.cursor()
         cursor.execute("DELETE FROM matches")
 
-def batch_insert_matches(matches_list: list[tuple[int, int, int]]) -> None:
-    """Batch insert generated fixtures into the database."""
-    with transaction() as conn:
-        cursor = conn.cursor()
-        cursor.executemany(
-            "INSERT INTO matches (round_number, player1_id, player2_id, tournament_id, status) VALUES (?, ?, ?, 1, 'pending')",
-            matches_list
-        )
-
 def get_match(match_id: int) -> dict | None:
     """Retrieve a single match by ID with player nicknames, team names, and cup details."""
     with transaction() as conn:
@@ -2812,24 +2803,26 @@ def get_match_events(match_id: int) -> list[dict]:
         )
         return [dict(row) for row in cursor.fetchall()]
 
-def get_matches_in_rounds(round_numbers: list[int]) -> list[dict]:
-    """Retrieve all matches in a list of rounds with player details."""
+def get_matches_in_rounds(round_numbers: list[int], division_id: int | None = None) -> list[dict]:
+    """Retrieve all matches in a list of rounds with player details, optionally filtered by division."""
     if not round_numbers:
         return []
     placeholders = ",".join(["?"] * len(round_numbers))
+    div_clause = " AND (m.division_id = ? OR m.division_id IS NULL)" if division_id is not None else ""
+    params = tuple(round_numbers) + ((division_id,) if division_id is not None else ())
     with transaction() as conn:
         cursor = conn.cursor()
         cursor.execute(f"""
-            SELECT 
-                m.id, m.round_number, u1.telegram_id AS player1_id, u2.telegram_id AS player2_id, m.status,
+            SELECT
+                m.id, m.round_number, m.division_id, u1.telegram_id AS player1_id, u2.telegram_id AS player2_id, m.status,
                 u1.username AS player1_username, u1.team_name AS player1_team,
                 u2.username AS player2_username, u2.team_name AS player2_team
             FROM matches m
             LEFT JOIN users u1 ON LOWER(m.player1_team) = LOWER(u1.team_name)
             LEFT JOIN users u2 ON LOWER(m.player2_team) = LOWER(u2.team_name)
-            WHERE m.round_number IN ({placeholders})
+            WHERE m.round_number IN ({placeholders}){div_clause}
             ORDER BY m.round_number ASC, m.id ASC
-        """, tuple(round_numbers))
+        """, params)
         return [dict(row) for row in cursor.fetchall()]
 
 def get_unplayed_matches_by_round(round_number: int, division_id: int | None = None) -> list[dict]:
@@ -4290,7 +4283,9 @@ def batch_insert_matches(fixtures: list[tuple[int, int, int]], division_id: int 
         cursor = conn.cursor()
         cursor.executemany(
             "INSERT INTO matches (round_number, player1_id, player2_id, status, division_id, season_id) VALUES (?, ?, ?, 'pending', ?, ?)",
-            [(f[0], f[1], f[2], division_id, s_id) for f in valid_fixtures]
+            # div_id, а не division_id: иначе при вызове без дивизиона матчи легли бы
+            # с NULL, а туры ниже — в дивизион 1, и сетка туров их уже не нашла бы.
+            [(f[0], f[1], f[2], div_id, s_id) for f in valid_fixtures]
         )
         rounds = set([f[0] for f in valid_fixtures])
         cursor.executemany(

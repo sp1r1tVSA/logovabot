@@ -103,7 +103,7 @@ class TestRbacDivisionPanels(unittest.IsolatedAsyncioTestCase):
             callbacks = self._callbacks(edit_mock.call_args[1]["reply_markup"])
             self.assertIn("Админ-панель дивизиона", text)
             self.assertIn(f"admin_div_manage_matches:{self.div_a}", callbacks)
-            self.assertIn(f"admin_div_broadcast_debts:{self.div_a}", callbacks)
+            self.assertIn(f"admin_div_debts_menu:{self.div_a}", callbacks)
             self.assertIn(f"admin_div_manage_players:{self.div_a}", callbacks)
             # Урезанная панель: глобальных разделов быть не должно
             self.assertNotIn("admin_manage_squads", callbacks)
