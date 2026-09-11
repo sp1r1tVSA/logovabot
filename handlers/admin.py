@@ -265,7 +265,7 @@ async def admin_toggle_chat_mode(update: Update, context: ContextTypes.DEFAULT_T
 
 @admin_only
 async def admin_force_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Force rechecks the DB and updates the league table in the reports topic."""
+    """Force rechecks the DB, reconciles all division statistics, and updates the league tables in reports topics."""
     user = update.effective_user
     if not is_admin(user.id):
         if update.callback_query:
@@ -273,22 +273,57 @@ async def admin_force_update(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
         
     if update.callback_query:
-        await update.callback_query.answer("🔄 Запущено обновление баз данных и таблиц...")
+        await update.callback_query.answer("🔄 Запущена сверка баз данных и таблиц...")
     else:
-        await update.message.reply_text("🔄 Запущено обновление баз данных и таблиц...")
+        await update.message.reply_text("🔄 Запущена сверка баз данных и таблиц...")
 
     try:
-        # Trigger league table update which recalculates standings
+        # 1. Complete audit & data reconciliation across all active divisions
+        audit_res = await asyncio.to_thread(database.reconcile_all_divisions_data)
+
+        # 2. Update existing graphic league tables in reports topics
         await post_league_table_to_reports(context)
-        
-        msg = "✅ Все базы перепроверены. Турнирная таблица и статистика бомбардиров актуализированы!"
+
+        # 3. Build informative audit report for admin
+        divs_cnt = audit_res.get("divisions_checked", 0)
+        matches_cnt = audit_res.get("matches_checked", 0)
+        goals_cnt = audit_res.get("total_goals_in_matches", 0)
+        events_cnt = audit_res.get("events_checked", 0)
+        discrepancies = audit_res.get("discrepancies", [])
+
+        if not discrepancies:
+            msg = (
+                "✅ <b>Сверка данных и баз успешно завершена!</b>\n\n"
+                f"📊 <b>Итоги аудита дивизионов:</b>\n"
+                f"• Активных дивизионов: <b>{divs_cnt}</b>\n"
+                f"• Подтверждённых матчей: <b>{matches_cnt}</b>\n"
+                f"• Голов в матчах: <b>{goals_cnt}</b>\n"
+                f"• Событий игроков (match_events): <b>{events_cnt}</b>\n"
+                "• Расхождений и ошибок: <b>0</b> ✅\n\n"
+                "🏆 Турнирные таблицы актуализированы."
+            )
+        else:
+            disc_preview = "\n".join(f"• {html.escape(d)}" for d in discrepancies[:10])
+            if len(discrepancies) > 10:
+                disc_preview += f"\n<i>...и ещё {len(discrepancies) - 10} замечаний</i>"
+            msg = (
+                "⚠️ <b>Сверка завершена с замечаниями:</b>\n\n"
+                f"📊 <b>Итоги аудита дивизионов:</b>\n"
+                f"• Активных дивизионов: <b>{divs_cnt}</b>\n"
+                f"• Подтверждённых матчей: <b>{matches_cnt}</b>\n"
+                f"• Голов в матчах: <b>{goals_cnt}</b>\n"
+                f"• Найдено расхождений: <b>{len(discrepancies)}</b>\n\n"
+                f"❗️ <b>Список замечаний:</b>\n{disc_preview}\n\n"
+                "🏆 Турнирные таблицы актуализированы."
+            )
+
         if update.callback_query:
-            await update.callback_query.message.reply_text(msg)
+            await update.callback_query.message.reply_text(msg, parse_mode="HTML")
         elif update.message:
-            await update.message.reply_text(msg)
+            await update.message.reply_text(msg, parse_mode="HTML")
     except Exception as e:
         logger.error(f"Error in force_update: {e}")
-        err_msg = "❌ Ошибка при обновлении таблиц. Проверьте логи."
+        err_msg = "❌ Ошибка при сверке баз данных и обновлении таблиц. Проверьте логи."
         if update.callback_query:
             await update.callback_query.message.reply_text(err_msg)
         elif update.message:

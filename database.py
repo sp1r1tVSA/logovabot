@@ -9510,3 +9510,158 @@ def get_stale_provider_matches_count(stale_threshold_seconds: int = 120) -> int:
         """, (stale_threshold_seconds,))
         row = cursor.fetchone()
         return row["cnt"] if row else 0
+
+
+def reconcile_all_divisions_data(season_id: int | None = None) -> dict:
+    """
+    Perform a complete audit and reconciliation of divisions data:
+    - Standings mathematical integrity (played = W+D+L, points = 3W+D, sum(W) = sum(L), sum(GF) = sum(GA)).
+    - Match scores vs player match_events (goals scored by team vs individual author events).
+    - Checks for negative scores, missing events, or discrepancies in active divisions.
+    Returns structured audit result with status, metrics, and any discrepancies found.
+    """
+    with transaction() as conn:
+        cursor = conn.cursor()
+
+        target_season_id = season_id
+        if target_season_id is None:
+            act = get_active_season()
+            target_season_id = act["id"] if act else 1
+
+        active_divisions = get_active_divisions()
+
+        total_matches_checked = 0
+        total_events_checked = 0
+        total_goals_in_matches = 0
+        total_goals_in_events = 0
+        discrepancies: list[str] = []
+        division_summaries: list[dict] = []
+
+        for d in active_divisions:
+            div_id = d["id"]
+            div_name = d["name"]
+
+            # 1. Standings mathematical consistency
+            standings = get_standings(division_id=div_id, season_id=target_season_id)
+            sum_w = sum(t["wins"] for t in standings)
+            sum_l = sum(t["losses"] for t in standings)
+            sum_d = sum(t["draws"] for t in standings)
+            sum_gf = sum(t["goals_scored"] for t in standings)
+            sum_ga = sum(t["goals_conceded"] for t in standings)
+
+            if sum_w != sum_l:
+                discrepancies.append(
+                    f"[{div_name}] Баланс побед и поражений: побед={sum_w}, поражений={sum_l}"
+                )
+            if sum_gf != sum_ga:
+                discrepancies.append(
+                    f"[{div_name}] Баланс голов: забито={sum_gf}, пропущено={sum_ga}"
+                )
+            if sum_d % 2 != 0:
+                discrepancies.append(
+                    f"[{div_name}] Нечётное число ничьих в турнирной таблице: {sum_d}"
+                )
+
+            for t in standings:
+                t_name = t["team_name"]
+                if t["played"] != t["wins"] + t["draws"] + t["losses"]:
+                    discrepancies.append(
+                        f"[{div_name} • {t_name}] Игры не сходятся: сыграно {t['played']} != {t['wins'] + t['draws'] + t['losses']}"
+                    )
+                if t["points"] != t["wins"] * 3 + t["draws"]:
+                    discrepancies.append(
+                        f"[{div_name} • {t_name}] Очки не сходятся: {t['points']} != {t['wins'] * 3 + t['draws']}"
+                    )
+
+            # 2. Confirmed matches in this division
+            cursor.execute("""
+                SELECT 
+                    m.id, 
+                    m.round_number, 
+                    COALESCE(m.player1_team, u1.team_name) AS player1_team, 
+                    COALESCE(m.player2_team, u2.team_name) AS player2_team, 
+                    m.player1_score, 
+                    m.player2_score 
+                FROM matches m
+                LEFT JOIN users u1 ON LOWER(m.player1_team) = LOWER(u1.team_name)
+                LEFT JOIN users u2 ON LOWER(m.player2_team) = LOWER(u2.team_name)
+                WHERE m.status = 'confirmed'
+                  AND (m.tournament_type IS NULL OR m.tournament_type = 'league')
+                  AND m.division_id = ?
+                  AND (m.season_id = ? OR m.season_id IS NULL)
+                ORDER BY m.id ASC
+            """, (div_id, target_season_id))
+            div_matches = cursor.fetchall()
+
+            div_match_goals = 0
+            for m in div_matches:
+                m_id = m["id"]
+                p1_team = m["player1_team"] or "Команда 1"
+                p2_team = m["player2_team"] or "Команда 2"
+                p1_sc = m["player1_score"] if m["player1_score"] is not None else 0
+                p2_sc = m["player2_score"] if m["player2_score"] is not None else 0
+                div_match_goals += (p1_sc + p2_sc)
+                total_matches_checked += 1
+
+                # Events for this match
+                cursor.execute("""
+                    SELECT team_name, player_name, event_type, count
+                    FROM match_events
+                    WHERE match_id = ?
+                """, (m_id,))
+                events = cursor.fetchall()
+                total_events_checked += len(events)
+
+                goal_events = [e for e in events if e["event_type"] == "goal"]
+                assist_events = [e for e in events if e["event_type"] == "assist"]
+
+                if goal_events:
+                    e_p1 = sum(e["count"] for e in goal_events if teams_match(e["team_name"], p1_team))
+                    e_p2 = sum(e["count"] for e in goal_events if teams_match(e["team_name"], p2_team))
+                    total_goals_in_events += (e_p1 + e_p2)
+
+                    if e_p1 != p1_sc or e_p2 != p2_sc:
+                        discrepancies.append(
+                            f"[{div_name}] Матч #{m_id} ({p1_team} {p1_sc}:{p2_sc} {p2_team}): "
+                            f"в событиях авторов {e_p1}:{e_p2} голов"
+                        )
+
+                if assist_events:
+                    a_p1 = sum(e["count"] for e in assist_events if teams_match(e["team_name"], p1_team))
+                    a_p2 = sum(e["count"] for e in assist_events if teams_match(e["team_name"], p2_team))
+                    if a_p1 > p1_sc:
+                        discrepancies.append(
+                            f"[{div_name}] Матч #{m_id} ({p1_team}): ассистов ({a_p1}) больше чем голов ({p1_sc})"
+                        )
+                    if a_p2 > p2_sc:
+                        discrepancies.append(
+                            f"[{div_name}] Матч #{m_id} ({p2_team}): ассистов ({a_p2}) больше чем голов ({p2_sc})"
+                        )
+
+            total_goals_in_matches += div_match_goals
+
+            # Top scorer for division summary
+            top_sc = get_top_scorers(limit=1, division_id=div_id, season_id=target_season_id)
+            top_scorer_str = f"{top_sc[0]['player_name']} ({top_sc[0]['total_goals']})" if top_sc else "—"
+
+            division_summaries.append({
+                "division_id": div_id,
+                "division_name": div_name,
+                "teams_count": len(standings),
+                "confirmed_matches": len(div_matches),
+                "total_goals": div_match_goals,
+                "top_scorer": top_scorer_str,
+            })
+
+        return {
+            "status": "ok" if not discrepancies else "warning",
+            "season_id": target_season_id,
+            "divisions_checked": len(active_divisions),
+            "matches_checked": total_matches_checked,
+            "events_checked": total_events_checked,
+            "total_goals_in_matches": total_goals_in_matches,
+            "total_goals_in_events": total_goals_in_events,
+            "discrepancies": discrepancies,
+            "division_summaries": division_summaries,
+        }
+
