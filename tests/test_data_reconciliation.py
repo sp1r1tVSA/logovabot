@@ -95,12 +95,12 @@ class TestDataReconciliation(unittest.IsolatedAsyncioTestCase):
 
             update.callback_query.answer.assert_awaited()
             update.callback_query.message.reply_text.assert_awaited()
-            mock_post_tables.assert_awaited_once_with(context)
+            mock_post_tables.assert_not_awaited()
 
             reply_text = update.callback_query.message.reply_text.await_args[0][0]
             self.assertIn("Итоги аудита дивизионов", reply_text)
             self.assertIn("Активных дивизионов", reply_text)
-            self.assertIn("Турнирные таблицы актуализированы", reply_text)
+            self.assertIn("Сверка данных и баз успешно завершена", reply_text)
 
 
 if __name__ == "__main__":

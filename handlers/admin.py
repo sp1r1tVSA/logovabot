@@ -265,7 +265,7 @@ async def admin_toggle_chat_mode(update: Update, context: ContextTypes.DEFAULT_T
 
 @admin_only
 async def admin_force_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Force rechecks the DB, reconciles all division statistics, and updates the league tables in reports topics."""
+    """Force rechecks the DB, reconciles all division statistics, and sends audit summary to admin without touching group topics."""
     user = update.effective_user
     if not is_admin(user.id):
         if update.callback_query:
@@ -273,18 +273,15 @@ async def admin_force_update(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
         
     if update.callback_query:
-        await update.callback_query.answer("🔄 Запущена сверка баз данных и таблиц...")
+        await update.callback_query.answer("🔄 Запущена сверка баз данных и статистики...")
     else:
-        await update.message.reply_text("🔄 Запущена сверка баз данных и таблиц...")
+        await update.message.reply_text("🔄 Запущена сверка баз данных и статистики...")
 
     try:
-        # 1. Complete audit & data reconciliation across all active divisions
+        # Complete audit & data reconciliation across all active divisions (no posts sent to groups)
         audit_res = await asyncio.to_thread(database.reconcile_all_divisions_data)
 
-        # 2. Update existing graphic league tables in reports topics
-        await post_league_table_to_reports(context)
-
-        # 3. Build informative audit report for admin
+        # Build informative audit report for admin
         divs_cnt = audit_res.get("divisions_checked", 0)
         matches_cnt = audit_res.get("matches_checked", 0)
         goals_cnt = audit_res.get("total_goals_in_matches", 0)
@@ -299,8 +296,7 @@ async def admin_force_update(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 f"• Подтверждённых матчей: <b>{matches_cnt}</b>\n"
                 f"• Голов в матчах: <b>{goals_cnt}</b>\n"
                 f"• Событий игроков (match_events): <b>{events_cnt}</b>\n"
-                "• Расхождений и ошибок: <b>0</b> ✅\n\n"
-                "🏆 Турнирные таблицы актуализированы."
+                "• Расхождений и ошибок: <b>0</b> ✅"
             )
         else:
             disc_preview = "\n".join(f"• {html.escape(d)}" for d in discrepancies[:10])
@@ -313,8 +309,7 @@ async def admin_force_update(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 f"• Подтверждённых матчей: <b>{matches_cnt}</b>\n"
                 f"• Голов в матчах: <b>{goals_cnt}</b>\n"
                 f"• Найдено расхождений: <b>{len(discrepancies)}</b>\n\n"
-                f"❗️ <b>Список замечаний:</b>\n{disc_preview}\n\n"
-                "🏆 Турнирные таблицы актуализированы."
+                f"❗️ <b>Список замечаний:</b>\n{disc_preview}"
             )
 
         if update.callback_query:
@@ -323,7 +318,7 @@ async def admin_force_update(update: Update, context: ContextTypes.DEFAULT_TYPE)
             await update.message.reply_text(msg, parse_mode="HTML")
     except Exception as e:
         logger.error(f"Error in force_update: {e}")
-        err_msg = "❌ Ошибка при сверке баз данных и обновлении таблиц. Проверьте логи."
+        err_msg = "❌ Ошибка при сверке баз данных. Проверьте логи."
         if update.callback_query:
             await update.callback_query.message.reply_text(err_msg)
         elif update.message:
