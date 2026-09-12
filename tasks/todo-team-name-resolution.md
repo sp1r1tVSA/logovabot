@@ -130,7 +130,15 @@
 
 ## Шаг 6 — Инструмент для живой БД
 
-- [ ] **T7. `scripts/audit_team_resolution.py`**
+- [x] **T7. `scripts/audit_team_resolution.py`** — готово. Локально на пустой базе
+      «Клубов в ростере: 0», exit 0; полный прогон exit 0.
+      Read-only сделан не обещанием, а авторизатором SQLite: соединение пропускает
+      SELECT/READ и отклоняет INSERT/UPDATE/DELETE/DDL на уровне драйвера.
+      **Сверх спеки:** `tests/test_audit_team_resolution.py` — на временной базе
+      проверяет отказ в записи и ветки находок. Скрипт поедет по боевым данным,
+      гарантия «ничего не пишет» должна проверяться, а не читаться глазами.
+      Находки: COLLISION, NORMALIZE_DUP, AMBIGUOUS, UNREGISTERED, ORPHAN_NAME,
+      FUZZY_THRESHOLD. Все ветки прогнаны вручную на копии базы с подставным ростером.
   - Acceptance:
     - Строго read-only: ни одного `INSERT`/`UPDATE`/`DELETE`.
     - Отчёт: коллизии (2+ имени → 1 канон), клубы вне реестра, дрейф реестр↔БД,
