@@ -6,7 +6,7 @@ from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
 
 import database
-from handlers.base import is_admin, generate_league_table_image
+from handlers.base import is_admin, generate_league_table_image, resolve_division_id
 
 logger = logging.getLogger(__name__)
 
@@ -78,9 +78,25 @@ async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_T
         return True
 
     if action in ("таблица", "турнирка", "table", "standings"):
-        img_buf = await asyncio.to_thread(generate_league_table_image)
-        caption = "🏆 <b>Турнирная таблица турнира</b>"
-        keyboard = [[InlineKeyboardButton("🔄 Обновить", callback_data="refresh_div_table_0")]]
+        # Без дивизиона запрос уходил в кросс-дивизионную ветку и рисовал таблицу
+        # по 16 именам КПЛ — одну и ту же всем пяти дивизионам.
+        division_id = await resolve_division_id(update)
+        if division_id is None:
+            await msg.reply_text(
+                "🤷 Не понял, таблицу какого дивизиона показать.\n"
+                "Напишите в топике своего дивизиона или попросите админа привязать вас к дивизиону.",
+                parse_mode="HTML",
+            )
+            return True
+
+        division = await asyncio.to_thread(database.get_division, division_id)
+        division_name = (division or {}).get("name") if division else None
+        img_buf = await asyncio.to_thread(
+            generate_league_table_image,
+            None, None, division_name, division_id
+        )
+        caption = f"🏆 <b>Турнирная таблица — {html.escape(division_name or 'дивизион')}</b>"
+        keyboard = [[InlineKeyboardButton("🔄 Обновить", callback_data=f"refresh_div_table_{division_id}")]]
         await msg.reply_photo(photo=img_buf, caption=caption, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
         return True
 

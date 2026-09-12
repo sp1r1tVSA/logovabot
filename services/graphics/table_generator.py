@@ -150,10 +150,12 @@ def generate_league_table_image(
     division_id selects the division accent colour; without it the theme falls
     back to division_name and then to the neutral default.
     """
+    # division_id здесь не только про цвет: если данные не передали, тянуть их надо
+    # тем же срезом, иначе получается таблица в цветах дивизиона с чужими строками.
     if standings is None:
-        standings = database.get_standings()
+        standings = database.get_standings(division_id=division_id)
     if form_map is None:
-        form_map = database.get_teams_recent_form(limit=5)
+        form_map = database.get_teams_recent_form(limit=5, division_id=division_id)
 
     # 1x Base Dimensions
     width_1x = 1120
