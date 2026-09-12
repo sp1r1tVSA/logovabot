@@ -11,6 +11,8 @@ It depends on config only, so importing it can never create a cycle.
 import difflib
 import logging
 import re
+from dataclasses import dataclass
+from enum import Enum
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +37,7 @@ TEAM_ALIASES = {
     # Аякс
     "аякс": "Аякс", "аякса": "Аякс", "аяксу": "Аякс", "аяксе": "Аякс",
     "ajax": "Аякс", "afc ajax": "Аякс",
+    "аякс амстердам": "Аякс", "ajax amsterdam": "Аякс",
     
     # ПСВ
     "псв": "ПСВ", "псв эйндховен": "ПСВ",
@@ -75,6 +78,7 @@ TEAM_ALIASES = {
     # Селтик
     "селтик": "Селтик", "кельтик": "Селтик", "селтика": "Селтик", "селтику": "Селтик",
     "celtic": "Селтик", "celtic fc": "Селтик",
+    "селтик глазго": "Селтик", "celtic glasgow": "Селтик",
     
     # Брюгге
     "брюгге": "Брюгге", "брюге": "Брюгге", "брюгг": "Брюгге", "брюг": "Брюгге", "брюгге фк": "Брюгге",
@@ -97,63 +101,6 @@ def normalize_team_name(name: str | None) -> str:
     # Collapse multiple spaces
     s = re.sub(r"\s+", " ", s).strip()
     return s
-
-
-def resolve_team_name(name: str | None) -> str:
-    """Intelligently resolve any user-entered team name, typo, alias, or transliteration to canonical KPL team name."""
-    if not name:
-        return ""
-    
-    raw = str(name).strip()
-    norm = normalize_team_name(raw)
-    if not norm:
-        return raw
-
-    # 1. Direct alias dictionary lookup
-    if norm in TEAM_ALIASES:
-        return TEAM_ALIASES[norm]
-
-    # 2. Check tokens / joined words
-    tokens = norm.split()
-    if len(tokens) > 1:
-        joined = "".join(tokens)
-        if joined in TEAM_ALIASES:
-            return TEAM_ALIASES[joined]
-
-    # 3. Check exact match against canonical KPL_TEAMS in config
-    import config
-    all_canon = getattr(config, "KPL_TEAMS", [])
-    for canon in all_canon:
-        c_norm = normalize_team_name(canon)
-        if norm == c_norm:
-            return canon
-
-    # 4. Prefix / Substring match against aliases
-    for alias, canon in TEAM_ALIASES.items():
-        a_norm = normalize_team_name(alias)
-        if len(norm) >= 3 and (norm == a_norm or (len(a_norm) >= 4 and (norm in a_norm or a_norm in norm))):
-            return canon
-
-    # 5. Fuzzy string similarity using difflib
-    best_match = None
-    best_score = 0.0
-
-    for alias, canon in TEAM_ALIASES.items():
-        score = difflib.SequenceMatcher(None, norm, normalize_team_name(alias)).ratio()
-        if score > best_score:
-            best_score = score
-            best_match = canon
-
-    for canon in all_canon:
-        score = difflib.SequenceMatcher(None, norm, normalize_team_name(canon)).ratio()
-        if score > best_score:
-            best_score = score
-            best_match = canon
-
-    if best_match and best_score >= 0.65:
-        return best_match
-
-    return raw
 
 
 def teams_match(team_a: str | None, team_b: str | None) -> bool:
@@ -211,7 +158,10 @@ def teams_match(team_a: str | None, team_b: str | None) -> bool:
 
 _registry: tuple[str, ...] = ()
 _registry_index: dict[str, str] = {}
+_alias_index: dict[str, str] = {}
+_joined_index: dict[str, str] = {}
 _dropped_aliases: tuple[tuple[str, str, str], ...] = ()
+_orphan_aliases: tuple[str, ...] = ()
 
 
 def _load_canonical_names() -> tuple[str, ...]:
@@ -250,22 +200,74 @@ def _validate_aliases(index: dict[str, str]) -> tuple[tuple[str, str, str], ...]
     return tuple(dropped)
 
 
+def _build_alias_index(index: dict[str, str]) -> tuple[dict[str, str], tuple[str, ...]]:
+    """Map normalized alias -> canonical name, keeping only aliases that are safe.
+
+    Two kinds are left out: aliases whose key is itself a registered club name (the
+    EXACT tier owns those, and honouring the alias would rename a real club), and
+    aliases pointing at a club that is not in the registry at all.
+    """
+    aliases: dict[str, str] = {}
+    orphans: list[str] = []
+    for alias, canonical in TEAM_ALIASES.items():
+        a_norm = normalize_team_name(alias)
+        if not a_norm or a_norm in index:
+            continue
+        owner = index.get(normalize_team_name(canonical))
+        if owner is None:
+            orphans.append(alias)
+            continue
+        aliases[a_norm] = owner
+    return aliases, tuple(orphans)
+
+
+def _build_joined_index(*sources: dict[str, str]) -> dict[str, str]:
+    """Map space-free forms -> canonical name, for OCR that glues or splits words.
+
+    Ambiguous keys are dropped: if two clubs collapse to the same space-free form,
+    neither may win by accident.
+    """
+    joined: dict[str, str] = {}
+    conflicting: set[str] = set()
+    for source in sources:
+        for key, canonical in source.items():
+            glued = key.replace(" ", "")
+            if not glued or glued == key:
+                continue
+            existing = joined.get(glued)
+            if existing is not None and existing != canonical:
+                conflicting.add(glued)
+            else:
+                joined[glued] = canonical
+    for key in conflicting:
+        joined.pop(key, None)
+    return joined
+
+
 def reload_registry() -> int:
     """Rebuild the registry index from config. Returns the number of clubs loaded.
 
     Call this after the club list changes. Kept explicit (rather than lazy) so the
     resolver stays free of I/O and of surprise rebuilds inside hot loops.
     """
-    global _registry, _registry_index, _dropped_aliases
+    global _registry, _registry_index, _alias_index, _joined_index
+    global _dropped_aliases, _orphan_aliases
 
     _registry = _load_canonical_names()
     _registry_index = {normalize_team_name(name): name for name in _registry}
     _dropped_aliases = _validate_aliases(_registry_index)
+    _alias_index, _orphan_aliases = _build_alias_index(_registry_index)
+    _joined_index = _build_joined_index(_registry_index, _alias_index)
 
     for alias, canonical, owner in _dropped_aliases:
         logger.warning(
             "Alias %r -> %r shadows registered club %r and will be ignored",
             alias, canonical, owner,
+        )
+    if _orphan_aliases:
+        logger.debug(
+            "%d aliases point at clubs outside the registry and are inactive",
+            len(_orphan_aliases),
         )
     return len(_registry)
 
@@ -288,6 +290,170 @@ def get_dropped_aliases() -> tuple[tuple[str, str, str], ...]:
 def is_registered(name: str | None) -> bool:
     """True when the name matches a registered club exactly (after normalization)."""
     return normalize_team_name(name) in _registry_index
+
+
+def get_alias_index() -> dict[str, str]:
+    """Normalized alias -> canonical name, for aliases active against this registry."""
+    return _alias_index
+
+
+def get_orphan_aliases() -> tuple[str, ...]:
+    """Aliases inactive because their target club is not in the registry."""
+    return _orphan_aliases
+
+
+# ---------------------------------------------------------------------------
+# Name resolution
+#
+# Tiers run in order and the first *unambiguous* one wins. Ambiguity anywhere
+# stops resolution with method=NONE: letting a weaker tier settle what a stronger
+# one called a tie is exactly how «Расинг Ланс» used to become «Расинг».
+# ---------------------------------------------------------------------------
+
+# Фаззи-тир нужен против опечаток OCR, а не против коротких похожих имён.
+FUZZY_MIN_LEN = 5       # 'псж' против 'псв' даёт 0.667 — на трёх буквах фаззи бессмысленен
+FUZZY_THRESHOLD = 0.87  # было 0.65: слишком низко, склеивало разные клубы
+FUZZY_MARGIN = 0.07     # отрыв от второго кандидата; без него побеждал просто «наименее плохой»
+PREFIX_MIN_LEN = 3      # префикс короче трёх букв подходит слишком многим
+
+# Юридические формы и приставки: шум, а не часть имени. Отбрасываются, чтобы
+# «Спортинг CP» и «ФК Порту» дошли до точного совпадения. Географические
+# уточнения сюда не входят и входить не должны — именно они отличают
+# «Расинг Сантандер» от «Расинг Ланс».
+_NOISE_TOKENS = frozenset({
+    "фк", "фс", "сп", "сц", "кф", "клуб",
+    "fc", "sc", "sl", "cf", "ac", "afc", "cp", "club", "jrs",
+})
+
+
+class ResolveMethod(str, Enum):
+    """Which tier produced the answer."""
+    EXACT = "exact"      # совпадение с каноном реестра
+    ALIAS = "alias"      # словарь TEAM_ALIASES
+    JOINED = "joined"    # склейка токенов / отброшенный шум
+    PREFIX = "prefix"    # единственный канон с таким префиксом
+    FUZZY = "fuzzy"      # difflib, с запасом над вторым кандидатом
+    NONE = "none"        # не разрешено — вход возвращается как есть
+
+
+@dataclass(frozen=True, slots=True)
+class TeamResolution:
+    """Outcome of resolving a raw team name against the club registry."""
+    raw: str
+    canonical: str | None
+    method: ResolveMethod
+    confidence: float
+    candidates: tuple[str, ...] = ()
+
+    @property
+    def is_confident(self) -> bool:
+        return self.canonical is not None
+
+
+def _alternate_forms(norm: str) -> list[str]:
+    """Rewrites of the input worth a second lookup, in order of trustworthiness."""
+    forms: list[str] = []
+    tokens = norm.split()
+
+    stripped = [t for t in tokens if t not in _NOISE_TOKENS]
+    if stripped and len(stripped) != len(tokens):
+        forms.append(" ".join(stripped))
+
+    if len(tokens) > 1:
+        forms.append("".join(tokens))
+    if len(stripped) > 1 and len(stripped) != len(tokens):
+        forms.append("".join(stripped))
+
+    return [f for f in forms if f and f != norm]
+
+
+def _fuzzy_scores(norm: str) -> list[tuple[str, float]]:
+    """Best difflib ratio per canonical club, highest first."""
+    scores: dict[str, float] = {}
+    for candidate_norm, canonical in list(_registry_index.items()) + list(_alias_index.items()):
+        ratio = difflib.SequenceMatcher(None, norm, candidate_norm).ratio()
+        if ratio > scores.get(canonical, 0.0):
+            scores[canonical] = ratio
+    return sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
+
+
+def resolve_team_name_ex(name: str | None) -> TeamResolution:
+    """Resolve a raw team name, reporting how confident the answer is.
+
+    Pure CPU: no SQL, no network. Callers run inside the event loop.
+    """
+    raw = str(name).strip() if name else ""
+    norm = normalize_team_name(raw)
+    if not norm:
+        return TeamResolution(raw, None, ResolveMethod.NONE, 0.0)
+
+    # 1. Точное совпадение с каноном. idx_users_team_name_unique гарантирует,
+    #    что канон один, поэтому спорить тут не с чем.
+    canonical = _registry_index.get(norm)
+    if canonical is not None:
+        return TeamResolution(raw, canonical, ResolveMethod.EXACT, 1.0)
+
+    # 2. Словарь алиасов: транслит, склонения, опечатки OCR.
+    canonical = _alias_index.get(norm)
+    if canonical is not None:
+        return TeamResolution(raw, canonical, ResolveMethod.ALIAS, 1.0)
+
+    # 3. Те же справочники, но по переписанным формам: отброшенные «ФК»/«CP»
+    #    и склейка токенов в обе стороны (OCR и слепляет слова, и рвёт их).
+    for form in _alternate_forms(norm):
+        canonical = _registry_index.get(form) or _alias_index.get(form)
+        if canonical is not None:
+            return TeamResolution(raw, canonical, ResolveMethod.JOINED, 1.0)
+
+    for form in [norm] + _alternate_forms(norm):
+        canonical = _joined_index.get(form.replace(" ", ""))
+        if canonical is not None:
+            return TeamResolution(raw, canonical, ResolveMethod.JOINED, 1.0)
+
+    # 4. Префикс — но только если он ведёт ровно к одному клубу. Именно этот
+    #    предохранитель не даёт «Расинг» угадаться при живых «Расинг Сантандер»
+    #    и «Расинг Ланс».
+    if len(norm) >= PREFIX_MIN_LEN:
+        prefixed = sorted({
+            canon for canon_norm, canon in _registry_index.items()
+            if canon_norm.startswith(norm)
+        })
+        if len(prefixed) == 1:
+            return TeamResolution(raw, prefixed[0], ResolveMethod.PREFIX, 1.0)
+        if len(prefixed) > 1:
+            return TeamResolution(raw, None, ResolveMethod.NONE, 0.0, tuple(prefixed))
+
+    # 5. Фаззи — последний и самый слабый тир, под тремя предохранителями.
+    if len(norm) < FUZZY_MIN_LEN:
+        return TeamResolution(raw, None, ResolveMethod.NONE, 0.0)
+
+    ranked = _fuzzy_scores(norm)
+    if not ranked:
+        return TeamResolution(raw, None, ResolveMethod.NONE, 0.0)
+
+    best_canon, best_score = ranked[0]
+    if best_score < FUZZY_THRESHOLD:
+        return TeamResolution(raw, None, ResolveMethod.NONE, 0.0)
+
+    second_score = ranked[1][1] if len(ranked) > 1 else 0.0
+    if best_score - second_score < FUZZY_MARGIN:
+        tied = tuple(canon for canon, score in ranked if best_score - score < FUZZY_MARGIN)
+        return TeamResolution(raw, None, ResolveMethod.NONE, 0.0, tied)
+
+    return TeamResolution(raw, best_canon, ResolveMethod.FUZZY, best_score)
+
+
+def resolve_team_name(name: str | None) -> str:
+    """Resolve a raw team name to its canonical form, or return it unchanged.
+
+    Backwards-compatible wrapper: never returns an empty string for a non-empty
+    input, so the existing `resolve_team_name(x) or x` call sites keep working.
+    Use resolve_team_name_ex when you need to know whether it actually resolved.
+    """
+    if not name:
+        return ""
+    resolved = resolve_team_name_ex(name)
+    return resolved.canonical if resolved.canonical is not None else str(name).strip()
 
 
 reload_registry()

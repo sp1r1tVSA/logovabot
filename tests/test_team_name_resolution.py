@@ -183,6 +183,131 @@ class TestResolverIsPureCpu(unittest.TestCase):
         self.assertEqual(calls, [], "резолв полез в БД — он вызывается из event loop")
 
 
+class TestResolveTiers(unittest.TestCase):
+    """ЗЕЛЁНЫЕ с T3. По одному тесту на тир: каждый обязан срабатывать сам."""
+
+    def _method(self, name):
+        return club_registry.resolve_team_name_ex(name).method
+
+    def test_exact_tier(self):
+        res = club_registry.resolve_team_name_ex("  бенфика  ")
+        self.assertEqual(res.canonical, "Бенфика")
+        self.assertEqual(res.method, club_registry.ResolveMethod.EXACT)
+        self.assertEqual(res.confidence, 1.0)
+
+    def test_alias_tier(self):
+        res = club_registry.resolve_team_name_ex("feyenoor")
+        self.assertEqual(res.canonical, "Фейеноорд")
+        self.assertEqual(res.method, club_registry.ResolveMethod.ALIAS)
+
+    def test_joined_tier_glues_tokens(self):
+        self.assertEqual(self._method("Будё Глимт"), club_registry.ResolveMethod.EXACT)
+        res = club_registry.resolve_team_name_ex("Бока  Х униорс")
+        self.assertEqual(res.canonical, "Бока Хуниорс")
+        self.assertEqual(res.method, club_registry.ResolveMethod.JOINED)
+
+    def test_prefix_tier_when_exactly_one_club_matches(self):
+        res = club_registry.resolve_team_name_ex("коп")
+        self.assertEqual(res.canonical, "Копенгаген")
+        self.assertEqual(res.method, club_registry.ResolveMethod.PREFIX)
+
+    def test_fuzzy_tier_catches_an_ocr_typo(self):
+        res = club_registry.resolve_team_name_ex("копенгаен")
+        self.assertEqual(res.canonical, "Копенгаген")
+        self.assertEqual(res.method, club_registry.ResolveMethod.FUZZY)
+        self.assertGreaterEqual(res.confidence, club_registry.FUZZY_THRESHOLD)
+
+    def test_legal_form_tokens_are_noise_not_name(self):
+        # Работа, которую раньше делал удалённый подстрочный тир. Список токенов
+        # закрытый и географию не трогает — иначе вернулись бы коллизии.
+        for name, canonical in (
+            ("Порту ФК", "Порту"),
+            ("Спортинг CP", "Спортинг"),
+            ("ФК Брюгге", "Брюгге"),
+        ):
+            with self.subTest(name=name):
+                self.assertEqual(resolve_team_name(name), canonical)
+
+    def test_city_qualifier_is_never_treated_as_noise(self):
+        # Обратная сторона предыдущего теста: 'Сантандер' отбрасывать нельзя.
+        self.assertEqual(resolve_team_name("Расинг Сантандер"), "Расинг Сантандер")
+
+
+class TestAmbiguityStopsResolution(unittest.TestCase):
+    """ЗЕЛЁНЫЕ с T3. Спорный вход не должен «дорешаться» более слабым тиром."""
+
+    def tearDown(self):
+        club_registry.reload_registry()
+
+    def _with_registry(self, names):
+        config.CLUB_REGISTRY = names
+        self.addCleanup(setattr, config, "CLUB_REGISTRY", [])
+        club_registry.reload_registry()
+
+    def test_prefix_with_two_candidates_resolves_to_nothing(self):
+        self._with_registry(["Расинг Сантандер", "Расинг Ланс", "Порту"])
+        res = club_registry.resolve_team_name_ex("Расинг")
+        self.assertIsNone(res.canonical)
+        self.assertFalse(res.is_confident)
+        self.assertEqual(res.method, club_registry.ResolveMethod.NONE)
+        self.assertEqual(res.candidates, ("Расинг Ланс", "Расинг Сантандер"))
+        # Обёртка возвращает вход как есть — контракт `resolve_team_name(x) or x`.
+        self.assertEqual(resolve_team_name("Расинг"), "Расинг")
+
+    def test_fuzzy_margin_rejects_a_near_tie(self):
+        # 'атлетикo' с латинской o: 0.933 к 'Атлетик' и 0.875 к 'Атлетико'.
+        # Оба выше порога, отрыв 0.058 < FUZZY_MARGIN — значит ответа нет.
+        self._with_registry(["Атлетик", "Атлетико"])
+        res = club_registry.resolve_team_name_ex("атлетикo")
+        self.assertIsNone(res.canonical)
+        self.assertEqual(res.candidates, ("Атлетик", "Атлетико"))
+
+    def test_fuzzy_min_len_blocks_short_names(self):
+        self.assertLess(len("псж"), club_registry.FUZZY_MIN_LEN)
+        self.assertIsNone(club_registry.resolve_team_name_ex("ПСЖ").canonical)
+
+    def test_fuzzy_threshold_blocks_a_merely_similar_name(self):
+        # 'спортинг хихон' даёт 0.774 к 'Спортинг': выше старых 0.65, ниже новых 0.87.
+        res = club_registry.resolve_team_name_ex("Спортинг Хихон")
+        self.assertIsNone(res.canonical)
+        scores = dict(club_registry._fuzzy_scores("спортинг хихон"))
+        self.assertGreater(scores["Спортинг"], 0.65)
+        self.assertLess(scores["Спортинг"], club_registry.FUZZY_THRESHOLD)
+
+
+class TestCaptionWordResolution(unittest.TestCase):
+    """ЗЕЛЁНЫЙ с T3. Риск R3: detect_teams_from_players резолвит отдельные слова подписи.
+
+    Клубы и составы подставные — тест без БД, чтобы не зависеть от параллельного прогона.
+    """
+
+    def setUp(self):
+        self.teams = ["Расинг Сантандер", "Расинг Ланс", "Порту"]
+        config.CLUB_REGISTRY = list(self.teams)
+        club_registry.reload_registry()
+        self._orig_teams = database.get_all_teams
+        self._orig_squads = database.get_all_squads
+        database.get_all_teams = lambda *a, **kw: list(self.teams)
+        database.get_all_squads = lambda *a, **kw: {t: [] for t in self.teams}
+
+    def tearDown(self):
+        database.get_all_teams = self._orig_teams
+        database.get_all_squads = self._orig_squads
+        config.CLUB_REGISTRY = []
+        club_registry.reload_registry()
+
+    def test_caption_finds_both_real_clubs(self):
+        team1, team2 = database.detect_teams_from_players([], [], "расинг сантандер vs порту")
+        self.assertEqual({team1, team2}, {"Расинг Сантандер", "Порту"})
+
+    def test_ambiguous_caption_word_does_not_pull_in_a_third_club(self):
+        # Слово 'расинг' подходит двум клубам. Угадывать его нельзя: раньше оно
+        # резолвилось в чужой канон и подмешивало не тот клуб.
+        self.assertIsNone(club_registry.resolve_team_name_ex("расинг").canonical)
+        team1, team2 = database.detect_teams_from_players([], [], "расинг ланс vs порту")
+        self.assertNotIn("Расинг Сантандер", {team1, team2})
+
+
 class TestClubRegistry(unittest.TestCase):
     """ЗЕЛЁНЫЕ. Реестр: индекс, перезагрузка, отбраковка алиасов-теней."""
 
