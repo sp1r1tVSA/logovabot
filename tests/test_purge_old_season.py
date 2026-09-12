@@ -101,11 +101,16 @@ class TestPurgeOldSeason(unittest.TestCase):
             # Seed 25 division topics (5 divisions x 5 topic types)
             topic_types = ["chat", "table", "matches", "draft", "bets"]
             for div_id in range(1, 6):
-                for tt in topic_types:
+                # Номер темы считаем от позиции в списке, а не от hash(tt): hash строки
+                # рандомизируется на каждый процесс, и раз в ~100 запусков два типа тем
+                # давали один message_thread_id. Уникальный индекс
+                # idx_div_topics_chat_thread(group_chat_id, message_thread_id) молча
+                # затирал строку через INSERT OR REPLACE, и тест падал на «got 20».
+                for offset, tt in enumerate(topic_types):
                     cursor.execute("""
                         INSERT OR REPLACE INTO division_topics (division_id, topic_type, message_thread_id, group_chat_id)
                         VALUES (?, ?, ?, -100123456789)
-                    """, (div_id, tt, div_id * 1000 + (hash(tt) % 900)))
+                    """, (div_id, tt, div_id * 1000 + offset))
                     
             # Seed division admins
             cursor.execute("""
@@ -380,8 +385,9 @@ class TestPurgeOldSeason(unittest.TestCase):
         # Insert 5 divisions and 25 division_topics
         for i in range(1, 6):
             c.execute("INSERT INTO divisions (id, tournament_id, name, code, season_id, sort_order) VALUES (?, 1, ?, ?, 1, ?)", (i, f"Div {i}", f"DIV_{i}", i))
-            for tt in ["chat", "table", "matches", "draft", "bets"]:
-                c.execute("INSERT INTO division_topics (division_id, topic_type, message_thread_id, group_chat_id) VALUES (?, ?, ?, -100123)", (i, tt, i * 100 + hash(tt) % 50))
+            # Тот же приём, что и выше: без hash(tt) номера тем повторяемы от запуска к запуску.
+            for offset, tt in enumerate(["chat", "table", "matches", "draft", "bets"]):
+                c.execute("INSERT INTO division_topics (division_id, topic_type, message_thread_id, group_chat_id) VALUES (?, ?, ?, -100123)", (i, tt, i * 100 + offset))
                 
         conn.commit()
         conn.close()
