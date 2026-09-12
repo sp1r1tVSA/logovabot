@@ -119,6 +119,31 @@ async def _division_name(division_id: int) -> str:
     return (division or {}).get("name") or f"Дивизион {division_id}"
 
 
+async def _line_failure_reason(round_number: int, division_id: int, opening: bool) -> str:
+    """
+    Объяснить отказ `set_round_bets_open` словами.
+
+    Функция возвращает голый False, а причин у него три, и самая частая —
+    «тур уже открыт для игры»: состояние is_open=1 AND bets_open=1 запрещено.
+    Порядок проверок повторяет порядок в самой `set_round_bets_open`.
+    """
+    if not opening:
+        return "Проверьте, что сезон активен."
+
+    info = await asyncio.to_thread(database.get_round_info, round_number, division_id)
+    if info and info.get("is_open"):
+        return (
+            "Тур уже открыт для внесения результатов — линия на такой тур не выставляется.\n"
+            f"Сначала закройте его: <code>Темшик закрыть тур {round_number}</code>"
+        )
+
+    matches = await asyncio.to_thread(database.get_matches_by_round, round_number, division_id)
+    if not matches:
+        return "У тура нет матчей в этом дивизионе — выставлять в линию нечего."
+
+    return "Проверьте, что сезон активен."
+
+
 async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
     """
     Handle structured tournament text commands prefixed with 'Темшик' without slashes.
@@ -560,9 +585,10 @@ async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_T
         division_name = await _division_name(division_id)
         ok = await asyncio.to_thread(database.set_round_bets_open, rn, opening, division_id=division_id)
         if not ok:
+            reason = await _line_failure_reason(rn, division_id, opening)
             await msg.reply_text(
                 f"❌ <b>Не удалось изменить линию на тур {rn} — {html.escape(division_name)}.</b>\n"
-                f"Проверьте, что матчи тура созданы, а сезон активен.",
+                f"{reason}",
                 parse_mode="HTML"
             )
         elif opening:
