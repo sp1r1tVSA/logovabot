@@ -20,6 +20,58 @@ from constants import (
 
 logger = logging.getLogger(__name__)
 
+
+async def resolve_division_id(update: Update, user_data=None) -> int | None:
+    """
+    Определить дивизион, в контексте которого говорит пользователь.
+
+    Приоритет: топик дивизиона → группа дивизиона → дивизион самого игрока.
+    В личке первые два шага не срабатывают, остаётся привязка из users.division_id.
+    Возвращает None, если игрок никуда не приписан — вызывающий сам решает, что
+    показать, но кросс-дивизионные данные подсовывать вместо этого нельзя.
+
+    Живёт здесь, а не в handlers/chat.py, потому что нужен и чату, и текстовым
+    командам, а chat импортирует text_commands — общий помощник может лежать
+    только ниже обоих.
+    """
+    chat = update.effective_chat
+    msg = update.effective_message
+
+    if chat and chat.type in ("group", "supergroup"):
+        thread_id = getattr(msg, "message_thread_id", None) if msg else None
+        if thread_id:
+            try:
+                from services.topic_cache import topic_cache
+                binding = topic_cache.get_by_topic(chat.id, thread_id)
+                if binding and binding.get("division_id"):
+                    return binding["division_id"]
+            except Exception:
+                logger.warning("resolve_division_id: topic_cache lookup failed", exc_info=True)
+
+        try:
+            div = await asyncio.to_thread(database.get_division_by_group, chat.id)
+            if div and div.get("id"):
+                return div["id"]
+        except Exception:
+            logger.warning("resolve_division_id: division-by-group lookup failed", exc_info=True)
+
+    if user_data is None:
+        user = update.effective_user
+        if user:
+            try:
+                user_data = await asyncio.to_thread(database.get_user, user.id)
+            except Exception:
+                logger.warning("resolve_division_id: get_user failed", exc_info=True)
+
+    try:
+        if user_data is not None and user_data["division_id"]:
+            return user_data["division_id"]
+    except (KeyError, IndexError):
+        pass
+
+    return None
+
+
 def is_admin(telegram_id: int) -> bool:
     """Check if the user is in configured Admin IDs, has admin role, or is assigned as a division admin."""
     if not telegram_id:

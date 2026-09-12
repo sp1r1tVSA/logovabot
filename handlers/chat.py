@@ -6,7 +6,7 @@ from telegram.constants import ChatAction
 from telegram.ext import ContextTypes
 import database
 from services.ai import ai_chat
-from services.topic_cache import topic_cache
+from handlers.base import resolve_division_id
 from handlers.text_commands import handle_temshik_command
 
 
@@ -28,42 +28,8 @@ async def _empty_dict():
     return {}
 
 
-async def _resolve_division_id(update: Update, user_data) -> int | None:
-    """
-    Определить дивизион, в контексте которого говорит пользователь.
-
-    Приоритет: топик дивизиона → группа дивизиона → дивизион самого игрока.
-    В личке первые два шага не срабатывают, остаётся привязка из users.division_id.
-    Возвращает None, если игрок никуда не приписан — тогда Темшик честно говорит,
-    что турнирных данных не видит, вместо выдачи каши из чужих дивизионов.
-    """
-    chat = update.effective_chat
-    msg = update.effective_message
-
-    if chat and chat.type in ("group", "supergroup"):
-        thread_id = getattr(msg, "message_thread_id", None) if msg else None
-        if thread_id:
-            try:
-                binding = topic_cache.get_by_topic(chat.id, thread_id)
-                if binding and binding.get("division_id"):
-                    return binding["division_id"]
-            except Exception:
-                logger.warning("AI chat: topic_cache lookup failed", exc_info=True)
-
-        try:
-            div = await asyncio.to_thread(database.get_division_by_group, chat.id)
-            if div and div.get("id"):
-                return div["id"]
-        except Exception:
-            logger.warning("AI chat: division-by-group lookup failed", exc_info=True)
-
-    try:
-        if user_data is not None and user_data["division_id"]:
-            return user_data["division_id"]
-    except (KeyError, IndexError):
-        pass
-
-    return None
+# Резолв дивизиона переехал в handlers/base.py: он нужен и текстовым командам тоже,
+# а chat импортирует text_commands, поэтому общее место может быть только ниже обоих.
 
 
 async def handle_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -134,7 +100,7 @@ async def handle_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     season_id = active_season["id"] if active_season else None
     season_name = (active_season["name"] if active_season else None) or "текущий сезон"
-    division_id = await _resolve_division_id(update, user_data)
+    division_id = await resolve_division_id(update, user_data)
 
     # 2. Gather division-scoped context concurrently
     (
