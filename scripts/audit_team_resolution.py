@@ -172,7 +172,12 @@ def check_normalization_duplicates(roster: list[sqlite3.Row]) -> Finding | None:
 
 
 def check_unregistered(roster: list[sqlite3.Row]) -> Finding | None:
-    """Клубы ростера, которых нет в CLUB_REGISTRY."""
+    """Клубы ростера, которых нет в CLUB_REGISTRY.
+
+    Та же сверка есть в `database.verify_registry_against_db()` — её зовёт код бота,
+    по своей базе. Здесь считаем по уже прочитанному ростеру, потому что аудит
+    умеет смотреть в произвольный файл через --db, в том числе в копию с VPS.
+    """
     missing = sorted({
         row["team_name"] for row in roster
         if not club_registry.is_registered(row["team_name"])

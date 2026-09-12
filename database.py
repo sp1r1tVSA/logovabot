@@ -1446,12 +1446,55 @@ def migrate_team_names_canonical(cursor: sqlite3.Cursor) -> None:
 # Резолв имени клуба переехал в club_registry.py (аудит P3-7): это чистый CPU без SQL.
 # Имена ниже реэкспортируются, поэтому database.resolve_team_name(...) и
 # from database import normalize_team_name продолжают работать без изменений.
+import club_registry
 from club_registry import (  # noqa: F401  (re-export)
     TEAM_ALIASES,
     normalize_team_name,
     resolve_team_name,
     teams_match,
 )
+
+def verify_registry_against_db(division_id: int | None = None) -> dict[str, list[str]]:
+    """Сверить config.CLUB_REGISTRY с клубами, которые реально заведены в users.
+
+    Реестр правится руками, а клубы заводят тренеры — списки расходятся молча.
+    Само по себе расхождение резолв не ломает: клуб вне реестра резолвится сам в
+    себя. Но teams_match для него становится строже — опечатку OCR не с чем
+    сличить, — поэтому дрейф надо видеть, а не узнавать о нём из жалобы.
+
+    Возвращает два отсортированных списка:
+      missing_in_registry — клубы из БД, которых нет в реестре: их надо добавить;
+      unused_in_registry  — имена реестра, под которыми никто не играет: опечатка
+                            в реестре либо ушедший клуб.
+
+    division_id сужает проверку до одного дивизиона; None — весь турнир.
+    """
+    with transaction() as conn:
+        cursor = conn.cursor()
+        if division_id is None:
+            cursor.execute(
+                "SELECT DISTINCT team_name FROM users "
+                "WHERE team_name IS NOT NULL AND team_name != ''"
+            )
+        else:
+            cursor.execute(
+                "SELECT DISTINCT team_name FROM users "
+                "WHERE team_name IS NOT NULL AND team_name != '' AND division_id = ?",
+                (division_id,)
+            )
+        db_names = [row["team_name"] for row in cursor.fetchall()]
+
+    registry_index = club_registry.get_registry_index()
+    db_index = {normalize_team_name(name): name for name in db_names}
+
+    missing = sorted(raw for norm, raw in db_index.items() if norm not in registry_index)
+    # Ушедшие клубы ищем только по всему турниру: в срезе одного дивизиона
+    # «неиспользованным» окажется весь остальной реестр.
+    unused = (
+        sorted(raw for norm, raw in registry_index.items() if norm not in db_index)
+        if division_id is None else []
+    )
+    return {"missing_in_registry": missing, "unused_in_registry": unused}
 
 def get_team_owner(team_name: str) -> int | None:
     """Return the telegram_id of the user who owns the given team."""
