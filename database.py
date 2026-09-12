@@ -2,7 +2,6 @@ import logging
 import sqlite3
 import datetime
 import re
-import difflib
 import threading
 import asyncio
 from typing import Generator
@@ -1444,191 +1443,15 @@ def migrate_team_names_canonical(cursor: sqlite3.Cursor) -> None:
     except Exception as e:
         logger.warning(f"migrate_team_names_canonical notice: {e}")
 
-TEAM_ALIASES = {
-    # Расинг
-    "расинг": "Расинг", "расинг клаб": "Расинг", "расинг клуб": "Расинг", "расинга": "Расинг",
-    "racing": "Расинг", "racing club": "Расинг", "rcing": "Расинг",
-    
-    # Брага
-    "брага": "Брага", "брагу": "Брага", "браге": "Брага", "браги": "Брага",
-    "braga": "Брага", "sc braga": "Брага", "сп брага": "Брага", "сц брага": "Брага",
-    
-    # Бенфика
-    "бенфика": "Бенфика", "бенфику": "Бенфика", "бенфике": "Бенфика", "бенфики": "Бенфика", "бенфа": "Бенфика",
-    "benfica": "Бенфика", "sl benfica": "Бенфика", "бенфика лиссабон": "Бенфика",
-    
-    # АЕК
-    "аек": "АЕК", "аека": "АЕК", "аеку": "АЕК", "аек афины": "АЕК",
-    "aek": "АЕК", "aek athens": "АЕК",
-    
-    # Аякс
-    "аякс": "Аякс", "аякса": "Аякс", "аяксу": "Аякс", "аяксе": "Аякс",
-    "ajax": "Аякс", "afc ajax": "Аякс",
-    
-    # ПСВ
-    "псв": "ПСВ", "псв эйндховен": "ПСВ",
-    "psv": "ПСВ", "psv eindhoven": "ПСВ",
-    
-    # Фейеноорд
-    "фейеноорд": "Фейеноорд", "фейенорд": "Фейеноорд", "фейноорд": "Фейеноорд", "фейнорд": "Фейеноорд",
-    "фейе": "Фейеноорд", "фейеноорда": "Фейеноорд", "фейенорда": "Фейеноорд",
-    "feyenoord": "Фейеноорд", "feyenoor": "Фейеноорд", "feyenord": "Фейеноорд",
-    
-    # Будё Глимт
-    "будё глимт": "Будё Глимт", "буде глимт": "Будё Глимт", "будë глимт": "Будё Глимт",
-    "буде-глимт": "Будё Глимт", "будё-глимт": "Будё Глимт", "будеглимт": "Будё Глимт", "будёглимт": "Будё Глимт",
-    "буде": "Будё Глимт", "будё": "Будё Глимт", "будë": "Будё Глимт", "глимт": "Будё Глимт",
-    "bodo glimt": "Будё Глимт", "bodø glimt": "Будё Глимт", "bodo/glimt": "Будё Глимт", "bodø/glimt": "Будё Глимт",
-    "bodo": "Будё Глимт", "glimt": "Будё Глимт", "bodoe glimt": "Будё Глимт",
-    
-    # Порту
-    "порту": "Порту", "порто": "Порту", "порт": "Порту", "португал": "Порту",
-    "porto": "Порту", "portu": "Порту", "fc porto": "Порту", "фк порту": "Порту", "фк порто": "Порту",
-    
-    # Спортинг
-    "спортинг": "Спортинг", "спортнг": "Спортинг", "спортинга": "Спортинг", "спорт": "Спортинг",
-    "sporting": "Спортинг", "sporting cp": "Спортинг", "спортинг лиссабон": "Спортинг",
-    
-    # Копенгаген
-    "копенгаген": "Копенгаген", "копен": "Копенгаген", "копенгагн": "Копенгаген", "копенгагена": "Копенгаген",
-    "copenhagen": "Копенгаген", "kobenhavn": "Копенгаген", "fc kobenhavn": "Копенгаген", "фк копенгаген": "Копенгаген",
-    
-    # Рейнджерс
-    "рейнджерс": "Рейнджерс", "рейнджер": "Рейнджерс", "рейнджерсы": "Рейнджерс", "ренджерс": "Рейнджерс", "ренджер": "Рейнджерс",
-    "рейнджерса": "Рейнджерс", "rangers": "Рейнджерс", "glasgow rangers": "Рейнджерс", "рейнджерс глазго": "Рейнджерс",
-    
-    # Бока Хуниорс
-    "бока хуниорс": "Бока Хуниорс", "бока": "Бока Хуниорс", "боку": "Бока Хуниорс", "боке": "Бока Хуниорс", "хуниорс": "Бока Хуниорс",
-    "boca juniors": "Бока Хуниорс", "boca": "Бока Хуниорс", "boca jrs": "Бока Хуниорс",
-    
-    # Селтик
-    "селтик": "Селтик", "кельтик": "Селтик", "селтика": "Селтик", "селтику": "Селтик",
-    "celtic": "Селтик", "celtic fc": "Селтик",
-    
-    # Брюгге
-    "брюгге": "Брюгге", "брюге": "Брюгге", "брюгг": "Брюгге", "брюг": "Брюгге", "брюгге фк": "Брюгге",
-    "brugge": "Брюгге", "club brugge": "Брюгге", "клуб брюгге": "Брюгге",
-    
-    # Ривер Плейт
-    "ривер плейт": "Ривер Плейт", "ривер": "Ривер Плейт", "плейт": "Ривер Плейт", "ривера": "Ривер Плейт",
-    "river plate": "Ривер Плейт", "river": "Ривер Плейт",
-}
-
-def normalize_team_name(name: str | None) -> str:
-    """Normalize team name for fuzzy matching (handles ё/е, latin ë, hyphens, slashes, extra spaces)."""
-    if not name:
-        return ""
-    s = str(name).lower()
-    # Replace variants of 'ё', latin 'ë' (\u00eb), 'ø', 'ö'
-    s = s.replace("ё", "е").replace("\u00eb", "е").replace("ø", "o").replace("ö", "o")
-    # Replace punctuation and separators
-    s = re.sub(r"[\-_/\\.,]", " ", s)
-    # Collapse multiple spaces
-    s = re.sub(r"\s+", " ", s).strip()
-    return s
-
-
-def resolve_team_name(name: str | None) -> str:
-    """Intelligently resolve any user-entered team name, typo, alias, or transliteration to canonical KPL team name."""
-    if not name:
-        return ""
-    
-    raw = str(name).strip()
-    norm = normalize_team_name(raw)
-    if not norm:
-        return raw
-
-    # 1. Direct alias dictionary lookup
-    if norm in TEAM_ALIASES:
-        return TEAM_ALIASES[norm]
-
-    # 2. Check tokens / joined words
-    tokens = norm.split()
-    if len(tokens) > 1:
-        joined = "".join(tokens)
-        if joined in TEAM_ALIASES:
-            return TEAM_ALIASES[joined]
-
-    # 3. Check exact match against canonical KPL_TEAMS in config
-    import config
-    all_canon = getattr(config, "KPL_TEAMS", [])
-    for canon in all_canon:
-        c_norm = normalize_team_name(canon)
-        if norm == c_norm:
-            return canon
-
-    # 4. Prefix / Substring match against aliases
-    for alias, canon in TEAM_ALIASES.items():
-        a_norm = normalize_team_name(alias)
-        if len(norm) >= 3 and (norm == a_norm or (len(a_norm) >= 4 and (norm in a_norm or a_norm in norm))):
-            return canon
-
-    # 5. Fuzzy string similarity using difflib
-    best_match = None
-    best_score = 0.0
-
-    for alias, canon in TEAM_ALIASES.items():
-        score = difflib.SequenceMatcher(None, norm, normalize_team_name(alias)).ratio()
-        if score > best_score:
-            best_score = score
-            best_match = canon
-
-    for canon in all_canon:
-        score = difflib.SequenceMatcher(None, norm, normalize_team_name(canon)).ratio()
-        if score > best_score:
-            best_score = score
-            best_match = canon
-
-    if best_match and best_score >= 0.65:
-        return best_match
-
-    return raw
-
-
-def teams_match(team_a: str | None, team_b: str | None) -> bool:
-    """Check if two team names refer to the same team (smart fuzzy/normalized match)."""
-    if not team_a or not team_b:
-        return False
-
-    res_a = resolve_team_name(team_a)
-    res_b = resolve_team_name(team_b)
-    if res_a and res_b and res_a.lower() == res_b.lower():
-        return True
-
-    # Two distinct canonical clubs must never be conflated by fuzzy matching
-    # (e.g. "Атлетико" vs "Атлетик" score ~0.93 on plain string similarity).
-    try:
-        from config import CLUBS as _KPL_CLUBS
-        canon = {normalize_team_name(c) for c in (_KPL_CLUBS or []) if isinstance(c, str)}
-        a_c = normalize_team_name(team_a)
-        b_c = normalize_team_name(team_b)
-        if canon and a_c in canon and b_c in canon and a_c != b_c:
-            return False
-    except Exception:
-        pass
-
-    a_norm = normalize_team_name(team_a)
-    b_norm = normalize_team_name(team_b)
-    if not a_norm or not b_norm:
-        return False
-    if a_norm == b_norm or a_norm in b_norm or b_norm in a_norm:
-        return True
-
-    # Fuzzy ratio check (raised to 0.85 so similar-but-distinct clubs like
-    # "Атлетик"/"Атлетико" are not matched).
-    if difflib.SequenceMatcher(None, a_norm, b_norm).ratio() >= 0.85:
-        return True
-        
-    # Word-level match
-    a_words = [w for w in a_norm.split() if len(w) > 2]
-    b_words = [w for w in b_norm.split() if len(w) > 2]
-    if a_words and b_words:
-        if all(any(aw in bw or bw in aw for bw in b_words) for aw in a_words):
-            return True
-        if all(any(bw in aw or aw in bw for aw in a_words) for bw in b_words):
-            return True
-    return False
-
+# Резолв имени клуба переехал в club_registry.py (аудит P3-7): это чистый CPU без SQL.
+# Имена ниже реэкспортируются, поэтому database.resolve_team_name(...) и
+# from database import normalize_team_name продолжают работать без изменений.
+from club_registry import (  # noqa: F401  (re-export)
+    TEAM_ALIASES,
+    normalize_team_name,
+    resolve_team_name,
+    teams_match,
+)
 
 def get_team_owner(team_name: str) -> int | None:
     """Return the telegram_id of the user who owns the given team."""

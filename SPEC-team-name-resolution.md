@@ -90,7 +90,7 @@ python scripts/audit_team_resolution.py --emit-config
 ## Project Structure
 
 ```
-services/club_registry.py                    → НОВЫЙ. Нормализация, алиасы, реестр, резолв
+club_registry.py                    → НОВЫЙ. Нормализация, алиасы, реестр, резолв
 config.py                                    → ИЗМЕНЕН. + CLUB_REGISTRY (все ~80 клубов)
 database.py                                  → ИЗМЕНЕН. Тонкие делегаты, -~130 строк
 scripts/audit_team_resolution.py             → НОВЫЙ. Read-only аудит живой БД
@@ -120,7 +120,7 @@ tests/test_standings_name_collision.py       → НОВЫЙ. Интеграци�
 каждый возвращает результат **только если он однозначен**.
 
 ```python
-# services/club_registry.py
+# club_registry.py
 
 class ResolveMethod(str, Enum):
     EXACT = "exact"          # точное совпадение с каноном
@@ -280,7 +280,7 @@ pytest, файлы в `tests/`, по одному на область. `pytest.i
    (baseline фиксируется первым шагом реализации).
 7. `scripts/audit_team_resolution.py` на VPS: 0 коллизий, 0 недостижимых клубов,
    выход 0. Вывод до/после приложен к результату.
-8. Ни один файл вне `config.py`, `database.py`, `services/club_registry.py`, `scripts/`,
+8. Ни один файл вне `config.py`, `database.py`, `club_registry.py`, `scripts/`,
    `tests/` не изменён.
 
 ---

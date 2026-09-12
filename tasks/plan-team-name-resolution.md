@@ -14,7 +14,7 @@
 config.CLUB_REGISTRY  (данные, статический список)
         │
         ▼
-services/club_registry.py       ← НОВЫЙ; импортирует ТОЛЬКО config
+club_registry.py       ← НОВЫЙ; импортирует ТОЛЬКО config
    ├─ normalize_team_name()     ← переезжает из database.py
    ├─ TEAM_ALIASES              ← переезжает из database.py
    ├─ registry index            ← предпосчитанный normalized → canonical

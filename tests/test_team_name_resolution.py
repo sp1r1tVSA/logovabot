@@ -12,6 +12,7 @@
 """
 import unittest
 
+import club_registry
 import config
 import database
 from database import (
@@ -116,7 +117,7 @@ class TestAliasContractPreserved(unittest.TestCase):
 
 
 class TestNormalizationPreserved(unittest.TestCase):
-    """ЗЕЛЁНЫЕ. Нормализация переезжает в services/club_registry.py в T2 без изменений."""
+    """ЗЕЛЁНЫЕ. Нормализация переехала в club_registry.py в T2 без изменений."""
 
     def test_yo_and_latin_variants_collapse(self):
         self.assertEqual(normalize_team_name("Будё Глимт"), "буде глимт")
@@ -180,6 +181,62 @@ class TestResolverIsPureCpu(unittest.TestCase):
             database.get_connection = original
 
         self.assertEqual(calls, [], "резолв полез в БД — он вызывается из event loop")
+
+
+class TestClubRegistry(unittest.TestCase):
+    """ЗЕЛЁНЫЕ. Реестр: индекс, перезагрузка, отбраковка алиасов-теней."""
+
+    def tearDown(self):
+        club_registry.reload_registry()
+
+    def test_registry_falls_back_to_legacy_seed_while_empty(self):
+        # Пока config.CLUB_REGISTRY не заполнен (T8), реестр = KPL_TEAMS ∪ CLUBS,
+        # то есть поведение не хуже прежнего.
+        registry = club_registry.get_registry()
+        self.assertTrue(registry)
+        for team in config.KPL_TEAMS:
+            with self.subTest(team=team):
+                self.assertIn(team, registry)
+
+    def test_index_maps_normalized_name_to_canonical(self):
+        index = club_registry.get_registry_index()
+        self.assertEqual(index.get("буде глимт"), "Будё Глимт")
+        self.assertEqual(index.get("ривер плейт"), "Ривер Плейт")
+
+    def test_is_registered_ignores_case_and_separators(self):
+        self.assertTrue(club_registry.is_registered("будё-глимт"))
+        self.assertTrue(club_registry.is_registered("  РИВЕР ПЛЕЙТ  "))
+        self.assertFalse(club_registry.is_registered("Расинг Сантандер"))
+
+    def test_no_alias_currently_shadows_a_registered_club(self):
+        self.assertEqual(club_registry.get_dropped_aliases(), ())
+
+    def test_reload_picks_up_a_changed_club_list(self):
+        original = getattr(config, "CLUB_REGISTRY", [])
+        try:
+            config.CLUB_REGISTRY = ["Расинг Сантандер", "Расинг Ланс", "Шериф"]
+            count = club_registry.reload_registry()
+            self.assertEqual(count, 3)
+            self.assertTrue(club_registry.is_registered("Расинг Ланс"))
+            self.assertFalse(club_registry.is_registered("Брага"))
+        finally:
+            config.CLUB_REGISTRY = original
+
+    def test_duplicate_and_blank_entries_are_ignored(self):
+        original = getattr(config, "CLUB_REGISTRY", [])
+        try:
+            config.CLUB_REGISTRY = ["Брага", "брага", "  ", "", "Порту"]
+            self.assertEqual(club_registry.reload_registry(), 2)
+        finally:
+            config.CLUB_REGISTRY = original
+
+    def test_registry_module_does_not_import_database(self):
+        # Слоение: club_registry лежит ниже database.py. Импорт наверх вернул бы
+        # цикл, ради ухода от которого модуль и вынесен.
+        import inspect
+
+        source = inspect.getsource(club_registry)
+        self.assertNotIn("import database", source)
 
 
 if __name__ == "__main__":

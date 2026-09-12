@@ -26,7 +26,12 @@
 
 ## Шаг 2 — Переезд без смены поведения
 
-- [ ] **T2. `services/club_registry.py` + реэкспорт**
+- [x] **T2. `club_registry.py` + реэкспорт** — готово. Прогон не изменился: те же 12
+      красных из T1, 0 падений вне нового файла → реэкспорт держит ~50 вызовов.
+      **Отклонение от спеки:** модуль лежит в корне, а не в `services/`.
+      `services/__init__.py` тянет `services.animation_sender`, который импортирует
+      `database` — из `services/` получилось бы `database → services → database`.
+      Корень рядом с `config.py`/`constants.py` оставляет стрелки в одну сторону.
   - Acceptance:
     - `normalize_team_name` и `TEAM_ALIASES` переехали, логика не тронута.
     - `CLUB_REGISTRY` в `config.py` = `KPL_TEAMS ∪ CLUBS` (пока заглушка с TODO;
@@ -37,11 +42,11 @@
     - `database.py` реэкспортирует `normalize_team_name`, `TEAM_ALIASES`,
       `resolve_team_name`, `teams_match`.
   - Verify:
-    - `python -c "import database, services.club_registry"` — без ImportError (R4).
+    - `python -c "import database, club_registry"` — без ImportError (R4).
     - `python -c "import database as d; print(d.normalize_team_name('Будё-Глимт'))"` → `буде глимт`
     - `python -m pytest tests/ -q` зелёный. **Это чекпоинт реэкспорта** — если красный,
       сломаны 50 вызовов, дальше не идти.
-  - Files: `services/club_registry.py`, `config.py`, `database.py`
+  - Files: `club_registry.py`, `config.py`, `database.py`
 
 ## Шаг 3 — Собственно фикс
 
@@ -59,7 +64,7 @@
       резолвит отдельные слова подписи. Тест с подписью `"расинг сантандер vs порту"`
       обязан находить оба клуба. Не находит — добавляем алиас, порог не трогаем.
     - `python -m pytest tests/ -q` зелёный.
-  - Files: `services/club_registry.py`, `tests/test_team_name_resolution.py`
+  - Files: `club_registry.py`, `tests/test_team_name_resolution.py`
 
 - [ ] **T4. `teams_match` на полном реестре**
   - Acceptance:
@@ -69,7 +74,7 @@
     - `teams_match("Расинг", "Расинг Ланс") is False`;
       `teams_match("Атлетик", "Атлетико") is False` (не регрессировало).
   - Verify: `python -m pytest tests/test_team_name_resolution.py -v` + полный прогон.
-  - Files: `services/club_registry.py`, `tests/test_team_name_resolution.py`
+  - Files: `club_registry.py`, `tests/test_team_name_resolution.py`
 
 ## Шаг 4 — Производительность
 
@@ -81,7 +86,7 @@
       кэш не отдаёт устаревшее.
   - Verify: `python -m pytest tests/test_team_name_resolution.py -v`; грубый замер —
     80 имён × 1000 резолвов укладывается в секунду.
-  - Files: `services/club_registry.py`, `tests/test_team_name_resolution.py`
+  - Files: `club_registry.py`, `tests/test_team_name_resolution.py`
 
 ## Шаг 5 — Доказать исходную жалобу
 
