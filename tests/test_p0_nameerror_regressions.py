@@ -73,10 +73,13 @@ class TestAiChatContextAssembly(unittest.IsolatedAsyncioTestCase):
         context_data = gen.call_args.args[3]
 
         # The cup block is the section that was missing entirely.
-        self.assertIn("КУБОК КПЛ", context_data)
+        # Заголовок переехал на дивизионную формулировку: кубок общий на турнир,
+        # но в контекст попадают только серии клубов текущего дивизиона.
+        self.assertIn("КУБОК", context_data)
         # And its siblings must still be there — a stubbed-out fix would drop these.
         for section in ("ТУРНИРНАЯ ТАБЛИЦА", "ТОП БОМБАРДИРОВ", "ФОРМА КОМАНД",
-                        "РАСПИСАНИЕ ПРЕДСТОЯЩИХ МАТЧЕЙ", "ОФИЦИАЛЬНЫЙ РЕГЛАМЕНТ"):
+                        "РАСПИСАНИЕ ПРЕДСТОЯЩИХ МАТЧЕЙ", "ОФИЦИАЛЬНЫЙ РЕГЛАМЕНТ",
+                        "СТРУКТУРА ТУРНИРА"):
             self.assertIn(section, context_data, f"missing prompt section: {section}")
 
         update.message.reply_text.assert_awaited_once_with("Норм, погнали.")

@@ -4736,22 +4736,43 @@ def get_round_player_stats(round_number: int, division_id: int | None = None, se
         return [dict(row) for row in cursor.fetchall()]
 
 
-def get_recent_confirmed_matches(limit: int = 15) -> list[dict]:
-    """Retrieve recent confirmed matches across the league."""
+def get_recent_confirmed_matches(
+    limit: int = 15,
+    division_id: int | None = None,
+    season_id: int | None = None,
+) -> list[dict]:
+    """Retrieve recent confirmed matches, optionally scoped to one division and season.
+
+    With division_id=None the legacy cross-division behaviour is kept for callers
+    that intentionally want a league-wide feed.
+    """
     with transaction() as conn:
         cursor = conn.cursor()
-        cursor.execute("""
-            SELECT 
+        query = """
+            SELECT
                 m.id, m.round_number, m.player1_score, m.player2_score,
-                u1.team_name AS team1, u1.username AS user1,
-                u2.team_name AS team2, u2.username AS user2
+                m.division_id, m.season_id,
+                COALESCE(m.player1_team, u1.team_name) AS team1, u1.username AS user1,
+                COALESCE(m.player2_team, u2.team_name) AS team2, u2.username AS user2
             FROM matches m
             LEFT JOIN users u1 ON LOWER(m.player1_team) = LOWER(u1.team_name)
             LEFT JOIN users u2 ON LOWER(m.player2_team) = LOWER(u2.team_name)
             WHERE m.status = 'confirmed'
-            ORDER BY m.id DESC
-            LIMIT ?
-        """, (limit,))
+        """
+        params: list = []
+
+        if division_id is not None:
+            target_season_id = season_id
+            if target_season_id is None:
+                act = get_active_season()
+                target_season_id = act["id"] if act else 1
+            query += " AND m.division_id = ? AND (m.season_id = ? OR m.season_id IS NULL)"
+            params.extend([division_id, target_season_id])
+
+        query += " ORDER BY m.id DESC LIMIT ?"
+        params.append(limit)
+
+        cursor.execute(query, params)
         return [dict(row) for row in cursor.fetchall()]
 
 def get_all_squads() -> dict[str, list[str]]:
