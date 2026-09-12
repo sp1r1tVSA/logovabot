@@ -104,47 +104,44 @@ def normalize_team_name(name: str | None) -> str:
 
 
 def teams_match(team_a: str | None, team_b: str | None) -> bool:
-    """Check if two team names refer to the same team (smart fuzzy/normalized match)."""
+    """Check whether two names refer to the same club.
+
+    All the judgement lives in resolve_team_name_ex, on purpose. The previous
+    version added its own substring and word-level tiers on top of the resolver,
+    and those tiers carried the same defect: 'Расинг' is a substring of
+    'Расинг Ланс' and shares a word with it, so two different clubs matched.
+
+    Deciding "typo of the same club" versus "two similar clubs" is impossible
+    without knowing the club list, so the registry is the only authority here.
+    While the registry is incomplete this errs towards False: refusing to match
+    is recoverable, silently merging two coaches' clubs is not.
+    """
     if not team_a or not team_b:
         return False
 
-    res_a = resolve_team_name(team_a)
-    res_b = resolve_team_name(team_b)
-    if res_a and res_b and res_a.lower() == res_b.lower():
-        return True
+    res_a = resolve_team_name_ex(team_a)
+    res_b = resolve_team_name_ex(team_b)
 
-    # Two distinct canonical clubs must never be conflated by fuzzy matching
-    # (e.g. "Атлетико" vs "Атлетик" score ~0.93 on plain string similarity).
-    try:
-        from config import CLUBS as _KPL_CLUBS
-        canon = {normalize_team_name(c) for c in (_KPL_CLUBS or []) if isinstance(c, str)}
-        a_c = normalize_team_name(team_a)
-        b_c = normalize_team_name(team_b)
-        if canon and a_c in canon and b_c in canon and a_c != b_c:
-            return False
-    except Exception:
-        pass
+    # Both sides landed on a registered club: the canonical names settle it.
+    # This is also the guard against conflating distinct clubs — it now reads the
+    # full registry instead of the 16 legacy names, and it runs first.
+    if res_a.is_confident and res_b.is_confident:
+        return res_a.canonical == res_b.canonical
 
     a_norm = normalize_team_name(team_a)
     b_norm = normalize_team_name(team_b)
     if not a_norm or not b_norm:
         return False
-    if a_norm == b_norm or a_norm in b_norm or b_norm in a_norm:
+    if a_norm == b_norm:
         return True
 
-    # Fuzzy ratio check (raised to 0.85 so similar-but-distinct clubs like
-    # "Атлетик"/"Атлетико" are not matched).
-    if difflib.SequenceMatcher(None, a_norm, b_norm).ratio() >= 0.85:
+    # One side is a registered club, the other is not: they match only when the
+    # unresolved side spells that club's canonical name outright.
+    if res_a.is_confident and normalize_team_name(res_a.canonical) == b_norm:
         return True
-        
-    # Word-level match
-    a_words = [w for w in a_norm.split() if len(w) > 2]
-    b_words = [w for w in b_norm.split() if len(w) > 2]
-    if a_words and b_words:
-        if all(any(aw in bw or bw in aw for bw in b_words) for aw in a_words):
-            return True
-        if all(any(bw in aw or aw in bw for aw in a_words) for bw in b_words):
-            return True
+    if res_b.is_confident and normalize_team_name(res_b.canonical) == a_norm:
+        return True
+
     return False
 
 

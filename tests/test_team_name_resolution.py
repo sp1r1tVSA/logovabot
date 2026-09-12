@@ -93,6 +93,58 @@ class TestTeamsMatchDoesNotConflateClubs(unittest.TestCase):
         self.assertFalse(teams_match("Спортинг", "Спортинг Хихон"))
 
 
+class TestTeamsMatchContract(unittest.TestCase):
+    """ЗЕЛЁНЫЕ с T4. Что teams_match обязан склеивать, а что — нет."""
+
+    def tearDown(self):
+        # Порядок важен: config сбрасывается до перезагрузки, иначе реестр
+        # соберётся обратно из подставного списка.
+        config.CLUB_REGISTRY = []
+        club_registry.reload_registry()
+
+    def _with_registry(self, names):
+        config.CLUB_REGISTRY = list(names)
+        club_registry.reload_registry()
+
+    def test_similar_but_distinct_clubs_do_not_match(self):
+        # Кейс из комментария в старом коде: похожесть 0.93, но клубы разные.
+        self.assertFalse(teams_match("Атлетик", "Атлетико"))
+
+    def test_alias_and_typo_still_match_their_club(self):
+        for a, b in (
+            ("Порту", "фк порту"),
+            ("Фейеноорд", "Фейенорд"),
+            ("Будё Глимт", "bodo/glimt"),
+            ("Спортинг", "Спортинг Лиссабон"),
+        ):
+            with self.subTest(pair=(a, b)):
+                self.assertTrue(teams_match(a, b))
+                self.assertTrue(teams_match(b, a), "матч обязан быть симметричным")
+
+    def test_identical_names_match_even_outside_the_registry(self):
+        self.assertTrue(teams_match("Расинг Сантандер", "  расинг-сантандер  "))
+
+    def test_two_registered_clubs_never_match(self):
+        self._with_registry(["Расинг Сантандер", "Расинг Ланс"])
+        self.assertFalse(teams_match("Расинг Сантандер", "Расинг Ланс"))
+        self.assertTrue(teams_match("Расинг Ланс", "расинг ланс"))
+
+    def test_unregistered_typo_does_not_match_until_the_registry_knows_the_club(self):
+        # Сознательный компромисс до T8: отличить опечатку того же клуба от
+        # другого похожего клуба без списка клубов нельзя. Отказ склеить
+        # обратим, молча слитые клубы двух тренеров — нет.
+        self.assertFalse(club_registry.is_registered("Расинг Сантандер"))
+        self.assertFalse(teams_match("Расинг Сантандер", "Расинг Сантандр"))
+
+        self._with_registry(["Расинг Сантандер"])
+        self.assertTrue(teams_match("Расинг Сантандер", "Расинг Сантандр"))
+
+    def test_empty_input_never_matches(self):
+        for a, b in ((None, "Порту"), ("Порту", None), ("", ""), ("   ", "Порту")):
+            with self.subTest(pair=(a, b)):
+                self.assertFalse(teams_match(a, b))
+
+
 class TestAliasContractPreserved(unittest.TestCase):
     """ЗЕЛЁНЫЕ. Словарь OCR-опечаток и транслита — ронять его нельзя ни на одном шаге."""
 
@@ -237,11 +289,11 @@ class TestAmbiguityStopsResolution(unittest.TestCase):
     """ЗЕЛЁНЫЕ с T3. Спорный вход не должен «дорешаться» более слабым тиром."""
 
     def tearDown(self):
+        config.CLUB_REGISTRY = []
         club_registry.reload_registry()
 
     def _with_registry(self, names):
-        config.CLUB_REGISTRY = names
-        self.addCleanup(setattr, config, "CLUB_REGISTRY", [])
+        config.CLUB_REGISTRY = list(names)
         club_registry.reload_registry()
 
     def test_prefix_with_two_candidates_resolves_to_nothing(self):
