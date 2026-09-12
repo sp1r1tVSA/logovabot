@@ -44,7 +44,19 @@ Run the bot (needs a populated `.env`):
 python main.py
 ```
 
-There is no `pytest.ini` / `pyproject.toml` — pytest runs on defaults from the repo root.
+Run serially when debugging shared state:
+
+```bash
+python -m pytest tests/ -n0
+```
+
+`pytest.ini` is the only config (there is no `pyproject.toml` / `setup.cfg`). It sets
+`testpaths = tests` and `addopts = -q -n auto --dist loadfile`, so runs are parallel across
+cores by default, with each file pinned to one worker. Tests that share module or class
+state within a file therefore keep their order, but tests in *different* files run
+concurrently against the same `league.db` — give fixtures unique names (see the `uuid4`
+suffixes in `tests/test_chat_division_scope.py`) rather than assuming exclusive DB access.
+`markers` declares `slow`, excluded via `-m "not slow"`.
 
 ---
 
@@ -61,6 +73,7 @@ never prevents the bot itself from starting. Preserve that isolation.
 | `config.py` | All env parsing. Every setting must be read here, never via `os.getenv` at a call site |
 | `database.py` | ~8.7k lines: schema, migrations, and every repository function |
 | `constants.py` | Shared enums and literals |
+| `club_registry.py` | Canonical club names, aliases, and the tiered name resolver. Imports `config` only |
 | `handlers/` | Telegram entrypoints — `admin`, `cabinet`, `drafts`, `betting`, `chat`, `topic_management`, `text_commands`, `base` |
 | `services/ai/` | `ai_recognizer.py` (Gemini Vision OCR), `ai_chat.py` («Темшик» persona), `persona_base.py` |
 | `services/graphics/` | Pillow renderers: standings tables, club/player/FC cards, schedules, top-stats |
@@ -118,8 +131,46 @@ registration — call `topic_cache.reload_cache()` after mutating division topic
 **League play** runs through `rounds` / `rounds_v` and `matches`. **Cup play** uses
 `cup_series` (stage, series number, per-side win counts, winner, status).
 
-**Teams** are the 16 fixed clubs in `config.CLUBS` / `config.KPL_TEAMS`. Team-name
-resolution from OCR output goes through `resolve_team_name` and `detect_teams_from_players`.
+**Teams** live in `users.team_name`, one club per coach. Club names are globally unique —
+`idx_users_team_name_unique` enforces `UNIQUE(LOWER(TRIM(team_name)))` across all divisions,
+so a name identifies a club on its own and name-keyed lookups are safe. The roster is
+growing toward ~16 clubs per division across 5 divisions (~80 total).
+
+`config.CLUBS` / `config.KPL_TEAMS` hold only the 16 clubs of the pre-division КПЛ era —
+roughly one division's worth. Treat them as legacy seed data, **not** as the list of
+participants; query `users` scoped by `division_id` instead.
+
+Team-name resolution from OCR output goes through `resolve_team_name` and
+`detect_teams_from_players`, both backed by **`club_registry.py`** — a pure-CPU module at
+the repo root that imports `config` and nothing else. It deliberately sits *below*
+`database.py`, which re-exports `resolve_team_name`, `teams_match`, `normalize_team_name`
+and `TEAM_ALIASES`, so existing `database.…` call sites keep working. Never import
+`database` from it.
+
+Resolution walks EXACT → ALIAS → JOINED → PREFIX → FUZZY and stops at the first
+*unambiguous* tier. A tie at any tier ends the walk with no match instead of falling
+through to a weaker one. Fuzzy is guarded by `FUZZY_MIN_LEN = 5`,
+`FUZZY_THRESHOLD = 0.87` and `FUZZY_MARGIN = 0.07` (the gap to the runner-up). There is no
+substring tier: `Расинг` is both a club and a substring of `Расинг Ланс`, so that tier had
+no safe version. `resolve_team_name` returns its input unchanged when nothing resolves;
+`resolve_team_name_ex` returns `(canonical, method, confidence, candidates)` when the
+caller needs to know *how* confident the answer is. Results are memoised —
+`reload_registry()` is the only thing that invalidates them.
+
+⚠️ The canonical list is `config.CLUB_REGISTRY`, and it is **still an empty stub** falling
+back to `KPL_TEAMS ∪ CLUBS`. It cannot be bulk-filled yet: the live database was audited on
+2026-09-12 and its roster is empty — the five divisions exist, but the previous season was
+purged and no coach has registered a club since, so there are no names to harvest. The
+registry therefore fills in one name at a time, as coaches join. Two consequences while it
+is short: a club outside the list resolves to itself, which is safe — it is no longer coerced into a КПЛ name — but
+`teams_match` will not merge an OCR typo of such a club, because a typo cannot be told
+apart from a genuinely similar club without knowing the club list. Refusing to merge is
+recoverable; silently merging two coaches' clubs is not.
+
+**Adding a club to the tournament means adding its name to `CLUB_REGISTRY`.**
+`python scripts/audit_team_resolution.py` reports registry↔`users.team_name` drift, name
+collisions and clubs that sit too close to the fuzzy threshold; it is read-only (the
+connection is closed by a SQLite authorizer) and `--emit-config` prints a ready block.
 
 **Discipline:** unplayed matches accrue debts, tracked from `DEBT_TRACKING_START_DATETIME`.
 Three job-queue tasks drive it — deadline reminders and the debt lifecycle tracker every

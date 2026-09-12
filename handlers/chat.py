@@ -6,10 +6,65 @@ from telegram.constants import ChatAction
 from telegram.ext import ContextTypes
 import database
 from services.ai import ai_chat
+from services.topic_cache import topic_cache
 from handlers.text_commands import handle_temshik_command
 
 
 logger = logging.getLogger(__name__)
+
+
+async def _none():
+    """Awaitable placeholder so asyncio.gather slots stay positional when a query is skipped."""
+    return None
+
+
+async def _empty_list():
+    """Awaitable placeholder for skipped list-returning queries."""
+    return []
+
+
+async def _empty_dict():
+    """Awaitable placeholder for skipped dict-returning queries."""
+    return {}
+
+
+async def _resolve_division_id(update: Update, user_data) -> int | None:
+    """
+    Определить дивизион, в контексте которого говорит пользователь.
+
+    Приоритет: топик дивизиона → группа дивизиона → дивизион самого игрока.
+    В личке первые два шага не срабатывают, остаётся привязка из users.division_id.
+    Возвращает None, если игрок никуда не приписан — тогда Темшик честно говорит,
+    что турнирных данных не видит, вместо выдачи каши из чужих дивизионов.
+    """
+    chat = update.effective_chat
+    msg = update.effective_message
+
+    if chat and chat.type in ("group", "supergroup"):
+        thread_id = getattr(msg, "message_thread_id", None) if msg else None
+        if thread_id:
+            try:
+                binding = topic_cache.get_by_topic(chat.id, thread_id)
+                if binding and binding.get("division_id"):
+                    return binding["division_id"]
+            except Exception:
+                logger.warning("AI chat: topic_cache lookup failed", exc_info=True)
+
+        try:
+            div = await asyncio.to_thread(database.get_division_by_group, chat.id)
+            if div and div.get("id"):
+                return div["id"]
+        except Exception:
+            logger.warning("AI chat: division-by-group lookup failed", exc_info=True)
+
+    try:
+        if user_data is not None and user_data["division_id"]:
+            return user_data["division_id"]
+    except (KeyError, IndexError):
+        pass
+
+    return None
+
 
 async def handle_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -69,48 +124,95 @@ async def handle_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.warning(f"Failed to send typing action: {e}")
 
-    # 1. Gather Context concurrently
+    # 1. Resolve the scope first: everything below is strictly one division + one season.
+    user_data, active_season, chat_history, chat_mode = await asyncio.gather(
+        asyncio.to_thread(database.get_user, user_id),
+        asyncio.to_thread(database.get_active_season),
+        asyncio.to_thread(database.get_chat_history, user_id, 10),
+        asyncio.to_thread(database.get_config, "chat_mode")
+    )
+
+    season_id = active_season["id"] if active_season else None
+    season_name = (active_season["name"] if active_season else None) or "текущий сезон"
+    division_id = await _resolve_division_id(update, user_data)
+
+    # 2. Gather division-scoped context concurrently
     (
-        user_data,
+        division,
+        divisions,
         standings,
         top_scorers,
         top_assists,
         recent_matches,
         all_squads,
-        all_rounds,
+        division_rounds,
         recent_form_map,
         pending_matches,
         cup_series,
-        all_players,
-        chat_history,
-        chat_mode
+        division_players,
+        season_rules
     ) = await asyncio.gather(
-        asyncio.to_thread(database.get_user, user_id),
-        asyncio.to_thread(database.get_standings),
-        asyncio.to_thread(database.get_top_scorers, limit=15),
-        asyncio.to_thread(database.get_top_assists, limit=15),
-        asyncio.to_thread(database.get_recent_confirmed_matches, limit=10),
-        asyncio.to_thread(database.get_all_squads),
-        asyncio.to_thread(database.get_all_rounds),
-        asyncio.to_thread(database.get_teams_recent_form, 5),
-        asyncio.to_thread(database.get_open_pending_matches),
-        asyncio.to_thread(database.get_all_cup_series),
-        asyncio.to_thread(database.list_users),
-        asyncio.to_thread(database.get_chat_history, user_id, 10),
-        asyncio.to_thread(database.get_config, "chat_mode")
+        asyncio.to_thread(database.get_division, division_id) if division_id else _none(),
+        asyncio.to_thread(database.get_divisions, True),
+        # Без дивизиона эти запросы ушли бы в legacy-ветку и смешали все дивизионы разом,
+        # поэтому при неопределённом скоупе не отдаём турнирных данных вообще.
+        asyncio.to_thread(database.get_standings, division_id, season_id) if division_id else _empty_list(),
+        asyncio.to_thread(database.get_top_scorers, 15, division_id, season_id) if division_id else _empty_list(),
+        asyncio.to_thread(database.get_top_assists, 15, division_id, season_id) if division_id else _empty_list(),
+        asyncio.to_thread(database.get_recent_confirmed_matches, 10, division_id, season_id) if division_id else _empty_list(),
+        asyncio.to_thread(database.get_all_squads) if division_id else _empty_dict(),
+        asyncio.to_thread(database.get_division_rounds, division_id) if division_id else _empty_list(),
+        asyncio.to_thread(database.get_teams_recent_form, 5, division_id, season_id) if division_id else _empty_dict(),
+        asyncio.to_thread(database.get_open_pending_matches) if division_id else _empty_list(),
+        asyncio.to_thread(database.get_all_cup_series) if division_id else _empty_list(),
+        asyncio.to_thread(database.get_division_users, division_id) if division_id else _empty_list(),
+        asyncio.to_thread(database.get_season_rules, season_id, division_id) if (season_id and division_id) else _none(),
     )
+
+    division_name = (division or {}).get("name") if division else None
+    if not division_name and division_id:
+        division_name = f"Дивизион {division_id}"
+
+    # Teams of this division — used to filter globally-stored data (squads, cup bracket).
+    division_team_names = {
+        (st.get("team_name") or "").lower() for st in standings if st.get("team_name")
+    }
+    for p in division_players:
+        if p.get("team_name"):
+            division_team_names.add(p["team_name"].lower())
 
     user_team = user_data["team_name"] if user_data else "Не зарегистрирован"
     username = user_data["username"] if user_data else update.effective_user.username or str(user_id)
     user_warn_count = user_data["warn_count"] if user_data and user_data["warn_count"] else 0
     
-    # Standings
-    standings_text = "🏆 ТУРНИРНАЯ ТАБЛИЦА:\n"
-    for i, st in enumerate(standings, 1):
-        standings_text += f"{i}. {st['team_name']} (@{st['username'] or '—'}) — Очки: {st['points']} (И:{st['played']} В:{st['wins']} Н:{st['draws']} П:{st['losses']}, Г:{st['goals_scored']}-{st['goals_conceded']})\n"
+    # Promotion / relegation zones: division 1 has nothing above it, the last has nothing below.
+    sorted_divs = sorted(divisions or [], key=lambda d: (d.get("sort_order") or 0, d.get("id") or 0))
+    div_index = next((i for i, d in enumerate(sorted_divs) if d.get("id") == division_id), None)
+    has_division_above = div_index is not None and div_index > 0
+    has_division_below = div_index is not None and div_index < len(sorted_divs) - 1
+    prom_slots = (season_rules or {}).get("promotion_slots", 3) if has_division_above else 0
+    rel_slots = (season_rules or {}).get("relegation_slots", 3) if has_division_below else 0
+
+    # Standings (division-scoped) with zone markers
+    standings_text = f"🏆 ТУРНИРНАЯ ТАБЛИЦА — {division_name or 'дивизион не определён'} ({season_name}):\n"
+    if standings:
+        total_teams = len(standings)
+        for i, st in enumerate(standings, 1):
+            zone = ""
+            if prom_slots and i <= prom_slots:
+                zone = " 🚀[зона повышения]"
+            elif rel_slots and i > total_teams - rel_slots:
+                zone = " 🔻[зона вылета]"
+            standings_text += (
+                f"{i}. {st['team_name']} (@{st['username'] or '—'}) — Очки: {st['points']} "
+                f"(И:{st['played']} В:{st['wins']} Н:{st['draws']} П:{st['losses']}, "
+                f"Г:{st['goals_scored']}-{st['goals_conceded']}){zone}\n"
+            )
+    else:
+        standings_text += "Таблица пока пустая — сыгранных матчей в этом дивизионе нет.\n"
 
     # Top Scorers
-    scorers_text = "⚽ ТОП БОМБАРДИРОВ:\n"
+    scorers_text = "⚽ ТОП БОМБАРДИРОВ ДИВИЗИОНА:\n"
     if top_scorers:
         for i, sc in enumerate(top_scorers, 1):
             scorers_text += f"{i}. {sc['player_name']} ({sc['team_name']}) — {sc['total_goals']} голов\n"
@@ -118,7 +220,7 @@ async def handle_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         scorers_text += "Пока нет зарегистрированных голов.\n"
 
     # Top Assists
-    assists_text = "🎯 ТОП АССИСТЕНТОВ:\n"
+    assists_text = "🎯 ТОП АССИСТЕНТОВ ДИВИЗИОНА:\n"
     if top_assists:
         for i, asst in enumerate(top_assists, 1):
             assists_text += f"{i}. {asst['player_name']} ({asst['team_name']}) — {asst['total_assists']} ассистов\n"
@@ -126,36 +228,41 @@ async def handle_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         assists_text += "Пока нет зарегистрированных ассистов.\n"
 
     # Recent Matches
-    matches_text = "📊 ПОСЛЕДНИЕ СЫГРАННЫЕ МАТЧИ:\n"
+    matches_text = "📊 ПОСЛЕДНИЕ СЫГРАННЫЕ МАТЧИ ДИВИЗИОНА:\n"
     if recent_matches:
         for m in recent_matches:
             matches_text += f"Тур {m['round_number']}: {m['team1']} {m['player1_score']} : {m['player2_score']} {m['team2']}\n"
     else:
         matches_text += "Сыгранных матчей пока нет.\n"
 
-    # Squads Summary
-    squads_text = "👥 СОСТАВЫ КЛУБОВ (ИГРОКИ ИХ КЛУБОВ):\n"
-    if all_squads:
-        for team, players in all_squads.items():
+    # Squads — stored globally by team name, so keep only clubs of this division.
+    squads_text = "👥 СОСТАВЫ КЛУБОВ ДИВИЗИОНА:\n"
+    division_squads = {
+        team: players for team, players in (all_squads or {}).items()
+        if not division_team_names or (team or "").lower() in division_team_names
+    }
+    if division_squads:
+        for team, players in division_squads.items():
             squads_text += f"• {team}: {', '.join(players)}\n"
     else:
         squads_text += "Составы пока не занесены.\n"
 
-    # Tournament rounds info
-    all_rounds_list = all_rounds or [30]
-    total_rounds = max(all_rounds_list) if all_rounds_list else 30
-    
-    # Team Recent Form
+    # Rounds played in this division
+    rounds_list = division_rounds or []
+    total_rounds = max(rounds_list) if rounds_list else 0
+
+    # Team Recent Form (get_teams_recent_form keys by lowercased team name)
     form_text = "📈 ФОРМА КОМАНД (последние игры: W=Победа, D=Ничья, L=Поражение):\n"
     for st in standings:
-        uid = st.get("telegram_id")
-        form_list = recent_form_map.get(uid, [])
+        form_list = recent_form_map.get((st.get("team_name") or "").lower(), [])
         form_str = "-".join(form_list) if form_list else "нет игр"
         form_text += f"• {st['team_name']}: {form_str}\n"
 
-    # Full upcoming schedule (all pending/unplayed matches)
+    # Upcoming schedule — get_open_pending_matches is league-wide, so scope it here.
     schedule_by_round: dict[int, list[str]] = {}
     for pm in pending_matches:
+        if division_id is not None and pm.get("division_id") != division_id:
+            continue
         rnd = pm.get("round_number", "?")
         team1 = pm.get("player1_team", "?")
         team2 = pm.get("player2_team", "?")
@@ -167,7 +274,7 @@ async def handle_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             line += f" [дедлайн: {deadline}]"
         schedule_by_round.setdefault(rnd, []).append(line)
 
-    schedule_text = "📅 РАСПИСАНИЕ ПРЕДСТОЯЩИХ МАТЧЕЙ (ещё не сыгранные):\n"
+    schedule_text = "📅 РАСПИСАНИЕ ПРЕДСТОЯЩИХ МАТЧЕЙ ДИВИЗИОНА (ещё не сыгранные):\n"
     if schedule_by_round:
         for rnd in sorted(schedule_by_round.keys()):
             schedule_text += f"\nТур {rnd}:\n"
@@ -177,10 +284,16 @@ async def handle_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         schedule_text += "Все матчи уже сыграны или расписание ещё не загружено.\n"
 
 
-    # History of past seasons
+    # History of past seasons — archive from the pre-division era.
+    # Единая лига КПЛ на 16 клубов больше не существует: турнир разбит на дивизионы.
+    # Эти итоги годятся для подколов и историй про старожилов, но НЕ описывают текущий сезон.
     past_seasons_text = (
-        "📜 ИСТОРИЯ ПРОШЛЫХ СЕЗОНОВ ЛИГИ (КПЛ):\n\n"
-        "=== ИТОГИ ПРОШЛОГО СЕЗОНА (СЕЗОН 2) ===\n"
+        "📜 АРХИВ: ИСТОРИЯ ЕДИНОЙ ЛИГИ КПЛ (ЭПОХА ДО ДИВИЗИОНОВ).\n"
+        "⚠️ ВАЖНО: это ЗАКРЫТАЯ глава. Тогда была ОДНА общая лига на 16 клубов без дивизионов.\n"
+        "Сейчас турнир устроен иначе — дивизионы с повышениями и вылетами, состав участников шире.\n"
+        "Используй этот блок ТОЛЬКО как историю и материал для подколов старожилов.\n"
+        "НИКОГДА не выдавай эти таблицы и титулы за текущее положение дел.\n\n"
+        "=== ИТОГИ ПОСЛЕДНЕГО СЕЗОНА ЕДИНОЙ ЛИГИ ===\n"
         "• Чемпион: Расинг (@Vazya4mo666) — 74 очка, 108 голов (забрал золото и +7 тренировок). Двукратный чемпион!\n"
         "• 2 место: Брага (@Saharokk8830) — 67 очков (серебро).\n"
         "• 3 место: АЕК (@Snikers2121) — 62 очка (бронза).\n"
@@ -191,8 +304,8 @@ async def handle_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• 8-9 места: Копенгаген (@crcsss) и Бока Хуниорс (@k1nkyua) — по 45 очков.\n"
         "• 10-13 места: Ривер Плейт (31), Селтик (28), Спортинг (27), Будё-Глимт (25).\n"
         "• 14-16 места (аутсайдеры): ПСВ (22), Рейнджерс (16), Брюгге (@malenkihyi) (14).\n"
-        "• Герои Сезона 2: Igor Paixao (Бенфика, 50 голов), Gittens (44 гола). Ассистенты: Bardghji, Ndoye, Rafa (по 24).\n\n"
-        "=== ИТОГИ ПОЗАПРОШЛОГО СЕЗОНА (СЕЗОН 1) ===\n"
+        "• Герои того сезона: Igor Paixao (Бенфика, 50 голов), Gittens (44 гола). Ассистенты: Bardghji, Ndoye, Rafa (по 24).\n\n"
+        "=== ИТОГИ ПРЕДЫДУЩЕГО СЕЗОНА ЕДИНОЙ ЛИГИ ===\n"
         "• Чемпион: Расинг (@Vazya4mo666) — вырвал золото у Браги в 1 очко!\n"
         "• 2 место: Брага (@Saharokk8830) — 71 очко.\n"
         "• 3 место: АЕК (@Snikers2121) — 63 очка. Победитель Кубка КПЛ.\n"
@@ -200,7 +313,7 @@ async def handle_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• 5-6 места: Копенгаген (50) и ПСВ (50).\n"
         "• Победитель Лиги Европы: Аякс (@LachesisQQQ).\n"
         "• 15-16 места: Рейнджерс и Брюгге.\n"
-        "• Герои Сезона 1: Pineda (АЕК, 44 гола), Perisic (21 ассист).\n"
+        "• Герои того сезона: Pineda (АЕК, 44 гола), Perisic (21 ассист).\n"
     )
 
     # Official League Rules & Info
@@ -221,45 +334,94 @@ async def handle_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• Награды: В конце сезона вручается премия 'Золотой Мяч'. Красивые голы отправлять @antonv2801.\n"
     )
 
-    # Cup bracket state (series are stored newest-stage-last)
-    cup_info_text = "🏆 КУБОК КПЛ:\n"
-    if cup_series:
-        for cs in cup_series:
-            t1, t2 = cs.get("team1_name", "?"), cs.get("team2_name", "?")
-            w1, w2 = cs.get("team1_wins", 0) or 0, cs.get("team2_wins", 0) or 0
-            stage = cs.get("stage") or "?"
-            winner = cs.get("winner_name")
-            line = f"• [{stage}] {t1} {w1}:{w2} {t2}"
-            if winner:
-                line += f" — прошёл дальше: {winner}"
-            elif (cs.get("status") or "") == "active":
-                line += " — серия ещё идёт"
-            cup_info_text += line + "\n"
-    else:
-        cup_info_text += "Кубок ещё не стартовал или сетка не сформирована.\n"
+    # Cup bracket — единая сетка на весь турнир, не имеет division_id.
+    # Оставляем только серии, где участвует клуб из этого дивизиона.
+    cup_info_text = "🏆 КУБОК (общий на весь турнир, сетка Best-of-3 — серии клубов ЭТОГО дивизиона):\n"
+    cup_lines = []
+    for cs in cup_series or []:
+        t1, t2 = cs.get("team1_name", "?"), cs.get("team2_name", "?")
+        if division_team_names and not (
+            (t1 or "").lower() in division_team_names or (t2 or "").lower() in division_team_names
+        ):
+            continue
+        w1, w2 = cs.get("team1_wins", 0) or 0, cs.get("team2_wins", 0) or 0
+        stage = cs.get("stage") or "?"
+        winner = cs.get("winner_name")
+        line = f"• [{stage}] {t1} {w1}:{w2} {t2}"
+        if winner:
+            line += f" — прошёл дальше: {winner}"
+        elif (cs.get("status") or "") == "active":
+            line += " — серия ещё идёт"
+        cup_lines.append(line)
 
-    # Opponents list: club -> coach username (from registered users)
-    opponents_text = ""
-    if all_players:
-        for p in all_players:
-            team = p["team_name"]
-            uname = p["username"]
-            if team and uname:
-                opponents_text += f"• {team} — @{uname}\n"
-        if not opponents_text:
-            opponents_text = "Информация о тренерах ещё не занесена.\n"
+    if cup_lines:
+        cup_info_text += "\n".join(cup_lines) + "\n"
     else:
-        opponents_text = "Информация о тренерах ещё не занесена.\n"
+        cup_info_text += "Клубы этого дивизиона в кубковой сетке сейчас не представлены.\n"
+
+    # Opponents list: club -> coach username (только тренеры этого дивизиона)
+    opponents_text = ""
+    for p in division_players or []:
+        team = p.get("team_name")
+        uname = p.get("username")
+        if team and uname:
+            opponents_text += f"• {team} — @{uname}\n"
+    if not opponents_text:
+        opponents_text = "Информация о тренерах дивизиона ещё не занесена.\n"
+
+    # Tournament structure — то, что модель обязана понимать про устройство турнира.
+    if division_id:
+        structure_lines = [
+            f"• Турнир разбит на ДИВИЗИОНЫ (всего активных: {len(sorted_divs) or '—'}). Каждый дивизион — отдельная лига со своей таблицей, своими турами и своими дедлайнами.",
+            f"• Ты сейчас работаешь СТРОГО в контексте: {division_name}, {season_name}.",
+            f"• Клубов в этом дивизионе: {len(standings)}. Это полный список участников — "
+            f"кого нет в таблице ниже, того нет и в дивизионе.",
+            f"• Сыграно/заведено туров в этом дивизионе: {total_rounds if total_rounds else 'туры ещё не заведены'}.",
+        ]
+        if prom_slots:
+            structure_lines.append(f"• Повышение: верхние {prom_slots} мест уходят дивизионом ВЫШЕ. 🚀")
+        else:
+            structure_lines.append("• Это ВЕРХНИЙ дивизион — выше подниматься некуда, тут играют за титул.")
+        if rel_slots:
+            structure_lines.append(f"• Вылет: нижние {rel_slots} мест падают дивизионом НИЖЕ. 🔻")
+        else:
+            structure_lines.append("• Это НИЖНИЙ дивизион — ниже падать некуда.")
+        structure_lines.append(
+            "• Данные других дивизионов тебе НЕ переданы. Если спрашивают про чужой дивизион, "
+            "про сквозную таблицу всей лиги или про чемпиона всего турнира — честно скажи, "
+            "что видишь только свой дивизион, и не выдумывай цифры."
+        )
+        structure_text = "🗂 СТРУКТУРА ТУРНИРА:\n" + "\n".join(structure_lines) + "\n"
+    else:
+        structure_text = (
+            "🗂 СТРУКТУРА ТУРНИРА:\n"
+            "• Турнир разбит на дивизионы — каждый со своей таблицей, турами и дедлайнами.\n"
+            "• ⚠️ ЭТОТ собеседник НЕ приписан ни к одному дивизиону, поэтому турнирных данных у тебя НЕТ.\n"
+            "• Не выдумывай таблицу, места, очки и расписание. Скажи, что он не в дивизионе, "
+            "и отправь к админу за распределением. Болтать на общие темы при этом можно.\n"
+        )
+
+    user_div_note = ""
+    if division_id and user_data is not None:
+        try:
+            if user_data["division_id"] and user_data["division_id"] != division_id:
+                user_div_note = (
+                    f" ⚠️ Сам он приписан к другому дивизиону (#{user_data['division_id']}), "
+                    f"а спрашивает в {division_name} — отвечай по данным {division_name}."
+                )
+        except (KeyError, IndexError):
+            pass
 
     context_data = (
         f"Пользователь, который с тобой говорит: {username} (тренер команды '{user_team}').\n"
+        f"Его дивизион в этом разговоре: {division_name or 'не определён'}.{user_div_note}\n"
         f"СНИКИ ЛИ ЭТО? {'ДА! Это сам @Snikers2121 (sniki) — великий! Относись к нему максимально уважительно и по-братски, защищай его, называй великим.' if (username or '').lower() == 'snikers2121' else 'НЕТ, это не сники — это обычный собеседник.'}\n"
         f"АДМИН ЛИ ЛИГИ? {'ДА! Это админ @sp1r1tVSA — его не троллить, относись уважительно, по-дружески.' if (username or '').lower() == 'sp1r1tvsa' else 'НЕТ, это не админ лиги.'}\n"
         f"Предупреждения (варны) у этого пользователя: {user_warn_count}/4."
-        f"{' ⚠️ ВНИМАНИЕ: у игрока 3/4 варна! Следующий варн (например, ещё один долг по матчу) приведёт к автоматическому лишению клуба и кику из группы!' if user_warn_count == 3 else ''}\n"
-        f"Всего туров в турнире: {total_rounds}.\n\n"
+        f"{' ⚠️ ВНИМАНИЕ: у игрока 3/4 варна! Следующий варн (например, ещё один долг по матчу) приведёт к автоматическому лишению клуба и кику из группы!' if user_warn_count == 3 else ''}\n\n"
+        f"{structure_text}\n"
         f"ВЛАДЕЛЕЦ ТУРНИРА: @antonv2801 — он хозяин и главный по правилам, но троллить и подкалывать его можно как любого другого.\n"
-        f"СОПЕРНИКИ ПО ЛИГЕ (клуб — тренер):\n{opponents_text}\n\n"
+        f"СОПЕРНИКИ ПО ДИВИЗИОНУ (клуб — тренер):\n{opponents_text}\n\n"
         f"{standings_text}\n"
         f"{form_text}\n"
         f"{schedule_text}\n"

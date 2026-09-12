@@ -41,7 +41,7 @@ This repository contains **Logovobot** (Логово Фифарей / ИИ «Т�
 - Always execute SQLite operations inside `with transaction() as conn:` blocks.
 - Enable WAL mode (`PRAGMA journal_mode=WAL;`).
 - Never perform string concatenation in SQL queries — always use `?` placeholders.
-- When matching team names, use `resolve_team_name()` and `normalize_team_name()` to handle aliases, typos, and transliteration.
+- When matching team names, use `resolve_team_name()` / `teams_match()` / `normalize_team_name()` — they live in `club_registry.py` and are re-exported from `database.py`. The canonical list is `config.CLUB_REGISTRY`; a new club must be added there, otherwise it resolves only to itself. Resolution stops at the first unambiguous tier, so an ambiguous name yields *no* match rather than a guess — call `resolve_team_name_ex()` when the caller needs to know whether the answer was confident.
 
 ### 2. Vision OCR & Drafts Pipeline (`ai_recognizer.py` + `handlers/drafts.py`)
 - **No Squad Hints in Gemini Prompt**: Gemini Vision must perform pure optical text extraction from screenshots. Do not pass DB squads into the AI prompt to prevent team hallucination.

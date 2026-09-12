@@ -2,7 +2,6 @@ import logging
 import sqlite3
 import datetime
 import re
-import difflib
 import threading
 import asyncio
 from typing import Generator
@@ -1444,191 +1443,58 @@ def migrate_team_names_canonical(cursor: sqlite3.Cursor) -> None:
     except Exception as e:
         logger.warning(f"migrate_team_names_canonical notice: {e}")
 
-TEAM_ALIASES = {
-    # Расинг
-    "расинг": "Расинг", "расинг клаб": "Расинг", "расинг клуб": "Расинг", "расинга": "Расинг",
-    "racing": "Расинг", "racing club": "Расинг", "rcing": "Расинг",
-    
-    # Брага
-    "брага": "Брага", "брагу": "Брага", "браге": "Брага", "браги": "Брага",
-    "braga": "Брага", "sc braga": "Брага", "сп брага": "Брага", "сц брага": "Брага",
-    
-    # Бенфика
-    "бенфика": "Бенфика", "бенфику": "Бенфика", "бенфике": "Бенфика", "бенфики": "Бенфика", "бенфа": "Бенфика",
-    "benfica": "Бенфика", "sl benfica": "Бенфика", "бенфика лиссабон": "Бенфика",
-    
-    # АЕК
-    "аек": "АЕК", "аека": "АЕК", "аеку": "АЕК", "аек афины": "АЕК",
-    "aek": "АЕК", "aek athens": "АЕК",
-    
-    # Аякс
-    "аякс": "Аякс", "аякса": "Аякс", "аяксу": "Аякс", "аяксе": "Аякс",
-    "ajax": "Аякс", "afc ajax": "Аякс",
-    
-    # ПСВ
-    "псв": "ПСВ", "псв эйндховен": "ПСВ",
-    "psv": "ПСВ", "psv eindhoven": "ПСВ",
-    
-    # Фейеноорд
-    "фейеноорд": "Фейеноорд", "фейенорд": "Фейеноорд", "фейноорд": "Фейеноорд", "фейнорд": "Фейеноорд",
-    "фейе": "Фейеноорд", "фейеноорда": "Фейеноорд", "фейенорда": "Фейеноорд",
-    "feyenoord": "Фейеноорд", "feyenoor": "Фейеноорд", "feyenord": "Фейеноорд",
-    
-    # Будё Глимт
-    "будё глимт": "Будё Глимт", "буде глимт": "Будё Глимт", "будë глимт": "Будё Глимт",
-    "буде-глимт": "Будё Глимт", "будё-глимт": "Будё Глимт", "будеглимт": "Будё Глимт", "будёглимт": "Будё Глимт",
-    "буде": "Будё Глимт", "будё": "Будё Глимт", "будë": "Будё Глимт", "глимт": "Будё Глимт",
-    "bodo glimt": "Будё Глимт", "bodø glimt": "Будё Глимт", "bodo/glimt": "Будё Глимт", "bodø/glimt": "Будё Глимт",
-    "bodo": "Будё Глимт", "glimt": "Будё Глимт", "bodoe glimt": "Будё Глимт",
-    
-    # Порту
-    "порту": "Порту", "порто": "Порту", "порт": "Порту", "португал": "Порту",
-    "porto": "Порту", "portu": "Порту", "fc porto": "Порту", "фк порту": "Порту", "фк порто": "Порту",
-    
-    # Спортинг
-    "спортинг": "Спортинг", "спортнг": "Спортинг", "спортинга": "Спортинг", "спорт": "Спортинг",
-    "sporting": "Спортинг", "sporting cp": "Спортинг", "спортинг лиссабон": "Спортинг",
-    
-    # Копенгаген
-    "копенгаген": "Копенгаген", "копен": "Копенгаген", "копенгагн": "Копенгаген", "копенгагена": "Копенгаген",
-    "copenhagen": "Копенгаген", "kobenhavn": "Копенгаген", "fc kobenhavn": "Копенгаген", "фк копенгаген": "Копенгаген",
-    
-    # Рейнджерс
-    "рейнджерс": "Рейнджерс", "рейнджер": "Рейнджерс", "рейнджерсы": "Рейнджерс", "ренджерс": "Рейнджерс", "ренджер": "Рейнджерс",
-    "рейнджерса": "Рейнджерс", "rangers": "Рейнджерс", "glasgow rangers": "Рейнджерс", "рейнджерс глазго": "Рейнджерс",
-    
-    # Бока Хуниорс
-    "бока хуниорс": "Бока Хуниорс", "бока": "Бока Хуниорс", "боку": "Бока Хуниорс", "боке": "Бока Хуниорс", "хуниорс": "Бока Хуниорс",
-    "boca juniors": "Бока Хуниорс", "boca": "Бока Хуниорс", "boca jrs": "Бока Хуниорс",
-    
-    # Селтик
-    "селтик": "Селтик", "кельтик": "Селтик", "селтика": "Селтик", "селтику": "Селтик",
-    "celtic": "Селтик", "celtic fc": "Селтик",
-    
-    # Брюгге
-    "брюгге": "Брюгге", "брюге": "Брюгге", "брюгг": "Брюгге", "брюг": "Брюгге", "брюгге фк": "Брюгге",
-    "brugge": "Брюгге", "club brugge": "Брюгге", "клуб брюгге": "Брюгге",
-    
-    # Ривер Плейт
-    "ривер плейт": "Ривер Плейт", "ривер": "Ривер Плейт", "плейт": "Ривер Плейт", "ривера": "Ривер Плейт",
-    "river plate": "Ривер Плейт", "river": "Ривер Плейт",
-}
+# Резолв имени клуба переехал в club_registry.py (аудит P3-7): это чистый CPU без SQL.
+# Имена ниже реэкспортируются, поэтому database.resolve_team_name(...) и
+# from database import normalize_team_name продолжают работать без изменений.
+import club_registry
+from club_registry import (  # noqa: F401  (re-export)
+    TEAM_ALIASES,
+    normalize_team_name,
+    resolve_team_name,
+    teams_match,
+)
 
-def normalize_team_name(name: str | None) -> str:
-    """Normalize team name for fuzzy matching (handles ё/е, latin ë, hyphens, slashes, extra spaces)."""
-    if not name:
-        return ""
-    s = str(name).lower()
-    # Replace variants of 'ё', latin 'ë' (\u00eb), 'ø', 'ö'
-    s = s.replace("ё", "е").replace("\u00eb", "е").replace("ø", "o").replace("ö", "o")
-    # Replace punctuation and separators
-    s = re.sub(r"[\-_/\\.,]", " ", s)
-    # Collapse multiple spaces
-    s = re.sub(r"\s+", " ", s).strip()
-    return s
+def verify_registry_against_db(division_id: int | None = None) -> dict[str, list[str]]:
+    """Сверить config.CLUB_REGISTRY с клубами, которые реально заведены в users.
 
+    Реестр правится руками, а клубы заводят тренеры — списки расходятся молча.
+    Само по себе расхождение резолв не ломает: клуб вне реестра резолвится сам в
+    себя. Но teams_match для него становится строже — опечатку OCR не с чем
+    сличить, — поэтому дрейф надо видеть, а не узнавать о нём из жалобы.
 
-def resolve_team_name(name: str | None) -> str:
-    """Intelligently resolve any user-entered team name, typo, alias, or transliteration to canonical KPL team name."""
-    if not name:
-        return ""
-    
-    raw = str(name).strip()
-    norm = normalize_team_name(raw)
-    if not norm:
-        return raw
+    Возвращает два отсортированных списка:
+      missing_in_registry — клубы из БД, которых нет в реестре: их надо добавить;
+      unused_in_registry  — имена реестра, под которыми никто не играет: опечатка
+                            в реестре либо ушедший клуб.
 
-    # 1. Direct alias dictionary lookup
-    if norm in TEAM_ALIASES:
-        return TEAM_ALIASES[norm]
+    division_id сужает проверку до одного дивизиона; None — весь турнир.
+    """
+    with transaction() as conn:
+        cursor = conn.cursor()
+        if division_id is None:
+            cursor.execute(
+                "SELECT DISTINCT team_name FROM users "
+                "WHERE team_name IS NOT NULL AND team_name != ''"
+            )
+        else:
+            cursor.execute(
+                "SELECT DISTINCT team_name FROM users "
+                "WHERE team_name IS NOT NULL AND team_name != '' AND division_id = ?",
+                (division_id,)
+            )
+        db_names = [row["team_name"] for row in cursor.fetchall()]
 
-    # 2. Check tokens / joined words
-    tokens = norm.split()
-    if len(tokens) > 1:
-        joined = "".join(tokens)
-        if joined in TEAM_ALIASES:
-            return TEAM_ALIASES[joined]
+    registry_index = club_registry.get_registry_index()
+    db_index = {normalize_team_name(name): name for name in db_names}
 
-    # 3. Check exact match against canonical KPL_TEAMS in config
-    import config
-    all_canon = getattr(config, "KPL_TEAMS", [])
-    for canon in all_canon:
-        c_norm = normalize_team_name(canon)
-        if norm == c_norm:
-            return canon
-
-    # 4. Prefix / Substring match against aliases
-    for alias, canon in TEAM_ALIASES.items():
-        a_norm = normalize_team_name(alias)
-        if len(norm) >= 3 and (norm == a_norm or (len(a_norm) >= 4 and (norm in a_norm or a_norm in norm))):
-            return canon
-
-    # 5. Fuzzy string similarity using difflib
-    best_match = None
-    best_score = 0.0
-
-    for alias, canon in TEAM_ALIASES.items():
-        score = difflib.SequenceMatcher(None, norm, normalize_team_name(alias)).ratio()
-        if score > best_score:
-            best_score = score
-            best_match = canon
-
-    for canon in all_canon:
-        score = difflib.SequenceMatcher(None, norm, normalize_team_name(canon)).ratio()
-        if score > best_score:
-            best_score = score
-            best_match = canon
-
-    if best_match and best_score >= 0.65:
-        return best_match
-
-    return raw
-
-
-def teams_match(team_a: str | None, team_b: str | None) -> bool:
-    """Check if two team names refer to the same team (smart fuzzy/normalized match)."""
-    if not team_a or not team_b:
-        return False
-
-    res_a = resolve_team_name(team_a)
-    res_b = resolve_team_name(team_b)
-    if res_a and res_b and res_a.lower() == res_b.lower():
-        return True
-
-    # Two distinct canonical clubs must never be conflated by fuzzy matching
-    # (e.g. "Атлетико" vs "Атлетик" score ~0.93 on plain string similarity).
-    try:
-        from config import CLUBS as _KPL_CLUBS
-        canon = {normalize_team_name(c) for c in (_KPL_CLUBS or []) if isinstance(c, str)}
-        a_c = normalize_team_name(team_a)
-        b_c = normalize_team_name(team_b)
-        if canon and a_c in canon and b_c in canon and a_c != b_c:
-            return False
-    except Exception:
-        pass
-
-    a_norm = normalize_team_name(team_a)
-    b_norm = normalize_team_name(team_b)
-    if not a_norm or not b_norm:
-        return False
-    if a_norm == b_norm or a_norm in b_norm or b_norm in a_norm:
-        return True
-
-    # Fuzzy ratio check (raised to 0.85 so similar-but-distinct clubs like
-    # "Атлетик"/"Атлетико" are not matched).
-    if difflib.SequenceMatcher(None, a_norm, b_norm).ratio() >= 0.85:
-        return True
-        
-    # Word-level match
-    a_words = [w for w in a_norm.split() if len(w) > 2]
-    b_words = [w for w in b_norm.split() if len(w) > 2]
-    if a_words and b_words:
-        if all(any(aw in bw or bw in aw for bw in b_words) for aw in a_words):
-            return True
-        if all(any(bw in aw or aw in bw for aw in a_words) for bw in b_words):
-            return True
-    return False
-
+    missing = sorted(raw for norm, raw in db_index.items() if norm not in registry_index)
+    # Ушедшие клубы ищем только по всему турниру: в срезе одного дивизиона
+    # «неиспользованным» окажется весь остальной реестр.
+    unused = (
+        sorted(raw for norm, raw in registry_index.items() if norm not in db_index)
+        if division_id is None else []
+    )
+    return {"missing_in_registry": missing, "unused_in_registry": unused}
 
 def get_team_owner(team_name: str) -> int | None:
     """Return the telegram_id of the user who owns the given team."""
@@ -4870,22 +4736,43 @@ def get_round_player_stats(round_number: int, division_id: int | None = None, se
         return [dict(row) for row in cursor.fetchall()]
 
 
-def get_recent_confirmed_matches(limit: int = 15) -> list[dict]:
-    """Retrieve recent confirmed matches across the league."""
+def get_recent_confirmed_matches(
+    limit: int = 15,
+    division_id: int | None = None,
+    season_id: int | None = None,
+) -> list[dict]:
+    """Retrieve recent confirmed matches, optionally scoped to one division and season.
+
+    With division_id=None the legacy cross-division behaviour is kept for callers
+    that intentionally want a league-wide feed.
+    """
     with transaction() as conn:
         cursor = conn.cursor()
-        cursor.execute("""
-            SELECT 
+        query = """
+            SELECT
                 m.id, m.round_number, m.player1_score, m.player2_score,
-                u1.team_name AS team1, u1.username AS user1,
-                u2.team_name AS team2, u2.username AS user2
+                m.division_id, m.season_id,
+                COALESCE(m.player1_team, u1.team_name) AS team1, u1.username AS user1,
+                COALESCE(m.player2_team, u2.team_name) AS team2, u2.username AS user2
             FROM matches m
             LEFT JOIN users u1 ON LOWER(m.player1_team) = LOWER(u1.team_name)
             LEFT JOIN users u2 ON LOWER(m.player2_team) = LOWER(u2.team_name)
             WHERE m.status = 'confirmed'
-            ORDER BY m.id DESC
-            LIMIT ?
-        """, (limit,))
+        """
+        params: list = []
+
+        if division_id is not None:
+            target_season_id = season_id
+            if target_season_id is None:
+                act = get_active_season()
+                target_season_id = act["id"] if act else 1
+            query += " AND m.division_id = ? AND (m.season_id = ? OR m.season_id IS NULL)"
+            params.extend([division_id, target_season_id])
+
+        query += " ORDER BY m.id DESC LIMIT ?"
+        params.append(limit)
+
+        cursor.execute(query, params)
         return [dict(row) for row in cursor.fetchall()]
 
 def get_all_squads() -> dict[str, list[str]]:

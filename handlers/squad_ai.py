@@ -86,6 +86,21 @@ async def offer_recognized_squad(
     await status.edit_text(text, parse_mode="HTML", reply_markup=markup)
 
 
+async def _prefetch_squad_photos(players: list[dict], club: str) -> None:
+    """Fire-and-forget: warm the player_photos cache for a freshly recognized squad."""
+    from services.graphics import player_photos
+
+    pairs = [
+        (name, club)
+        for p in players
+        if (name := (p.get("player_name") or p.get("name")))
+    ]
+    try:
+        await asyncio.to_thread(player_photos.fetch_all_players, pairs)
+    except Exception:
+        logger.exception(f"Failed to prefetch player photos for squad '{club}'")
+
+
 async def squad_ai_apply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle the add / replace / cancel buttons of a pending recognition."""
     query = update.callback_query
@@ -118,5 +133,7 @@ async def squad_ai_apply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     else:
         added = await asyncio.to_thread(database.add_squad, club, players)
         text = f"✅ В состав клуба <b>{html.escape(club)}</b> добавлено футболистов: <b>{added}</b>."
+
+    asyncio.create_task(_prefetch_squad_photos(players, club))
 
     await query.edit_message_text(text, parse_mode="HTML", reply_markup=back_kb)
