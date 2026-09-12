@@ -104,6 +104,19 @@ def fetch_roster(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     ).fetchall()
 
 
+def fetch_division_count(conn: sqlite3.Connection) -> int | None:
+    """Сколько дивизионов заведено в базе — независимо от того, есть ли в них клубы.
+
+    Нужно именно как отдельный счётчик: пустой ростер и указанная не та база дают
+    одинаковый «0 клубов», и различить их можно только по остальному содержимому.
+    None — таблицы нет, база явно не та.
+    """
+    try:
+        return conn.execute("SELECT COUNT(*) FROM divisions").fetchone()[0]
+    except sqlite3.OperationalError:
+        return None
+
+
 def fetch_other_names(conn: sqlite3.Connection) -> dict[str, set[str]]:
     """Имена клубов из остальных таблиц: name -> где встретилось.
 
@@ -285,6 +298,7 @@ def main() -> int:
     conn = open_read_only(args.db)
     try:
         roster = fetch_roster(conn)
+        division_count = fetch_division_count(conn)
         other = fetch_other_names(conn)
     finally:
         conn.close()
@@ -304,9 +318,23 @@ def main() -> int:
     if orphan_aliases:
         print(f"Алиасов на клуб вне реестра: {len(orphan_aliases)}", file=out)
 
-    divisions = {row["division_id"] for row in roster}
-    print(f"Клубов в ростере: {len(roster)}, дивизионов: {len(divisions - {None})}", file=out)
+    divisions_with_clubs = len({row["division_id"] for row in roster} - {None})
+    if division_count is None:
+        print("Дивизионов: таблицы divisions нет — это не база бота", file=out)
+    else:
+        print(f"Дивизионов заведено: {division_count}, из них с клубами: {divisions_with_clubs}", file=out)
+    print(f"Клубов в ростере: {len(roster)}", file=out)
     print(f"Имён клубов в остальных таблицах: {len(other)}", file=out)
+
+    if not roster:
+        # Без этой подсказки пустой ростер выглядит как ошибка в пути к базе.
+        print(
+            "\nРостер пуст: ни у одного пользователя не заполнен team_name.\n"
+            "Если база та самая — значит тренеров ещё не регистрировали (например, после\n"
+            "purge сезона), и собирать CLUB_REGISTRY пока не из чего. Если ожидались клубы —\n"
+            "проверьте путь: LEAGUE_SQLITE_PATH в .env и WorkingDirectory у systemd-юнита.",
+            file=out,
+        )
 
     fuzzy_finding, fuzzy_report = check_fuzzy_threshold(roster)
     findings = [

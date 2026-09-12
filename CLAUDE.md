@@ -158,9 +158,11 @@ caller needs to know *how* confident the answer is. Results are memoised —
 `reload_registry()` is the only thing that invalidates them.
 
 ⚠️ The canonical list is `config.CLUB_REGISTRY`, and it is **still an empty stub** falling
-back to `KPL_TEAMS ∪ CLUBS`; the ~80 real club names are not in it yet (audit item P3-7,
-task T8 — blocked on a VPS run). Two consequences until it is filled: a club outside the
-list resolves to itself, which is safe — it is no longer coerced into a КПЛ name — but
+back to `KPL_TEAMS ∪ CLUBS`. It cannot be bulk-filled yet: the live database was audited on
+2026-09-12 and its roster is empty — the five divisions exist, but the previous season was
+purged and no coach has registered a club since, so there are no names to harvest. The
+registry therefore fills in one name at a time, as coaches join. Two consequences while it
+is short: a club outside the list resolves to itself, which is safe — it is no longer coerced into a КПЛ name — but
 `teams_match` will not merge an OCR typo of such a club, because a typo cannot be told
 apart from a genuinely similar club without knowing the club list. Refusing to merge is
 recoverable; silently merging two coaches' clubs is not.

@@ -20,6 +20,7 @@ from scripts.audit_team_resolution import (
     check_resolution_collisions,
     check_unregistered,
     emit_config,
+    fetch_division_count,
     fetch_roster,
     open_read_only,
 )
@@ -177,6 +178,39 @@ class TestAuditOnEmptyRoster(_TempRosterDB):
         self.assertIsNone(check_resolution_collisions(roster))
         self.assertIsNone(check_normalization_duplicates(roster))
         self.assertIsNone(check_unregistered(roster))
+
+
+class TestAuditDistinguishesEmptyRosterFromWrongDatabase(_TempRosterDB):
+    """Пустой ростер и указанная не та база оба дают «0 клубов».
+
+    Отличить их можно только по остальному содержимому, и отчёт обязан это показывать:
+    на живой базе после purge сезона дивизионы есть, а клубов ещё нет, и это не ошибка.
+    """
+
+    clubs = ()
+
+    def test_division_count_is_read_from_the_divisions_table(self):
+        conn = sqlite3.connect(self.path)
+        conn.execute("CREATE TABLE divisions (id INTEGER PRIMARY KEY, name TEXT)")
+        conn.executemany("INSERT INTO divisions (id, name) VALUES (?, ?)",
+                         [(i, f"Div {i}") for i in range(1, 6)])
+        conn.commit()
+        conn.close()
+
+        conn = open_read_only(self.path)
+        try:
+            # Ростер пуст, но дивизионы на месте — счётчик не должен зависеть от ростера.
+            self.assertEqual(fetch_roster(conn), [])
+            self.assertEqual(fetch_division_count(conn), 5)
+        finally:
+            conn.close()
+
+    def test_missing_divisions_table_means_wrong_database(self):
+        conn = open_read_only(self.path)
+        try:
+            self.assertIsNone(fetch_division_count(conn))
+        finally:
+            conn.close()
 
 
 if __name__ == "__main__":
