@@ -14,7 +14,11 @@ import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import database
-from handlers.text_commands import _match_division_in_args, handle_temshik_command
+from handlers.text_commands import (
+    _line_failure_reason,
+    _match_division_in_args,
+    handle_temshik_command,
+)
 
 
 def build_update(user_id: int, text: str):
@@ -295,6 +299,45 @@ class TestTemshikCommandsAreDivisionScoped(unittest.IsolatedAsyncioTestCase):
             await handle_temshik_command(update, MagicMock())
 
         self.assertIn("администратор", update.message.reply_text.call_args[0][0].lower())
+
+
+class TestLineFailureReason(unittest.IsolatedAsyncioTestCase):
+    """Отказ линии должен называть причину, а не отправлять админа гадать.
+
+    На ручной проверке 12.09.2026 «открыть линию» после «открыть тур» упало с
+    подсказкой «проверьте, что матчи созданы», хотя матчи были ни при чём:
+    `set_round_bets_open` отказывает открытому туру, потому что состояние
+    is_open=1 AND bets_open=1 запрещено.
+    """
+
+    async def test_open_round_is_named_as_the_reason(self):
+        with patch("database.get_round_info", return_value={"round_number": 3, "is_open": 1}):
+            reason = await _line_failure_reason(3, 2, opening=True)
+
+        self.assertIn("уже открыт", reason)
+        self.assertIn("Темшик закрыть тур 3", reason)
+
+    async def test_missing_matches_is_named_as_the_reason(self):
+        with patch("database.get_round_info", return_value={"round_number": 3, "is_open": 0}), \
+             patch("database.get_matches_by_round", return_value=[]):
+            reason = await _line_failure_reason(3, 2, opening=True)
+
+        self.assertIn("нет матчей", reason)
+
+    async def test_closed_round_with_matches_falls_back_to_season(self):
+        with patch("database.get_round_info", return_value={"round_number": 3, "is_open": 0}), \
+             patch("database.get_matches_by_round", return_value=[{"id": 1}]):
+            reason = await _line_failure_reason(3, 2, opening=True)
+
+        self.assertIn("сезон", reason.lower())
+
+    async def test_closing_does_not_probe_the_round(self):
+        # При закрытии линии причина одна — неактивный сезон, лишние запросы ни к чему.
+        with patch("database.get_round_info") as info:
+            reason = await _line_failure_reason(3, 2, opening=False)
+
+        info.assert_not_called()
+        self.assertIn("сезон", reason.lower())
 
 
 if __name__ == "__main__":
