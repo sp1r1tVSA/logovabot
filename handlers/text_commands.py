@@ -13,6 +13,111 @@ logger = logging.getLogger(__name__)
 # Trigger pattern: matches messages starting with "темшик", "темщик", "temshik", or @bot_username
 TRIGGER_REGEX = re.compile(r"^(?:темшик|темщик|temshik|@[\w_]+bot)\b[\s,:]*", re.IGNORECASE)
 
+# «див 2», «дивизион: 3», «division 4», «div #1» — явное указание дивизиона.
+# Голое число дивизионом НЕ считается: в «бомбардиры 10» и «открыть тур 5» число
+# уже занято лимитом и номером тура, и угадывать тут нечего.
+_DIV_KEYWORD_REGEX = re.compile(
+    r"(?<!\w)(?:дивизион\w*|дива|див|division|div)(?!\w)\s*[:#№]?\s*([\w\-]+)?",
+    re.IGNORECASE,
+)
+
+
+def _cut_span(text: str, start: int, end: int) -> str:
+    """Вырезать кусок строки и схлопнуть оставшиеся пробелы."""
+    return re.sub(r"\s+", " ", (text[:start] + " " + text[end:])).strip()
+
+
+def _match_division_in_args(args_str: str, divisions: list[dict]) -> tuple[int | None, str]:
+    """
+    Выдернуть дивизион из аргументов команды.
+
+    Возвращает (division_id | None, аргументы без куска, описывающего дивизион).
+    Порядок разбора: полное название → код (DIV_2 / div2) → ключевое слово с
+    номером или частью названия. Если ничего не совпало — аргументы возвращаются
+    нетронутыми, и вызывающий резолвит дивизион по контексту.
+    """
+    if not args_str or not divisions:
+        return None, (args_str or "").strip()
+
+    # 1) Название дивизиона целиком: «Дивизион 2», «Высшая лига».
+    #    Границы слова нужны, чтобы «Дивизион 1» не откусывался от «Дивизион 12».
+    best: tuple[int, int, int, int] | None = None  # (start, end, division_id, len)
+    for d in divisions:
+        name = (d.get("name") or "").strip()
+        if len(name) < 3:
+            continue
+        m = re.search(rf"(?<!\w){re.escape(name)}(?!\w)", args_str, re.IGNORECASE)
+        if m and (best is None or len(name) > best[3]):
+            best = (m.start(), m.end(), d["id"], len(name))
+    if best:
+        return best[2], _cut_span(args_str, best[0], best[1])
+
+    # 2) Код дивизиона отдельным токеном.
+    for d in divisions:
+        code = (d.get("code") or "").strip()
+        if not code:
+            continue
+        for variant in (code, code.replace("_", ""), code.replace("_", " ")):
+            m = re.search(rf"(?<!\w){re.escape(variant)}(?!\w)", args_str, re.IGNORECASE)
+            if m:
+                return d["id"], _cut_span(args_str, m.start(), m.end())
+
+    # 3) Ключевое слово + номер либо часть названия: «див 2», «дивизион Альфа».
+    m = _DIV_KEYWORD_REGEX.search(args_str)
+    if m:
+        token = (m.group(1) or "").strip()
+        if token:
+            if token.isdigit():
+                target = int(token)
+                for d in divisions:
+                    if d["id"] == target:
+                        return d["id"], _cut_span(args_str, m.start(), m.end())
+            else:
+                low = token.lower()
+                hits = [d for d in divisions if low in (d.get("name") or "").lower()]
+                if len(hits) == 1:
+                    return hits[0]["id"], _cut_span(args_str, m.start(), m.end())
+
+    return None, args_str.strip()
+
+
+async def resolve_command_division(update: Update, args_str: str) -> tuple[int | None, str, list[dict]]:
+    """
+    Единая точка определения дивизиона для текстовых команд.
+
+    Сначала смотрим в аргументы (явное указание всегда сильнее контекста),
+    затем падаем в `resolve_division_id` — топик → группа → привязка тренера.
+    Возвращает (division_id | None, очищенные аргументы, список активных дивизионов);
+    список отдаётся наружу, чтобы подсказку об ошибке можно было собрать без
+    повторного похода в базу.
+    """
+    divisions = await asyncio.to_thread(database.get_active_divisions)
+    div_id, leftover = _match_division_in_args(args_str, divisions)
+    if div_id is None:
+        div_id = await resolve_division_id(update)
+    return div_id, leftover, divisions
+
+
+def _division_hint(divisions: list[dict], example: str) -> str:
+    """Сообщение о том, что дивизион не определён, со списком доступных."""
+    lines = [
+        "🤷 <b>Не понял, о каком дивизионе речь.</b>\n",
+        "Напишите команду в топике своего дивизиона, попросите админа привязать вас "
+        "к дивизиону — или укажите дивизион прямо в команде:",
+        f"<code>{html.escape(example)}</code>",
+    ]
+    if divisions:
+        lines.append("\n📋 <b>Активные дивизионы:</b>")
+        for d in divisions:
+            lines.append(f"• <code>{d['id']}</code> — {html.escape(d.get('name') or '—')}")
+    return "\n".join(lines)
+
+
+async def _division_name(division_id: int) -> str:
+    """Человекочитаемое название дивизиона с безопасным фолбэком."""
+    division = await asyncio.to_thread(database.get_division, division_id)
+    return (division or {}).get("name") or f"Дивизион {division_id}"
+
 
 async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
     """
@@ -53,49 +158,86 @@ async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_T
     if action in ("помощь", "help", "команды", "команда"):
         help_text = (
             "📋 <b>ТЕКСТОВЫЕ КОМАНДЫ БОТА:</b>\n\n"
+            "🗂 <b>Как работают дивизионы</b>\n"
+            "Лига разбита на дивизионы — у каждого свои туры, таблица, расписание, "
+            "бомбардиры и линия Logovo.bet.\n"
+            "Дивизион определяется автоматически:\n"
+            "• в форумном топике — по самому топику;\n"
+            "• в личке с ботом — по дивизиону вашего клуба.\n"
+            "Либо укажите его явно последним аргументом: "
+            "<code>Дивизион 2</code>, <code>див 2</code> или кодом <code>DIV_2</code>.\n"
+            "Список — <code>Темшик дивизионы</code>.\n\n"
             "⚽ <b>Для всех участников:</b>\n"
-            "• <code>Темшик таблица</code> — турнирная таблица\n"
-            "• <code>Темшик состав [клуб]</code> — состав клуба\n"
-            "• <code>Темшик бомбардиры [число]</code> — топ бомбардиров\n"
-            "• <code>Темшик ассистенты [число]</code> — топ ассистентов\n"
-            "• <code>Темшик долги</code> — несыгранные матчи с тегами\n"
+            "• <code>Темшик таблица [дивизион]</code> — таблица дивизиона (графика + кнопка обновления)\n"
+            "• <code>Темшик бомбардиры [число] [дивизион]</code> — топ бомбардиров (карточка или список)\n"
+            "• <code>Темшик ассистенты [число] [дивизион]</code> — топ ассистентов\n"
+            "• <code>Темшик долги [дивизион]</code> — несыгранные матчи дивизиона с тегами участников\n"
+            "• <code>Темшик состав [клуб]</code> — фото и состав заявленного клуба\n"
+            "• <code>Темшик карточка [клуб]</code> — инфокарточка клуба\n"
+            "• <code>Темшик дивизионы</code> — список активных дивизионов лиги\n"
         )
         if is_adm:
             help_text += (
                 "\n👑 <b>Команды администратора:</b>\n"
+                "<i>Туры и линия — в рамках дивизиона:</i>\n"
+                "• <code>Темшик открыть тур [номер] [дивизион]</code>\n"
+                "• <code>Темшик закрыть тур [номер] [дивизион]</code>\n"
+                "• <code>Темшик дедлайн [номер] [дата/время] [дивизион]</code> — дедлайн тура\n"
+                "• <code>Темшик открыть линию [номер] [дивизион]</code> — приём прогнозов Logovo.bet\n"
+                "• <code>Темшик закрыть линию [номер] [дивизион]</code>\n"
+                "• <code>Темшик топики [дивизион]</code> — статус настройки форумных топиков\n\n"
+                "<i>Составы и клубы:</i>\n"
                 "• <code>Темшик +игрок [клуб] [имена]</code> — добавить в состав\n"
                 "• <code>Темшик -игрок [клуб] [имя]</code> — удалить из состава\n"
+                "• <code>Темшик позиция [клуб] [POS] [имя]</code> — сменить позицию (GK, CB, CM, ST…)\n"
                 "• <code>Темшик переименовать игрока [клуб] [старое] -> [новое]</code>\n"
-                "• <code>Темшик открыть тур [номер]</code>\n"
-                "• <code>Темшик закрыть тур [номер]</code>\n"
-                "• <code>Темшик дедлайн [номер] [дата/время]</code>\n"
+                "• <code>Темшик привязать клуб @username [клуб]</code>\n\n"
+                "<i>Дисциплина:</i>\n"
                 "• <code>Темшик варн @username [причина]</code> — выдать варн\n"
                 "• <code>Темшик снять варн @username</code> — снять варн\n"
                 "• <code>Темшик варны</code> — список игроков с варнами\n"
-                "• <code>Темшик привязать клуб @username [клуб]</code>"
+                "• <code>Темшик автоварны</code> — прогнать проверку долгов\n\n"
+                "<i>Слеш-команды топиков:</i>\n"
+                "• <code>/naznachit_topik &lt;div_id&gt;</code> — привязать текущий топик к дивизиону\n"
+                "• <code>/topiki &lt;div_id&gt;</code> — статус топиков дивизиона\n"
+                "• <code>/diviziony</code> — сводка по всем дивизионам"
             )
         await msg.reply_text(help_text, parse_mode="HTML")
+        return True
+
+    if action in ("дивизионы", "дивизион", "divisions", "divs"):
+        divisions = await asyncio.to_thread(database.get_active_divisions)
+        if not divisions:
+            await msg.reply_text("📋 Активных дивизионов пока нет.", parse_mode="HTML")
+            return True
+
+        current_id = await resolve_division_id(update)
+        lines = ["🏆 <b>АКТИВНЫЕ ДИВИЗИОНЫ ЛИГИ:</b>\n"]
+        for d in divisions:
+            mark = " 👈 <i>ваш</i>" if d["id"] == current_id else ""
+            code = f" <code>{html.escape(d.get('code') or '')}</code>" if d.get("code") else ""
+            lines.append(f"• <b>{html.escape(d.get('name') or '—')}</b>{code} — id <code>{d['id']}</code>{mark}")
+        lines.append("\nℹ️ Дивизион можно указать в любой команде: <code>Темшик таблица Дивизион 2</code>")
+        await msg.reply_text("\n".join(lines), parse_mode="HTML")
         return True
 
     if action in ("таблица", "турнирка", "table", "standings"):
         # Без дивизиона запрос уходил в кросс-дивизионную ветку и рисовал таблицу
         # по 16 именам КПЛ — одну и ту же всем пяти дивизионам.
-        division_id = await resolve_division_id(update)
+        division_id, _, divisions = await resolve_command_division(update, args_str)
         if division_id is None:
             await msg.reply_text(
-                "🤷 Не понял, таблицу какого дивизиона показать.\n"
-                "Напишите в топике своего дивизиона или попросите админа привязать вас к дивизиону.",
+                _division_hint(divisions, "Темшик таблица Дивизион 2"),
                 parse_mode="HTML",
             )
             return True
 
-        division = await asyncio.to_thread(database.get_division, division_id)
-        division_name = (division or {}).get("name") if division else None
+        division_name = await _division_name(division_id)
         img_buf = await asyncio.to_thread(
             generate_league_table_image,
             None, None, division_name, division_id
         )
-        caption = f"🏆 <b>Турнирная таблица — {html.escape(division_name or 'дивизион')}</b>"
+        caption = f"🏆 <b>Турнирная таблица — {html.escape(division_name)}</b>"
         keyboard = [[InlineKeyboardButton("🔄 Обновить", callback_data=f"refresh_div_table_{division_id}")]]
         await msg.reply_photo(photo=img_buf, caption=caption, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
         return True
@@ -104,16 +246,27 @@ async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_T
         from telegram import InputFile
         from services.graphics import top_stats_generator
 
-        nums = re.findall(r"\d+", args_str)
+        division_id, rest, divisions = await resolve_command_division(update, args_str)
+        if division_id is None:
+            await msg.reply_text(
+                _division_hint(divisions, "Темшик бомбардиры 10 Дивизион 2"),
+                parse_mode="HTML",
+            )
+            return True
+        division_name = await _division_name(division_id)
+        nums = re.findall(r"\d+", rest)
 
         if nums:
             # Text list mode if explicit number is given
             limit = min(30, max(3, int(nums[0])))
-            top_list = await asyncio.to_thread(database.get_top_scorers, limit)
+            top_list = await asyncio.to_thread(database.get_top_scorers, limit, division_id=division_id)
             if not top_list:
-                await msg.reply_text("⚽ Список бомбардиров пока пуст.", parse_mode="HTML")
+                await msg.reply_text(
+                    f"⚽ Список бомбардиров дивизиона <b>{html.escape(division_name)}</b> пока пуст.",
+                    parse_mode="HTML"
+                )
                 return True
-            lines = [f"⚽ <b>ТОП-{len(top_list)} БОМБАРДИРОВ ТУРНИРА:</b>\n"]
+            lines = [f"⚽ <b>ТОП-{len(top_list)} БОМБАРДИРОВ — {html.escape(division_name).upper()}:</b>\n"]
             for idx, p in enumerate(top_list, 1):
                 badge = "🥇 " if idx == 1 else ("🥈 " if idx == 2 else ("🥉 " if idx == 3 else f"{idx}. "))
                 team_str = f" ({p['team_name']})" if p.get('team_name') else ""
@@ -123,8 +276,11 @@ async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_T
             return True
         else:
             # Graphic card mode!
-            buf = await asyncio.to_thread(top_stats_generator.generate_top_stats_image, "goals", 10)
-            caption = "<b>⚽ ТОП БОМБАРДИРОВ ТУРНИРА</b>"
+            buf = await asyncio.to_thread(
+                top_stats_generator.generate_top_stats_image,
+                "goals", 10, "league", division_id, division_name
+            )
+            caption = f"<b>⚽ ТОП БОМБАРДИРОВ — {html.escape(division_name).upper()}</b>"
             filename = "top_scorers.png"
             await msg.reply_photo(photo=InputFile(buf, filename=filename), caption=caption, parse_mode="HTML")
             return True
@@ -133,16 +289,27 @@ async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_T
         from telegram import InputFile
         from services.graphics import top_stats_generator
 
-        nums = re.findall(r"\d+", args_str)
+        division_id, rest, divisions = await resolve_command_division(update, args_str)
+        if division_id is None:
+            await msg.reply_text(
+                _division_hint(divisions, "Темшик ассистенты 10 Дивизион 2"),
+                parse_mode="HTML",
+            )
+            return True
+        division_name = await _division_name(division_id)
+        nums = re.findall(r"\d+", rest)
 
         if nums:
             # Text list mode if explicit number is given
             limit = min(30, max(3, int(nums[0])))
-            top_list = await asyncio.to_thread(database.get_top_assists, limit)
+            top_list = await asyncio.to_thread(database.get_top_assists, limit, division_id=division_id)
             if not top_list:
-                await msg.reply_text("🎯 Список ассистентов пока пуст.", parse_mode="HTML")
+                await msg.reply_text(
+                    f"🎯 Список ассистентов дивизиона <b>{html.escape(division_name)}</b> пока пуст.",
+                    parse_mode="HTML"
+                )
                 return True
-            lines = [f"🎯 <b>ТОП-{len(top_list)} АССИСТЕНТОВ ТУРНИРА:</b>\n"]
+            lines = [f"🎯 <b>ТОП-{len(top_list)} АССИСТЕНТОВ — {html.escape(division_name).upper()}:</b>\n"]
             for idx, p in enumerate(top_list, 1):
                 badge = "🥇 " if idx == 1 else ("🥈 " if idx == 2 else ("🥉 " if idx == 3 else f"{idx}. "))
                 team_str = f" ({p['team_name']})" if p.get('team_name') else ""
@@ -152,18 +319,33 @@ async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_T
             return True
         else:
             # Graphic card mode!
-            buf = await asyncio.to_thread(top_stats_generator.generate_top_stats_image, "assists", 10)
-            caption = "<b>🎯 ТОП АССИСТЕНТОВ ТУРНИРА</b>"
+            buf = await asyncio.to_thread(
+                top_stats_generator.generate_top_stats_image,
+                "assists", 10, "league", division_id, division_name
+            )
+            caption = f"<b>🎯 ТОП АССИСТЕНТОВ — {html.escape(division_name).upper()}</b>"
             filename = "top_assisters.png"
             await msg.reply_photo(photo=InputFile(buf, filename=filename), caption=caption, parse_mode="HTML")
             return True
 
     if action in ("долги", "debts", "должники"):
-        debts = await asyncio.to_thread(database.get_all_unplayed_league_matches)
-        if not debts:
-            await msg.reply_text("✅ <b>Все матчи сыграны! Долгов по турниру нет.</b>", parse_mode="HTML")
+        division_id, _, divisions = await resolve_command_division(update, args_str)
+        if division_id is None:
+            await msg.reply_text(
+                _division_hint(divisions, "Темшик долги Дивизион 2"),
+                parse_mode="HTML",
+            )
             return True
-        lines = ["⏳ <b>СПИСОК НЕЗАКРЫТЫХ МАТЧЕЙ (ДОЛГИ):</b>\n"]
+        division_name = await _division_name(division_id)
+
+        debts = await asyncio.to_thread(database.get_all_unplayed_league_matches, division_id=division_id)
+        if not debts:
+            await msg.reply_text(
+                f"✅ <b>В дивизионе {html.escape(division_name)} нет долгов!</b> Все матчи сыграны.",
+                parse_mode="HTML"
+            )
+            return True
+        lines = [f"⏳ <b>НЕЗАКРЫТЫЕ МАТЧИ — {html.escape(division_name).upper()}:</b>\n"]
         rounds_map = {}
         for d in debts:
             rn = d.get("round_number", 0)
@@ -354,30 +536,47 @@ async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_T
             return True
 
         opening = full_cmd.startswith("откр")
-        nums = re.findall(r"\d+", cmd_text)
+        line_args = re.sub(
+            r"^(?:открыть|открой|закрыть|закрой)\s+лини[юияей]*\s*", "", cmd_text, flags=re.IGNORECASE
+        ).strip()
+        division_id, rest, divisions = await resolve_command_division(update, line_args)
+        if division_id is None:
+            await msg.reply_text(
+                _division_hint(divisions, "Темшик открыть линию 19 Дивизион 2"),
+                parse_mode="HTML",
+            )
+            return True
+
+        nums = re.findall(r"\d+", rest)
         if not nums:
             await msg.reply_text(
-                "ℹ️ Укажите номер тура. Пример: <code>Темшик открыть линию 19</code>",
+                "ℹ️ Формат: <code>Темшик открыть линию [номер тура] [дивизион]</code>\n"
+                "Пример: <code>Темшик открыть линию 19 Дивизион 2</code>",
                 parse_mode="HTML"
             )
             return True
 
         rn = int(nums[0])
-        ok = await asyncio.to_thread(database.set_round_bets_open, rn, opening)
+        division_name = await _division_name(division_id)
+        ok = await asyncio.to_thread(database.set_round_bets_open, rn, opening, division_id=division_id)
         if not ok:
             await msg.reply_text(
-                f"❌ <b>Не удалось изменить линию на тур {rn}.</b>\n"
+                f"❌ <b>Не удалось изменить линию на тур {rn} — {html.escape(division_name)}.</b>\n"
                 f"Проверьте, что матчи тура созданы, а сезон активен.",
                 parse_mode="HTML"
             )
         elif opening:
             await msg.reply_text(
-                f"🎰 <b>Линия на Тур {rn} открыта!</b>\n"
+                f"🎰 <b>Линия на Тур {rn} — {html.escape(division_name)} открыта!</b>\n"
                 f"Прогнозы принимаются, даже пока тур закрыт для внесения результатов.",
                 parse_mode="HTML"
             )
         else:
-            await msg.reply_text(f"🚫 <b>Линия на Тур {rn} закрыта.</b> Приём прогнозов остановлен.", parse_mode="HTML")
+            await msg.reply_text(
+                f"🚫 <b>Линия на Тур {rn} — {html.escape(division_name)} закрыта.</b> "
+                f"Приём прогнозов остановлен.",
+                parse_mode="HTML"
+            )
         return True
 
     if (
@@ -389,13 +588,30 @@ async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_T
             await msg.reply_text("⚠️ Эта команда доступна только администраторам турнира.")
             return True
 
-        nums = re.findall(r"\d+", cmd_text)
+        division_id, rest, divisions = await resolve_command_division(update, args_str)
+        if division_id is None:
+            await msg.reply_text(
+                _division_hint(divisions, "Темшик открыть тур 18 Дивизион 2"),
+                parse_mode="HTML",
+            )
+            return True
+
+        nums = re.findall(r"\d+", rest)
         if not nums:
-            await msg.reply_text("ℹ️ Укажите номер тура. Пример: <code>Темшик открыть тур 18</code>", parse_mode="HTML")
+            await msg.reply_text(
+                "ℹ️ Формат: <code>Темшик открыть тур [номер] [дивизион]</code>\n"
+                "Пример: <code>Темшик открыть тур 18 Дивизион 2</code>",
+                parse_mode="HTML"
+            )
             return True
         rn = int(nums[0])
-        await asyncio.to_thread(database.update_round_status, rn, is_open=True)
-        await msg.reply_text(f"🔓 <b>Тур {rn} успешно открыт!</b> Участники могут вносить результаты.", parse_mode="HTML")
+        division_name = await _division_name(division_id)
+        await asyncio.to_thread(database.update_round_status, rn, is_open=True, division_id=division_id)
+        await msg.reply_text(
+            f"🔓 <b>Тур {rn} — {html.escape(division_name)} успешно открыт!</b> "
+            f"Участники могут вносить результаты.",
+            parse_mode="HTML"
+        )
         return True
 
     if (
@@ -407,13 +623,29 @@ async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_T
             await msg.reply_text("⚠️ Эта команда доступна только администраторам турнира.")
             return True
 
-        nums = re.findall(r"\d+", cmd_text)
+        division_id, rest, divisions = await resolve_command_division(update, args_str)
+        if division_id is None:
+            await msg.reply_text(
+                _division_hint(divisions, "Темшик закрыть тур 17 Дивизион 2"),
+                parse_mode="HTML",
+            )
+            return True
+
+        nums = re.findall(r"\d+", rest)
         if not nums:
-            await msg.reply_text("ℹ️ Укажите номер тура. Пример: <code>Темшик закрыть тур 17</code>", parse_mode="HTML")
+            await msg.reply_text(
+                "ℹ️ Формат: <code>Темшик закрыть тур [номер] [дивизион]</code>\n"
+                "Пример: <code>Темшик закрыть тур 17 Дивизион 2</code>",
+                parse_mode="HTML"
+            )
             return True
         rn = int(nums[0])
-        await asyncio.to_thread(database.update_round_status, rn, is_open=False)
-        await msg.reply_text(f"🔒 <b>Тур {rn} закрыт.</b>", parse_mode="HTML")
+        division_name = await _division_name(division_id)
+        await asyncio.to_thread(database.update_round_status, rn, is_open=False, division_id=division_id)
+        await msg.reply_text(
+            f"🔒 <b>Тур {rn} — {html.escape(division_name)} закрыт.</b>",
+            parse_mode="HTML"
+        )
         return True
 
     if action in ("дедлайн", "deadline"):
@@ -421,26 +653,83 @@ async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_T
             await msg.reply_text("⚠️ Эта команда доступна только администраторам турнира.")
             return True
 
-        nums = re.findall(r"\d+", args_str)
+        division_id, rest, divisions = await resolve_command_division(update, args_str)
+        if division_id is None:
+            await msg.reply_text(
+                _division_hint(divisions, "Темшик дедлайн 18 18.08 23:59 Дивизион 2"),
+                parse_mode="HTML",
+            )
+            return True
+
+        nums = re.findall(r"\d+", rest)
         if not nums:
             await msg.reply_text(
-                "ℹ️ Формат: <code>Темшик дедлайн [номер_тура] [дата и время]</code>\n"
-                "Пример: <code>Темшик дедлайн 18 18.08 23:59</code>",
+                "ℹ️ Формат: <code>Темшик дедлайн [номер_тура] [дата и время] [дивизион]</code>\n"
+                "Пример: <code>Темшик дедлайн 18 18.08 23:59 Дивизион 2</code>",
                 parse_mode="HTML"
             )
             return True
 
         rn = int(nums[0])
-        dl_text = re.sub(r"^\d+\s*(?:тур)?\s*", "", args_str, flags=re.IGNORECASE).strip()
+        dl_text = re.sub(r"^\d+\s*(?:тур)?\s*", "", rest, flags=re.IGNORECASE).strip()
         if not dl_text:
-            await msg.reply_text("ℹ️ Укажите дату и время дедлайна, например: <code>18.08 23:59</code>", parse_mode="HTML")
+            await msg.reply_text(
+                "ℹ️ Укажите дату и время дедлайна, например: "
+                "<code>Темшик дедлайн 18 18.08 23:59 Дивизион 2</code>",
+                parse_mode="HTML"
+            )
             return True
 
-        await asyncio.to_thread(database.update_round_status, rn, is_open=True, deadline=dl_text)
+        division_name = await _division_name(division_id)
+        await asyncio.to_thread(
+            database.update_round_status, rn, is_open=True, deadline=dl_text, division_id=division_id
+        )
         await msg.reply_text(
-            f"⏰ <b>Дедлайн для тура {rn} установлен на:</b> <code>{html.escape(dl_text)}</code>.",
+            f"⏰ <b>Дедлайн тура {rn} — {html.escape(division_name)} установлен на:</b> "
+            f"<code>{html.escape(dl_text)}</code>.",
             parse_mode="HTML"
         )
+        return True
+
+    if action in ("топики", "топик", "topics", "topiki"):
+        if not is_adm:
+            await msg.reply_text("⚠️ Эта команда доступна только администраторам турнира.")
+            return True
+
+        division_id, _, divisions = await resolve_command_division(update, args_str)
+        if division_id is None:
+            await msg.reply_text(
+                _division_hint(divisions, "Темшик топики Дивизион 2"),
+                parse_mode="HTML",
+            )
+            return True
+
+        from services.topic_cache import topic_cache
+
+        division_name = await _division_name(division_id)
+        summary = await asyncio.to_thread(topic_cache.get_division_topics_summary, division_id)
+        if not summary:
+            summary = await asyncio.to_thread(database.get_division_topics_map, division_id)
+
+        lines = [f"🗂 <b>ТОПИКИ — {html.escape(division_name).upper()}</b>\n"]
+        missing = 0
+        for t in database.PRIMARY_DIVISION_TOPICS:
+            display = database.TOPIC_DISPLAY_NAMES.get(t, t)
+            bound = summary.get(t)
+            if bound:
+                lines.append(f"✅ {display} — <code>{bound.get('message_thread_id')}</code>")
+            else:
+                missing += 1
+                lines.append(f"❌ {display} — не привязан")
+
+        if missing:
+            lines.append(
+                f"\n⚠️ Не настроено топиков: <b>{missing}</b>.\n"
+                f"Зайдите в нужный топик и выполните <code>/naznachit_topik {division_id}</code>."
+            )
+        else:
+            lines.append("\n🎉 Все основные топики дивизиона настроены.")
+        await msg.reply_text("\n".join(lines), parse_mode="HTML")
         return True
 
     if action in ("автоварны", "проверить_долги", "чекер_долгов") or full_cmd.startswith("автоварны") or full_cmd.startswith("проверить долги") or full_cmd.startswith("проверка долгов"):
@@ -454,7 +743,11 @@ async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_T
         await msg.reply_text("✅ <b>Проверка долгов и авто-варнов успешно завершена!</b>", parse_mode="HTML")
         return True
 
-    if action in ("клуб", "карточка_клуба", "клуб_инфо", "club") or full_cmd.startswith("клуб") or full_cmd.startswith("карточка клуба"):
+    if (
+        action in ("клуб", "карточка", "карточка_клуба", "клуб_инфо", "club") or
+        full_cmd.startswith("клуб") or
+        full_cmd.startswith("карточка")
+    ):
         chat = update.effective_chat
         if chat and chat.type in ("group", "supergroup", "channel") and not is_adm:
             bot_me = await context.bot.get_me()
@@ -466,7 +759,9 @@ async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_T
             )
             return True
 
-        target_club_raw = re.sub(r"^(?:карточка\s+клуба|клуб(?:\s+инфо)?)\s*", "", cmd_text, flags=re.IGNORECASE).strip()
+        target_club_raw = re.sub(
+            r"^(?:карточка(?:\s+клуба)?|клуб(?:\s+инфо)?)\s*", "", cmd_text, flags=re.IGNORECASE
+        ).strip()
         if not target_club_raw:
             user = update.effective_user
             team = await asyncio.to_thread(database.get_user_team, user.id) if user else None
