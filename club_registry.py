@@ -13,6 +13,7 @@ import logging
 import re
 from dataclasses import dataclass
 from enum import Enum
+from functools import lru_cache
 
 logger = logging.getLogger(__name__)
 
@@ -255,6 +256,7 @@ def reload_registry() -> int:
     _dropped_aliases = _validate_aliases(_registry_index)
     _alias_index, _orphan_aliases = _build_alias_index(_registry_index)
     _joined_index = _build_joined_index(_registry_index, _alias_index)
+    _resolve_cached.cache_clear()
 
     for alias, canonical, owner in _dropped_aliases:
         logger.warning(
@@ -378,8 +380,14 @@ def resolve_team_name_ex(name: str | None) -> TeamResolution:
     """Resolve a raw team name, reporting how confident the answer is.
 
     Pure CPU: no SQL, no network. Callers run inside the event loop.
+    Results are cached; reload_registry() drops the cache.
     """
-    raw = str(name).strip() if name else ""
+    return _resolve_cached(str(name).strip() if name else "")
+
+
+@lru_cache(maxsize=4096)
+def _resolve_cached(raw: str) -> TeamResolution:
+    """Tier walk for one already-stripped name. Only reload_registry() may invalidate."""
     norm = normalize_team_name(raw)
     if not norm:
         return TeamResolution(raw, None, ResolveMethod.NONE, 0.0)

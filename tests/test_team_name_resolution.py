@@ -360,6 +360,36 @@ class TestCaptionWordResolution(unittest.TestCase):
         self.assertNotIn("Расинг Сантандер", {team1, team2})
 
 
+class TestResolveCache(unittest.TestCase):
+    """ЗЕЛЁНЫЕ с T5. Кэш обязан ускорять и обязан забывать при смене реестра."""
+
+    def tearDown(self):
+        config.CLUB_REGISTRY = []
+        club_registry.reload_registry()
+
+    def test_repeated_resolves_hit_the_cache(self):
+        club_registry.reload_registry()  # сбрасывает счётчики
+        for _ in range(50):
+            resolve_team_name("Фейенорд")
+        info = club_registry._resolve_cached.cache_info()
+        self.assertEqual(info.misses, 1)
+        self.assertEqual(info.hits, 49)
+
+    def test_reload_invalidates_stale_answers(self):
+        # Без этого клуб, добавленный в реестр, остался бы неразрешённым до
+        # перезапуска бота — ровно тот класс багов, который мы и чиним.
+        self.assertEqual(resolve_team_name("шериф"), "шериф")
+        config.CLUB_REGISTRY = ["Шериф"]
+        club_registry.reload_registry()
+        self.assertEqual(resolve_team_name("шериф"), "Шериф")
+
+    def test_resolution_objects_are_immutable(self):
+        # Кэш отдаёт один и тот же объект всем вызывающим: менять его нельзя.
+        res = club_registry.resolve_team_name_ex("Порту")
+        with self.assertRaises(Exception):
+            res.canonical = "Брага"
+
+
 class TestClubRegistry(unittest.TestCase):
     """ЗЕЛЁНЫЕ. Реестр: индекс, перезагрузка, отбраковка алиасов-теней."""
 
