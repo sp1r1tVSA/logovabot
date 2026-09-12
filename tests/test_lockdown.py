@@ -273,6 +273,12 @@ class TestLockdownApi(AioHTTPTestCase):
             conn.execute("INSERT OR REPLACE INTO division_admins (user_id, division_id) VALUES (?, 1)", (self.division_admin_id,))
             conn.execute("INSERT OR REPLACE INTO users (telegram_id, username, role) VALUES (?, 'global_admin', 'admin')", (self.global_admin_id,))
 
+        # Подменяем список глобальных админов и обязательно возвращаем обратно:
+        # xdist с --dist loadfile отдаёт одному воркеру несколько файлов подряд,
+        # в одном процессе, и незакрытая подмена роняет чужие тесты
+        # (test_feature_access_fail_closed берёт ADMIN_IDS[0] на импорте).
+        self._orig_admin_ids = list(config.ADMIN_IDS)
+        self.addCleanup(setattr, config, "ADMIN_IDS", self._orig_admin_ids)
         config.ADMIN_IDS = [self.global_admin_id]
 
         self.reg_headers = {"X-Telegram-Init-Data": generate_mock_init_data(self.regular_user_id, "reg_player")}
