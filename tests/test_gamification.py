@@ -5,6 +5,7 @@ Unit tests for LOGOVO.BET Progression, Streaks & Achievements (Secondary gamific
 
 import unittest
 import database
+from config import INITIAL_WALLET_BALANCE as START
 
 
 class TestGamificationEngine(unittest.TestCase):
@@ -30,7 +31,7 @@ class TestGamificationEngine(unittest.TestCase):
 
         # 3. Check wallet got level up coins
         w = database.get_or_create_wallet(self.user_id)
-        self.assertGreaterEqual(w["balance"], 1000 + res["reward_coins"])
+        self.assertGreaterEqual(w["balance"], START + res["reward_coins"])
 
     def test_login_streak(self):
         streak_info = database.check_and_update_login_streak(self.user_id)

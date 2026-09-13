@@ -59,7 +59,27 @@ class RiskEngine:
                 message="Купон не содержит выбранных исходов."
             )
 
-        # 2. Centralized Limits Check
+        # 2. Self-Bet Prohibition (322-защита)
+        #
+        # Перебираются все исходы купона: если хотя бы один взят из матча с
+        # участием самого ставящего, отклоняется весь купон — и ординар, и экспресс.
+        # Проверка идёт раньше лимитов и баланса, чтобы причина отказа была
+        # однозначной. Проверяется только участие в матче: дивизион игрока и
+        # дивизион матча не сравниваются — ставки на чужие дивизионы разрешены.
+        with database.transaction() as conn:
+            self_match_id = database.find_self_participation_match(
+                conn.cursor(), user_id, selections
+            )
+        if self_match_id is not None:
+            return RiskDecision(
+                decision="REJECT",
+                allowed=False,
+                reason="SELF_BET_PROHIBITED",
+                message="Запрещено делать ставки на матчи с собственным участием.",
+                details={"match_id": self_match_id, "user_id": user_id}
+            )
+
+        # 3. Centralized Limits Check
         limits = BettingLimitsService.get_user_effective_limits(user_id, division_id=division_id)
 
         # Minimum Stake Check
@@ -83,7 +103,7 @@ class RiskEngine:
                 details={"max_bet": limits["max_bet"], "amount": amount}
             )
 
-        # 3. User Wallet Balance Check
+        # 4. User Wallet Balance Check
         wallet = database.get_or_create_wallet(user_id)
         current_balance = wallet.get("balance", 0)
         if current_balance < amount:
@@ -95,7 +115,7 @@ class RiskEngine:
                 details={"balance": current_balance, "required": amount}
             )
 
-        # 4. Rapid Betting Anomaly Protection (Rate Limiting per User)
+        # 5. Rapid Betting Anomaly Protection (Rate Limiting per User)
         with database.transaction() as conn:
             cursor = conn.cursor()
             cursor.execute("""
@@ -119,7 +139,7 @@ class RiskEngine:
                     message="Слишком много запросов на ставки. Подождите минуту."
                 )
 
-            # 5. User Daily Staking Limit Check
+            # 6. User Daily Staking Limit Check
             cursor.execute("""
                 SELECT COALESCE(SUM(amount), 0) as today_staked
                 FROM user_bets
@@ -145,7 +165,7 @@ class RiskEngine:
                     details={"max_daily_stake": limits["max_daily_stake"], "today_staked": today_staked, "remaining": remaining_daily}
                 )
 
-            # 6. Selections Validation (Market State, Selection State, Odds Validity & Freshness)
+            # 7. Selections Validation (Market State, Selection State, Odds Validity & Freshness)
             total_odd = 1.0
             for s in selections:
                 m_id = s.get("match_id")
@@ -301,7 +321,7 @@ class RiskEngine:
 
                 total_odd *= max(1.01, odd_float)
 
-            # 7. Maximum Payout Cap Check
+            # 8. Maximum Payout Cap Check
             potential_win = int(round(amount * total_odd))
             if potential_win > limits["max_payout"]:
                 max_allowed = int(limits["max_payout"] / max(1.01, total_odd))
@@ -322,7 +342,7 @@ class RiskEngine:
                     details={"potential_win": potential_win, "max_payout": limits["max_payout"], "max_allowed_stake": max_allowed}
                 )
 
-            # 8. Market Net Exposure Limit Check
+            # 9. Market Net Exposure Limit Check
             for s in selections:
                 mkt_id = s.get("market_id")
                 odd_float = float(s.get("odd") or 2.0)

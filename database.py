@@ -6,9 +6,15 @@ import threading
 import asyncio
 from typing import Generator
 from contextlib import contextmanager
-from config import DB_PATH
+from config import DB_PATH, INITIAL_WALLET_BALANCE
 
 logger = logging.getLogger(__name__)
+
+# 322-защита: канонический код и текст отказа при ставке на свой собственный матч.
+# Используются и place_user_bet, и services/risk_engine.RiskEngine, чтобы Telegram,
+# Mini App и REST API отвечали одинаково.
+SELF_BET_ERROR_CODE = "SELF_BET_PROHIBITED"
+SELF_BET_ERROR_MESSAGE = "Запрещено делать ставки на матчи с собственным участием."
 
 def get_connection() -> sqlite3.Connection:
     """Establish and return a new SQLite database connection."""
@@ -491,7 +497,7 @@ def init_db() -> None:
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS user_wallets (
                 user_id INTEGER PRIMARY KEY,
-                balance INTEGER NOT NULL DEFAULT 1000,
+                balance INTEGER NOT NULL DEFAULT 677,
                 total_wagered INTEGER NOT NULL DEFAULT 0,
                 total_won INTEGER NOT NULL DEFAULT 0,
                 bets_count INTEGER NOT NULL DEFAULT 0,
@@ -4388,6 +4394,59 @@ def evaluate_round_betting_gate(
     return True, None, None
 
 
+def find_self_participation_match(cursor, user_id: int | None, selections: list[dict]) -> int | None:
+    """322-защита: найти в купоне матч, в котором сам ставящий является участником.
+
+    Игрок не имеет права ставить ни на один исход (П1, X, П2, тоталы, ОЗ) матча,
+    где он играет сам. Перебираются ВСЕ исходы купона: одного попадания
+    достаточно, чтобы отклонить весь экспресс целиком.
+
+    Участие определяется двумя способами, и достаточно любого:
+      * `matches.player1_id` / `player2_id` — Telegram ID (`users.telegram_id`);
+      * `matches.player1_team` / `player2_team` — имя клуба, если ID в строке матча
+        не заполнен (legacy-расписания). Имена клубов глобально уникальны
+        (`idx_users_team_name_unique`), поэтому такое сопоставление однозначно.
+
+    Возвращает id первого найденного матча или None. Вызывается внутри транзакции;
+    дивизион матча и дивизион игрока намеренно не сравниваются — ставить на чужие
+    дивизионы разрешено.
+    """
+    if not user_id or not selections:
+        return None
+
+    for s in selections:
+        if not isinstance(s, dict):
+            continue
+        m_id = s.get("match_id")
+        if not m_id:
+            continue
+        cursor.execute(
+            """
+            SELECT 1
+            FROM matches m
+            LEFT JOIN users u ON u.telegram_id = ?
+            WHERE m.id = ?
+              AND (
+                  m.player1_id = ?
+                  OR m.player2_id = ?
+                  OR (
+                      u.team_name IS NOT NULL AND TRIM(u.team_name) != ''
+                      AND (
+                          LOWER(TRIM(m.player1_team)) = LOWER(TRIM(u.team_name))
+                          OR LOWER(TRIM(m.player2_team)) = LOWER(TRIM(u.team_name))
+                      )
+                  )
+              )
+            LIMIT 1
+            """,
+            (user_id, m_id, user_id, user_id)
+        )
+        if cursor.fetchone():
+            return int(m_id)
+
+    return None
+
+
 def update_round_status(round_number: int, is_open: bool, deadline: str | None = None, division_id: int | None = None, season_id: int | None = None) -> None:
     """Open/close a round. When opening without an explicit deadline, any stale
     stored deadline is cleared so it cannot instantly mark matches as overdue.
@@ -6338,28 +6397,28 @@ def get_active_round_number() -> int:
 
 
 def get_or_create_wallet(user_id: int) -> dict:
-    """Get user's betting wallet or initialize a new one with 1,000 start coins."""
+    """Get user's betting wallet or initialize a new one with INITIAL_WALLET_BALANCE coins."""
     with transaction() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM user_wallets WHERE user_id = ?", (user_id,))
         row = cursor.fetchone()
         if row:
             return dict(row)
-        
+
         cursor.execute(
             """
             INSERT INTO user_wallets (user_id, balance, total_wagered, total_won, bets_count, bets_won)
-            VALUES (?, 1000, 0, 0, 0, 0)
+            VALUES (?, ?, 0, 0, 0, 0)
             """,
-            (user_id,)
+            (user_id, INITIAL_WALLET_BALANCE)
         )
         cursor.execute(
-            "INSERT INTO coin_transactions (user_id, amount, transaction_type) VALUES (?, 1000, 'welcome_bonus')",
-            (user_id,)
+            "INSERT INTO coin_transactions (user_id, amount, transaction_type) VALUES (?, ?, 'welcome_bonus')",
+            (user_id, INITIAL_WALLET_BALANCE)
         )
         cursor.execute("SELECT * FROM user_wallets WHERE user_id = ?", (user_id,))
         new_row = cursor.fetchone()
-        return dict(new_row) if new_row else {"user_id": user_id, "balance": 1000}
+        return dict(new_row) if new_row else {"user_id": user_id, "balance": INITIAL_WALLET_BALANCE}
 
 
 def get_wallet_balance(user_id: int) -> int:
@@ -6763,6 +6822,19 @@ def place_user_bet(
                     return False, {"error": "IDEMPOTENCY_KEY_REUSED",
                                    "message": "Ключ идемпотентности уже использован для другой ставки."}
                 return True, existing["id"]
+
+        # 322-защита (дублирующая проверка). RiskEngine отклоняет такие купоны
+        # раньше, но эта проверка выполняется в той же транзакции, что и списание
+        # монет: она закрывает и гонку (матч мог получить участника между
+        # проверкой риск-движка и записью купона), и обход RiskEngine при прямом
+        # вызове place_user_bet из API/скрипта.
+        self_match_id = find_self_participation_match(cursor, user_id, selections)
+        if self_match_id is not None:
+            logger.warning(
+                f"SELF_BET_PROHIBITED: user_id={user_id} попытался поставить на свой матч "
+                f"#{self_match_id} (amount={amount}, selections={len(selections)})"
+            )
+            return False, {"error": SELF_BET_ERROR_CODE, "message": SELF_BET_ERROR_MESSAGE}
 
         # Phase 9: Risk Engine Evaluation.
         #

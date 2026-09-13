@@ -164,13 +164,14 @@ class TestPhase3Operations(unittest.TestCase):
         """Wallet balance cannot go negative when betting amount exceeds balance."""
         with database.transaction() as conn:
             conn.execute(
+                # 322-защита: ставящий не должен быть участником матча, поэтому
+                # здесь играют сторонние клубы без привязки к коучам-тестерам.
                 "INSERT INTO matches (id, round_number, player1_id, player2_id, player1_team, player2_team, status, division_id, season_id) "
-                "VALUES (99003, 1, ?, ?, 'Phase3 Team A', 'Phase3 Team B', 'open', 991, 998)",
-                (self.user1_id, self.user2_id)
+                "VALUES (99003, 1, NULL, NULL, 'Phase3 Rival A', 'Phase3 Rival B', 'open', 991, 998)"
             )
             conn.execute(
                 "INSERT INTO bet_markets (match_id, tour, team1_name, team2_name, odd_p1, odd_x, odd_p2, is_active) "
-                "VALUES (99003, 1, 'Phase3 Team A', 'Phase3 Team B', 2.00, 3.00, 3.50, 1)"
+                "VALUES (99003, 1, 'Phase3 Rival A', 'Phase3 Rival B', 2.00, 3.00, 3.50, 1)"
             )
 
         # User2 has balance 50, tries to bet 100 -> Rejected
@@ -190,13 +191,14 @@ class TestPhase3Operations(unittest.TestCase):
         """Repeated settlement of the same match must not double-credit wallet balance."""
         with database.transaction() as conn:
             conn.execute(
+                # 322-защита: ставящий не должен быть участником матча, поэтому
+                # здесь играют сторонние клубы без привязки к коучам-тестерам.
                 "INSERT INTO matches (id, round_number, player1_id, player2_id, player1_team, player2_team, status, division_id, season_id) "
-                "VALUES (99004, 1, ?, ?, 'Phase3 Team A', 'Phase3 Team B', 'open', 991, 998)",
-                (self.user1_id, self.user2_id)
+                "VALUES (99004, 1, NULL, NULL, 'Phase3 Rival A', 'Phase3 Rival B', 'open', 991, 998)"
             )
             conn.execute(
                 "INSERT INTO bet_markets (match_id, tour, team1_name, team2_name, odd_p1, odd_x, odd_p2, is_active) "
-                "VALUES (99004, 1, 'Phase3 Team A', 'Phase3 Team B', 2.00, 3.00, 3.50, 1)"
+                "VALUES (99004, 1, 'Phase3 Rival A', 'Phase3 Rival B', 2.00, 3.00, 3.50, 1)"
             )
 
         # User1 bets 100 on p1 (odd 2.00) -> potential win = 200
@@ -209,7 +211,7 @@ class TestPhase3Operations(unittest.TestCase):
         bal_after_bet = database.get_or_create_wallet(self.user1_id)["balance"]
         self.assertEqual(bal_after_bet, 900)
 
-        # First settlement: Team A wins 2:0 -> Bet WON -> +200 payout
+        # First settlement: Rival A wins 2:0 -> Bet WON -> +200 payout
         notifs1 = settlement_engine.settle_match_predictions(99004, score1=2, score2=0)
         self.assertEqual(len(notifs1), 1)
         self.assertEqual(notifs1[0]["status"], "won")
@@ -273,13 +275,14 @@ class TestPhase3Operations(unittest.TestCase):
         """get_user_bet_by_id must return bet only for the authorized user."""
         with database.transaction() as conn:
             conn.execute(
+                # 322-защита: ставящий не должен быть участником матча, поэтому
+                # здесь играют сторонние клубы без привязки к коучам-тестерам.
                 "INSERT INTO matches (id, round_number, player1_id, player2_id, player1_team, player2_team, status, division_id, season_id) "
-                "VALUES (99008, 1, ?, ?, 'Phase3 Team A', 'Phase3 Team B', 'open', 991, 998)",
-                (self.user1_id, self.user2_id)
+                "VALUES (99008, 1, NULL, NULL, 'Phase3 Rival A', 'Phase3 Rival B', 'open', 991, 998)"
             )
             conn.execute(
                 "INSERT INTO bet_markets (match_id, tour, team1_name, team2_name, odd_p1, odd_x, odd_p2, is_active) "
-                "VALUES (99008, 1, 'Phase3 Team A', 'Phase3 Team B', 2.00, 3.00, 3.50, 1)"
+                "VALUES (99008, 1, 'Phase3 Rival A', 'Phase3 Rival B', 2.00, 3.00, 3.50, 1)"
             )
 
         ok, bet_id = database.place_user_bet(

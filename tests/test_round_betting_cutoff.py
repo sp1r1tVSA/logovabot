@@ -76,7 +76,8 @@ class TestRoundBettingCutoff(unittest.TestCase):
             c.execute(
                 "INSERT OR REPLACE INTO users (telegram_id, username, team_name, division_id, role) "
                 "VALUES (?, ?, ?, ?, ?)",
-                (USER_ID, "cutoff_user", "Cutoff FC", DIV, "player")
+                # 322-защита: клуб ставящего не совпадает с участниками матча M_ALLOW.
+                (USER_ID, "cutoff_user", "Cutoff Coach FC", DIV, "player")
             )
             for rn in ROUNDS:
                 c.execute(
