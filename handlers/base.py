@@ -131,6 +131,19 @@ def is_admin_user(user_id: int) -> bool:
     return is_global_admin(user_id)
 
 
+def round_schedule_missing_message(round_number: int, division_name: str) -> str:
+    """Единый текст отказа, когда тур пытаются открыть без расписания.
+
+    Используется и текстовыми командами «Темшик открыть тур ...», и админ-панелью,
+    чтобы админ видел одну и ту же формулировку независимо от точки входа.
+    Название дивизиона экранируется — отправлять с `parse_mode="HTML"`.
+    """
+    return (
+        f"❌ Нельзя открыть Тур {round_number} — {html.escape(str(division_name))}: "
+        "расписание ещё не сгенерировано. Сначала создайте матчи через меню админа."
+    )
+
+
 def is_logovo_access_allowed(user_id: int) -> bool:
     """
     Check if a user is permitted to access Logovo.bet.

@@ -11,7 +11,13 @@ from telegram.error import BadRequest, TelegramError, Forbidden
 from telegram.ext import ContextTypes, ConversationHandler
 import html
 import database
-from handlers.base import is_admin, is_global_admin, admin_only, post_league_table_to_reports
+from handlers.base import (
+    is_admin,
+    is_global_admin,
+    admin_only,
+    post_league_table_to_reports,
+    round_schedule_missing_message,
+)
 from handlers.cabinet import notify_match_confirmed, safe_send_notification, cb_report_choice_manual, safe_edit_or_reply
 import config
 from config import MAX_WARNS_LIMIT, GROUP_ID
@@ -2353,6 +2359,12 @@ async def admin_list_overdue(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
+async def _division_display_name(div_id: int) -> str:
+    """Человекочитаемое название дивизиона с безопасным фолбэком."""
+    div = await asyncio.to_thread(database.get_division, div_id)
+    return (div or {}).get("name") or f"Дивизион {div_id}"
+
+
 @admin_only
 async def admin_open_round_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
@@ -2365,6 +2377,20 @@ async def admin_open_round_prompt(update: Update, context: ContextTypes.DEFAULT_
         return ConversationHandler.END
     if not await _ensure_division_access(update, div_id):
         return ConversationHandler.END
+
+    # Расписание проверяется до запроса дедлайна: иначе админ вводит дату,
+    # а отказ прилетает только на следующем шаге.
+    if await asyncio.to_thread(database.count_round_matches, round_number, div_id) == 0:
+        div_name = await _division_display_name(div_id)
+        await query.edit_message_text(
+            round_schedule_missing_message(round_number, div_name),
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(
+                [[InlineKeyboardButton("« К турам", callback_data=f"admin_div_manage_matches:{div_id}")]]
+            ),
+        )
+        return ConversationHandler.END
+
     context.user_data["admin_round_to_open"] = round_number
     context.user_data["admin_round_open_div"] = div_id
 
@@ -2401,9 +2427,21 @@ async def admin_open_round_save(update: Update, context: ContextTypes.DEFAULT_TY
     if not round_number or not div_id:
         return ConversationHandler.END
 
-    await asyncio.to_thread(
-        database.update_round_status, round_number, is_open=True, deadline=deadline_text, division_id=div_id
-    )
+    # Гейт расписания стоит и здесь, а не только в prompt: между запросом
+    # дедлайна и вводом ответа матчи тура могли быть удалены.
+    try:
+        await asyncio.to_thread(
+            database.update_round_status, round_number, is_open=True, deadline=deadline_text, division_id=div_id
+        )
+    except database.RoundScheduleMissingError:
+        div_name = await _division_display_name(div_id)
+        keyboard = [[InlineKeyboardButton("« К турам", callback_data=f"admin_div_manage_matches:{div_id}")]]
+        await update.message.reply_text(
+            round_schedule_missing_message(round_number, div_name),
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return ConversationHandler.END
 
     announced = await _announce_rounds_opened(
         context,
@@ -2508,14 +2546,38 @@ async def admin_open_batch_deadline(update: Update, context: ContextTypes.DEFAUL
     if not start_r or not end_r or not div_id:
         return ConversationHandler.END
 
-    await asyncio.to_thread(database.open_rounds_batch, start_r, end_r, deadline_text, division_id=div_id)
+    # Туры без расписания пачка не открывает — они возвращаются в `skipped`.
+    report = await asyncio.to_thread(database.open_rounds_batch, start_r, end_r, deadline_text, division_id=div_id)
+    opened_rounds = report.get("opened", [])
+    skipped_rounds = report.get("skipped", [])
+    keyboard = [[InlineKeyboardButton("« К турам", callback_data=f"admin_div_manage_matches:{div_id}")]]
 
+    if not opened_rounds:
+        div_name = await _division_display_name(div_id)
+        if len(skipped_rounds) == 1:
+            text = round_schedule_missing_message(skipped_rounds[0], div_name)
+        else:
+            text = (
+                f"❌ Нельзя открыть туры {', '.join(str(r) for r in skipped_rounds)} — "
+                f"{html.escape(div_name)}: расписание ещё не сгенерировано. "
+                "Сначала создайте матчи через меню админа."
+            )
+        await update.message.reply_text(
+            text,
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return ConversationHandler.END
+
+    # Перечисляем открытые туры списком, а не диапазоном: в диапазоне мог
+    # оказаться пропущенный тур без расписания.
+    opened_list = ", ".join(str(r) for r in opened_rounds)
     announced = await _announce_rounds_opened(
         context,
         div_id,
-        f"🟢 <b>Открыты туры с {start_r} по {end_r}!</b>\n\n🕒 Дедлайн: {html.escape(deadline_text)}\n\n"
+        f"🟢 <b>Открыты туры: {opened_list}!</b>\n\n🕒 Дедлайн: {html.escape(deadline_text)}\n\n"
         "Пожалуйста, сыграйте свои матчи и внесите результаты до истечения срока.",
-        include_table=(start_r <= 1 <= end_r),
+        include_table=(1 in opened_rounds),
     )
 
     notice = (
@@ -2523,13 +2585,18 @@ async def admin_open_batch_deadline(update: Update, context: ContextTypes.DEFAUL
         if announced
         else "⚠️ Топик «📞 ОТЧЁТЫ» у дивизиона не настроен — объявление в группу не отправлено. Игроки уведомлены в ЛС."
     )
-    keyboard = [[InlineKeyboardButton("« К турам", callback_data=f"admin_div_manage_matches:{div_id}")]]
+    skipped_notice = (
+        f"\n⚠️ Пропущены туры без расписания: {', '.join(str(r) for r in skipped_rounds)}. "
+        "Сначала создайте для них матчи через меню админа."
+        if skipped_rounds
+        else ""
+    )
     await update.message.reply_text(
-        f"✅ Туры с {start_r} по {end_r} успешно открыты.\nДедлайн: {deadline_text}\n{notice}",
+        f"✅ Открыты туры: {opened_list}.\n"
+        f"Дедлайн: {deadline_text}{skipped_notice}\n{notice}",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-    opened_rounds = list(range(start_r, end_r + 1))
     await notify_players_rounds_opened(context, opened_rounds, deadline_text, division_id=div_id)
     return ConversationHandler.END
 

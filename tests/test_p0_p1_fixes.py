@@ -125,6 +125,15 @@ class TestP0P1Fixes(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(r1_div1["is_open"], 0)
         self.assertEqual(r1_div2["is_open"], 0)
 
+        # Расписание — предусловие открытия тура: без матчей update_round_status
+        # отказывает (RoundScheduleMissingError), см. test_round_schedule_guard.
+        with database.transaction() as conn:
+            conn.execute("""
+                INSERT INTO matches (round_number, player1_id, player2_id, player1_team, player2_team,
+                                     status, division_id)
+                VALUES (1, ?, ?, ?, 'Opponent Team 1', 'pending', ?)
+            """, (self.player1_id, self.div1_admin_id, f"ClubA_{self.uid}", self.div1_id))
+
         # Open Round 1 strictly in Div 1 with deadline preserved
         database.update_round_status(round_number=1, is_open=True, deadline="10.10.2026 18:00", division_id=self.div1_id)
 
