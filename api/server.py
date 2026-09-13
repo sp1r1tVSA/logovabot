@@ -55,6 +55,12 @@ from api.routes_tournaments import (
     handle_get_top_scorers,
     handle_get_my_tournament_stats
 )
+from api.routes_player_cabinet import (
+    handle_get_cabinet_overview,
+    handle_get_cabinet_matches,
+    handle_get_cabinet_squad,
+    handle_post_cabinet_match_time,
+)
 from api.routes_user_extras import (
     handle_get_my_stats,
     handle_get_profile_analytics,
@@ -348,6 +354,12 @@ def create_app() -> web.Application:
     app.router.add_get("/api/admin/risk/limits", handle_admin_get_limits)
     app.router.add_post("/api/admin/risk/limits", handle_admin_set_limits)
     app.router.add_post("/api/admin/risk/suspend", handle_admin_emergency_suspend)
+
+    # 12. Player Cabinet («Мой Клуб»)
+    app.router.add_get("/api/cabinet/overview", handle_get_cabinet_overview)
+    app.router.add_get("/api/cabinet/matches", handle_get_cabinet_matches)
+    app.router.add_get("/api/cabinet/squad", handle_get_cabinet_squad)
+    app.router.add_post("/api/cabinet/match-time", handle_post_cabinet_match_time)
 
     # Static SPA Frontend & Assets
     app.router.add_get("/", handle_index)

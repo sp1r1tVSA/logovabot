@@ -33,6 +33,13 @@ class AppController {
       UIRenderer.renderPredictionsHistory(state.myBets, state.myBetsFilter);
       UIRenderer.renderSavedCoupons(state.savedCoupons);
       UIRenderer.renderProfile(state.user, state.progression, state.myStats, state.achievements);
+      UIRenderer.renderMyClubView(state.myClub.overview);
+      if (!state.myClub.overview || state.myClub.overview.registered) {
+        UIRenderer.renderMyClubMatches(state.myClub.matches, state.myClubLoading);
+        UIRenderer.renderMyClubHistory(state.myClubRecent, state.myClubLoading);
+        UIRenderer.renderMyClubSquad(state.myClub.squad, state.myClubSquadMeta, state.myClubLoading);
+        UIRenderer.renderMyClubSubTab(state.myClubSubTab);
+      }
       UIRenderer.renderSlipDrawer(state.slip, state.stakeAmount);
     });
 
@@ -199,6 +206,118 @@ class AppController {
       if (tourStatsRes && tourStatsRes.status === 'ok') store.setTournamentStats(tourStatsRes.tournament_stats);
     } catch (e) {
       console.warn("Could not load user extras:", e);
+    }
+  }
+
+  async fetchMyClubData() {
+    store.setMyClubLoading(true);
+    try {
+      const overviewRes = await api.getMyClubOverview();
+      if (overviewRes.status === 'ok') {
+        store.setMyClubOverview(overviewRes);
+        // Незаявленному игроку показываем онбординг — матчи и состав не грузим.
+        if (!overviewRes.registered) return;
+      }
+
+      const [matchesRes, squadRes] = await Promise.all([
+        api.getMyClubMatches().catch(() => null),
+        api.getMyClubSquad().catch(() => null)
+      ]);
+
+      if (matchesRes && matchesRes.status === 'ok') {
+        store.setMyClubMatches(matchesRes.matches || [], matchesRes.recent || []);
+      }
+      if (squadRes && squadRes.status === 'ok') {
+        store.setMyClubSquad(squadRes.players || [], squadRes.top_scorer, squadRes.top_assistant);
+      }
+    } catch (e) {
+      console.warn("Could not load My Club data:", e);
+    } finally {
+      store.setMyClubLoading(false);
+    }
+  }
+
+  async refreshMyClubMatches() {
+    try {
+      const res = await api.getMyClubMatches();
+      if (res.status === 'ok') {
+        store.setMyClubMatches(res.matches || [], res.recent || []);
+      }
+    } catch (e) {
+      console.warn("Could not refresh My Club matches:", e);
+    }
+  }
+
+  openMatchTimeModal(matchId, opponentName, currentTime) {
+    const modal = document.getElementById('match-time-modal');
+    if (!modal) return;
+
+    this.pendingTimeMatchId = matchId;
+
+    const opponentEl = document.getElementById('match-time-modal-opponent');
+    if (opponentEl) opponentEl.textContent = `Соперник: ${opponentName || '—'}`;
+
+    const errEl = document.getElementById('match-time-error');
+    if (errEl) errEl.style.display = 'none';
+
+    const dateInput = document.getElementById('match-time-date');
+    const timeInput = document.getElementById('match-time-time');
+
+    // Предзаполняем сегодняшней датой (локальной, без сдвига в UTC) и
+    // ранее предложенным временем, если оно было.
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    if (dateInput && !dateInput.value) {
+      dateInput.value = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+    }
+    if (timeInput) {
+      const match = (currentTime || '').match(/(\d{1,2}):(\d{2})/);
+      timeInput.value = match ? `${pad(match[1])}:${match[2]}` : (timeInput.value || '20:00');
+    }
+
+    modal.classList.add('active');
+  }
+
+  async submitMatchTime() {
+    const matchId = this.pendingTimeMatchId;
+    const errEl = document.getElementById('match-time-error');
+    const dateInput = document.getElementById('match-time-date');
+    const timeInput = document.getElementById('match-time-time');
+    const submitBtn = document.getElementById('btn-submit-match-time');
+
+    const showError = (msg) => {
+      if (errEl) {
+        errEl.textContent = msg;
+        errEl.style.display = 'block';
+      } else {
+        tgBridge.showAlert(msg);
+      }
+    };
+
+    if (!matchId) return showError('Матч не выбран.');
+    if (!timeInput || !timeInput.value) return showError('Укажите время начала матча.');
+
+    // Формат «ДД.ММ.ГГГГ ЧЧ:ММ» — тот же, что понимает бот.
+    let timeStr = timeInput.value;
+    if (dateInput && dateInput.value) {
+      const [y, m, d] = dateInput.value.split('-');
+      timeStr = `${d}.${m}.${y} ${timeInput.value}`;
+    }
+
+    if (submitBtn) submitBtn.disabled = true;
+    try {
+      const res = await api.proposeMatchTime(matchId, timeStr);
+      if (res.status === 'ok') {
+        const modal = document.getElementById('match-time-modal');
+        if (modal) modal.classList.remove('active');
+        tgBridge.hapticNotification('success');
+        this.showSuccessModal('🗓 Время предложено', `Соперник получит предложение: ${timeStr}.`);
+        await this.refreshMyClubMatches();
+      }
+    } catch (e) {
+      showError(e.message || 'Не удалось отправить предложение времени.');
+    } finally {
+      if (submitBtn) submitBtn.disabled = false;
     }
   }
 
@@ -715,6 +834,61 @@ class AppController {
       }
     });
 
+    // 18b. My Club — внутренние под-вкладки
+    document.querySelectorAll('#my-club-subtabs .mc-subtab-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        store.setMyClubSubTab(btn.dataset.clubTab);
+        tgBridge.hapticImpact('light');
+      });
+    });
+
+    // 18c. My Club — согласование времени матча
+    document.addEventListener('click', async (e) => {
+      const proposeBtn = e.target.closest('.btn-propose-time');
+      if (proposeBtn) {
+        this.openMatchTimeModal(
+          parseInt(proposeBtn.dataset.matchId),
+          proposeBtn.dataset.opponent,
+          proposeBtn.dataset.currentTime
+        );
+        tgBridge.hapticImpact('light');
+        return;
+      }
+
+      const acceptBtn = e.target.closest('.btn-accept-time');
+      if (acceptBtn) {
+        const matchId = parseInt(acceptBtn.dataset.matchId);
+        acceptBtn.disabled = true;
+        try {
+          const res = await api.acceptMatchTime(matchId);
+          if (res.status === 'ok') {
+            tgBridge.hapticNotification('success');
+            this.showSuccessModal('✅ Время согласовано', `Матч назначен на ${res.proposed_time || 'согласованное время'}.`);
+            await this.refreshMyClubMatches();
+          }
+        } catch (err) {
+          tgBridge.showAlert(err.message || 'Не удалось подтвердить время матча.');
+        } finally {
+          acceptBtn.disabled = false;
+        }
+      }
+    });
+
+    // 18d. My Club — пресеты и отправка в модалке выбора времени
+    document.querySelectorAll('#match-time-presets .time-preset-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const timeInput = document.getElementById('match-time-time');
+        if (timeInput) timeInput.value = btn.dataset.time;
+        document.querySelectorAll('#match-time-presets .time-preset-btn')
+          .forEach(b => b.classList.toggle('active', b === btn));
+      });
+    });
+
+    const btnSubmitTime = document.getElementById('btn-submit-match-time');
+    if (btnSubmitTime) {
+      btnSubmitTime.addEventListener('click', () => this.submitMatchTime());
+    }
+
     // 19. Close Locked App screen
     const btnCloseLocked = document.getElementById('btn-close-locked-app');
     if (btnCloseLocked) {
@@ -775,6 +949,8 @@ class AppController {
       this.fetchUserExtras();
     } else if (viewName === 'tournaments') {
       this.fetchTournamentData();
+    } else if (viewName === 'my_club') {
+      this.fetchMyClubData();
     }
 
     tgBridge.hapticImpact('light');

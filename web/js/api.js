@@ -408,6 +408,37 @@ class ApiClient {
       body: JSON.stringify({ season_id: seasonId, confirm: true })
     });
   }
+
+  // 12. My Club — личный кабинет игрока
+  getMyClubOverview() {
+    return this.request('/api/cabinet/overview');
+  }
+
+  getMyClubMatches() {
+    return this.request('/api/cabinet/matches');
+  }
+
+  getMyClubSquad() {
+    return this.request('/api/cabinet/squad');
+  }
+
+  proposeMatchTime(matchId, timeStr) {
+    // Сервер вернёт новое состояние; кэш матчей сбрасываем, иначе вкладка
+    // до 5 секунд показывала бы старый статус согласования.
+    this.cache.delete('/api/cabinet/matches');
+    return this.request('/api/cabinet/match-time', {
+      method: 'POST',
+      body: JSON.stringify({ match_id: matchId, action: 'propose', proposed_time: timeStr })
+    });
+  }
+
+  acceptMatchTime(matchId) {
+    this.cache.delete('/api/cabinet/matches');
+    return this.request('/api/cabinet/match-time', {
+      method: 'POST',
+      body: JSON.stringify({ match_id: matchId, action: 'accept' })
+    });
+  }
 }
 
 export const api = new ApiClient();

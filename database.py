@@ -9640,3 +9640,190 @@ def reconcile_all_divisions_data(season_id: int | None = None) -> dict:
             "division_summaries": division_summaries,
         }
 
+
+# ============================================================================
+# Player Cabinet — Mini App tab «Мой Клуб»
+# Repository helpers backing api/routes_player_cabinet.py. They mirror what the
+# bot cabinet (handlers/cabinet.py) shows, but shaped for JSON transport.
+# ============================================================================
+
+CABINET_ACTIVE_MATCH_STATUSES = ("pending", "reported", "disputed")
+
+
+def _shape_cabinet_match(row: sqlite3.Row | dict, team_name: str, telegram_id: int) -> dict:
+    """Convert a raw matches row into the Mini App cabinet match payload."""
+    d = dict(row)
+    own = (team_name or "").strip().lower()
+    is_home = (d.get("player1_team") or "").strip().lower() == own
+
+    if is_home:
+        opponent_team = d.get("player2_team")
+        opponent_user = d.get("player2_username")
+        my_score, opp_score = d.get("player1_score"), d.get("player2_score")
+    else:
+        opponent_team = d.get("player1_team")
+        opponent_user = d.get("player1_username")
+        my_score, opp_score = d.get("player2_score"), d.get("player1_score")
+
+    proposed_by = d.get("proposed_by")
+    return {
+        "id": d.get("id"),
+        "round_number": d.get("round_number"),
+        "deadline": None,  # заполняется вызывающим из rounds
+        "opponent_team": opponent_team,
+        "opponent_user": opponent_user,
+        "is_home": bool(is_home),
+        "my_score": my_score,
+        "opp_score": opp_score,
+        "status": d.get("status"),
+        "time_status": d.get("time_status") or "none",
+        "proposed_time": d.get("proposed_time"),
+        "proposed_by_me": bool(proposed_by) and int(proposed_by) == int(telegram_id),
+    }
+
+
+def _attach_round_deadlines(matches: list[dict], division_id: int | None) -> None:
+    """Fill the `deadline` field of cabinet matches from the rounds table."""
+    cache: dict[int, str | None] = {}
+    for m in matches:
+        r_num = m.get("round_number")
+        if r_num is None:
+            continue
+        if r_num not in cache:
+            info = get_round_info(r_num, division_id=division_id)
+            cache[r_num] = (info or {}).get("deadline")
+        m["deadline"] = cache[r_num]
+
+
+def get_cabinet_matches(telegram_id: int, limit: int = 20) -> list[dict]:
+    """Active (unplayed / reported / disputed) matches of a coach's club."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT team_name, division_id FROM users WHERE telegram_id = ?", (telegram_id,))
+        u_row = cursor.fetchone()
+        if not u_row or not u_row["team_name"]:
+            return []
+        team = u_row["team_name"]
+        div_id = u_row["division_id"] if "division_id" in u_row.keys() else None
+
+        cursor.execute(
+            """
+            SELECT
+                m.id, m.round_number, m.status,
+                m.player1_team, m.player2_team, m.player1_score, m.player2_score,
+                m.proposed_time, m.proposed_by, COALESCE(m.time_status, 'none') AS time_status,
+                u1.username AS player1_username, u2.username AS player2_username
+            FROM matches m
+            LEFT JOIN users u1 ON LOWER(m.player1_team) = LOWER(u1.team_name)
+            LEFT JOIN users u2 ON LOWER(m.player2_team) = LOWER(u2.team_name)
+            WHERE (LOWER(m.player1_team) = LOWER(?) OR LOWER(m.player2_team) = LOWER(?))
+              AND m.status IN (?, ?, ?)
+            ORDER BY m.round_number ASC, m.id ASC
+            LIMIT ?
+            """,
+            (team, team, *CABINET_ACTIVE_MATCH_STATUSES, limit)
+        )
+        matches = [_shape_cabinet_match(row, team, telegram_id) for row in cursor.fetchall()]
+
+    _attach_round_deadlines(matches, div_id)
+    return matches
+
+
+def get_cabinet_recent_matches(telegram_id: int, limit: int = 5) -> list[dict]:
+    """Most recently finished (confirmed) matches of a coach's club."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT team_name, division_id FROM users WHERE telegram_id = ?", (telegram_id,))
+        u_row = cursor.fetchone()
+        if not u_row or not u_row["team_name"]:
+            return []
+        team = u_row["team_name"]
+        div_id = u_row["division_id"] if "division_id" in u_row.keys() else None
+
+        cursor.execute(
+            """
+            SELECT
+                m.id, m.round_number, m.status,
+                m.player1_team, m.player2_team, m.player1_score, m.player2_score,
+                m.proposed_time, m.proposed_by, COALESCE(m.time_status, 'none') AS time_status,
+                u1.username AS player1_username, u2.username AS player2_username
+            FROM matches m
+            LEFT JOIN users u1 ON LOWER(m.player1_team) = LOWER(u1.team_name)
+            LEFT JOIN users u2 ON LOWER(m.player2_team) = LOWER(u2.team_name)
+            WHERE (LOWER(m.player1_team) = LOWER(?) OR LOWER(m.player2_team) = LOWER(?))
+              AND m.status = 'confirmed'
+            ORDER BY m.played_at DESC, m.id DESC
+            LIMIT ?
+            """,
+            (team, team, limit)
+        )
+        matches = [_shape_cabinet_match(row, team, telegram_id) for row in cursor.fetchall()]
+
+    _attach_round_deadlines(matches, div_id)
+    return matches
+
+
+def get_cabinet_squad_stats(team_name: str) -> dict:
+    """Club roster with per-player goal/assist totals from confirmed matches.
+
+    Отличается от `get_club_squad_stats` (её использует бот-кабинет и карточка
+    клуба): здесь добавлены позиции и лидеры клуба, а ответ — словарь, а не
+    список, поэтому это отдельная функция, а не замена существующей.
+
+    Жёлтые/красные карточки в схеме не хранятся: `match_events.event_type`
+    ограничен CHECK ('goal', 'assist'), а в `squad_players` карточных колонок нет.
+    Поля отдаются нулями, чтобы контракт API оставался стабильным.
+    """
+    empty = {"players": [], "top_scorer": None, "top_assistant": None}
+    if not team_name:
+        return empty
+
+    roster = get_squad_with_positions(team_name)
+
+    goals: dict[str, int] = {}
+    assists: dict[str, int] = {}
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT me.player_name, me.event_type, SUM(me.count) AS total
+            FROM match_events me
+            JOIN matches m ON me.match_id = m.id
+            WHERE LOWER(me.team_name) = LOWER(?) AND m.status = 'confirmed'
+            GROUP BY me.player_name, me.event_type
+            """,
+            (team_name.strip(),)
+        )
+        for row in cursor.fetchall():
+            bucket = goals if row["event_type"] == "goal" else assists
+            bucket[row["player_name"]] = int(row["total"] or 0)
+
+    names = [p.get("player_name") for p in roster if p.get("player_name")]
+    positions = {p.get("player_name"): p.get("position") for p in roster}
+    # Бомбардир мог быть распознан OCR раньше, чем состав попал в squad_players.
+    for extra in list(goals.keys()) + list(assists.keys()):
+        if extra not in positions:
+            names.append(extra)
+            positions[extra] = None
+
+    players = [
+        {
+            "player_name": name,
+            "position": positions.get(name),
+            "goals": goals.get(name, 0),
+            "assists": assists.get(name, 0),
+            "yellow_cards": 0,
+            "red_cards": 0,
+        }
+        for name in names
+    ]
+    players.sort(key=lambda p: (-p["goals"], -p["assists"], p["player_name"] or ""))
+
+    top_scorer = next((p for p in players if p["goals"] > 0), None)
+    top_assistant = None
+    by_assists = sorted(players, key=lambda p: (-p["assists"], p["player_name"] or ""))
+    if by_assists and by_assists[0]["assists"] > 0:
+        top_assistant = by_assists[0]
+
+    return {"players": players, "top_scorer": top_scorer, "top_assistant": top_assistant}
+

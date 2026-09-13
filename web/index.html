@@ -10,8 +10,8 @@
   <!-- Telegram WebApp SDK -->
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <!-- Styles with cache-busting -->
-  <link rel="stylesheet" href="/css/main.css?v=2.3.0">
-  <link rel="stylesheet" href="/css/components.css?v=2.3.0">
+  <link rel="stylesheet" href="/css/main.css?v=2.4.0">
+  <link rel="stylesheet" href="/css/components.css?v=2.4.0">
 
   <!-- Critical Coupons & Team Logos Styles -->
   <style id="coupons-critical-css">
@@ -291,6 +291,28 @@
       </div>
     </section>
 
+    <!-- 6. My Club — Player's Personal Cabinet -->
+    <section id="view-my_club" class="view-section">
+      <!-- Club Hero Banner -->
+      <div id="my-club-hero-container">
+        <div class="club-hero club-hero-skeleton">
+          <div style="text-align: center; padding: 30px 16px; color: var(--text-muted);">Загрузка клуба...</div>
+        </div>
+      </div>
+
+      <!-- Internal Sub-tabs -->
+      <div class="mc-tabs club-subtabs" id="my-club-subtabs" style="margin: 14px 0;">
+        <button class="mc-subtab-btn active" data-club-tab="matches">📋 Мои матчи</button>
+        <button class="mc-subtab-btn" data-club-tab="squad">👥 Состав клуба</button>
+        <button class="mc-subtab-btn" data-club-tab="history">📜 История игр</button>
+      </div>
+
+      <!-- Sub-tab Panels -->
+      <div id="my-club-matches-container" class="club-panel"></div>
+      <div id="my-club-squad-container" class="club-panel" style="display: none;"></div>
+      <div id="my-club-history-container" class="club-panel" style="display: none;"></div>
+    </section>
+
   </main>
 
   <!-- Floating Smart Bet Slip Drawer -->
@@ -368,6 +390,10 @@
       <span class="nav-icon">📜</span>
       <span>Купоны</span>
     </button>
+    <button class="nav-item" data-view="my_club">
+      <span class="nav-icon">🛡</span>
+      <span>Мой Клуб</span>
+    </button>
     <button class="nav-item" data-view="profile">
       <span class="nav-icon">🐺</span>
       <span>Кабинет</span>
@@ -397,6 +423,36 @@
       <div class="podium-container" id="leaderboard-podium"></div>
       <!-- Full Rankings List -->
       <div id="leaderboard-list"></div>
+    </div>
+  </div>
+
+  <!-- Match Time Proposal Modal («Мой Клуб») -->
+  <div class="modal-overlay" id="match-time-modal">
+    <div class="modal-content" style="text-align: left;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
+        <div style="font-size: 1.1rem; font-weight: 900; color: #fff;">🗓 Предложить время</div>
+        <button class="btn-modal-close" style="background: transparent; color: var(--text-muted); font-size: 1.2rem; border: none; cursor: pointer;">✕</button>
+      </div>
+      <div class="time-modal-opponent" id="match-time-modal-opponent"></div>
+
+      <label class="time-modal-label" for="match-time-date">Дата</label>
+      <input type="date" id="match-time-date" class="time-modal-input">
+
+      <label class="time-modal-label" for="match-time-time">Время</label>
+      <input type="time" id="match-time-time" class="time-modal-input" step="300">
+
+      <div class="time-modal-presets" id="match-time-presets">
+        <button class="time-preset-btn" data-time="19:00">19:00</button>
+        <button class="time-preset-btn" data-time="20:00">20:00</button>
+        <button class="time-preset-btn" data-time="21:00">21:00</button>
+        <button class="time-preset-btn" data-time="22:00">22:00</button>
+      </div>
+
+      <div class="time-modal-error" id="match-time-error" style="display: none;"></div>
+
+      <button class="btn-club-primary" id="btn-submit-match-time" style="width: 100%; margin-top: 14px;">
+        Отправить предложение
+      </button>
     </div>
   </div>
 
@@ -453,6 +509,6 @@
 
 
   <!-- Main JavaScript App with cache-busting -->
-  <script type="module" src="/js/app.js?v=2.3.0"></script>
+  <script type="module" src="/js/app.js?v=2.4.0"></script>
 </body>
 </html>

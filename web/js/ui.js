@@ -122,6 +122,20 @@ const OUTCOME_NAMES = {
   'it2_under_1.5': 'ИТМ2 (1.5)'
 };
 
+/**
+ * Имена игроков и ники соперников приходят из пользовательского ввода и OCR,
+ * поэтому перед вставкой в innerHTML их обязательно экранировать.
+ */
+export function escapeHtml(value) {
+  if (value === null || value === undefined) return '';
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 export class UIRenderer {
   static formatNumber(n) {
     return (n || 0).toLocaleString('ru-RU');
@@ -1461,5 +1475,301 @@ export class UIRenderer {
         </div>
       </div>
     `;
+  }
+
+  // ==========================================================================
+  // My Club («Мой Клуб») — личный кабинет игрока
+  // ==========================================================================
+
+  /** Пустое состояние для игрока, не заявленного ни за один клуб. */
+  static renderMyClubEmptyState() {
+    return `
+      <div class="club-empty-state">
+        <div class="club-empty-icon">🛡</div>
+        <div class="club-empty-title">Вы пока не заявлены за клуб</div>
+        <div class="club-empty-text">
+          Личный кабинет откроется, как только вы станете участником лиги:
+          выберите клуб и получите дивизион.
+        </div>
+        <ol class="club-empty-steps">
+          <li>Откройте бота «Логово Фифарей» и отправьте <b>/start</b>.</li>
+          <li>В меню выберите <b>«Регистрация»</b> и укажите свой клуб.</li>
+          <li>Дождитесь подтверждения администратора дивизиона.</li>
+        </ol>
+      </div>
+    `;
+  }
+
+  /** Баннер клуба + дисциплина. */
+  static renderMyClubView(overview) {
+    const heroEl = document.getElementById('my-club-hero-container');
+    if (!heroEl) return;
+
+    if (!overview) {
+      heroEl.innerHTML = `
+        <div class="club-hero club-hero-skeleton">
+          <div style="text-align: center; padding: 30px 16px; color: var(--text-muted);">Загрузка клуба...</div>
+        </div>
+      `;
+      return;
+    }
+
+    const subtabs = document.getElementById('my-club-subtabs');
+    if (!overview.registered) {
+      heroEl.innerHTML = UIRenderer.renderMyClubEmptyState();
+      if (subtabs) subtabs.style.display = 'none';
+      ['my-club-matches-container', 'my-club-squad-container', 'my-club-history-container']
+        .forEach(id => {
+          const el = document.getElementById(id);
+          if (el) el.innerHTML = '';
+        });
+      return;
+    }
+    if (subtabs) subtabs.style.display = '';
+
+    const club = overview.club || {};
+    const t = overview.tournament || {};
+    const discipline = overview.discipline || { warns: 0, limit: 0 };
+
+    const teamName = club.team_name || 'Мой клуб';
+    const divLabel = club.division_name || (club.division_id ? `Дивизион ${club.division_id}` : 'Лига');
+    const place = t.position ? `${t.position}` : '—';
+    const diff = (t.goal_diff || 0) > 0 ? `+${t.goal_diff}` : `${t.goal_diff || 0}`;
+
+    const warns = Number(discipline.warns || 0);
+    const limit = Number(discipline.limit || 0);
+    const warnLevel = limit && warns >= limit ? 'danger' : (warns > 0 ? 'warning' : 'ok');
+
+    const formHtml = (t.form || []).map(r => {
+      const cls = r === 'W' ? 'win' : (r === 'D' ? 'draw' : 'loss');
+      const label = r === 'W' ? 'В' : (r === 'D' ? 'Н' : 'П');
+      return `<span class="club-form-dot ${cls}">${label}</span>`;
+    }).join('');
+
+    heroEl.innerHTML = `
+      <div class="club-hero">
+        <div class="club-hero-top">
+          ${renderTeamLogoWrapperHtml(teamName, 'club-hero-crest')}
+          <div class="club-hero-id">
+            <div class="club-hero-name">${escapeHtml(teamName)}</div>
+            <div class="club-hero-division">${escapeHtml(divLabel)}</div>
+          </div>
+          <div class="club-place-badge">
+            <span class="club-place-value">${escapeHtml(place)}</span>
+            <span class="club-place-label">место${t.total_teams ? ` / ${t.total_teams}` : ''}</span>
+          </div>
+        </div>
+
+        <div class="club-kpi-row">
+          <div class="club-kpi"><span class="club-kpi-label">Очки</span><span class="club-kpi-value gold">${t.points || 0}</span></div>
+          <div class="club-kpi"><span class="club-kpi-label">Игр</span><span class="club-kpi-value">${t.played || 0}</span></div>
+          <div class="club-kpi"><span class="club-kpi-label">В / Н / П</span><span class="club-kpi-value">${t.wins || 0} / ${t.draws || 0} / ${t.losses || 0}</span></div>
+          <div class="club-kpi"><span class="club-kpi-label">Мячи</span><span class="club-kpi-value">${t.goals_scored || 0}:${t.goals_conceded || 0} <span class="club-kpi-sub">(${diff})</span></span></div>
+        </div>
+
+        ${formHtml ? `
+          <div class="club-form-row">
+            <span class="club-form-caption">Форма</span>
+            <div class="club-form-dots">${formHtml}</div>
+          </div>
+        ` : ''}
+
+        <div class="club-discipline ${warnLevel}">
+          <span class="club-discipline-label">Дисциплина</span>
+          <span class="club-discipline-value">${warns} / ${limit} ⚠️</span>
+        </div>
+      </div>
+    `;
+  }
+
+  /** Бейдж состояния согласования времени для карточки матча. */
+  static _clubMatchBadge(match) {
+    if (match.status === 'confirmed') {
+      return { cls: 'finished', text: 'Завершён' };
+    }
+    if (match.status === 'disputed') {
+      return { cls: 'disputed', text: 'Спорный' };
+    }
+    if (match.time_status === 'accepted' && match.proposed_time) {
+      return { cls: 'accepted', text: `Согласовано время: ${escapeHtml(match.proposed_time)}` };
+    }
+    if (match.time_status === 'proposed') {
+      return match.proposed_by_me
+        ? { cls: 'proposed', text: `Вы предложили: ${escapeHtml(match.proposed_time || '—')}` }
+        : { cls: 'incoming', text: `Соперник предлагает: ${escapeHtml(match.proposed_time || '—')}` };
+    }
+    if (match.status === 'reported') {
+      return { cls: 'reported', text: 'Результат на проверке' };
+    }
+    return { cls: 'pending', text: 'Ожидает игры' };
+  }
+
+  static _clubMatchCard(match, { showActions = true } = {}) {
+    const badge = UIRenderer._clubMatchBadge(match);
+    const sideLabel = match.is_home ? 'Дома' : 'В гостях';
+    const opponentTeam = match.opponent_team || 'Соперник';
+    const opponentUser = match.opponent_user ? `@${match.opponent_user}` : 'ник не указан';
+    const scoreHtml = (match.my_score !== null && match.my_score !== undefined &&
+                       match.opp_score !== null && match.opp_score !== undefined)
+      ? `<div class="club-match-score">${match.my_score} : ${match.opp_score}</div>`
+      : '';
+
+    const canAccept = showActions && match.time_status === 'proposed' && !match.proposed_by_me;
+    const actionsHtml = showActions ? `
+      <div class="club-match-actions">
+        <button class="btn-club-secondary btn-propose-time"
+                data-match-id="${match.id}"
+                data-opponent="${escapeHtml(opponentTeam)}"
+                data-current-time="${escapeHtml(match.proposed_time || '')}">
+          🗓 Предложить время
+        </button>
+        ${canAccept ? `
+          <button class="btn-club-primary btn-accept-time" data-match-id="${match.id}">
+            ✅ Подтвердить
+          </button>
+        ` : ''}
+      </div>
+    ` : '';
+
+    return `
+      <div class="club-match-card" data-match-id="${match.id}">
+        <div class="club-match-head">
+          <span class="club-match-round">${match.round_number ? `Тур ${match.round_number}` : 'Матч'} · ${sideLabel}</span>
+          <span class="club-badge ${badge.cls}">${badge.text}</span>
+        </div>
+        <div class="club-match-body">
+          ${renderTeamLogoWrapperHtml(opponentTeam, 'club-match-crest')}
+          <div class="club-match-opponent">
+            <div class="club-match-team">${escapeHtml(opponentTeam)}</div>
+            <div class="club-match-user">${escapeHtml(opponentUser)}</div>
+          </div>
+          ${scoreHtml}
+        </div>
+        ${match.deadline ? `<div class="club-match-deadline">⏳ Дедлайн тура: ${escapeHtml(match.deadline)}</div>` : ''}
+        ${actionsHtml}
+      </div>
+    `;
+  }
+
+  /** Активные матчи игрока. */
+  static renderMyClubMatches(matches, isLoading = false) {
+    const el = document.getElementById('my-club-matches-container');
+    if (!el) return;
+
+    if (isLoading && (!matches || matches.length === 0)) {
+      el.innerHTML = `<div class="club-placeholder">Загрузка матчей...</div>`;
+      return;
+    }
+
+    if (!matches || matches.length === 0) {
+      el.innerHTML = `
+        <div class="club-placeholder">
+          Активных матчей нет — ждём открытия следующего тура. ⚽
+        </div>
+      `;
+      return;
+    }
+
+    el.innerHTML = matches.map(m => UIRenderer._clubMatchCard(m)).join('');
+  }
+
+  /** Последние сыгранные матчи клуба. */
+  static renderMyClubHistory(recent, isLoading = false) {
+    const el = document.getElementById('my-club-history-container');
+    if (!el) return;
+
+    if (isLoading && (!recent || recent.length === 0)) {
+      el.innerHTML = `<div class="club-placeholder">Загрузка истории...</div>`;
+      return;
+    }
+
+    if (!recent || recent.length === 0) {
+      el.innerHTML = `<div class="club-placeholder">Сыгранных матчей пока нет.</div>`;
+      return;
+    }
+
+    el.innerHTML = recent.map(m => UIRenderer._clubMatchCard(m, { showActions: false })).join('');
+  }
+
+  /** Состав клуба с личной статистикой. */
+  static renderMyClubSquad(players, meta = {}, isLoading = false) {
+    const el = document.getElementById('my-club-squad-container');
+    if (!el) return;
+
+    if (isLoading && (!players || players.length === 0)) {
+      el.innerHTML = `<div class="club-placeholder">Загрузка состава...</div>`;
+      return;
+    }
+
+    if (!players || players.length === 0) {
+      el.innerHTML = `
+        <div class="club-placeholder">
+          Состав клуба ещё не заполнен. Он появится после первой заявки состава в боте.
+        </div>
+      `;
+      return;
+    }
+
+    const topScorer = meta.top_scorer ? meta.top_scorer.player_name : null;
+    const topAssistant = meta.top_assistant ? meta.top_assistant.player_name : null;
+
+    const leadersHtml = (topScorer || topAssistant) ? `
+      <div class="club-leaders">
+        ${topScorer ? `
+          <div class="club-leader-card">
+            <span class="club-leader-label">⚽ Лучший бомбардир</span>
+            <span class="club-leader-name">${escapeHtml(topScorer)}</span>
+            <span class="club-leader-value">${meta.top_scorer.goals}</span>
+          </div>
+        ` : ''}
+        ${topAssistant ? `
+          <div class="club-leader-card">
+            <span class="club-leader-label">👟 Лучший ассистент</span>
+            <span class="club-leader-name">${escapeHtml(topAssistant)}</span>
+            <span class="club-leader-value">${meta.top_assistant.assists}</span>
+          </div>
+        ` : ''}
+      </div>
+    ` : '';
+
+    const rowsHtml = players.map((p, idx) => {
+      const isLeader = (topScorer && p.player_name === topScorer) ||
+                       (topAssistant && p.player_name === topAssistant);
+      return `
+        <div class="club-player-row ${isLeader ? 'leader' : ''}">
+          <span class="club-player-num">${idx + 1}</span>
+          <div class="club-player-id">
+            <span class="club-player-name">${escapeHtml(p.player_name)}</span>
+            ${p.position ? `<span class="club-player-pos">${escapeHtml(p.position)}</span>` : ''}
+          </div>
+          <span class="club-stat-badge goals" title="Голы">⚽ ${p.goals || 0}</span>
+          <span class="club-stat-badge assists" title="Ассисты">👟 ${p.assists || 0}</span>
+        </div>
+      `;
+    }).join('');
+
+    el.innerHTML = `
+      ${leadersHtml}
+      <div class="club-squad-list">${rowsHtml}</div>
+      <div class="club-squad-note">
+        Жёлтые и красные карточки в лиге пока не фиксируются.
+      </div>
+    `;
+  }
+
+  /** Переключение внутренних под-вкладок «Мой Клуб». */
+  static renderMyClubSubTab(tab) {
+    document.querySelectorAll('#my-club-subtabs .mc-subtab-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.clubTab === tab);
+    });
+    const panels = {
+      matches: 'my-club-matches-container',
+      squad: 'my-club-squad-container',
+      history: 'my-club-history-container'
+    };
+    Object.entries(panels).forEach(([name, id]) => {
+      const el = document.getElementById(id);
+      if (el) el.style.display = (name === tab) ? '' : 'none';
+    });
   }
 }

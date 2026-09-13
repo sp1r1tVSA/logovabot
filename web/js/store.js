@@ -15,7 +15,7 @@ class StateStore {
       searchQuery: '',
       slip: [], // [ { match_id, outcome, odd, market_id, selection_id, selection_name, team1_name, team2_name, tour }, ... ]
       stakeAmount: 100,
-      activeView: 'lobby', // 'lobby' | 'match_center' | 'tournaments' | 'history' | 'profile'
+      activeView: 'lobby', // 'lobby' | 'match_center' | 'tournaments' | 'history' | 'my_club' | 'profile'
       selectedMatchId: null,
       matchCenterSubTab: 'markets', // 'markets' | 'stats' | 'insights'
       matchDetail: null,
@@ -45,6 +45,12 @@ class StateStore {
       selectedDivisionId: 1,
       matchStatusFilter: 'all', // 'all' | 'open' | 'upcoming' | 'completed'
       unclaimedAchievementsCount: 0,
+      // Вкладка «Мой Клуб» (личный кабинет игрока)
+      myClub: { overview: null, matches: [], squad: [] },
+      myClubRecent: [],
+      myClubSquadMeta: { top_scorer: null, top_assistant: null },
+      myClubSubTab: 'matches', // 'matches' | 'squad' | 'history'
+      myClubLoading: false,
       // Sports Intelligence State (LIVE-центр удалён)
       oddsMovers: [],
       hotMatches: [],
@@ -194,6 +200,34 @@ class StateStore {
   setLeaderboard(leaderboard, myRank) {
     this.state.leaderboard = leaderboard || [];
     this.state.myRank = myRank;
+    this.notify();
+  }
+
+  // --- My Club («Мой Клуб») ---
+  setMyClubOverview(overview) {
+    this.state.myClub.overview = overview || null;
+    this.notify();
+  }
+
+  setMyClubMatches(matches, recent = null) {
+    this.state.myClub.matches = matches || [];
+    if (recent) this.state.myClubRecent = recent;
+    this.notify();
+  }
+
+  setMyClubSquad(players, topScorer = null, topAssistant = null) {
+    this.state.myClub.squad = players || [];
+    this.state.myClubSquadMeta = { top_scorer: topScorer, top_assistant: topAssistant };
+    this.notify();
+  }
+
+  setMyClubSubTab(tab) {
+    this.state.myClubSubTab = tab || 'matches';
+    this.notify();
+  }
+
+  setMyClubLoading(isLoading) {
+    this.state.myClubLoading = !!isLoading;
     this.notify();
   }
 
