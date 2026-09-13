@@ -8,7 +8,12 @@ everything in one atomic transaction.
 
 Targets, by default, только зарегистрированных игроков — строки `users`
 с непустым `team_name` (коуч с клубом). Расширяется флагами --all-users,
---division, --user-id.
+--all-wallets, --division, --user-id, --exclude-user-id.
+
+--all-wallets идёт не от `users`, а от самих кошельков: берёт все user_id из
+`user_wallets` ∪ `user_progression`, включая «сирот» — id без строки в `users`
+(так бывает после чистки ростера: коуч удалён, а его кошелёк с монетами остался).
+Это единственный режим, который вычищает монеты у таких id.
 
 Что делает --apply:
   * user_wallets.balance  → config.INITIAL_WALLET_BALANCE
@@ -58,16 +63,29 @@ DEFAULT_STREAK = 1
 DEFAULT_SHIELDS = 1
 
 
-def build_target_query(args: argparse.Namespace) -> tuple[str, list]:
-    """Return (WHERE clause, params) selecting the users to reset."""
-    where = []
+def _id_filters(args: argparse.Namespace, id_column: str) -> tuple[list[str], list]:
+    """--user-id / --exclude-user-id — общие для обоих режимов выборки."""
+    where: list[str] = []
     params: list = []
 
     if args.user_id:
         placeholders = ",".join("?" for _ in args.user_id)
-        where.append(f"u.telegram_id IN ({placeholders})")
+        where.append(f"{id_column} IN ({placeholders})")
         params.extend(args.user_id)
-    elif not args.all_users:
+
+    if args.exclude_user_id:
+        placeholders = ",".join("?" for _ in args.exclude_user_id)
+        where.append(f"{id_column} NOT IN ({placeholders})")
+        params.extend(args.exclude_user_id)
+
+    return where, params
+
+
+def build_target_query(args: argparse.Namespace) -> tuple[str, list]:
+    """Return (WHERE clause, params) selecting the users to reset."""
+    where, params = _id_filters(args, "u.telegram_id")
+
+    if not args.user_id and not args.all_users:
         # «Зарегистрированный игрок» = коуч с клубом.
         where.append("u.team_name IS NOT NULL AND TRIM(u.team_name) != ''")
 
@@ -78,12 +96,31 @@ def build_target_query(args: argparse.Namespace) -> tuple[str, list]:
     return (" AND ".join(where) if where else "1=1"), params
 
 
+def build_wallet_query(args: argparse.Namespace) -> tuple[str, list]:
+    """WHERE для режима --all-wallets: фильтр по id + опционально дивизион."""
+    where, params = _id_filters(args, "i.user_id")
+
+    if args.division is not None:
+        # У «сирот» строки в users нет, поэтому фильтр по дивизиону их отбросит.
+        where.append("u.division_id = ?")
+        params.append(args.division)
+
+    return (" AND ".join(where) if where else "1=1"), params
+
+
 def fetch_targets(args: argparse.Namespace) -> list[dict]:
+    if args.all_wallets:
+        return _fetch_from_wallets(args)
+    return _fetch_from_users(args)
+
+
+def _fetch_from_users(args: argparse.Namespace) -> list[dict]:
     where_sql, params = build_target_query(args)
     with database.transaction() as conn:
         cursor = conn.cursor()
         cursor.execute(f"""
             SELECT u.telegram_id, u.username, u.team_name, u.division_id,
+                   1 AS user_exists,
                    w.user_id AS wallet_exists, w.balance,
                    w.total_wagered, w.total_won, w.bets_count, w.bets_won,
                    p.user_id AS prog_exists, p.level, p.current_xp,
@@ -93,6 +130,33 @@ def fetch_targets(args: argparse.Namespace) -> list[dict]:
             LEFT JOIN user_progression p ON p.user_id = u.telegram_id
             WHERE {where_sql}
             ORDER BY u.division_id, u.team_name, u.telegram_id
+        """, params)
+        return [dict(r) for r in cursor.fetchall()]
+
+
+def _fetch_from_wallets(args: argparse.Namespace) -> list[dict]:
+    """Выборка от кошельков и прогресса — ловит id, которых нет в users."""
+    where_sql, params = build_wallet_query(args)
+    with database.transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute(f"""
+            WITH ids(user_id) AS (
+                SELECT user_id FROM user_wallets
+                UNION
+                SELECT user_id FROM user_progression
+            )
+            SELECT i.user_id AS telegram_id, u.username, u.team_name, u.division_id,
+                   u.telegram_id AS user_exists,
+                   w.user_id AS wallet_exists, w.balance,
+                   w.total_wagered, w.total_won, w.bets_count, w.bets_won,
+                   p.user_id AS prog_exists, p.level, p.current_xp,
+                   p.total_xp_earned, p.equipped_title
+            FROM ids i
+            LEFT JOIN users u ON u.telegram_id = i.user_id
+            LEFT JOIN user_wallets w ON w.user_id = i.user_id
+            LEFT JOIN user_progression p ON p.user_id = i.user_id
+            WHERE {where_sql}
+            ORDER BY w.balance DESC, i.user_id
         """, params)
         return [dict(r) for r in cursor.fetchall()]
 
@@ -118,7 +182,9 @@ def describe(row: dict) -> str:
     who = f"@{row['username']}" if row.get("username") else str(row["telegram_id"])
     club = row.get("team_name") or "без клуба"
     div = row.get("division_id")
-    return f"{who} [{club}] (див. {div if div is not None else '—'}, id {row['telegram_id']})"
+    orphan = "" if row.get("user_exists") else ", НЕТ строки в users"
+    return (f"{who} [{club}] (див. {div if div is not None else '—'}, "
+            f"id {row['telegram_id']}{orphan})")
 
 
 def apply_reset(rows: list[dict], args: argparse.Namespace) -> dict:
@@ -223,10 +289,16 @@ def main() -> int:
                         help="Реально применить изменения (по умолчанию dry-run)")
     parser.add_argument("--all-users", action="store_true",
                         help="Все строки users, включая тех, у кого нет клуба")
+    parser.add_argument("--all-wallets", action="store_true",
+                        help="Идти от кошельков и прогресса, а не от users: захватывает "
+                             "и «сирот» — id без строки в users")
     parser.add_argument("--division", type=int, default=None,
                         help="Только указанный дивизион (по division_id)")
     parser.add_argument("--user-id", type=int, action="append", default=[],
                         help="Только конкретный telegram_id (можно указать несколько раз)")
+    parser.add_argument("--exclude-user-id", type=int, action="append", default=[],
+                        help="Исключить telegram_id, например тестовый кошелёк "
+                             "(можно указать несколько раз)")
     parser.add_argument("--reset-stats", action="store_true",
                         help="Дополнительно обнулить счётчики ставок и таймер дневного бонуса")
     parser.add_argument("--reset-streaks", action="store_true",
@@ -238,6 +310,13 @@ def main() -> int:
     print(f"База: {config.DB_PATH}")
     print(f"Целевой баланс: {TARGET_BALANCE} 🪙 (config.INITIAL_WALLET_BALANCE)")
     print(f"Целевой прогресс: ур. {DEFAULT_LEVEL}, XP {DEFAULT_XP}, звание «{DEFAULT_TITLE}»")
+    if args.all_wallets:
+        source = "user_wallets ∪ user_progression (включая id без строки в users)"
+    elif args.all_users or args.user_id:
+        source = "users — все попавшие под фильтр"
+    else:
+        source = "users с непустым team_name"
+    print(f"Выборка: {source}")
 
     rows = fetch_targets(args)
     if not rows:
@@ -295,6 +374,9 @@ def main() -> int:
         print(f"Без кошелька (пропущены): {len(no_wallet)}")
     if no_prog:
         print(f"Без записи прогресса (пропущены): {len(no_prog)}")
+    orphans = [r for r in rows if not r.get("user_exists")]
+    if orphans:
+        print(f"Из них без строки в users («сироты»): {len(orphans)}")
 
     if not args.apply:
         print("\nЭто был dry-run. Для применения запустите с флагом --apply")
