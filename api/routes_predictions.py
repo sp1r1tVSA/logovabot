@@ -84,6 +84,14 @@ async def handle_place_prediction(request: web.Request) -> web.Response:
                     "error": "IDEMPOTENCY_KEY_REUSED",
                     "message": result.get("message", "Ключ уже использован для другой ставки.")
                 }, status=409)
+            if error_code == "SELF_BET_PROHIBITED":
+                # 322-защита: ставка на матч с собственным участием.
+                # Код отдаём отдельно, чтобы Mini App показал причину, а не общий отказ.
+                return web.json_response({
+                    "status": "error",
+                    "error": "SELF_BET_PROHIBITED",
+                    "message": result.get("message", "Запрещено делать ставки на матчи с собственным участием.")
+                }, status=400)
             if error_code in ("MAX_BET_EXCEEDED", "MAX_PAYOUT_EXCEEDED"):
                 return web.json_response({
                     "status": "error",

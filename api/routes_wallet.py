@@ -9,6 +9,7 @@ import json
 import logging
 from aiohttp import web
 import database
+from config import INITIAL_WALLET_BALANCE
 from api.auth import get_authenticated_user, check_user_access
 from handlers.base import is_admin
 
@@ -64,7 +65,7 @@ async def handle_bootstrap(request: web.Request) -> web.Response:
             "first_name": user_info.get("first_name", "Игрок"),
             "username": user_info.get("username", ""),
             "photo_url": user_info.get("photo_url", ""),
-            "balance": wallet.get("balance", 1000),
+            "balance": wallet.get("balance", INITIAL_WALLET_BALANCE),
             "total_wagered": wallet.get("total_wagered", 0),
             "total_won": wallet.get("total_won", 0),
             "bets_count": wallet.get("bets_count", 0),
@@ -229,7 +230,7 @@ async def handle_get_wallet(request: web.Request) -> web.Response:
         "status": "ok",
         "wallet": {
             "user_id": user_id,
-            "balance": wallet.get("balance", 1000),
+            "balance": wallet.get("balance", INITIAL_WALLET_BALANCE),
             "currency": "🪙",
             "total_wagered": wallet.get("total_wagered", 0),
             "total_won": wallet.get("total_won", 0),

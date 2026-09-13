@@ -56,6 +56,11 @@ GROUP_ID = _get_group_id()
 
 MAX_WARNS_LIMIT = 4
 
+# Logovo.bet: стартовый баланс нового кошелька (🪙). Единственный источник истины —
+# схема user_wallets.balance, get_or_create_wallet() и приветственный бонус
+# coin_transactions('welcome_bonus') берут сумму отсюда.
+INITIAL_WALLET_BALANCE = 677
+
 # Debt tracking and auto-warn activation threshold
 # No auto-warns will be issued before this datetime.
 # All previous round deadlines will be counted starting from this datetime.

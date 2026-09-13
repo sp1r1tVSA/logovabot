@@ -98,10 +98,12 @@ class TestPhase4BettingExperience(unittest.TestCase):
             # Setup test users
             c.execute("INSERT OR REPLACE INTO users (telegram_id, username, team_name, division_id, role) VALUES (?, ?, ?, ?, ?)",
                       (self.admin_id, "p4_admin", "Admin Team", 1, "admin"))
+            # 322-защита: клубы тестовых коучей намеренно не совпадают с участниками
+            # матчей, на которые они ставят (иначе купон отклоняется как ставка на свой матч).
             c.execute("INSERT OR REPLACE INTO users (telegram_id, username, team_name, division_id, role) VALUES (?, ?, ?, ?, ?)",
-                      (self.user1_id, "p4_user1", "Arsenal P4", 1, "player"))
+                      (self.user1_id, "p4_user1", "P4 Coach One", 1, "player"))
             c.execute("INSERT OR REPLACE INTO users (telegram_id, username, team_name, division_id, role) VALUES (?, ?, ?, ?, ?)",
-                      (self.user2_id, "p4_user2", "Chelsea P4", 2, "player"))
+                      (self.user2_id, "p4_user2", "P4 Coach Two", 2, "player"))
 
             # Setup test rounds
             # Round 95: betting line open (is_open=0, bets_open=1), valid future deadline

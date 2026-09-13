@@ -1,6 +1,7 @@
 import unittest
 import database
 import services.betting_engine as betting_engine
+from config import INITIAL_WALLET_BALANCE as START
 
 
 class TestBettingEngine(unittest.TestCase):
@@ -32,23 +33,23 @@ class TestBettingEngine(unittest.TestCase):
             conn.execute("DELETE FROM coin_transactions WHERE user_id = ?", (test_user,))
 
         wallet = database.get_or_create_wallet(test_user)
-        self.assertEqual(wallet["balance"], 1000)
-        self.assertEqual(database.get_wallet_balance(test_user), 1000)
+        self.assertEqual(wallet["balance"], START)
+        self.assertEqual(database.get_wallet_balance(test_user), START)
 
         # Add coins
         new_bal = database.add_coins(test_user, 500, "test_add")
-        self.assertEqual(new_bal, 1500)
-        self.assertEqual(database.get_wallet_balance(test_user), 1500)
+        self.assertEqual(new_bal, START + 500)
+        self.assertEqual(database.get_wallet_balance(test_user), START + 500)
 
         # Deduct coins
         ok = database.deduct_coins(test_user, 300, "test_sub")
         self.assertTrue(ok)
-        self.assertEqual(database.get_wallet_balance(test_user), 1200)
+        self.assertEqual(database.get_wallet_balance(test_user), START + 200)
 
         # Over-deduct should fail
-        fail_ok = database.deduct_coins(test_user, 5000, "overdraft")
+        fail_ok = database.deduct_coins(test_user, START + 5000, "overdraft")
         self.assertFalse(fail_ok)
-        self.assertEqual(database.get_wallet_balance(test_user), 1200)
+        self.assertEqual(database.get_wallet_balance(test_user), START + 200)
 
     def test_daily_bonus_and_cooldown(self):
         test_user = 999333444
@@ -58,7 +59,7 @@ class TestBettingEngine(unittest.TestCase):
         # 1. First claim succeeds
         ok, bal, msg = database.claim_daily_bonus(test_user, 250)
         self.assertTrue(ok)
-        self.assertEqual(bal, 1250) # 1000 welcome + 250 bonus
+        self.assertEqual(bal, START + 250)  # приветственный баланс + бонус
 
         # 2. Immediate second claim fails due to 24h cooldown
         ok2, rem_h, msg2 = database.claim_daily_bonus(test_user, 250)
@@ -88,7 +89,7 @@ class TestBettingEngine(unittest.TestCase):
             test_user, 100, [{"match_id": 8881, "outcome": "p1", "odd": 1.80}]
         )
         self.assertTrue(ok_single)
-        self.assertEqual(database.get_wallet_balance(test_user), 900)
+        self.assertEqual(database.get_wallet_balance(test_user), START - 100)
 
         # 2. Express Bet (200 coins on P1 1.80 * TB25 1.60 = 2.88)
         ok_express, bet_id_2 = database.place_user_bet(
@@ -98,21 +99,25 @@ class TestBettingEngine(unittest.TestCase):
             ]
         )
         self.assertTrue(ok_express)
-        self.assertEqual(database.get_wallet_balance(test_user), 700)
+        self.assertEqual(database.get_wallet_balance(test_user), START - 300)
 
         # 3. Settle Match 8881 (Score: 2-1 -> P1 won)
         payouts_1 = database.settle_match_bets(8881, 2, 1)
         # Single bet wins: 100 * 1.80 = 180 coins
         self.assertEqual(len(payouts_1), 1)
         self.assertEqual(payouts_1[0]["payout"], 180)
-        self.assertEqual(database.get_wallet_balance(test_user), 880)
+        self.assertEqual(database.get_wallet_balance(test_user), START - 300 + 180)
 
         # 4. Settle Match 8882 (Score: 3-1 -> TB25 won)
         payouts_2 = database.settle_match_bets(8882, 3, 1)
         # Express bet wins: 200 * 2.88 = 576 coins (+ optional 500 level up reward if XP milestone reached)
         self.assertEqual(len(payouts_2), 1)
         self.assertEqual(payouts_2[0]["payout"], 576)
-        self.assertIn(database.get_wallet_balance(test_user), [880 + 576, 880 + 576 + 500])
+        after_settle = START - 300 + 180
+        self.assertIn(
+            database.get_wallet_balance(test_user),
+            [after_settle + 576, after_settle + 576 + 500]
+        )
 
         # Verify bet history
         history = database.get_user_bets(test_user)
