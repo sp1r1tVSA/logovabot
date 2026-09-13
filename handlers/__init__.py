@@ -116,6 +116,7 @@ from handlers.admin import (
     admin_div_debts_dm,
     admin_div_manage_players,
     admin_toggle_chat_mode,
+    admin_toggle_ai_chat,
     admin_list_players,
     admin_gen_div_select,
     admin_generate_matches_execute,
@@ -694,6 +695,7 @@ def _register_admin_handlers(app: Application) -> None:
     app.add_handler(CallbackQueryHandler(admin_div_toggle, pattern="^admin_div_toggle_\\d+$"))
     app.add_handler(CallbackQueryHandler(admin_div_topics_menu, pattern="^admin_div_topics_\\d+$"))
     app.add_handler(CallbackQueryHandler(admin_toggle_chat_mode, pattern="^admin_toggle_chat_mode$"))
+    app.add_handler(CallbackQueryHandler(admin_toggle_ai_chat, pattern="^admin_toggle_ai_chat$"))
     app.add_handler(CallbackQueryHandler(admin_gen_div_select, pattern=r"^admin_gen_div_\d+$"))
     app.add_handler(CallbackQueryHandler(admin_generate_matches_execute, pattern=r"^admin_gen_exec_\d+$"))
     app.add_handler(CallbackQueryHandler(admin_manage_players_menu, pattern="^admin_manage_players$"))

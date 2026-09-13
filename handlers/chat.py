@@ -46,6 +46,11 @@ async def handle_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if handled:
             return
 
+    # Мастер-выключатель из супер-админки: турнирные текстовые команды выше остаются
+    # рабочими, глушится только генеративный диалог — ни Gemini, ни ответа в чат.
+    if not await asyncio.to_thread(database.is_ai_chat_enabled):
+        return
+
     is_voice_input = bool(update.message.voice)
     user_text = update.message.text.strip() if update.message.text else ""
     audio_input_bytes = None

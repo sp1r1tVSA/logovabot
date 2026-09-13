@@ -3028,6 +3028,22 @@ def set_config(key: str, value: str) -> None:
             (key, value)
         )
 
+AI_CHAT_ENABLED_KEY = "ai_chat_enabled"
+
+
+def is_ai_chat_enabled() -> bool:
+    """
+    Мастер-выключатель генеративных ответов ИИ «Темшик».
+    Отсутствие записи трактуется как «включено» — выключение хранится явным "0".
+    """
+    return get_config(AI_CHAT_ENABLED_KEY) != "0"
+
+
+def set_ai_chat_enabled(enabled: bool) -> None:
+    """Сохранить состояние мастер-выключателя ИИ «Темшик»."""
+    set_config(AI_CHAT_ENABLED_KEY, "1" if enabled else "0")
+
+
 def get_group_id() -> int | None:
     """Retrieve the automatically tracked Telegram Group ID."""
     val = get_config("group_id")

@@ -156,6 +156,26 @@ async def _ensure_match_access(update: Update, match: dict | None) -> bool:
     return await _ensure_division_access(update, int(div_id))
 
 
+def _build_super_admin_keyboard() -> InlineKeyboardMarkup:
+    """
+    Клавиатура супер-админки. Вынесена отдельно, потому что тумблер ИИ
+    перерисовывает её на месте через edit_message_reply_markup.
+    """
+    chat_mode = database.get_config("chat_mode") or "temshik"
+    mode_label = "Темшик 🍺" if chat_mode == "temshik" else "Булли 😈"
+    ai_label = "🟢 ВКЛ" if database.is_ai_chat_enabled() else "🔴 ВЫКЛ"
+    keyboard = [
+        [InlineKeyboardButton("🏆 Дивизионы", callback_data="admin_divs_hub")],
+        [InlineKeyboardButton("👔 Админы дивизионов", callback_data="admin_div_admins_hub")],
+        [InlineKeyboardButton("👥 Управление игроками", callback_data="admin_manage_players")],
+        [InlineKeyboardButton("🔄 Обновить таблицы и стату", callback_data="admin_force_update")],
+        [InlineKeyboardButton(f"🎭 Режим общения: {mode_label}", callback_data="admin_toggle_chat_mode")],
+        [InlineKeyboardButton(f"🤖 ИИ Темшик: {ai_label}", callback_data="admin_toggle_ai_chat")],
+        [InlineKeyboardButton("« Назад в меню", callback_data="main_menu")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
 @admin_only
 async def show_super_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Полная админ-панель — только для глобальных (супер) админов."""
@@ -164,18 +184,9 @@ async def show_super_admin_panel(update: Update, context: ContextTypes.DEFAULT_T
         await _deny_access(update)
         return
 
-    chat_mode = database.get_config("chat_mode") or "temshik"
-    mode_label = "Темшик 🍺" if chat_mode == "temshik" else "Булли 😈"
-    keyboard = [
-        [InlineKeyboardButton("🏆 Дивизионы", callback_data="admin_divs_hub")],
-        [InlineKeyboardButton("👔 Админы дивизионов", callback_data="admin_div_admins_hub")],
-        [InlineKeyboardButton("👥 Управление игроками", callback_data="admin_manage_players")],
-        [InlineKeyboardButton("🔄 Обновить таблицы и стату", callback_data="admin_force_update")],
-        [InlineKeyboardButton(f"🎭 Режим общения: {mode_label}", callback_data="admin_toggle_chat_mode")],
-        [InlineKeyboardButton("« Назад в меню", callback_data="main_menu")]
-    ]
+    markup = await asyncio.to_thread(_build_super_admin_keyboard)
     text = "👑 <b>Админ-панель</b>\n\nВыберите раздел:"
-    await _send_panel(update, context, text, InlineKeyboardMarkup(keyboard))
+    await _send_panel(update, context, text, markup)
 
 
 @admin_only
@@ -262,6 +273,38 @@ async def admin_toggle_chat_mode(update: Update, context: ContextTypes.DEFAULT_T
         f"✅ Режим общения ИИ изменён: <b>{'Булли 😈' if new_mode == 'persona2' else 'Темшик 🍺'}</b>",
         parse_mode="HTML"
     )
+
+async def admin_toggle_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Мастер-выключатель генеративных ответов ИИ «Темшик» (экономия токенов Gemini,
+    техработы, оффтоп). Клавиатура перерисовывается на месте, без нового сообщения.
+
+    Без @admin_only намеренно: декоратор гасит callback пустым query.answer(),
+    а Telegram принимает ответ на запрос только один раз — тост с новым состоянием
+    тогда не долетает. Права проверяются вручную тем же _ensure_super_admin.
+    """
+    query = update.callback_query
+    if not query:
+        return
+
+    if not await _ensure_super_admin(update):
+        return
+
+    new_state = not await asyncio.to_thread(database.is_ai_chat_enabled)
+    await asyncio.to_thread(database.set_ai_chat_enabled, new_state)
+
+    try:
+        await query.answer("ИИ Темшик включён 🟢" if new_state else "ИИ Темшик выключен 🔴")
+    except Exception as e:
+        # Тост не критичен: состояние всё равно видно на перерисованной кнопке.
+        logger.warning(f"Could not answer AI toggle callback: {e}")
+
+    markup = await asyncio.to_thread(_build_super_admin_keyboard)
+    try:
+        await query.edit_message_reply_markup(reply_markup=markup)
+    except Exception as e:
+        logger.warning(f"Could not refresh super admin keyboard after AI toggle: {e}")
+
 
 @admin_only
 async def admin_force_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
