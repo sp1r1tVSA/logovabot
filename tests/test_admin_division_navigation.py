@@ -53,7 +53,8 @@ class TestAdminDivisionNavigation(unittest.IsolatedAsyncioTestCase):
 
     # --- главная панель ---
 
-    async def test_super_panel_has_six_rows(self):
+    async def test_super_panel_has_seven_rows(self):
+        # Разделы + режим общения + мастер-выключатель ИИ + «Назад».
         update = self._build_update(self.super_id, "admin_main_menu")
         context = MagicMock()
         p_base, p_adm, p_glob, p_edit = self._patches()
@@ -61,7 +62,7 @@ class TestAdminDivisionNavigation(unittest.IsolatedAsyncioTestCase):
             await show_super_admin_panel(update, context)
 
             markup = edit_mock.call_args[1]["reply_markup"]
-            self.assertEqual(len(markup.inline_keyboard), 6)
+            self.assertEqual(len(markup.inline_keyboard), 7)
 
     async def test_super_panel_drops_global_sections(self):
         update = self._build_update(self.super_id, "admin_main_menu")
