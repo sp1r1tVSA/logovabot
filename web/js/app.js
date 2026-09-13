@@ -232,6 +232,7 @@ class AppController {
       }
     } catch (e) {
       console.warn("Could not load My Club data:", e);
+      UIRenderer.renderMyClubError(e.message || "Ошибка подключения к серверу", () => this.fetchMyClubData());
     } finally {
       store.setMyClubLoading(false);
     }

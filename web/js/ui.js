@@ -1500,6 +1500,24 @@ export class UIRenderer {
     `;
   }
 
+  /** Ошибка загрузки кабинета клуба с кнопкой повтора. */
+  static renderMyClubError(errorMessage, onRetry = null) {
+    const heroEl = document.getElementById('my-club-hero-container');
+    if (!heroEl) return;
+    heroEl.innerHTML = `
+      <div class="club-hero" style="text-align: center; padding: 24px 16px;">
+        <div style="font-size: 2rem; margin-bottom: 8px;">⚠️</div>
+        <div style="font-size: 0.95rem; font-weight: 700; color: #fff; margin-bottom: 6px;">Не удалось загрузить данные клуба</div>
+        <div style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 14px;">${escapeHtml(errorMessage || 'Сервер временно недоступен или перезагружается')}</div>
+        <button id="btn-retry-my-club" class="btn-club-secondary" style="margin: 0 auto; display: inline-flex;">🔄 Повторить</button>
+      </div>
+    `;
+    const btn = document.getElementById('btn-retry-my-club');
+    if (btn && onRetry) {
+      btn.addEventListener('click', onRetry);
+    }
+  }
+
   /** Баннер клуба + дисциплина. */
   static renderMyClubView(overview) {
     const heroEl = document.getElementById('my-club-hero-container');
