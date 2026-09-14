@@ -26,7 +26,7 @@ class AppController {
       UIRenderer.renderTourTabs(state.tours, state.selectedTour);
       UIRenderer.renderHotMatches(state.hotMatches);
       UIRenderer.renderOddsMovers(state.oddsMovers);
-      UIRenderer.renderRecommendations(state.recommendations);
+      UIRenderer.renderRecommendations(state.recommendations, state.searchQuery);
       UIRenderer.renderMatches(state.tours, state.selectedTour, state.marketCategoryFilter, state.searchQuery, state.matchStatusFilter, state.selectedDivisionId);
       UIRenderer.renderMatchCenter(state.matchDetail, state.matchStats, state.matchH2H, state.matchInsights, state.matchLive, state.matchMarkets, state.matchCenterSubTab);
       UIRenderer.renderTournaments(state.standings, state.results, state.topScorers, this.currentTournamentTab, state.standingsForm, this.standingsSort);
@@ -319,6 +319,31 @@ class AppController {
       showError(e.message || 'Не удалось отправить предложение времени.');
     } finally {
       if (submitBtn) submitBtn.disabled = false;
+    }
+  }
+
+  async openMatchProtocolModal(matchId) {
+    const modal = document.getElementById('match-protocol-modal');
+    if (!modal) return;
+
+    UIRenderer.renderMatchProtocolModal(null);
+    modal.classList.add('active');
+
+    try {
+      const res = await api.getMatchDetail(matchId);
+      if (res.status === 'ok' && res.match) {
+        UIRenderer.renderMatchProtocolModal(res);
+      } else {
+        const content = document.getElementById('match-protocol-content');
+        if (content) {
+          content.innerHTML = `<div style="text-align: center; padding: 24px; color: var(--color-danger);">Не удалось загрузить данные матча #${matchId}.</div>`;
+        }
+      }
+    } catch (err) {
+      const content = document.getElementById('match-protocol-content');
+      if (content) {
+        content.innerHTML = `<div style="text-align: center; padding: 24px; color: var(--color-danger);">${err.message || 'Ошибка сети при загрузке протокола'}</div>`;
+      }
     }
   }
 
@@ -871,6 +896,16 @@ class AppController {
           tgBridge.showAlert(err.message || 'Не удалось подтвердить время матча.');
         } finally {
           acceptBtn.disabled = false;
+        }
+      }
+
+      const protocolBtn = e.target.closest('.btn-view-match-protocol') || e.target.closest('.club-match-card.clickable');
+      if (protocolBtn && protocolBtn.dataset.matchId) {
+        const matchId = parseInt(protocolBtn.dataset.matchId);
+        if (matchId) {
+          this.openMatchProtocolModal(matchId);
+          tgBridge.hapticImpact('light');
+          return;
         }
       }
     });

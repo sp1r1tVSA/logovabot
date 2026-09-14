@@ -38,6 +38,7 @@ from api.routes_admin_risk import (
 from api.routes_matches import (
     handle_get_matches,
     handle_get_match_detail,
+    handle_get_match_photo,
     handle_get_match_stats,
     handle_get_match_h2h,
     handle_get_match_insights,
@@ -243,6 +244,7 @@ def create_app() -> web.Application:
     app.router.add_get("/api/matches/hot", handle_get_hot_matches)
     app.router.add_get("/api/recommendations", handle_get_recommendations)
     app.router.add_get("/api/matches/{id}", handle_get_match_detail)
+    app.router.add_get("/api/matches/{id}/photo", handle_get_match_photo)
     app.router.add_get("/api/matches/{id}/stats", handle_get_match_stats)
     app.router.add_get("/api/matches/{id}/h2h", handle_get_match_h2h)
     app.router.add_get("/api/matches/{id}/insights", handle_get_match_insights)

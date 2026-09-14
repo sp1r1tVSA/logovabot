@@ -196,10 +196,31 @@ async def handle_get_top_scorers(request: web.Request) -> web.Response:
         return web.json_response({"status": "error", "error": "unauthorized"}, status=401)
 
     div_param = request.query.get("division_id")
+    if not div_param:
+        path_id = request.match_info.get("id")
+        if path_id and path_id.isdigit():
+            div_param = path_id
     div_id = int(div_param) if div_param and div_param.isdigit() else None
 
-    top_scorers = await asyncio.to_thread(database.get_top_scorers, limit=15, division_id=div_id)
-    top_assists = await asyncio.to_thread(database.get_top_assists, limit=15, division_id=div_id)
+    raw_scorers = await asyncio.to_thread(database.get_top_scorers, limit=15, division_id=div_id)
+    raw_assists = await asyncio.to_thread(database.get_top_assists, limit=15, division_id=div_id)
+
+    top_scorers = [
+        {
+            **sc,
+            "goals": sc.get("total_goals", 0),
+            "total_goals": sc.get("total_goals", 0),
+        }
+        for sc in raw_scorers
+    ]
+    top_assists = [
+        {
+            **a,
+            "assists": a.get("total_assists", 0),
+            "total_assists": a.get("total_assists", 0),
+        }
+        for a in raw_assists
+    ]
 
     return web.json_response({
         "status": "ok",

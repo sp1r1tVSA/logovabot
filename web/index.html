@@ -266,14 +266,6 @@
         </div>
       </div>
 
-      <!-- Tournament (League) Statistics -->
-      <div style="font-size: 1.05rem; font-weight: 800; margin: 20px 0 10px; color: #fff;">
-        🏟 Турнирная статистика
-      </div>
-      <div id="tournament-stats-container">
-        <div style="text-align: center; padding: 24px; color: var(--text-muted);">Загрузка турнирной статистики...</div>
-      </div>
-
       <!-- Achievements Showcase -->
       <div style="font-size: 1.05rem; font-weight: 800; margin: 16px 0 10px; color: #fff; display: flex; align-items: center; justify-content: space-between;">
         <span>🏆 Достижения</span>
@@ -456,6 +448,17 @@
     </div>
   </div>
 
+  <!-- Match Protocol & Screenshot Modal («Мой Клуб» & Матчи) -->
+  <div class="modal-overlay" id="match-protocol-modal">
+    <div class="modal-content" style="max-height: 90vh; overflow-y: auto; text-align: left; max-width: 520px;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
+        <div style="font-size: 1.15rem; font-weight: 900; color: #fff;">📋 Протокол матча</div>
+        <button class="btn-modal-close" style="background: transparent; color: var(--text-muted); font-size: 1.2rem; border: none; cursor: pointer;">✕</button>
+      </div>
+      <div id="match-protocol-content"></div>
+    </div>
+  </div>
+
   <!-- General Success Modal -->
   <div class="modal-overlay" id="general-success-modal">
     <div class="modal-content">
@@ -509,6 +512,6 @@
 
 
   <!-- Main JavaScript App with cache-busting -->
-  <script type="module" src="/js/app.js?v=2.4.1"></script>
+  <script type="module" src="/js/app.js?v=2.4.2"></script>
 </body>
 </html>

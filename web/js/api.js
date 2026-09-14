@@ -192,8 +192,12 @@ class ApiClient {
     return this.request(`/api/results${q}`);
   }
 
+  getMatchPhotoUrl(matchId) {
+    return `/api/matches/${matchId}/photo`;
+  }
+
   getTopScorers(tournamentId = 1) {
-    return this.request(`/api/tournaments/${tournamentId}/top-scorers`);
+    return this.request(`/api/tournaments/${tournamentId}/top-scorers?division_id=${encodeURIComponent(tournamentId)}`);
   }
 
   // 6. User Stats, Saved Coupons, Favorites & Notifications

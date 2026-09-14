@@ -782,7 +782,7 @@ export class UIRenderer {
                 </div>
               </div>
               <div style="font-family: 'Outfit', sans-serif; font-weight: 900; color: var(--accent-gold); font-size: 1.05rem;">
-                ⚽ ${sc.goals}
+                ⚽ ${sc.goals ?? sc.total_goals ?? 0}
               </div>
             </div>
           `).join('')}
@@ -1155,8 +1155,6 @@ export class UIRenderer {
       if (bestEl) bestEl.textContent = `${this.formatNumber(stats.best_win)} 🪙`;
     }
 
-    this.renderTournamentStats(store.state.tournamentStats);
-
     // Achievements Grid
     const achEl = document.getElementById('achievements-grid-container');
     const achCountEl = document.getElementById('achievements-count-label');
@@ -1443,13 +1441,26 @@ export class UIRenderer {
     `;
   }
 
-  static renderRecommendations(recommendations) {
+  static renderRecommendations(recommendations, searchQuery = '') {
     const el = document.getElementById('recommendations-container');
     if (!el) return;
 
     if (!recommendations || recommendations.length === 0) {
       el.innerHTML = '';
       return;
+    }
+
+    let list = recommendations;
+    if (searchQuery && searchQuery.trim()) {
+      const q = searchQuery.toLowerCase().trim();
+      list = list.filter(rec =>
+        (rec.player1_team || '').toLowerCase().includes(q) ||
+        (rec.player2_team || '').toLowerCase().includes(q)
+      );
+      if (list.length === 0) {
+        el.innerHTML = '';
+        return;
+      }
     }
 
     el.innerHTML = `
@@ -1461,7 +1472,7 @@ export class UIRenderer {
           <span style="font-size: 0.75rem; color: var(--accent-gold); font-weight: 700;">Personalized</span>
         </div>
         <div style="display: flex; flex-direction: column; gap: 6px;">
-          ${recommendations.slice(0, 3).map(rec => `
+          ${list.slice(0, 3).map(rec => `
             <div style="background: var(--bg-secondary); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 10px 12px; display: flex; justify-content: space-between; align-items: center;">
               <div>
                 <div style="font-weight: 800; font-size: 0.85rem; color: #fff;">${rec.player1_team} — ${rec.player2_team}</div>
@@ -1646,11 +1657,16 @@ export class UIRenderer {
             ✅ Подтвердить
           </button>
         ` : ''}
+    const protocolBtnHtml = !showActions ? `
+      <div class="club-match-actions" style="margin-top: 10px;">
+        <button class="btn-club-secondary btn-view-match-protocol" data-match-id="${match.id}" style="width: 100%; justify-content: center; gap: 6px;">
+          📋 Протокол & Скриншот
+        </button>
       </div>
     ` : '';
 
     return `
-      <div class="club-match-card" data-match-id="${match.id}">
+      <div class="club-match-card ${!showActions ? 'clickable' : ''}" data-match-id="${match.id}">
         <div class="club-match-head">
           <span class="club-match-round">${match.round_number ? `Тур ${match.round_number}` : 'Матч'} · ${sideLabel}</span>
           <span class="club-badge ${badge.cls}">${badge.text}</span>
@@ -1665,6 +1681,7 @@ export class UIRenderer {
         </div>
         ${match.deadline ? `<div class="club-match-deadline">⏳ Дедлайн тура: ${escapeHtml(match.deadline)}</div>` : ''}
         ${actionsHtml}
+        ${protocolBtnHtml}
       </div>
     `;
   }
@@ -1789,5 +1806,110 @@ export class UIRenderer {
       const el = document.getElementById(id);
       if (el) el.style.display = (name === tab) ? '' : 'none';
     });
+  }
+
+  /** Модальное окно протокола матча с авторами голов и скриншотом. */
+  static renderMatchProtocolModal(detail) {
+    const container = document.getElementById('match-protocol-content');
+    if (!container) return;
+
+    if (!detail) {
+      container.innerHTML = '<div style="text-align: center; padding: 30px; color: var(--text-muted);">Загрузка протокола...</div>';
+      return;
+    }
+
+    const m = detail.match || detail;
+    const events = m.events || [];
+    const t1 = m.team1_name || m.player1_team || 'Хозяева';
+    const t2 = m.team2_name || m.player2_team || 'Гости';
+    const u1 = m.player1_username ? `@${m.player1_username}` : '';
+    const u2 = m.player2_username ? `@${m.player2_username}` : '';
+    const scoreStr = (m.player1_score !== null && m.player1_score !== undefined)
+      ? `${m.player1_score} : ${m.player2_score}`
+      : '— : —';
+    const isFinished = ['confirmed', 'completed', 'finished'].includes(m.status);
+    const photoUrl = m.photo_url || (m.has_photo ? `/api/matches/${m.id}/photo` : null);
+
+    const goals = events.filter(e => e.event_type === 'goal');
+    const assists = events.filter(e => e.event_type === 'assist');
+
+    container.innerHTML = `
+      <div style="background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 14px; margin-bottom: 14px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+          <span style="font-size: 0.75rem; font-weight: 800; color: var(--accent-gold); background: rgba(245,176,39,0.1); padding: 2px 8px; border-radius: 4px;">
+            ${m.round_number ? `Тур ${m.round_number}` : 'Матч'} · Дивизион ${m.division_id || 1}
+          </span>
+          <span style="font-size: 0.75rem; font-weight: 700; color: ${isFinished ? 'var(--color-success)' : 'var(--text-muted)'};">
+            ${isFinished ? '✅ Завершён' : (m.status || 'Ожидает')}
+          </span>
+        </div>
+
+        <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 0;">
+          <div style="flex: 1; text-align: center;">
+            ${renderTeamLogoHtml(t1, 38)}
+            <div style="font-weight: 800; color: #fff; font-size: 0.95rem; margin-top: 6px;">${escapeHtml(t1)}</div>
+            ${u1 ? `<div style="font-size: 0.75rem; color: var(--text-muted);">${escapeHtml(u1)}</div>` : ''}
+          </div>
+
+          <div style="padding: 6px 16px; background: rgba(0,0,0,0.4); border-radius: var(--radius-md); border: 1px solid rgba(255,255,255,0.06); text-align: center;">
+            <div style="font-family: 'Outfit', sans-serif; font-weight: 900; font-size: 1.6rem; color: var(--accent-gold); letter-spacing: 2px;">
+              ${scoreStr}
+            </div>
+          </div>
+
+          <div style="flex: 1; text-align: center;">
+            ${renderTeamLogoHtml(t2, 38)}
+            <div style="font-weight: 800; color: #fff; font-size: 0.95rem; margin-top: 6px;">${escapeHtml(t2)}</div>
+            ${u2 ? `<div style="font-size: 0.75rem; color: var(--text-muted);">${escapeHtml(u2)}</div>` : ''}
+          </div>
+        </div>
+      </div>
+
+      <!-- Events List (Goals & Assists) -->
+      <div style="margin-bottom: 16px;">
+        <div style="font-size: 0.88rem; font-weight: 800; color: #fff; margin-bottom: 8px; display: flex; align-items: center; gap: 6px;">
+          ⚽ События матча
+        </div>
+        ${events.length === 0 ? `
+          <div style="font-size: 0.8rem; color: var(--text-muted); padding: 10px; background: var(--bg-secondary); border-radius: var(--radius-sm); text-align: center;">
+            События (голы и ассисты) не зафиксированы
+          </div>
+        ` : `
+          <div style="background: var(--bg-secondary); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 8px 12px; display: flex; flex-direction: column; gap: 6px;">
+            ${goals.map(g => `
+              <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.82rem;">
+                <span style="color: #fff; font-weight: 700;">⚽ ${escapeHtml(g.player_name)} ${g.count > 1 ? `(x${g.count})` : ''}</span>
+                <span style="color: var(--text-muted); font-size: 0.75rem;">${escapeHtml(g.team_name)}</span>
+              </div>
+            `).join('')}
+            ${assists.map(a => `
+              <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.82rem; border-top: 1px dashed rgba(255,255,255,0.06); padding-top: 4px;">
+                <span style="color: var(--text-secondary); font-weight: 600;">👟 ${escapeHtml(a.player_name)} ${a.count > 1 ? `(x${a.count})` : ''}</span>
+                <span style="color: var(--text-muted); font-size: 0.75rem;">${escapeHtml(a.team_name)}</span>
+              </div>
+            `).join('')}
+          </div>
+        `}
+      </div>
+
+      <!-- Screenshot Section -->
+      <div style="margin-bottom: 12px;">
+        <div style="font-size: 0.88rem; font-weight: 800; color: #fff; margin-bottom: 8px; display: flex; align-items: center; justify-content: space-between;">
+          <span>📸 Скриншот протокола</span>
+          ${photoUrl ? `<span style="font-size: 0.72rem; color: var(--accent-gold); font-weight: 600;">Нажмите для увеличения</span>` : ''}
+        </div>
+        ${photoUrl ? `
+          <div style="position: relative; border-radius: var(--radius-md); overflow: hidden; border: 1px solid var(--border-subtle); background: #000; text-align: center;">
+            <a href="${photoUrl}" target="_blank" rel="noopener noreferrer" style="display: block;">
+              <img src="${photoUrl}" alt="Скриншот матча" style="width: 100%; display: block; max-height: 280px; object-fit: contain; cursor: pointer;">
+            </a>
+          </div>
+        ` : `
+          <div style="text-align: center; padding: 24px; color: var(--text-muted); font-size: 0.82rem; border: 1px dashed var(--border-subtle); border-radius: var(--radius-md); background: var(--bg-secondary);">
+            Скриншот для этого матча не был прикреплен
+          </div>
+        `}
+      </div>
+    `;
   }
 }

@@ -9666,6 +9666,7 @@ def _shape_cabinet_match(row: sqlite3.Row | dict, team_name: str, telegram_id: i
         my_score, opp_score = d.get("player2_score"), d.get("player1_score")
 
     proposed_by = d.get("proposed_by")
+    has_photo = bool(d.get("photo_id"))
     return {
         "id": d.get("id"),
         "round_number": d.get("round_number"),
@@ -9675,10 +9676,14 @@ def _shape_cabinet_match(row: sqlite3.Row | dict, team_name: str, telegram_id: i
         "is_home": bool(is_home),
         "my_score": my_score,
         "opp_score": opp_score,
+        "score": f"{my_score} : {opp_score}" if my_score is not None and opp_score is not None else None,
         "status": d.get("status"),
         "time_status": d.get("time_status") or "none",
         "proposed_time": d.get("proposed_time"),
         "proposed_by_me": bool(proposed_by) and int(proposed_by) == int(telegram_id),
+        "has_photo": has_photo,
+        "photo_id": d.get("photo_id"),
+        "photo_url": f"/api/matches/{d.get('id')}/photo" if has_photo else None,
     }
 
 
@@ -9709,7 +9714,7 @@ def get_cabinet_matches(telegram_id: int, limit: int = 20) -> list[dict]:
         cursor.execute(
             """
             SELECT
-                m.id, m.round_number, m.status,
+                m.id, m.round_number, m.status, m.photo_id,
                 m.player1_team, m.player2_team, m.player1_score, m.player2_score,
                 m.proposed_time, m.proposed_by, COALESCE(m.time_status, 'none') AS time_status,
                 u1.username AS player1_username, u2.username AS player2_username
@@ -9743,7 +9748,7 @@ def get_cabinet_recent_matches(telegram_id: int, limit: int = 5) -> list[dict]:
         cursor.execute(
             """
             SELECT
-                m.id, m.round_number, m.status,
+                m.id, m.round_number, m.status, m.photo_id,
                 m.player1_team, m.player2_team, m.player1_score, m.player2_score,
                 m.proposed_time, m.proposed_by, COALESCE(m.time_status, 'none') AS time_status,
                 u1.username AS player1_username, u2.username AS player2_username

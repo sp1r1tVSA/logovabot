@@ -9,8 +9,12 @@ Logovo.bet — Match Center 3.0 API:
 - Live match score, minute & timeline
 """
 
+import os
+import base64
 import logging
+import aiohttp
 from aiohttp import web
+import config
 import database
 from api.auth import get_authenticated_user, check_user_access
 
@@ -119,10 +123,35 @@ async def handle_get_matches(request: web.Request) -> web.Response:
     })
 
 
+def _render_placeholder_photo_svg(match_id: int, team1: str = "Хозяева", team2: str = "Гости") -> web.Response:
+    svg = f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 500" width="100%" height="100%">
+      <defs>
+        <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stop-color="#0f141d"/>
+          <stop offset="50%" stop-color="#182232"/>
+          <stop offset="100%" stop-color="#0c1017"/>
+        </linearGradient>
+        <linearGradient id="gold" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stop-color="#f5b027"/>
+          <stop offset="100%" stop-color="#d49410"/>
+        </linearGradient>
+      </defs>
+      <rect width="800" height="500" rx="16" fill="url(#bg)" stroke="#2a384c" stroke-width="2"/>
+      <circle cx="400" cy="180" r="48" fill="rgba(245, 176, 39, 0.1)" stroke="#f5b027" stroke-width="2"/>
+      <text x="400" y="195" font-family="'Outfit', sans-serif" font-size="40" text-anchor="middle" fill="#f5b027">📸</text>
+      <text x="400" y="270" font-family="'Outfit', sans-serif" font-weight="800" font-size="24" text-anchor="middle" fill="#ffffff">Протокол матча #{match_id}</text>
+      <text x="400" y="305" font-family="'Outfit', sans-serif" font-weight="600" font-size="16" text-anchor="middle" fill="#8a99ad">Скриншот с итоговым счётом и статистикой игры</text>
+      <rect x="250" y="340" width="300" height="42" rx="8" fill="rgba(255,255,255,0.04)" stroke="rgba(255,255,255,0.1)"/>
+      <text x="400" y="367" font-family="'Outfit', sans-serif" font-weight="700" font-size="15" text-anchor="middle" fill="url(#gold)">FIFA / EA FC Esports Center</text>
+    </svg>"""
+    return web.Response(body=svg.encode("utf-8"), content_type="image/svg+xml")
+
+
 async def handle_get_match_detail(request: web.Request) -> web.Response:
     """
     GET /api/matches/{id}
-    Returns complete overview of a single match.
+    Returns complete overview of a single match including coach usernames,
+    goals/assists events, and photo_url.
     """
     init_data = request.headers.get("X-Telegram-Init-Data", "")
     user_info = get_authenticated_user(init_data)
@@ -143,20 +172,114 @@ async def handle_get_match_detail(request: web.Request) -> web.Response:
             SELECT m.*,
                    COALESCE(m.player1_team, 'Хозяева') as team1_name,
                    COALESCE(m.player2_team, 'Гости') as team2_name,
+                   u1.username as player1_username,
+                   u2.username as player2_username,
                    t.name as tournament_name
             FROM matches m
+            LEFT JOIN users u1 ON LOWER(m.player1_team) = LOWER(u1.team_name)
+            LEFT JOIN users u2 ON LOWER(m.player2_team) = LOWER(u2.team_name)
             LEFT JOIN tournaments t ON m.tournament_id = t.id
             WHERE m.id = ?
         """, (match_id,))
         row = cursor.fetchone()
 
-    if not row:
-        return web.json_response({"status": "error", "message": "Матч не найден."}, status=404)
+        if not row:
+            return web.json_response({"status": "error", "message": "Матч не найден."}, status=404)
+
+        match_dict = dict(row)
+
+        cursor.execute("""
+            SELECT player_name, team_name, event_type, count
+            FROM match_events
+            WHERE match_id = ?
+            ORDER BY event_type DESC, count DESC, player_name ASC
+        """, (match_id,))
+        events = [dict(ev) for ev in cursor.fetchall()]
+
+    has_photo = bool(match_dict.get("photo_id"))
+    match_dict["events"] = events
+    match_dict["has_photo"] = has_photo
+    match_dict["photo_url"] = f"/api/matches/{match_id}/photo" if has_photo else None
 
     return web.json_response({
         "status": "ok",
-        "match": dict(row)
+        "match": match_dict
     })
+
+
+async def handle_get_match_photo(request: web.Request) -> web.Response:
+    """
+    GET /api/matches/{id}/photo
+    Serves the screenshot / photo proof of a match.
+    Supports HTTP URLs, base64 data URIs, and Telegram Bot API file_ids.
+    """
+    try:
+        match_id = int(request.match_info["id"])
+    except (KeyError, ValueError):
+        return web.Response(status=400, text="Invalid match id")
+
+    with database.transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, photo_id, player1_team, player2_team FROM matches WHERE id = ?", (match_id,))
+        row = cursor.fetchone()
+
+    if not row or not row["photo_id"]:
+        return _render_placeholder_photo_svg(match_id)
+
+    photo_id = str(row["photo_id"]).strip()
+    t1 = row["player1_team"] or "Хозяева"
+    t2 = row["player2_team"] or "Гости"
+
+    # 1. Direct HTTP / HTTPS URL
+    if photo_id.startswith("http://") or photo_id.startswith("https://"):
+        raise web.HTTPFound(photo_id)
+
+    # 2. Base64 / UTF-8 Data URI
+    if photo_id.startswith("data:image/"):
+        try:
+            header, data_part = photo_id.split(",", 1)
+            mime = header.split(";")[0].replace("data:", "")
+            if ";base64" in header:
+                img_bytes = base64.b64decode(data_part)
+            else:
+                from urllib.parse import unquote
+                img_bytes = unquote(data_part).encode("utf-8")
+            return web.Response(body=img_bytes, content_type=mime)
+        except Exception as e:
+            logger.warning(f"Failed to decode data uri match photo for #{match_id}: {e}")
+
+    # 3. Local file path
+    if os.path.exists(photo_id):
+        try:
+            with open(photo_id, "rb") as f:
+                return web.Response(body=f.read(), content_type="image/jpeg")
+        except Exception as e:
+            logger.warning(f"Failed to read local match photo file for #{match_id}: {e}")
+
+    # 4. Telegram Bot API file_id
+    if config.TOKEN:
+        try:
+            timeout = aiohttp.ClientTimeout(total=8)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                get_file_url = f"https://api.telegram.org/bot{config.TOKEN}/getFile?file_id={photo_id}"
+                async with session.get(get_file_url) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        file_path = data.get("result", {}).get("file_path")
+                        if file_path:
+                            file_download_url = f"https://api.telegram.org/file/bot{config.TOKEN}/{file_path}"
+                            async with session.get(file_download_url) as img_resp:
+                                if img_resp.status == 200:
+                                    img_bytes = await img_resp.read()
+                                    return web.Response(
+                                        body=img_bytes,
+                                        content_type="image/jpeg",
+                                        headers={"Cache-Control": "public, max-age=86400"}
+                                    )
+        except Exception as e:
+            logger.warning(f"Could not proxy Telegram photo for match #{match_id} (file_id={photo_id}): {e}")
+
+    return _render_placeholder_photo_svg(match_id, t1, t2)
 
 
 def _get_team_recent_matches(cursor, team_name: str, limit: int = 5) -> list[dict]:

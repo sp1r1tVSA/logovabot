@@ -37,19 +37,59 @@ async def handle_get_tours(request: web.Request) -> web.Response:
     division_id_param = request.query.get("division_id")
     div_id = int(division_id_param) if division_id_param and division_id_param.isdigit() else None
 
-    open_tours = await asyncio.to_thread(database.get_open_betting_tours, division_id=div_id)
+    # Получаем все туры сезона, которые либо открыты для игры (is_open = 1), либо открыты для ставок (bets_open = 1)
+    with database.transaction() as conn:
+        cursor = conn.cursor()
+        act = database.get_active_season()
+        s_id = act["id"] if act else 1
+        query = """
+            SELECT
+                r.round_number, r.deadline, r.division_id, r.season_id,
+                r.is_open, COALESCE(r.bets_open, 0) AS bets_open,
+                COUNT(m.id) as total_matches,
+                SUM(CASE WHEN m.status NOT IN ('confirmed', 'completed') THEN 1 ELSE 0 END) as unplayed_matches
+            FROM rounds r
+            LEFT JOIN matches m
+              ON m.round_number = r.round_number
+             AND COALESCE(m.division_id, 1) = r.division_id
+             AND COALESCE(m.season_id, 1) = r.season_id
+            WHERE (r.is_open = 1 OR COALESCE(r.bets_open, 0) = 1)
+              AND r.season_id = ?
+        """
+        params = [s_id]
+        if div_id is not None:
+            query += " AND r.division_id = ?"
+            params.append(div_id)
+        query += " GROUP BY r.round_number, r.deadline, r.division_id, r.season_id, r.is_open, r.bets_open ORDER BY r.round_number ASC"
+        cursor.execute(query, params)
+        season_tours = [dict(r) for r in cursor.fetchall()]
+
+    for t in season_tours:
+        t["is_early"] = (not t.get("is_open")) and bool(t.get("bets_open"))
+
+    open_tours = season_tours
+    if not open_tours:
+        open_tours = await asyncio.to_thread(database.get_open_betting_tours, division_id=div_id)
+
     results = []
 
     for t in open_tours:
         r_num = t["round_number"]
         # Ensure markets are generated
-        generate_round_markets(r_num, division_id=div_id)
+        try:
+            generate_round_markets(r_num, division_id=div_id)
+        except Exception as e:
+            logger.debug(f"Could not generate round markets for tour #{r_num}: {e}")
+
         markets = await asyncio.to_thread(database.get_active_bet_markets, r_num, division_id=div_id)
+        round_matches = await asyncio.to_thread(database.get_matches_by_round, r_num, division_id=div_id)
 
         matches_list = []
+        seen_match_ids = set()
+
         for m in markets:
-            # Also ensure relational markets are populated for each match
             m_id = m["match_id"]
+            seen_match_ids.add(m_id)
             t1 = m["team1_name"]
             t2 = m["team2_name"]
             try:
@@ -62,6 +102,10 @@ async def handle_get_tours(request: web.Request) -> web.Response:
                 "tour": m["tour"],
                 "team1_name": m["team1_name"],
                 "team2_name": m["team2_name"],
+                "status": m.get("match_status") or "pending",
+                "division_id": m.get("division_id") or div_id or 1,
+                "player1_score": m.get("player1_score"),
+                "player2_score": m.get("player2_score"),
                 "odds": {
                     "p1": round(m["odd_p1"], 2),
                     "x": round(m["odd_x"], 2),
@@ -73,12 +117,37 @@ async def handle_get_tours(request: web.Request) -> web.Response:
                 }
             })
 
+        # Добавляем также завершённые матчи этого тура, чтобы фильтр «Завершённые» работал корректно
+        for rm in round_matches:
+            rm_id = rm["id"]
+            if rm_id in seen_match_ids:
+                continue
+            seen_match_ids.add(rm_id)
+            matches_list.append({
+                "match_id": rm_id,
+                "tour": rm.get("round_number") or r_num,
+                "team1_name": rm.get("player1_team") or "Команда 1",
+                "team2_name": rm.get("player2_team") or "Команда 2",
+                "status": rm.get("status") or "confirmed",
+                "division_id": rm.get("division_id") or div_id or 1,
+                "player1_score": rm.get("player1_score"),
+                "player2_score": rm.get("player2_score"),
+                "odds": {
+                    "p1": 1.0,
+                    "x": 1.0,
+                    "p2": 1.0,
+                    "tb25": 1.0,
+                    "tm25": 1.0,
+                    "btts_yes": 1.0,
+                    "btts_no": 1.0
+                }
+            })
+
         results.append({
             "round_number": r_num,
             "deadline": t.get("deadline"),
             "total_matches": t.get("total_matches", len(matches_list)),
             "unplayed_matches": t.get("unplayed_matches", len(matches_list)),
-            # Ранняя линия: тур ещё не открыт для игры, но прогнозы уже принимаются.
             "is_early": bool(t.get("is_early")),
             "matches": matches_list
         })
