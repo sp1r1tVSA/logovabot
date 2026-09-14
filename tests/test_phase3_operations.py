@@ -254,7 +254,15 @@ class TestPhase3Operations(unittest.TestCase):
         with self.assertRaises(ValueError):
             database.open_rounds_batch(start_round=1, end_round=3, deadline="2026-12-31 23:59", division_id=991, season_id=999)
 
-        # Season 998 is 'active' -> Succeeds
+        # Season 998 is 'active' -> Succeeds. У тура должно быть расписание:
+        # открытие тура без матчей запрещено (см. tests/test_round_schedule_guard.py).
+        with database.transaction() as conn:
+            conn.execute(
+                "INSERT INTO matches (id, round_number, player1_id, player2_id, player1_team, player2_team, status, division_id, season_id) "
+                "VALUES (99006, 1, ?, ?, 'Phase3 Team A', 'Phase3 Team B', 'pending', 991, 998)",
+                (self.user1_id, self.user2_id)
+            )
+
         database.update_round_status(round_number=1, is_open=True, division_id=991, season_id=998)
         r_info = database.get_round_info(1, division_id=991, season_id=998)
         self.assertIsNotNone(r_info)

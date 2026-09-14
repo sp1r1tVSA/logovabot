@@ -16,6 +16,25 @@ logger = logging.getLogger(__name__)
 SELF_BET_ERROR_CODE = "SELF_BET_PROHIBITED"
 SELF_BET_ERROR_MESSAGE = "Запрещено делать ставки на матчи с собственным участием."
 
+
+class RoundScheduleMissingError(ValueError):
+    """Тур нельзя открыть: для (season, division, round) нет ни одного матча.
+
+    Открытый тур без расписания — «фантом»: игроки видят приглашение вносить
+    результаты, а вносить нечего; дедлайн и долговой трекер при этом уже идут.
+    Наследуется от ValueError, потому что вызывающие уже ловят ValueError от
+    сезонного гейта в тех же самых местах.
+    """
+
+    def __init__(self, round_number: int, division_id: int | None, season_id: int | None = None):
+        self.round_number = round_number
+        self.division_id = division_id
+        self.season_id = season_id
+        super().__init__(
+            f"Round {round_number} (division={division_id}, season={season_id}) has no matches: "
+            "the schedule has not been generated yet."
+        )
+
 def get_connection() -> sqlite3.Connection:
     """Establish and return a new SQLite database connection."""
     try:
@@ -3134,8 +3153,58 @@ def trim_style_samples(keep: int = 100) -> None:
         )
 
 
-def open_rounds_batch(start_round: int, end_round: int, deadline: str, division_id: int | None = None, season_id: int | None = None) -> None:
-    """Open multiple rounds and set a shared deadline, scoped by division and season."""
+def _count_round_matches(cursor, round_number: int, division_id: int | None, season_id: int) -> int:
+    """Сколько матчей стоит в расписании тура внутри (season, division).
+
+    Единственная точка, где считается «есть ли у тура расписание»: на неё
+    опираются и гейт открытия тура, и выставление линии. У легаси-строк матча
+    `division_id` может быть NULL — по принятому в проекте соглашению это
+    дивизион 1; NULL в `season_id` относится к запрошенному сезону, ровно как
+    в `get_matches_by_round`, чтобы гейт не запрещал открыть тур, матчи
+    которого админ видит в карточке тура.
+    """
+    if division_id is not None:
+        cursor.execute(
+            "SELECT COUNT(*) AS c FROM matches WHERE round_number = ? "
+            "AND COALESCE(division_id, 1) = ? AND (season_id = ? OR season_id IS NULL)",
+            (round_number, division_id, season_id)
+        )
+    else:
+        cursor.execute(
+            "SELECT COUNT(*) AS c FROM matches WHERE round_number = ? "
+            "AND (season_id = ? OR season_id IS NULL)",
+            (round_number, season_id)
+        )
+    return cursor.fetchone()["c"] or 0
+
+
+def count_round_matches(round_number: int, division_id: int | None = None, season_id: int | None = None) -> int:
+    """Публичная обёртка над `_count_round_matches` для хендлеров."""
+    if season_id is None:
+        act = get_active_season()
+        s_id = act["id"] if act else 1
+    else:
+        s_id = season_id
+
+    with transaction() as conn:
+        return _count_round_matches(conn.cursor(), round_number, division_id, s_id)
+
+
+def open_rounds_batch(
+    start_round: int,
+    end_round: int,
+    deadline: str,
+    division_id: int | None = None,
+    season_id: int | None = None,
+) -> dict:
+    """Open multiple rounds and set a shared deadline, scoped by division and season.
+
+    Туры без расписания пропускаются: открыть тур, для которого не сгенерированы
+    матчи, нельзя (см. `RoundScheduleMissingError`). Возвращает отчёт
+    `{"opened": [...], "skipped": [...]}` — вызывающий обязан показать админу
+    пропущенные туры. Если расписания нет ни у одного тура диапазона, не
+    изменяется ничего.
+    """
     div_id = division_id if division_id is not None else 1
     if season_id is None:
         act = get_active_season()
@@ -3150,40 +3219,59 @@ def open_rounds_batch(start_round: int, end_round: int, deadline: str, division_
     # Сериализуется с приёмом ставок — см. update_round_status.
     with _bet_placement_lock, transaction() as conn:
         cursor = conn.cursor()
+
+        # Сначала — раскладка диапазона на «есть расписание / нет расписания».
+        # Проверка идёт до первой записи, поэтому пустой тур не получает ни
+        # строки в rounds, ни is_open = 1.
+        opened: list[int] = []
+        skipped: list[int] = []
         for r_num in range(start_round, end_round + 1):
+            if _count_round_matches(cursor, r_num, div_id if division_id is not None else None, s_id) > 0:
+                opened.append(r_num)
+            else:
+                skipped.append(r_num)
+
+        for r_num in opened:
             cursor.execute(
                 "INSERT OR IGNORE INTO rounds (season_id, division_id, round_number, is_open, deadline) VALUES (?, ?, ?, 0, NULL)",
                 (s_id, div_id, r_num)
             )
-        if division_id is not None:
-            cursor.execute(
-                "UPDATE rounds SET is_open = 1, deadline = ? WHERE (season_id = ? OR season_id IS NULL) AND division_id = ? AND round_number >= ? AND round_number <= ?",
-                (deadline, s_id, division_id, start_round, end_round)
-            )
-            cursor.execute(
-                "UPDATE rounds SET bets_open = 0, bets_opened_at = NULL WHERE (season_id = ? OR season_id IS NULL) AND division_id = ? AND round_number >= ? AND round_number <= ?",
-                (s_id, division_id, start_round, end_round)
-            )
-        else:
-            cursor.execute(
-                "UPDATE rounds SET is_open = 1, deadline = ? WHERE (season_id = ? OR season_id IS NULL) AND round_number >= ? AND round_number <= ?",
-                (deadline, s_id, start_round, end_round)
-            )
-            cursor.execute(
-                "UPDATE rounds SET bets_open = 0, bets_opened_at = NULL WHERE (season_id = ? OR season_id IS NULL) AND round_number >= ? AND round_number <= ?",
-                (s_id, start_round, end_round)
-            )
+            if division_id is not None:
+                cursor.execute(
+                    "UPDATE rounds SET is_open = 1, deadline = ? WHERE (season_id = ? OR season_id IS NULL) AND division_id = ? AND round_number = ?",
+                    (deadline, s_id, division_id, r_num)
+                )
+                cursor.execute(
+                    "UPDATE rounds SET bets_open = 0, bets_opened_at = NULL WHERE (season_id = ? OR season_id IS NULL) AND division_id = ? AND round_number = ?",
+                    (s_id, division_id, r_num)
+                )
+            else:
+                cursor.execute(
+                    "UPDATE rounds SET is_open = 1, deadline = ? WHERE (season_id = ? OR season_id IS NULL) AND round_number = ?",
+                    (deadline, s_id, r_num)
+                )
+                cursor.execute(
+                    "UPDATE rounds SET bets_open = 0, bets_opened_at = NULL WHERE (season_id = ? OR season_id IS NULL) AND round_number = ?",
+                    (s_id, r_num)
+                )
 
         # 🎰 Тур, открытый для игры, ставки не принимает: линия закрывается
         # в обеих схемах, а не генерируется. То же правило, что в update_round_status.
         # Каждое закрытие идёт в пределах конкретного (season, division, round):
         # открытие туров Дивизиона 1 не гасит линию Дивизиона 2 и других сезонов.
-        for r_num in range(start_round, end_round + 1):
+        for r_num in opened:
             if division_id is not None:
                 close_round_betting_line(cursor, r_num, division_id=division_id, season_id=s_id)
             else:
                 for scope_div_id in _round_scope_divisions(cursor, r_num, s_id):
                     close_round_betting_line(cursor, r_num, division_id=scope_div_id, season_id=s_id)
+
+    if skipped:
+        logger.warning(
+            f"open_rounds_batch: rounds {skipped} skipped (no schedule) "
+            f"for division={division_id}, season={s_id}"
+        )
+    return {"opened": opened, "skipped": skipped}
 
 def get_open_pending_matches() -> list[dict]:
     """Get all pending matches where the round is open and not extended, scoped by division and season."""
@@ -4451,7 +4539,12 @@ def update_round_status(round_number: int, is_open: bool, deadline: str | None =
     """Open/close a round. When opening without an explicit deadline, any stale
     stored deadline is cleared so it cannot instantly mark matches as overdue.
     Whenever the deadline is (re)set, per-round reminder flags are reset so
-    the 24h/6h/1h pipeline works for the new deadline window."""
+    the 24h/6h/1h pipeline works for the new deadline window.
+
+    Открытие тура без расписания запрещено: если в `matches` нет ни одного матча
+    для (season, division, round), бросается `RoundScheduleMissingError` и в БД
+    не пишется ничего — ни строки тура, ни `is_open = 1`. Закрытие тура
+    (`is_open=False`) проверке не подлежит: закрыть пустой тур всегда можно."""
     if season_id is None:
         act = get_active_season()
         s_id = act["id"] if act else 1
@@ -4468,6 +4561,12 @@ def update_round_status(round_number: int, is_open: bool, deadline: str | None =
     with _bet_placement_lock, transaction() as conn:
         cursor = conn.cursor()
         if is_open:
+            # Расписание — предусловие открытия. Проверяется внутри той же
+            # транзакции и до первой записи, чтобы «фантомный» открытый тур
+            # без пар не мог появиться даже частично.
+            if _count_round_matches(cursor, round_number, division_id, s_id) == 0:
+                raise RoundScheduleMissingError(round_number, division_id, s_id)
+
             if division_id is not None:
                 cursor.execute(
                     "INSERT OR IGNORE INTO rounds (season_id, division_id, round_number, is_open, deadline) VALUES (?, ?, ?, 0, NULL)",
@@ -4596,18 +4695,7 @@ def set_round_bets_open(
             # Нет матчей — нечего выставлять в линию. Матчи считаются строго
             # в пределах scope: у матча division_id = NULL означает дивизион 1
             # (то же соглашение, что в place_user_bet и close_round_betting_line).
-            if division_id is not None:
-                cursor.execute(
-                    "SELECT COUNT(*) AS c FROM matches WHERE round_number = ? "
-                    "AND COALESCE(division_id, 1) = ? AND COALESCE(season_id, 1) = ?",
-                    (round_number, division_id, s_id)
-                )
-            else:
-                cursor.execute(
-                    "SELECT COUNT(*) AS c FROM matches WHERE round_number = ? AND COALESCE(season_id, 1) = ?",
-                    (round_number, s_id)
-                )
-            if (cursor.fetchone()["c"] or 0) == 0:
+            if _count_round_matches(cursor, round_number, division_id, s_id) == 0:
                 return False
 
             cursor.execute(

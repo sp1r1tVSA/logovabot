@@ -6,7 +6,12 @@ from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
 
 import database
-from handlers.base import is_admin, generate_league_table_image, resolve_division_id
+from handlers.base import (
+    is_admin,
+    generate_league_table_image,
+    resolve_division_id,
+    round_schedule_missing_message,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -632,7 +637,14 @@ async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_T
             return True
         rn = int(nums[0])
         division_name = await _division_name(division_id)
-        await asyncio.to_thread(database.update_round_status, rn, is_open=True, division_id=division_id)
+        try:
+            await asyncio.to_thread(database.update_round_status, rn, is_open=True, division_id=division_id)
+        except database.RoundScheduleMissingError:
+            await msg.reply_text(
+                round_schedule_missing_message(rn, division_name),
+                parse_mode="HTML"
+            )
+            return True
         await msg.reply_text(
             f"🔓 <b>Тур {rn} — {html.escape(division_name)} успешно открыт!</b> "
             f"Участники могут вносить результаты.",
@@ -707,9 +719,17 @@ async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_T
             return True
 
         division_name = await _division_name(division_id)
-        await asyncio.to_thread(
-            database.update_round_status, rn, is_open=True, deadline=dl_text, division_id=division_id
-        )
+        # Команда дедлайна тур ещё и открывает, поэтому подчиняется тому же гейту.
+        try:
+            await asyncio.to_thread(
+                database.update_round_status, rn, is_open=True, deadline=dl_text, division_id=division_id
+            )
+        except database.RoundScheduleMissingError:
+            await msg.reply_text(
+                round_schedule_missing_message(rn, division_name),
+                parse_mode="HTML"
+            )
+            return True
         await msg.reply_text(
             f"⏰ <b>Дедлайн тура {rn} — {html.escape(division_name)} установлен на:</b> "
             f"<code>{html.escape(dl_text)}</code>.",
