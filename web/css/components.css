@@ -128,12 +128,12 @@
 
 /* Внутри липкой панели строки компактнее — вся линия помещается в шапку. */
 .lobby-filter-bar .division-tabs,
-.lobby-filter-bar .tour-tabs,
-.lobby-filter-bar .category-pills {
+.lobby-filter-bar .tour-tabs {
   margin-bottom: 6px;
   padding-bottom: 4px;
 }
-.lobby-filter-bar .category-pills:last-child {
+/* Последняя строка панели не тянет за собой лишний отступ. */
+.lobby-filter-bar > *:last-child {
   margin-bottom: 0;
 }
 

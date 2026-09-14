@@ -431,20 +431,6 @@ class AppController {
       });
     }
 
-    // 2d. Match Status Filter Pills
-    const statusPills = document.getElementById('match-status-pills-container');
-    if (statusPills) {
-      statusPills.addEventListener('click', (e) => {
-        const btn = e.target.closest('.category-pill');
-        if (btn && btn.dataset.status) {
-          statusPills.querySelectorAll('.category-pill').forEach(p => p.classList.remove('active'));
-          btn.classList.add('active');
-          store.setMatchStatusFilter(btn.dataset.status);
-          tgBridge.hapticImpact('light');
-        }
-      });
-    }
-
     // 3. Tour Selector Tabs
     const tourTabs = document.getElementById('tour-tabs-container');
     if (tourTabs) {
@@ -453,20 +439,6 @@ class AppController {
         if (btn && btn.dataset.tour) {
           const tourNum = parseInt(btn.dataset.tour);
           store.setSelectedTour(tourNum);
-          tgBridge.hapticImpact('light');
-        }
-      });
-    }
-
-    // 4. Category Filter Pills
-    const catPills = document.getElementById('category-pills-container');
-    if (catPills) {
-      catPills.addEventListener('click', (e) => {
-        const btn = e.target.closest('.category-pill');
-        if (btn && btn.dataset.cat) {
-          catPills.querySelectorAll('.category-pill').forEach(p => p.classList.remove('active'));
-          btn.classList.add('active');
-          store.setMarketCategoryFilter(btn.dataset.cat);
           tgBridge.hapticImpact('light');
         }
       });
