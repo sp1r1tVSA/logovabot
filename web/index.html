@@ -10,8 +10,8 @@
   <!-- Telegram WebApp SDK -->
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <!-- Styles with cache-busting -->
-  <link rel="stylesheet" href="/css/main.css?v=2.4.4">
-  <link rel="stylesheet" href="/css/components.css?v=2.4.4">
+  <link rel="stylesheet" href="/css/main.css?v=2.4.5">
+  <link rel="stylesheet" href="/css/components.css?v=2.4.5">
 
   <!-- Critical Coupons & Team Logos Styles -->
   <style id="coupons-critical-css">
@@ -124,7 +124,7 @@
     
     <!-- 1. Lobby & Match Line View (Default Active) -->
     <section id="view-lobby" class="view-section active">
-      <!-- Sticky filter bar: дивизионы / туры / рынки — каждая строка
+      <!-- Sticky filter bar: дивизионы / туры — каждая строка
            прокручивается по горизонтали и остаётся в верхней строке экрана. -->
       <div class="lobby-filter-bar">
         <!-- Division Selector Tabs -->
@@ -132,22 +132,6 @@
 
         <!-- Tours Selector Tabs -->
         <div class="tour-tabs scroll-row" id="tour-tabs-container"></div>
-
-        <!-- Match Status Filter Pills -->
-        <div class="category-pills scroll-row" id="match-status-pills-container">
-          <button class="category-pill active" data-status="all">⚡ Все</button>
-          <button class="category-pill" data-status="open">🔥 Открытые</button>
-          <button class="category-pill" data-status="upcoming">⏰ Скоро</button>
-          <button class="category-pill" data-status="completed">✅ Завершённые</button>
-        </div>
-
-        <!-- Category Filter Pills -->
-        <div class="category-pills scroll-row" id="category-pills-container">
-          <button class="category-pill active" data-cat="all">🔥 Все рынки</button>
-          <button class="category-pill" data-cat="main">🏆 1X2</button>
-          <button class="category-pill" data-cat="totals">⚽ Тоталы</button>
-          <button class="category-pill" data-cat="btts">🤝 Обе забьют</button>
-        </div>
       </div>
 
       <!-- Search Input -->
@@ -512,6 +496,6 @@
 
 
   <!-- Main JavaScript App with cache-busting -->
-  <script type="module" src="/js/app.js?v=2.4.4"></script>
+  <script type="module" src="/js/app.js?v=2.4.5"></script>
 </body>
 </html>
