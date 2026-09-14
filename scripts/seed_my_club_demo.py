@@ -481,17 +481,72 @@ def seed_cabinet_demo(user_id: int, team_name: str = "Реал Мадрид", di
     print("   6. «Кабинет» (профиль): блок турнирной статистики удалён.")
 
 
+def find_candidate_user_ids() -> list[dict]:
+    """Найти реальных пользователей из БД для удобной привязки демо-клуба."""
+    with database.transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT DISTINCT user_id FROM (
+                SELECT user_id FROM user_wallets WHERE user_id NOT IN (990101, 990102, 990103, 990104, 990105, 990106)
+                UNION
+                SELECT telegram_id as user_id FROM users WHERE telegram_id NOT IN (990101, 990102, 990103, 990104, 990105, 990106)
+            ) ORDER BY user_id DESC
+        """)
+        rows = cursor.fetchall()
+        candidates = []
+        for r in rows:
+            uid = r["user_id"]
+            cursor.execute("SELECT username, team_name FROM users WHERE telegram_id = ?", (uid,))
+            u_info = cursor.fetchone()
+            candidates.append({
+                "user_id": uid,
+                "username": u_info["username"] if u_info and u_info["username"] else None,
+                "team_name": u_info["team_name"] if u_info and u_info["team_name"] else None
+            })
+        return candidates
+
+
 def main():
     parser = argparse.ArgumentParser(description="Seed comprehensive demo data for Logovo.bet")
-    default_uid = config.ADMIN_IDS[0] if config.ADMIN_IDS else 1642770076
-    parser.add_argument("--user-id", type=int, default=default_uid, help=f"Telegram ID пользователя (default: {default_uid})")
+    parser.add_argument("--user-id", type=int, default=None, help="Telegram ID пользователя для привязки клуба")
     parser.add_argument("--team", type=str, default="Реал Мадрид", help="Название клуба (default: Реал Мадрид)")
     parser.add_argument("--division-id", type=int, default=1, help="ID дивизиона (default: 1)")
     parser.add_argument("--clean", action="store_true", help="Очистить предыдущие демо-данные перед генерацией")
+    parser.add_argument("--list-users", action="store_true", help="Показать список пользователей в БД")
 
     args = parser.parse_args()
+
+    candidates = find_candidate_user_ids()
+
+    if args.list_users:
+        print("\n🔍 Найденные пользователи в базе данных:")
+        if not candidates:
+            print("   (реальные пользователи пока не найдены)")
+        for idx, c in enumerate(candidates, start=1):
+            un = f"@{c['username']}" if c['username'] else "(без username)"
+            tm = f"| Клуб: {c['team_name']}" if c['team_name'] else "| [Без клуба]"
+            print(f"   {idx}. Telegram ID: {c['user_id']} | {un} {tm}")
+        print("\nДля привязки клуба к конкретному пользователю запустите:")
+        print("   python scripts/seed_my_club_demo.py --user-id ВАШ_ID\n")
+        return
+
+    target_user_id = args.user_id
+    if not target_user_id:
+        if candidates:
+            # Автоматически берем последнего активного пользователя из БД
+            target_user_id = candidates[0]["user_id"]
+            c_info = candidates[0]
+            un = f" (@{c_info['username']})" if c_info['username'] else ""
+            print(f"🎯 Автоматически выбран последний активный пользователь: Telegram ID {target_user_id}{un}")
+        elif config.ADMIN_IDS:
+            target_user_id = config.ADMIN_IDS[0]
+            print(f"🎯 Выбран ID администратора из config.ADMIN_IDS: {target_user_id}")
+        else:
+            target_user_id = 1642770076
+            print(f"🎯 Выбран ID по умолчанию: {target_user_id}")
+
     seed_cabinet_demo(
-        user_id=args.user_id,
+        user_id=target_user_id,
         team_name=args.team,
         division_id=args.division_id,
         clean=args.clean
