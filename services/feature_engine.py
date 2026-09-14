@@ -37,14 +37,17 @@ class FeatureEngine:
         as_of_match_id: if set, limits historical query strictly to matches with id < as_of_match_id.
         Defaults to match_id itself to prevent data leakage from current or future fixtures.
         """
-        ref_match_id = as_of_match_id if as_of_match_id is not None else match_id
-
         with database.transaction() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM matches WHERE id = ?", (match_id,))
             m = cursor.fetchone()
             if not m:
                 raise ValueError(f"Match #{match_id} does not exist.")
+
+            is_completed = m["status"] in ('confirmed', 'completed', 'finished')
+            ref_match_id = as_of_match_id if as_of_match_id is not None else (
+                match_id if is_completed else 999999999
+            )
 
             t1 = m["player1_team"] or ""
             t2 = m["player2_team"] or ""
@@ -53,33 +56,33 @@ class FeatureEngine:
 
             # 1. League-wide goal averages for attack/defense normalization
             league_avg_home, league_avg_away = FeatureEngine._get_league_averages(
-                cursor, div_id, season_id, before_match_id=ref_match_id
+                cursor, div_id, season_id, before_match_id=ref_match_id, exclude_match_id=match_id
             )
 
             # 2. Team 1 historical matches (overall, home split)
             t1_recent_all = FeatureEngine._get_team_matches(
-                cursor, t1, div_id, season_id, limit=10, before_match_id=ref_match_id
+                cursor, t1, div_id, season_id, limit=10, before_match_id=ref_match_id, exclude_match_id=match_id
             )
             t1_recent_home = FeatureEngine._get_team_matches(
-                cursor, t1, div_id, season_id, limit=10, home_only=True, before_match_id=ref_match_id
+                cursor, t1, div_id, season_id, limit=10, home_only=True, before_match_id=ref_match_id, exclude_match_id=match_id
             )
 
             # 3. Team 2 historical matches (overall, away split)
             t2_recent_all = FeatureEngine._get_team_matches(
-                cursor, t2, div_id, season_id, limit=10, before_match_id=ref_match_id
+                cursor, t2, div_id, season_id, limit=10, before_match_id=ref_match_id, exclude_match_id=match_id
             )
             t2_recent_away = FeatureEngine._get_team_matches(
-                cursor, t2, div_id, season_id, limit=10, away_only=True, before_match_id=ref_match_id
+                cursor, t2, div_id, season_id, limit=10, away_only=True, before_match_id=ref_match_id, exclude_match_id=match_id
             )
 
             # 4. Head-to-head matches between t1 and t2 (strictly excluding match_id)
             h2h_matches = FeatureEngine._get_h2h_matches(
-                cursor, t1, t2, div_id, season_id, limit=10, before_match_id=ref_match_id
+                cursor, t1, t2, div_id, season_id, limit=10, before_match_id=ref_match_id, exclude_match_id=match_id
             )
 
             # 5. Extract xG metrics if present
-            t1_xg_info = FeatureEngine._get_team_xg_stats(cursor, t1, div_id, season_id, before_match_id=ref_match_id)
-            t2_xg_info = FeatureEngine._get_team_xg_stats(cursor, t2, div_id, season_id, before_match_id=ref_match_id)
+            t1_xg_info = FeatureEngine._get_team_xg_stats(cursor, t1, div_id, season_id, before_match_id=ref_match_id, exclude_match_id=match_id)
+            t2_xg_info = FeatureEngine._get_team_xg_stats(cursor, t2, div_id, season_id, before_match_id=ref_match_id, exclude_match_id=match_id)
 
         # Compute metric aggregates
         t1_stats = FeatureEngine._compute_team_metrics(t1, t1_recent_all, decay)
@@ -127,16 +130,17 @@ class FeatureEngine:
         }
 
     @staticmethod
-    def _get_league_averages(cursor, division_id: int, season_id: int, before_match_id: int) -> tuple[float, float]:
+    def _get_league_averages(cursor, division_id: int, season_id: int, before_match_id: int = 999999999, exclude_match_id: int = -1) -> tuple[float, float]:
         """Compute league average home goals and away goals before ref_match_id."""
         cursor.execute("""
             SELECT AVG(player1_score) as avg_home, AVG(player2_score) as avg_away
             FROM matches
             WHERE division_id = ? AND season_id = ?
               AND id < ?
+              AND id != ?
               AND status IN ('confirmed', 'completed', 'finished')
               AND player1_score IS NOT NULL AND player2_score IS NOT NULL
-        """, (division_id, season_id, before_match_id))
+        """, (division_id, season_id, before_match_id, exclude_match_id))
         row = cursor.fetchone()
         if row and row["avg_home"] is not None and row["avg_away"] is not None:
             return round(float(row["avg_home"]), 2), round(float(row["avg_away"]), 2)
@@ -151,7 +155,8 @@ class FeatureEngine:
         limit: int = 10,
         home_only: bool = False,
         away_only: bool = False,
-        before_match_id: int = 999999999
+        before_match_id: int = 999999999,
+        exclude_match_id: int = -1
     ) -> list[dict]:
         """Fetch completed historical matches for a team strictly before before_match_id."""
         if home_only:
@@ -170,12 +175,13 @@ class FeatureEngine:
             WHERE {where_clause}
               AND division_id = ? AND season_id = ?
               AND id < ?
+              AND id != ?
               AND status IN ('confirmed', 'completed', 'finished')
               AND player1_score IS NOT NULL AND player2_score IS NOT NULL
             ORDER BY id DESC
             LIMIT ?
         """
-        params.extend([division_id, season_id, before_match_id, limit])
+        params.extend([division_id, season_id, before_match_id, exclude_match_id, limit])
         cursor.execute(sql, params)
         return [dict(r) for r in cursor.fetchall()]
 
@@ -187,7 +193,8 @@ class FeatureEngine:
         division_id: int,
         season_id: int,
         limit: int = 10,
-        before_match_id: int = 999999999
+        before_match_id: int = 999999999,
+        exclude_match_id: int = -1
     ) -> list[dict]:
         """Fetch historical H2H matches between t1 and t2, strictly before before_match_id."""
         cursor.execute("""
@@ -197,11 +204,12 @@ class FeatureEngine:
                 OR (LOWER(player1_team) = LOWER(?) AND LOWER(player2_team) = LOWER(?)))
               AND division_id = ? AND season_id = ?
               AND id < ?
+              AND id != ?
               AND status IN ('confirmed', 'completed', 'finished')
               AND player1_score IS NOT NULL AND player2_score IS NOT NULL
             ORDER BY id DESC
             LIMIT ?
-        """, (t1, t2, t2, t1, division_id, season_id, before_match_id, limit))
+        """, (t1, t2, t2, t1, division_id, season_id, before_match_id, exclude_match_id, limit))
         return [dict(r) for r in cursor.fetchall()]
 
     @staticmethod
@@ -346,7 +354,7 @@ class FeatureEngine:
         }
 
     @staticmethod
-    def _get_team_xg_stats(cursor, team_name: str, division_id: int, season_id: int, before_match_id: int) -> dict[str, Any]:
+    def _get_team_xg_stats(cursor, team_name: str, division_id: int, season_id: int, before_match_id: int = 999999999, exclude_match_id: int = -1) -> dict[str, Any]:
         """
         Extract xG metrics from live_statistics if available.
         Strict rule: NO FAKE xG. If not present in DB, returns has_data = False.
@@ -358,8 +366,9 @@ class FeatureEngine:
             WHERE (LOWER(m.player1_team) = LOWER(?) OR LOWER(m.player2_team) = LOWER(?))
               AND m.division_id = ? AND m.season_id = ?
               AND m.id < ?
+              AND m.id != ?
               AND (ls.xg_home IS NOT NULL OR ls.xg_away IS NOT NULL)
-        """, (team_name, team_name, division_id, season_id, before_match_id))
+        """, (team_name, team_name, division_id, season_id, before_match_id, exclude_match_id))
         row = cursor.fetchone()
 
         if row and (row["xg_as_home"] is not None or row["xg_as_away"] is not None):

@@ -229,6 +229,22 @@ class TestPreviewPayload(RoundAnalyticsTestBase):
         self.assertEqual(payload["fixtures"], [])
         self.assertIsNone(payload["match_of_the_round"])
 
+    def test_pending_fixture_includes_completed_matches_with_higher_ids(self):
+        """Регрессионный тест: предстоящий матч с меньшим id должен учитывать сыгранные матчи с большим id."""
+        # 1. Создаем предстоящий матч тура (получает меньший id)
+        m_pending = self._add_match(1, "A", "B", status="pending")
+
+        # 2. Создаем сыгранный матч команды A (получает больший id)
+        m_completed = self._add_match(1, "A", "C", score1=3, score2=1, status="confirmed")
+        self.assertGreater(m_completed, m_pending)
+
+        from services.feature_engine import FeatureEngine
+        features = FeatureEngine.extract_match_features(m_pending)
+        # Сыгранный матч команды А должен быть учтен
+        self.assertEqual(features["team1_features"]["overall"]["matches_played"], 1)
+        self.assertEqual(features["team1_features"]["overall"]["goals_for"], 3)
+        self.assertGreater(features["sample_size"], 0)
+
 
 class TestDigestPayload(RoundAnalyticsTestBase):
     def test_digest_collects_results_rout_player_and_movement(self):

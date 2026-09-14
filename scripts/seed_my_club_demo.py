@@ -447,7 +447,16 @@ def seed_cabinet_demo(user_id: int, team_name: str = "Реал Мадрид", di
                 VALUES (?, ?, ?, ?, ?)
             """, (m_id, t_name, p_name, ev_type, count))
 
-        # 13. Кошелек пользователя
+        # 13. Обновление рейтингов Эло на основе сыгранных матчей
+        database.update_team_elo(team_name, division_id, season_id, 1545.0)
+        database.update_team_elo(opp_barca["team"], division_id, season_id, 1510.0)
+        database.update_team_elo(opp_liv["team"], division_id, season_id, 1505.0)
+        database.update_team_elo(opp_bayern["team"], division_id, season_id, 1455.0)
+        database.update_team_elo(opp_city["team"], division_id, season_id, 1500.0)
+        database.update_team_elo(opp_arsenal["team"], division_id, season_id, 1500.0)
+        database.update_team_elo(opp_inter["team"], division_id, season_id, 1500.0)
+
+        # 14. Кошелек пользователя
         cursor.execute("""
             INSERT INTO user_wallets (user_id, balance, bets_count, bets_won)
             VALUES (?, 1000, 5, 3)

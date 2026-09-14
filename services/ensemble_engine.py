@@ -157,8 +157,8 @@ class EnsemblePredictionEngine:
             "away_probability": cal_away,
             "confidence": confidence,
             "expected_goals": {
-                "team1": lh,
-                "team2": la,
+                "team1": round(lh, 2),
+                "team2": round(la, 2),
                 "total": round(lh + la, 2)
             },
             "goals_markets": {
