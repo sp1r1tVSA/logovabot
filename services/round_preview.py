@@ -96,6 +96,8 @@ def build_preview_payload(division_id: int, round_number: int, season_id: int | 
 
     fixtures = []
     for m in matches:
+        if m.get("status") in ("confirmed", "completed"):
+            continue
         t1 = m.get("player1_team") or ""
         t2 = m.get("player2_team") or ""
         if not t1 or not t2:

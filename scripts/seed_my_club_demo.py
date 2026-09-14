@@ -268,17 +268,24 @@ def seed_cabinet_demo(user_id: int, team_name: str = "Реал Мадрид", di
                     VALUES (?, ?, ?)
                 """, (opp_tname, player_name, pos))
 
-        # 7. Активные матчи клуба (Тур 1)
         opp_barca = DEMO_OPPONENTS[0]
+        opp_city = DEMO_OPPONENTS[1]
+        opp_bayern = DEMO_OPPONENTS[2]
+        opp_liv = DEMO_OPPONENTS[3]
+        opp_arsenal = DEMO_OPPONENTS[4]
+        opp_inter = DEMO_OPPONENTS[5]
+
+        # 7. Активные несыгранные матчи клуба (Тур 1)
+        # Матч 1: Реал Мадрид vs Арсенал (Соперник предложил время)
         cursor.execute("""
             INSERT INTO matches (
                 season_id, division_id, round_number, tournament_type,
                 player1_id, player2_id, player1_team, player2_team,
                 status, proposed_time, proposed_by, time_status
             ) VALUES (?, ?, 1, 'league', ?, ?, ?, ?, 'pending', 'Сегодня, 21:30', ?, 'proposed')
-        """, (season_id, division_id, user_id, opp_barca["user_id"], team_name, opp_barca["team"], opp_barca["user_id"]))
+        """, (season_id, division_id, user_id, opp_arsenal["user_id"], team_name, opp_arsenal["team"], opp_arsenal["user_id"]))
 
-        opp_city = DEMO_OPPONENTS[1]
+        # Матч 2: Манчестер Сити vs Реал Мадрид (Время ещё не предложено)
         cursor.execute("""
             INSERT INTO matches (
                 season_id, division_id, round_number, tournament_type,
@@ -287,13 +294,8 @@ def seed_cabinet_demo(user_id: int, team_name: str = "Реал Мадрид", di
             ) VALUES (?, ?, 1, 'league', ?, ?, ?, ?, 'pending', NULL, NULL, 'none')
         """, (season_id, division_id, opp_city["user_id"], user_id, opp_city["team"], team_name))
 
-        # 8. Матчи между ДРУГИМИ командами в Тур 1 (для проверки ставок и фильтров)
-        opp_bayern = DEMO_OPPONENTS[2]
-        opp_liv = DEMO_OPPONENTS[3]
-        opp_arsenal = DEMO_OPPONENTS[4]
-        opp_inter = DEMO_OPPONENTS[5]
-
-        # Бавария vs Интер (Открытый матч, тур 1)
+        # 8. Несыгранные матчи между ДРУГИМИ командами в Тур 1 (для проверки ставок и фильтров)
+        # Бавария vs Интер
         cursor.execute("""
             INSERT INTO matches (
                 season_id, division_id, round_number, tournament_type,
@@ -302,24 +304,24 @@ def seed_cabinet_demo(user_id: int, team_name: str = "Реал Мадрид", di
             ) VALUES (?, ?, 1, 'league', ?, ?, ?, ?, 'pending', 'Завтра, 20:00', 'agreed')
         """, (season_id, division_id, opp_bayern["user_id"], opp_inter["user_id"], opp_bayern["team"], opp_inter["team"]))
 
-        # Арсенал vs Ливерпуль (Открытый матч, тур 1)
+        # Ливерпуль vs Барселона
         cursor.execute("""
             INSERT INTO matches (
                 season_id, division_id, round_number, tournament_type,
                 player1_id, player2_id, player1_team, player2_team,
                 status, proposed_time, time_status
             ) VALUES (?, ?, 1, 'league', ?, ?, ?, ?, 'pending', 'Сегодня, 22:15', 'proposed')
-        """, (season_id, division_id, opp_arsenal["user_id"], opp_liv["user_id"], opp_arsenal["team"], opp_liv["team"]))
+        """, (season_id, division_id, opp_liv["user_id"], opp_barca["user_id"], opp_liv["team"], opp_barca["team"]))
 
         # 9. Матчи в Тур 2 («Ранняя линия» / «⏰ Скоро»)
-        # Реал Мадрид vs Арсенал
+        # Реал Мадрид vs Ливерпуль
         cursor.execute("""
             INSERT INTO matches (
                 season_id, division_id, round_number, tournament_type,
                 player1_id, player2_id, player1_team, player2_team,
                 status, time_status
             ) VALUES (?, ?, 2, 'league', ?, ?, ?, ?, 'pending', 'none')
-        """, (season_id, division_id, user_id, opp_arsenal["user_id"], team_name, opp_arsenal["team"]))
+        """, (season_id, division_id, user_id, opp_liv["user_id"], team_name, opp_liv["team"]))
 
         # Манчестер Сити vs Бавария
         cursor.execute("""
@@ -330,14 +332,14 @@ def seed_cabinet_demo(user_id: int, team_name: str = "Реал Мадрид", di
             ) VALUES (?, ?, 2, 'league', ?, ?, ?, ?, 'pending', 'none')
         """, (season_id, division_id, opp_city["user_id"], opp_bayern["user_id"], opp_city["team"], opp_bayern["team"]))
 
-        # Интер vs Барселона
+        # Интер vs Арсенал
         cursor.execute("""
             INSERT INTO matches (
                 season_id, division_id, round_number, tournament_type,
                 player1_id, player2_id, player1_team, player2_team,
                 status, time_status
             ) VALUES (?, ?, 2, 'league', ?, ?, ?, ?, 'pending', 'none')
-        """, (season_id, division_id, opp_inter["user_id"], opp_barca["user_id"], opp_inter["team"], opp_barca["team"]))
+        """, (season_id, division_id, opp_inter["user_id"], opp_arsenal["user_id"], opp_inter["team"], opp_arsenal["team"]))
 
         # 10. Сыгранные матчи клуба («История игр» + скриншоты протоколов)
         svg_hist1 = make_demo_svg(
