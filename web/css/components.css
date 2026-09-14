@@ -127,66 +127,13 @@
 }
 
 /* Внутри липкой панели строки компактнее — вся линия помещается в шапку. */
-.lobby-filter-bar .division-tabs,
-.lobby-filter-bar .tour-tabs {
+.lobby-filter-bar .division-tabs {
   margin-bottom: 6px;
   padding-bottom: 4px;
 }
 /* Последняя строка панели не тянет за собой лишний отступ. */
 .lobby-filter-bar > *:last-child {
   margin-bottom: 0;
-}
-
-/* ─── 2. Tour Selector Tabs ─── */
-.tour-tabs {
-  display: flex;
-  gap: 8px;
-  overflow-x: auto;
-  padding-bottom: 8px;
-  margin-bottom: 14px;
-  -webkit-overflow-scrolling: touch;
-}
-
-.tour-tab-btn {
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border-subtle);
-  color: var(--text-secondary);
-  font-family: 'Outfit', sans-serif;
-  font-size: 0.88rem;
-  font-weight: 700;
-  padding: 8px 16px;
-  border-radius: var(--radius-sm);
-  white-space: nowrap;
-  cursor: pointer;
-  transition: var(--transition-fast);
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.tour-tab-btn:active {
-  transform: scale(0.96);
-}
-
-.tour-tab-btn.active {
-  background: var(--accent-gold);
-  color: #000;
-  border-color: var(--accent-gold);
-  font-weight: 800;
-  box-shadow: var(--shadow-gold);
-}
-
-/* Ранняя линия: тур ещё не открыт для игры, но прогнозы уже принимаются. */
-.tour-tab-btn.early {
-  border-style: dashed;
-  border-color: rgba(124, 156, 255, 0.55);
-  color: #a8bcff;
-}
-
-.tour-tab-btn.early.active {
-  background: rgba(124, 156, 255, 0.18);
-  border-color: #7c9cff;
-  color: #cdd9ff;
-  box-shadow: none;
 }
 
 /* ─── 2b. Division Selector Tabs ─── */

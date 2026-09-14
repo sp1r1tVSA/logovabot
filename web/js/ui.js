@@ -183,53 +183,57 @@ export class UIRenderer {
     `).join('');
   }
 
-  static renderTourTabs(tours, selectedTour) {
-    const container = document.getElementById('tour-tabs-container');
-    if (!container) return;
+  /**
+   * Сводит матчи всех туров дивизиона в один плоский список линии.
+   * Пропускаем только то, на что реально можно поставить:
+   *  - статус не «сыгран» (confirmed / completed / finished);
+   *  - бэкенд не пометил матч архивным (is_line === false);
+   *  - есть действующие коэффициенты (заглушки архива приходят как 1.0).
+   */
+  static collectLineMatches(tours) {
+    const FINISHED = ['confirmed', 'completed', 'finished', 'cancelled'];
+    const ACTIVE = ['pending', 'open', 'scheduled', 'live'];
 
-    if (!tours || tours.length === 0) {
-      container.innerHTML = '<div style="color: var(--text-muted); font-size: 0.85rem; padding: 10px 0;">Нет активных туров</div>';
-      return;
+    const flat = [];
+    for (const t of (tours || [])) {
+      for (const m of (t.matches || [])) {
+        const status = (m.status || 'pending').toLowerCase();
+        if (FINISHED.includes(status)) continue;
+        if (!ACTIVE.includes(status)) continue;
+        if (m.is_line === false) continue;
+
+        const o = m.odds || {};
+        const hasRealOdds = [o.p1, o.x, o.p2].every(v => typeof v === 'number' && v > 1.0);
+        if (!hasRealOdds) continue;
+
+        flat.push({ ...m, tour: m.tour || t.round_number });
+      }
     }
 
-    // is_early — линия открыта заранее, тур ещё не открыт для внесения результатов.
-    container.innerHTML = tours.map(t => `
-      <button class="tour-tab-btn ${t.round_number === selectedTour ? 'active' : ''} ${t.is_early ? 'early' : ''}"
-              data-tour="${t.round_number}"
-              ${t.is_early ? 'title="Ранняя линия: тур ещё не начался"' : ''}>
-        ${t.is_early ? '🔮' : '⚽'} Тур ${t.round_number} (${t.unplayed_matches || t.total_matches})
-      </button>
-    `).join('');
+    flat.sort((a, b) => (a.tour - b.tour) || (a.match_id - b.match_id));
+    return flat;
   }
 
-  static renderMatches(tours, selectedTour, activeCategory = 'all', searchQuery = '', statusFilter = 'all', selectedDivisionId = 1) {
+  static renderMatches(tours, activeCategory = 'all', searchQuery = '', selectedDivisionId = 1) {
     const container = document.getElementById('matches-list-container');
     if (!container) return;
 
-    const currentTour = tours.find(t => t.round_number === selectedTour);
-    if (!currentTour || !currentTour.matches || currentTour.matches.length === 0) {
+    // Линия — единый сквозной список по всем турам дивизиона: только те матчи,
+    // которые реально открыты для ставок. Завершённые игры живут в «Турнирах».
+    const lineMatches = UIRenderer.collectLineMatches(tours);
+
+    if (lineMatches.length === 0) {
       container.innerHTML = `
         <div style="text-align: center; padding: 50px 20px; color: var(--text-muted);">
           <div style="font-size: 2.5rem; margin-bottom: 10px;">🏆</div>
-          <div style="font-size: 1rem; font-weight: 700; color: #fff; margin-bottom: 4px;">Матчи тура завершены</div>
-          <div style="font-size: 0.85rem;">Ожидайте открытия следующего тура Лиги</div>
+          <div style="font-size: 1rem; font-weight: 700; color: #fff; margin-bottom: 4px;">Сейчас нет открытых матчей для ставок</div>
+          <div style="font-size: 0.85rem;">Ожидайте открытия линии</div>
         </div>
       `;
       return;
     }
 
-    let filteredMatches = currentTour.matches;
-
-    // Filter by match status
-    if (statusFilter && statusFilter !== 'all') {
-      if (statusFilter === 'open') {
-        filteredMatches = filteredMatches.filter(m => ['open', 'scheduled', 'pending', 'live'].includes(m.status));
-      } else if (statusFilter === 'upcoming') {
-        filteredMatches = filteredMatches.filter(m => ['scheduled', 'pending'].includes(m.status));
-      } else if (statusFilter === 'completed') {
-        filteredMatches = filteredMatches.filter(m => ['confirmed', 'completed', 'finished'].includes(m.status));
-      }
-    }
+    let filteredMatches = lineMatches;
 
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase().trim();
@@ -242,7 +246,7 @@ export class UIRenderer {
     if (filteredMatches.length === 0) {
       container.innerHTML = `
         <div style="text-align: center; padding: 40px 20px; color: var(--text-muted);">
-          Ничего не найдено в текущей категории или по запросу «${searchQuery}»
+          В открытой линии нет матчей по запросу «${searchQuery}»
         </div>
       `;
       return;
@@ -250,11 +254,10 @@ export class UIRenderer {
 
     container.innerHTML = filteredMatches.map(m => {
       const isLive = m.status === 'live';
-      const isCompleted = ['confirmed', 'completed', 'finished'].includes(m.status);
-      const tourLabel = m.tour || selectedTour;
+      const tourLabel = m.tour;
       const divLabel = m.division_id || selectedDivisionId || 1;
       return `
-        <div class="match-card ${isCompleted ? 'completed' : ''}" data-match-id="${m.match_id}">
+        <div class="match-card" data-match-id="${m.match_id}">
           <!-- Match Card Header -->
           <div class="match-card-header">
             <div style="display: flex; align-items: center; gap: 8px;">
@@ -265,11 +268,6 @@ export class UIRenderer {
               ${isLive ? `
                 <span class="live-badge">
                   <span class="live-dot"></span> LIVE ${m.live_minute ? `${m.live_minute}'` : ''}
-                </span>
-              ` : ''}
-              ${isCompleted ? `
-                <span style="background: rgba(46, 204, 113, 0.15); color: #2ecc71; font-size: 0.72rem; font-weight: 800; padding: 2px 6px; border-radius: 4px;">
-                  ✅ Завершён ${m.player1_score ?? 0}:${m.player2_score ?? 0}
                 </span>
               ` : ''}
             </div>

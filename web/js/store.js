@@ -10,7 +10,6 @@ class StateStore {
     this.state = {
       user: null,
       tours: [],
-      selectedTour: null,
       marketCategoryFilter: 'all',
       searchQuery: '',
       slip: [], // [ { match_id, outcome, odd, market_id, selection_id, selection_name, team1_name, team2_name, tour }, ... ]
@@ -43,7 +42,6 @@ class StateStore {
       profile: null,
       divisions: [],
       selectedDivisionId: 1,
-      matchStatusFilter: 'all', // 'all' | 'open' | 'upcoming' | 'completed'
       unclaimedAchievementsCount: 0,
       // Вкладка «Мой Клуб» (личный кабинет игрока)
       myClub: { overview: null, matches: [], squad: [] },
@@ -99,14 +97,6 @@ class StateStore {
 
   setTours(tours) {
     this.state.tours = tours || [];
-    if (this.state.tours.length > 0 && !this.state.selectedTour) {
-      this.state.selectedTour = this.state.tours[0].round_number;
-    }
-    this.notify();
-  }
-
-  setSelectedTour(tourNumber) {
-    this.state.selectedTour = tourNumber;
     this.notify();
   }
 
@@ -117,11 +107,6 @@ class StateStore {
 
   setSelectedDivisionId(divisionId) {
     this.state.selectedDivisionId = divisionId ? parseInt(divisionId) : 1;
-    this.notify();
-  }
-
-  setMatchStatusFilter(status) {
-    this.state.matchStatusFilter = status || 'all';
     this.notify();
   }
 

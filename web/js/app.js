@@ -3,11 +3,11 @@
  * Comprehensive App Controller and Event Orchestrator for Logovo.bet (v2.0).
  */
 
-import { api } from './api.js?v=2.4.4';
-import { store } from './store.js?v=2.4.4';
-import { tgBridge } from './tg.js?v=2.4.4';
-import { UIRenderer } from './ui.js?v=2.4.4';
-import { ParticleEffects } from './effects.js?v=2.4.4';
+import { api } from './api.js?v=2.4.6';
+import { store } from './store.js?v=2.4.6';
+import { tgBridge } from './tg.js?v=2.4.6';
+import { UIRenderer } from './ui.js?v=2.4.6';
+import { ParticleEffects } from './effects.js?v=2.4.6';
 
 class AppController {
   constructor() {
@@ -23,11 +23,10 @@ class AppController {
       UIRenderer.renderHeader(state.user, state.progression);
       UIRenderer.renderDivisionTabs(state.divisions, state.selectedDivisionId, 'lobby-division-tabs-container');
       UIRenderer.renderDivisionTabs(state.divisions, state.selectedDivisionId, 'tournament-division-tabs-container');
-      UIRenderer.renderTourTabs(state.tours, state.selectedTour);
       UIRenderer.renderHotMatches(state.hotMatches);
       UIRenderer.renderOddsMovers(state.oddsMovers);
       UIRenderer.renderRecommendations(state.recommendations, state.searchQuery);
-      UIRenderer.renderMatches(state.tours, state.selectedTour, state.marketCategoryFilter, state.searchQuery, state.matchStatusFilter, state.selectedDivisionId);
+      UIRenderer.renderMatches(state.tours, state.marketCategoryFilter, state.searchQuery, state.selectedDivisionId);
       UIRenderer.renderMatchCenter(state.matchDetail, state.matchStats, state.matchH2H, state.matchInsights, state.matchLive, state.matchMarkets, state.matchCenterSubTab);
       UIRenderer.renderTournaments(state.standings, state.results, state.topScorers, this.currentTournamentTab, state.standingsForm, this.standingsSort);
       UIRenderer.renderPredictionsHistory(state.myBets, state.myBetsFilter);
@@ -85,7 +84,6 @@ class AppController {
         const urlParams = new URLSearchParams(window.location.search);
         const targetDivId = urlParams.get('division_id');
         const targetMatchId = urlParams.get('match_id');
-        const targetTour = urlParams.get('tour');
 
         // Fetch divisions
         try {
@@ -106,16 +104,15 @@ class AppController {
         const toursData = await api.getTours(store.state.selectedDivisionId);
         if (toursData.status === 'ok') {
           store.setTours(toursData.tours);
-          if (targetTour) {
-            store.setSelectedTour(parseInt(targetTour));
-          }
           if (targetMatchId) {
             const mId = parseInt(targetMatchId);
             this.loadMatchCenter(mId);
             this.switchView('match_center');
-          } else if (toursData.tours.length > 0 && toursData.tours[0].matches?.length > 0) {
-            const firstMatch = toursData.tours[0].matches[0];
-            this.loadMatchCenter(firstMatch.match_id);
+          } else {
+            // Предзагружаем Матч-Центр первым матчем открытой линии, а не первым
+            // матчем первого тура — тот может быть уже сыгран.
+            const [firstMatch] = UIRenderer.collectLineMatches(toursData.tours);
+            if (firstMatch) this.loadMatchCenter(firstMatch.match_id);
           }
         }
 
@@ -431,18 +428,7 @@ class AppController {
       });
     }
 
-    // 3. Tour Selector Tabs
-    const tourTabs = document.getElementById('tour-tabs-container');
-    if (tourTabs) {
-      tourTabs.addEventListener('click', (e) => {
-        const btn = e.target.closest('.tour-tab-btn');
-        if (btn && btn.dataset.tour) {
-          const tourNum = parseInt(btn.dataset.tour);
-          store.setSelectedTour(tourNum);
-          tgBridge.hapticImpact('light');
-        }
-      });
-    }
+    // 3. Фильтр по турам удалён: лобби показывает единый список открытой линии.
 
     // 5. Search Input
     const searchInput = document.getElementById('match-search-input');

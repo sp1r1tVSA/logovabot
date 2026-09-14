@@ -14,6 +14,9 @@ import services.odds_engine as odds_engine
 
 logger = logging.getLogger(__name__)
 
+# Статусы сыгранных матчей: такие игры не попадают в линию ставок.
+FINISHED_MATCH_STATUSES = ("confirmed", "completed", "finished", "cancelled")
+
 
 async def handle_get_tours(request: web.Request) -> web.Response:
     """
@@ -90,6 +93,9 @@ async def handle_get_tours(request: web.Request) -> web.Response:
         for m in markets:
             m_id = m["match_id"]
             seen_match_ids.add(m_id)
+            # Сыгранный матч в линии не нужен: его результат живёт в «Турнирах».
+            if (m.get("match_status") or "pending") in FINISHED_MATCH_STATUSES:
+                continue
             t1 = m["team1_name"]
             t2 = m["team2_name"]
             try:
@@ -106,6 +112,7 @@ async def handle_get_tours(request: web.Request) -> web.Response:
                 "division_id": m.get("division_id") or div_id or 1,
                 "player1_score": m.get("player1_score"),
                 "player2_score": m.get("player2_score"),
+                "is_line": True,
                 "odds": {
                     "p1": round(m["odd_p1"], 2),
                     "x": round(m["odd_x"], 2),
@@ -117,30 +124,28 @@ async def handle_get_tours(request: web.Request) -> web.Response:
                 }
             })
 
-        # Добавляем также завершённые матчи этого тура, чтобы фильтр «Завершённые» работал корректно
+        # Матчи тура без сгенерированного рынка: отдаём их помеченными is_line = False,
+        # чтобы клиент не принял заглушку за открытую линию. Сыгранные игры в ответ
+        # для линии не подмешиваем вовсе — их место в разделе «Турниры».
         for rm in round_matches:
             rm_id = rm["id"]
             if rm_id in seen_match_ids:
                 continue
             seen_match_ids.add(rm_id)
+            rm_status = rm.get("status") or "pending"
+            if rm_status in FINISHED_MATCH_STATUSES:
+                continue
             matches_list.append({
                 "match_id": rm_id,
                 "tour": rm.get("round_number") or r_num,
                 "team1_name": rm.get("player1_team") or "Команда 1",
                 "team2_name": rm.get("player2_team") or "Команда 2",
-                "status": rm.get("status") or "confirmed",
+                "status": rm_status,
                 "division_id": rm.get("division_id") or div_id or 1,
                 "player1_score": rm.get("player1_score"),
                 "player2_score": rm.get("player2_score"),
-                "odds": {
-                    "p1": 1.0,
-                    "x": 1.0,
-                    "p2": 1.0,
-                    "tb25": 1.0,
-                    "tm25": 1.0,
-                    "btts_yes": 1.0,
-                    "btts_no": 1.0
-                }
+                "is_line": False,
+                "odds": None
             })
 
         results.append({

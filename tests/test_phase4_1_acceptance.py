@@ -559,12 +559,16 @@ class TestPhase41ProductionAcceptance(unittest.TestCase):
         # 1. HOME Screen
         self.assertIn('id="view-lobby"', html_content)
         self.assertIn('renderDivisionTabs', ui_content)
-        self.assertIn('renderTourTabs', ui_content)
+        # Табы туров и пилюли статусов убраны: лобби показывает единый
+        # сквозной список матчей, открытых в линии.
+        self.assertNotIn('renderTourTabs', ui_content)
+        self.assertNotIn('tour-tabs-container', html_content)
+        self.assertNotIn('match-status-pills', html_content)
 
         # 2. MATCHES Screen
         self.assertIn('id="matches-list-container"', html_content)
         self.assertIn('renderMatches', ui_content)
-        self.assertIn('match-status-pills', html_content)
+        self.assertIn('collectLineMatches', ui_content)
 
         # 3. MATCH CENTER Screen
         self.assertIn('id="view-match_center"', html_content)
