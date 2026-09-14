@@ -1657,6 +1657,9 @@ export class UIRenderer {
             ✅ Подтвердить
           </button>
         ` : ''}
+      </div>
+    ` : '';
+
     const protocolBtnHtml = !showActions ? `
       <div class="club-match-actions" style="margin-top: 10px;">
         <button class="btn-club-secondary btn-view-match-protocol" data-match-id="${match.id}" style="width: 100%; justify-content: center; gap: 6px;">

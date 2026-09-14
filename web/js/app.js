@@ -3,11 +3,11 @@
  * Comprehensive App Controller and Event Orchestrator for Logovo.bet (v2.0).
  */
 
-import { api } from './api.js';
-import { store } from './store.js';
-import { tgBridge } from './tg.js';
-import { UIRenderer } from './ui.js';
-import { ParticleEffects } from './effects.js';
+import { api } from './api.js?v=2.4.4';
+import { store } from './store.js?v=2.4.4';
+import { tgBridge } from './tg.js?v=2.4.4';
+import { UIRenderer } from './ui.js?v=2.4.4';
+import { ParticleEffects } from './effects.js?v=2.4.4';
 
 class AppController {
   constructor() {
@@ -131,6 +131,18 @@ class AppController {
         return;
       }
       console.error("Failed to bootstrap app:", err);
+      const matchesContainer = document.getElementById('matches-list-container');
+      if (matchesContainer) {
+        matchesContainer.innerHTML = `
+          <div style="text-align: center; padding: 40px 20px; color: var(--text-secondary);">
+            <div style="font-size: 2.5rem; margin-bottom: 12px;">📱</div>
+            <div style="font-weight: 800; font-size: 1.1rem; color: #fff; margin-bottom: 8px;">Откройте через Telegram</div>
+            <div style="font-size: 0.85rem; max-width: 320px; margin: 0 auto; line-height: 1.4; color: var(--text-muted);">
+              Для работы Mini App требуется авторизация Telegram WebApp. Откройте приложение через меню бота или команду /start в Telegram.
+            </div>
+          </div>
+        `;
+      }
     }
   }
 
