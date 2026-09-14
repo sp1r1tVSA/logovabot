@@ -5,7 +5,6 @@ Cryptographic authentication and validation for Telegram WebApp initData.
 Uses HMAC-SHA256 with the bot token according to Telegram Mini Apps specifications.
 """
 
-import os
 import hmac
 import hashlib
 import urllib.parse
@@ -85,6 +84,26 @@ def validate_telegram_init_data(init_data_str: str, bot_token: str | None = None
         return None
 
 
+def extract_init_data(request) -> str:
+    """
+    Достать сырую строку initData из запроса.
+
+    Порядок: X-Telegram-Init-Data (его шлёт Mini App), затем Authorization
+    в форме `tma <initData>` / `Bearer <initData>`. Единая точка разбора нужна,
+    чтобы middleware и обработчики маршрутов опознавали пользователя одинаково.
+    """
+    init_data = request.headers.get("X-Telegram-Init-Data", "")
+    if init_data:
+        return init_data
+
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("tma "):
+        return auth_header[4:]
+    if auth_header.startswith("Bearer "):
+        return auth_header[7:]
+    return ""
+
+
 def get_authenticated_user(init_data_str: str) -> dict | None:
     """
     Extract and authenticate user info from initData.
@@ -92,16 +111,24 @@ def get_authenticated_user(init_data_str: str) -> dict | None:
     """
     user_info = validate_telegram_init_data(init_data_str)
     if not user_info:
-        # Dev / Sandbox Fallback for local testing, STRICTLY gated by environment flag
-        allow_dev_bypass = os.getenv("ALLOW_DEV_AUTH_BYPASS", "").strip().lower() in ("1", "true", "yes")
-        if allow_dev_bypass and init_data_str and init_data_str.startswith("mock_admin_"):
-            try:
-                u_id = int(init_data_str.replace("mock_admin_", ""))
-                if is_admin(u_id):
-                    return {"id": u_id, "first_name": "Admin", "username": "admin", "is_mock": True}
-            except Exception:
-                pass
-        return None
+        # Dev / Sandbox Fallback for local testing, STRICTLY gated by environment flag.
+        # Заглушка обязана оставаться недосягаемой в проде: флага в окружении нет,
+        # а даже с флагом подставить можно только существующего админа.
+        if not config.is_dev_auth_bypass_enabled():
+            return None
+        if not init_data_str or not init_data_str.startswith("mock_admin_"):
+            return None
+        try:
+            u_id = int(init_data_str.replace("mock_admin_", ""))
+        except (ValueError, TypeError):
+            return None
+        if not is_admin(u_id):
+            return None
+        logger.warning(
+            "DEV_AUTH_BYPASS used for user_id=%s — this must never happen in production.",
+            u_id
+        )
+        return {"id": u_id, "first_name": "Admin", "username": "admin", "is_mock": True}
 
     return user_info
 

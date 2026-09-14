@@ -74,6 +74,27 @@ def _isolate_db_path(tmp_path_factory):
 
 
 @pytest.fixture(autouse=True)
+def _disable_api_rate_limit():
+    """
+    Выключить rate limiting API на время обычных тестов.
+
+    В проде лимиты включены по умолчанию, но тестовые сценарии бьют по одним и
+    тем же эндпоинтам подряд от одного user_id и мгновенно упирались бы в окно
+    и в минимальный интервал между ставками. Файлы, которые проверяют сами
+    лимиты, включают флаг обратно у себя.
+    """
+    import config
+    from api import rate_limiter
+
+    original = config.API_RATE_LIMIT_ENABLED
+    config.API_RATE_LIMIT_ENABLED = False
+    rate_limiter.reset_all()
+    yield
+    config.API_RATE_LIMIT_ENABLED = original
+    rate_limiter.reset_all()
+
+
+@pytest.fixture(autouse=True)
 def _fresh_connection():
     """
     Drop the cached per-thread SQLite connection around every test.

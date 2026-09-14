@@ -117,3 +117,28 @@ def is_global_lockdown_enabled() -> bool:
 is_lockdown_enabled = is_global_lockdown_enabled
 LOGOVO_LOCKDOWN = is_global_lockdown_enabled()
 
+
+def is_dev_auth_bypass_enabled() -> bool:
+    """
+    Разрешён ли обход валидации initData («mock_admin_<id>») для локальной отладки.
+
+    Читается динамически, как и lockdown: тесты и локальный запуск меняют флаг
+    без перезапуска процесса. В продакшене переменная не выставляется никогда.
+    """
+    return os.getenv("ALLOW_DEV_AUTH_BYPASS", "").strip().lower() in ("1", "true", "yes")
+
+
+# Mini App API: защита от флуда и спам-атак.
+# Идентификация по user_id из валидированного initData, для анонимных — по IP.
+API_RATE_LIMIT_ENABLED = os.getenv("API_RATE_LIMIT_ENABLED", "true").strip().lower() in ("true", "1", "yes")
+API_RATE_LIMIT_READ_RPM = int(os.getenv("API_RATE_LIMIT_READ_RPM", "60"))
+API_RATE_LIMIT_WRITE_RPM = int(os.getenv("API_RATE_LIMIT_WRITE_RPM", "20"))
+API_RATE_LIMIT_ADMIN_RPM = int(os.getenv("API_RATE_LIMIT_ADMIN_RPM", "120"))
+API_RATE_LIMIT_ANON_RPM = int(os.getenv("API_RATE_LIMIT_ANON_RPM", "30"))
+# Минимальный интервал между двумя чувствительными мутациями одного пользователя.
+API_SENSITIVE_MIN_INTERVAL = float(os.getenv("API_SENSITIVE_MIN_INTERVAL", "2.0"))
+
+# X-Forwarded-For подделывается кем угодно, если сервер смотрит в интернет напрямую,
+# поэтому доверяем заголовку только при явном включении (за nginx/Cloudflare).
+API_TRUST_PROXY_HEADERS = os.getenv("API_TRUST_PROXY_HEADERS", "false").strip().lower() in ("true", "1", "yes")
+
