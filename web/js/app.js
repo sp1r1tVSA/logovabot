@@ -1004,7 +1004,11 @@ class AppController {
   }
 }
 
-// Instantiate on DOM load
-window.addEventListener('DOMContentLoaded', () => {
+// Instantiate on DOM ready
+if (document.readyState === 'loading') {
+  window.addEventListener('DOMContentLoaded', () => {
+    new AppController();
+  });
+} else {
   new AppController();
-});
+}
