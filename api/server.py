@@ -159,6 +159,65 @@ async def cors_middleware(request: web.Request, handler):
     return response
 
 
+def _rate_limit_response(error_code: str, retry_after: int) -> web.Response:
+    messages = {
+        "rate_limit_exceeded": "Слишком много запросов. Подождите немного.",
+        "too_fast": "Слишком часто. Подождите пару секунд перед повтором.",
+        "duplicate_request": "Предыдущий запрос ещё обрабатывается. Подождите результата.",
+    }
+    return web.json_response(
+        {
+            "status": "error",
+            "error": error_code,
+            "message": messages.get(error_code, messages["rate_limit_exceeded"]),
+            "retry_after": retry_after,
+        },
+        status=429,
+        headers={"Retry-After": str(retry_after)},
+    )
+
+
+@web.middleware
+async def rate_limit_middleware(request: web.Request, handler):
+    """
+    Ограничение частоты обращений к REST API Mini App.
+
+    Порядок намеренно такой: сначала окно запросов в минуту, затем минимальный
+    интервал для денежных мутаций, затем захват in-flight слота. Слот
+    освобождается в finally, иначе упавший обработчик заблокировал бы
+    пользователю этот маршрут навсегда.
+    """
+    if request.method == "OPTIONS" or not request.path.startswith("/api/"):
+        return await handler(request)
+
+    from config import API_RATE_LIMIT_ENABLED
+    if not API_RATE_LIMIT_ENABLED:
+        return await handler(request)
+
+    from api import rate_limiter
+
+    allowed, error_code, retry_after = rate_limiter.check_request(request)
+    if not allowed:
+        logger.warning(
+            "RATE_LIMIT %s: %s %s retry_after=%s",
+            error_code, request.method, request.path, retry_after
+        )
+        return _rate_limit_response(error_code, retry_after)
+
+    dedup_key = rate_limiter.in_flight_key(request)
+    if dedup_key is None:
+        return await handler(request)
+
+    if not rate_limiter.acquire_in_flight(dedup_key):
+        logger.warning("RATE_LIMIT duplicate_request: %s %s", request.method, request.path)
+        return _rate_limit_response("duplicate_request", 1)
+
+    try:
+        return await handler(request)
+    finally:
+        rate_limiter.release_in_flight(dedup_key)
+
+
 @web.middleware
 async def lockdown_middleware(request: web.Request, handler):
     """
@@ -181,18 +240,10 @@ async def lockdown_middleware(request: web.Request, handler):
     if not is_global_lockdown_enabled():
         return await handler(request)
 
-    from api.auth import get_authenticated_user
+    from api.auth import extract_init_data, get_authenticated_user
     from handlers.base import is_global_admin
 
-    init_data = request.headers.get("X-Telegram-Init-Data", "")
-    if not init_data:
-        auth_header = request.headers.get("Authorization", "")
-        if auth_header.startswith("tma "):
-            init_data = auth_header[4:]
-        elif auth_header.startswith("Bearer "):
-            init_data = auth_header[7:]
-
-    user_info = get_authenticated_user(init_data)
+    user_info = get_authenticated_user(extract_init_data(request))
     if not user_info or "id" not in user_info:
         return web.json_response(
             {"status": "error", "error": "unauthorized", "message": "Недействительные данные авторизации Telegram."},
@@ -226,7 +277,8 @@ async def handle_index(request: web.Request) -> web.FileResponse:
 
 def create_app() -> web.Application:
     """Construct and configure the aiohttp Application."""
-    app = web.Application(middlewares=[cors_middleware, lockdown_middleware])
+    # cors остаётся снаружи, чтобы 429 и 401 тоже уходили с CORS-заголовками.
+    app = web.Application(middlewares=[cors_middleware, rate_limit_middleware, lockdown_middleware])
 
     # 1. Wallet & Bootstrap
     app.router.add_get("/api/bootstrap", handle_bootstrap)
