@@ -126,6 +126,7 @@ from handlers.admin import (
     admin_confirm_delete_player,
     admin_delete_player_execute,
     admin_toggle_round_bets,
+    admin_open_preseason_line,
     admin_extend_match_execute,
     admin_extend_menu,
     admin_extend_hours_execute,
@@ -716,6 +717,7 @@ def _register_admin_handlers(app: Application) -> None:
     app.add_handler(CallbackQueryHandler(admin_delete_player_confirm, pattern="^admin_delete_player_confirm_-?\\d+$"))
     app.add_handler(CallbackQueryHandler(admin_delete_player_execute, pattern="^admin_delete_player_execute_-?\\d+$"))
     app.add_handler(CallbackQueryHandler(admin_toggle_round_bets, pattern=r"^admin_div_bets_(open|close):\d+:\d+$"))
+    app.add_handler(CallbackQueryHandler(admin_open_preseason_line, pattern=r"^admin_div_preseason_line:\d+$"))
     app.add_handler(CallbackQueryHandler(admin_close_round, pattern=r"^admin_div_round_close:\d+:\d+$"))
     app.add_handler(CallbackQueryHandler(admin_remind_round, pattern="^admin_remind_round_\\d+$"))
     app.add_handler(CallbackQueryHandler(admin_toggle_remind_match, pattern="^admin_toggle_remind_match_\\d+_\\d+$"))

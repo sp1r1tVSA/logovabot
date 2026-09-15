@@ -77,6 +77,33 @@ def generate_round_robin_fixtures(player_ids: list[int]) -> list[tuple[int, int,
     double_fixtures.sort(key=lambda x: x[0])
     return double_fixtures
 
+
+# 🎰 Предсезонная линия БК всегда встаёт на первую пару туров: дальше её
+# двигает автопилот «два через два» (database.advance_betting_line_pair).
+PRESEASON_LINE_ROUNDS = (1, 2)
+
+
+async def _open_preseason_line(div_id: int, season_id: int | None = None) -> list[int]:
+    """Выставить линию Logovo.bet на Туры 1 и 2 дивизиона.
+
+    Приём прогнозов открывается заранее — туры остаются `is_open = 0`, а
+    `set_round_bets_open` сразу генерирует котировки на четыре центральных
+    матча каждого тура. Возвращает список туров, на которые линия встала;
+    ошибка по одному туру не мешает открыть второй.
+    """
+    opened: list[int] = []
+    for r_num in PRESEASON_LINE_ROUNDS:
+        try:
+            ok = await asyncio.to_thread(
+                database.set_round_bets_open, r_num, True, div_id, season_id
+            )
+            if ok:
+                opened.append(r_num)
+        except Exception as e:
+            logger.warning(f"Could not open pre-season betting line for round {r_num} (div {div_id}): {e}")
+    return opened
+
+
 async def _send_panel(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str, markup: InlineKeyboardMarkup) -> None:
     """Отрисовать экран админки как ответ на сообщение или как правку callback-сообщения."""
     query = update.callback_query
@@ -895,14 +922,24 @@ async def admin_generate_matches_execute(update: Update, context: ContextTypes.D
         metadata=f"Generated {len(fixtures)} matches across {total_rounds} rounds for {div_title}"
     )
 
+    # 🎰 Автопилот линии «два через два»: расписание есть — значит предсезонная
+    # линия сразу встаёт на Туры 1 и 2 (is_open = 0, bets_open = 1). Ошибка
+    # здесь не должна отменять уже сгенерированное расписание.
+    line_rounds = await _open_preseason_line(div_id, season_id)
+
     keyboard = [[InlineKeyboardButton("« К турам", callback_data=f"admin_div_manage_matches:{div_id}")]]
+    if line_rounds:
+        line_note = f"🎰 Линия Logovo.bet открыта на Туры: <b>{', '.join(str(r) for r in line_rounds)}</b>."
+    else:
+        line_note = "⚠️ Линию Logovo.bet открыть не удалось — сделайте это вручную в карточке тура."
     await query.edit_message_text(
         f"📅 <b>Расписание успешно сгенерировано!</b>\n\n"
         f"• Дивизион: <b>{html.escape(div_title)}</b>\n"
         f"• Участников: <b>{len(players)}</b>\n"
         f"• Всего туров: <b>{total_rounds}</b>\n"
         f"• Всего матчей: <b>{len(fixtures)}</b>\n\n"
-        f"Матчи и туры дивизиона занесены в базу данных.",
+        f"Матчи и туры дивизиона занесены в базу данных.\n"
+        f"{line_note}",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="HTML"
     )
@@ -1518,6 +1555,9 @@ async def _render_div_round_card(query, context: ContextTypes.DEFAULT_TYPE, div_
         else:
             keyboard.append([InlineKeyboardButton("🎰 Открыть линию ставок заранее", callback_data=f"admin_div_bets_open:{div_id}:{round_number}")])
 
+    # Ручной перезапуск предсезонной линии: обычно она встаёт автоматически
+    # сразу после генерации расписания, но кнопка нужна, если её закрывали.
+    keyboard.append([InlineKeyboardButton("🎰 Открыть линию на Туры 1-2", callback_data=f"admin_div_preseason_line:{div_id}")])
     keyboard.append([InlineKeyboardButton("⚔️ Смотреть матчи тура", callback_data=f"admin_div_round_matches:{div_id}:{round_number}")])
     keyboard.append([InlineKeyboardButton("« К турам", callback_data=f"admin_div_manage_matches:{div_id}")])
 
@@ -2294,6 +2334,38 @@ async def admin_toggle_round_bets(update: Update, context: ContextTypes.DEFAULT_
         return
 
     await _render_div_round_card(query, context, div_id, round_number)
+
+
+@admin_only
+async def admin_open_preseason_line(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Выставить предсезонную линию БК на Туры 1 и 2 дивизиона вручную."""
+    query = update.callback_query
+    if not query or not is_admin(query.from_user.id):
+        return
+
+    try:
+        div_id = int(query.data.split(":")[1])
+    except (IndexError, ValueError):
+        await _deny_access(update, "⛔ Некорректные данные")
+        return
+    if not await _ensure_division_access(update, div_id):
+        return
+
+    opened = await _open_preseason_line(div_id)
+    if opened:
+        await query.answer(
+            f"🎰 Линия открыта на Туры: {', '.join(str(r) for r in opened)}",
+            show_alert=True
+        )
+    else:
+        await query.answer(
+            "❌ Не удалось открыть линию: туры уже открыты для игры, нет расписания или сезон неактивен.",
+            show_alert=True
+        )
+        return
+
+    await _render_div_round_card(query, context, div_id, opened[0])
+
 
 @admin_only
 async def admin_extend_match_execute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
