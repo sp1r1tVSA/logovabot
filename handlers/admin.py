@@ -2312,6 +2312,93 @@ async def admin_extend_match_execute(update: Update, context: ContextTypes.DEFAU
 
     await admin_view_match(update, context, match_id=match_id)
 
+
+@admin_only
+async def admin_extend_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Unfold the extension choices (+24ч / +48ч) for a debt match."""
+    query = update.callback_query
+    if not query or not is_admin(query.from_user.id):
+        return
+    await query.answer()
+
+    match_id = int(query.data.replace("admin_extend_menu_", ""))
+    match = await asyncio.to_thread(database.get_match, match_id)
+    if not match:
+        await safe_edit_or_reply(query, context, "❌ Матч не найден.")
+        return
+    if not await _ensure_match_access(update, match):
+        return
+
+    t1 = html.escape(match.get("player1_team") or "Хозяева")
+    t2 = html.escape(match.get("player2_team") or "Гости")
+    text = (
+        f"⏸ <b>Продление матча #{match_id}</b>\n\n"
+        f"🏠 <b>{t1}</b> 🆚 ✈️ <b>{t2}</b> (тур {match.get('round_number', '?')})\n\n"
+        f"<i>На выбранный срок долг замораживается: напоминания и вердикт не срабатывают, "
+        f"а ставки на матч продолжают висеть в статусе «в игре» и не возвращаются.</i>"
+    )
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("➕ +24 часа", callback_data=f"admin_extend_24h_{match_id}")],
+        [InlineKeyboardButton("➕ +48 часов", callback_data=f"admin_extend_48h_{match_id}")],
+        [InlineKeyboardButton("« Назад к карточке матча", callback_data=f"admin_view_match_{match_id}")],
+    ])
+    await safe_edit_or_reply(query, context, text, reply_markup=keyboard)
+
+
+@admin_only
+async def admin_extend_hours_execute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Grant a debt match a fixed +24h / +48h extension and tell both players.
+
+    Bets stay `pending` for the whole extension — nothing is refunded here,
+    only a technical result (ТП / ТН) ever voids them.
+    """
+    query = update.callback_query
+    if not query or not is_admin(query.from_user.id):
+        return
+    await query.answer()
+
+    data = query.data
+    hours = 24 if data.startswith("admin_extend_24h_") else 48
+    match_id = int(data.replace(f"admin_extend_{hours}h_", ""))
+
+    match = await asyncio.to_thread(database.get_match, match_id)
+    if not match:
+        await safe_edit_or_reply(query, context, "❌ Матч не найден.")
+        return
+    if not await _ensure_match_access(update, match):
+        return
+
+    until_str = await asyncio.to_thread(database.extend_match_deadline_by_hours, match_id, hours)
+    if not until_str:
+        await query.answer("❌ Не удалось продлить матч.", show_alert=True)
+        return
+
+    until_dt = database.parse_flexible_datetime(until_str)
+    until_human = until_dt.strftime("%d.%m.%Y %H:%M") if until_dt else until_str
+
+    rn = match.get("round_number", "?")
+    t1 = html.escape(match.get("player1_team") or "Хозяева")
+    t2 = html.escape(match.get("player2_team") or "Гости")
+    dm = (
+        f"⏸ <b>Администратор продлил ваш матч-долг на {hours} часов.</b>\n\n"
+        f"🏆 <b>{rn}-й тур:</b> 🏠 <b>{t1}</b> 🆚 ✈️ <b>{t2}</b>\n"
+        f"🗓 Новый срок: <b>до {until_human}</b>\n\n"
+        f"<i>Варны и вердикт на это время заморожены. Сыграйте матч и внесите результат — "
+        f"это спишет варн за долг.</i>\n"
+        f"💰 <i>Ставки на матч остаются в игре и не возвращаются.</i>"
+    )
+    for p_id in (match.get("player1_id"), match.get("player2_id")):
+        if not p_id:
+            continue
+        try:
+            await context.bot.send_message(chat_id=p_id, text=dm, parse_mode="HTML")
+        except Exception:
+            pass
+
+    await query.answer(f"⏸ Матч продлён на {hours}ч (до {until_human})", show_alert=True)
+    await admin_view_match(update, context, match_id=match_id)
+
+
 @admin_only
 async def admin_list_overdue(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Просроченные матчи одного дивизиона и быстрые действия по долгам."""
@@ -2732,9 +2819,11 @@ async def admin_view_match(update: Update, context: ContextTypes.DEFAULT_TYPE, m
     extra_status = ""
     if match.get("status") == "pending":
         if is_extended:
-            extra_status = "\n• <b>Авто-варны:</b> ⏸ <i>Заморожены (продлен админом)</i>"
+            until_dt = await asyncio.to_thread(database.get_match_extension_expiry, match_id)
+            until_txt = f" до {until_dt.strftime('%d.%m.%Y %H:%M')}" if until_dt else ""
+            extra_status = f"\n• <b>Отсчёт долга:</b> ⏸ <i>Заморожен (продлён админом{until_txt})</i>"
         elif is_overdue:
-            extra_status = "\n• <b>Статус долга:</b> ⏳ <b>Матч-долг (идет начисление авто-варнов)</b>"
+            extra_status = "\n• <b>Статус долга:</b> ⏳ <b>Матч-долг (48ч на отыгровку, далее ТП/ТН)</b>"
 
     text = (
         f"{header_title}\n\n"
@@ -2752,8 +2841,10 @@ async def admin_view_match(update: Update, context: ContextTypes.DEFAULT_TYPE, m
         [InlineKeyboardButton("🚫 ТП 1:0 (Хозяева)", callback_data=f"admin_tp_home_{match_id}"), InlineKeyboardButton("🚫 ТП 0:1 (Гости)", callback_data=f"admin_tp_away_{match_id}")],
     ]
     if match.get("status") == "pending":
-        btn_ext = "▶️ Снять продление (Возобновить варны)" if is_extended else "⏸ Продлить матч (Заморозить варны)"
-        keyboard.append([InlineKeyboardButton(btn_ext, callback_data=f"admin_extend_match_{match_id}")])
+        if is_extended:
+            keyboard.append([InlineKeyboardButton("▶️ Снять продление и возобновить отсчёт", callback_data=f"admin_extend_match_{match_id}")])
+        else:
+            keyboard.append([InlineKeyboardButton("⏸ Продлить матч: +24ч / +48ч", callback_data=f"admin_extend_menu_{match_id}")])
     keyboard.append([InlineKeyboardButton("🤝 ТН 0:0 (Ничья)", callback_data=f"admin_tp_draw_{match_id}"), InlineKeyboardButton("🔄 Сбросить результат", callback_data=f"admin_reset_match_execute_{match_id}")])
     if match.get("photo_id"):
         keyboard.append([InlineKeyboardButton("📸 Просмотр скриншота матча", callback_data=f"admin_view_match_photo_{match_id}")])
@@ -2922,24 +3013,144 @@ async def _notify_group_about_tp(context: ContextTypes.DEFAULT_TYPE, match_id: i
     except Exception as e:
         logger.error(f"Failed to send TP notification to group: {e}")
 
-async def _process_tp_debt_rewards(context: ContextTypes.DEFAULT_TYPE, match_id: int) -> None:
-    """A technical result also counts as a played debt: clear 1 warn per player
-    (same treatment as a normally confirmed overdue match)."""
+async def _process_technical_verdict(
+    context: ContextTypes.DEFAULT_TYPE,
+    match_id: int,
+    verdict: str,
+    admin_id: int | None = None,
+) -> None:
+    """Apply the disciplinary side of a technical result.
+
+    `verdict` is 'home', 'away' or 'draw'.
+
+    ТП — the active player wins: +3 очка in the table and −1 варн for the debt
+    (`apply_debt_played_reward`); the player who ignored the match gets +1 варн.
+    Previously both sides were unwarned here, which rewarded the offender for
+    stalling — that is the bug this function replaces.
+
+    ТН — обоюдное молчание: по 1 очку каждому and +1 варн for BOTH, no unwarns.
+
+    Either way the bets were already fully refunded by `set_technical_result`.
+    """
+    if verdict not in ("home", "away", "draw"):
+        logger.warning(f"Unknown technical verdict '{verdict}' for match #{match_id}")
+        return
+
+    # Idempotency: a double click (or an admin re-opening the card) must not
+    # hand out a second warn for the same debt.
+    if await asyncio.to_thread(database.has_debt_stage, match_id, "verdict_processed"):
+        return
+
     try:
-        from handlers.cabinet import handle_debt_played_rewards, refresh_debts_summary
         m = await asyncio.to_thread(database.get_match, match_id)
         if not m:
             return
-        await handle_debt_played_rewards(
-            context,
-            match_id=match_id,
-            round_number=m.get('round_number', 0) or 0,
-            p1_id=m.get('player1_id'),
-            p2_id=m.get('player2_id'),
-        )
+
+        rn = m.get("round_number", 0) or 0
+        p1_id = m.get("player1_id")
+        p2_id = m.get("player2_id")
+        t1 = html.escape(m.get("player1_team") or "Хозяева")
+        t2 = html.escape(m.get("player2_team") or "Гости")
+        u1 = f"@{html.escape(m['player1_username'])}" if m.get("player1_username") else t1
+        u2 = f"@{html.escape(m['player2_username'])}" if m.get("player2_username") else t2
+
+        names = {p1_id: (u1, t1, m.get("player1_username")), p2_id: (u2, t2, m.get("player2_username"))}
+
+        unwarned: list[tuple[int, int]] = []   # (user_id, new_count)
+        warned: list[tuple[int, int]] = []     # (user_id, new_count)
+        kick_queue: list[int] = []
+
+        if verdict == "draw":
+            score_line = f"🤝 <b>ТН 0:0</b> — по 1 очку каждому"
+            reason = f"ТН за срыв тура ({rn} тур)"
+            for p_id in (p1_id, p2_id):
+                if not p_id:
+                    continue
+                new_cnt, is_exceeded = await asyncio.to_thread(
+                    database.add_warn, p_id, admin_id, reason
+                )
+                warned.append((p_id, new_cnt))
+                if is_exceeded:
+                    kick_queue.append(p_id)
+        else:
+            winner_id, loser_id = (p1_id, p2_id) if verdict == "home" else (p2_id, p1_id)
+            score_line = (
+                f"🏆 <b>ТП 1:0</b> — победа {t1}" if verdict == "home"
+                else f"🏆 <b>ТП 0:1</b> — победа {t2}"
+            )
+            if winner_id:
+                new_cnt, was_unwarned = await asyncio.to_thread(
+                    database.apply_debt_played_reward, winner_id, rn
+                )
+                if was_unwarned:
+                    unwarned.append((winner_id, new_cnt))
+            if loser_id:
+                new_cnt, is_exceeded = await asyncio.to_thread(
+                    database.add_warn, loser_id, admin_id,
+                    f"ТП за неявку / игнор соперника ({rn} тур)"
+                )
+                warned.append((loser_id, new_cnt))
+                if is_exceeded:
+                    kick_queue.append(loser_id)
+
+        await asyncio.to_thread(database.record_debt_stage, match_id, "verdict_processed")
+
+        # DM both participants with the verdict and what it cost them.
+        for p_id in (p1_id, p2_id):
+            if not p_id:
+                continue
+            personal = ""
+            for uid, cnt in unwarned:
+                if uid == p_id:
+                    personal = (
+                        f"🎁 <b>С вас списан 1 варн за долг.</b>\n"
+                        f"📊 Текущие варны: <b>{cnt}/{MAX_WARNS_LIMIT}</b>\n"
+                    )
+            for uid, cnt in warned:
+                if uid == p_id:
+                    personal = (
+                        f"🚨 <b>Вам начислен +1 варн.</b>\n"
+                        f"📊 Текущие варны: <b>{cnt}/{MAX_WARNS_LIMIT}</b>\n"
+                    )
+            dm = (
+                f"⚖️ <b>Вердикт по матчу-долгу</b>\n\n"
+                f"🏆 <b>{rn}-й тур:</b> 🏠 <b>{t1}</b> ({u1}) 🆚 ✈️ <b>{t2}</b> ({u2})\n"
+                f"{score_line}\n\n"
+                f"{personal}"
+                f"💰 <i>Все ставки на этот матч возвращены игрокам (кэф 1.00).</i>"
+            )
+            try:
+                await context.bot.send_message(chat_id=p_id, text=dm, parse_mode="HTML")
+            except Exception:
+                pass
+
+        # Disciplinary report in the ПРЕДЫ topic.
+        lines = [
+            "⚖️ <b>ДИСЦИПЛИНАРНЫЙ ВЕРДИКТ ПО ДОЛГУ</b>\n",
+            f"🏆 Матч: {rn}-й тур — <b>{t1}</b> ({u1}) 🆚 <b>{t2}</b> ({u2})",
+            score_line,
+            "",
+        ]
+        for uid, cnt in warned:
+            who = names.get(uid, (f"ID {uid}", "", None))[0]
+            lines.append(f"🚨 {who}: <b>+1 варн</b> → <b>{cnt}/{MAX_WARNS_LIMIT}</b>")
+        for uid, cnt in unwarned:
+            who = names.get(uid, (f"ID {uid}", "", None))[0]
+            lines.append(f"🎁 {who}: <b>−1 варн</b> за закрытие долга → <b>{cnt}/{MAX_WARNS_LIMIT}</b>")
+        lines.append("")
+        lines.append("💰 <i>Все ставки на этот матч возвращены игрокам (Refund, кэф 1.00).</i>")
+        await _send_to_warns_thread(context, "\n".join(lines))
+
+        # Auto-kick only after the report, so the ПРЕДЫ thread reads in order.
+        for p_id in kick_queue:
+            _, _, uname = names.get(p_id, (None, None, None))
+            team = m.get("player1_team") if p_id == p1_id else m.get("player2_team")
+            await _auto_kick_player(context, p_id, uname, team)
+
+        from handlers.cabinet import refresh_debts_summary
         await refresh_debts_summary(context)
     except Exception as e:
-        logger.warning(f"Failed to process debt rewards for technical result #{match_id}: {e}")
+        logger.warning(f"Failed to process technical verdict for match #{match_id}: {e}")
 
 
 @admin_only
@@ -2950,9 +3161,9 @@ async def admin_set_tp_home_execute(update: Update, context: ContextTypes.DEFAUL
     match_id = int(query.data.replace("admin_tp_home_", ""))
     if not await _ensure_match_access(update, await asyncio.to_thread(database.get_match, match_id)):
         return
-    await asyncio.to_thread(database.set_technical_result, match_id, 1, 0)
+    await asyncio.to_thread(database.set_technical_result, match_id, 1, 0, "tp_home")
     await _notify_group_about_tp(context, match_id, "home")
-    await _process_tp_debt_rewards(context, match_id)
+    await _process_technical_verdict(context, match_id, "home", admin_id=query.from_user.id)
     await query.answer("✅ Назначено ТП 1:0 (Победа Хозяев)", show_alert=True)
     await admin_view_match(update, context, match_id=match_id)
 
@@ -2964,9 +3175,9 @@ async def admin_set_tp_away_execute(update: Update, context: ContextTypes.DEFAUL
     match_id = int(query.data.replace("admin_tp_away_", ""))
     if not await _ensure_match_access(update, await asyncio.to_thread(database.get_match, match_id)):
         return
-    await asyncio.to_thread(database.set_technical_result, match_id, 0, 1)
+    await asyncio.to_thread(database.set_technical_result, match_id, 0, 1, "tp_away")
     await _notify_group_about_tp(context, match_id, "away")
-    await _process_tp_debt_rewards(context, match_id)
+    await _process_technical_verdict(context, match_id, "away", admin_id=query.from_user.id)
     await query.answer("✅ Назначено ТП 0:1 (Победа Гостей)", show_alert=True)
     await admin_view_match(update, context, match_id=match_id)
 
@@ -2978,9 +3189,9 @@ async def admin_set_tp_draw_execute(update: Update, context: ContextTypes.DEFAUL
     match_id = int(query.data.replace("admin_tp_draw_", ""))
     if not await _ensure_match_access(update, await asyncio.to_thread(database.get_match, match_id)):
         return
-    await asyncio.to_thread(database.set_technical_result, match_id, 0, 0)
+    await asyncio.to_thread(database.set_technical_result, match_id, 0, 0, "tech_draw")
     await _notify_group_about_tp(context, match_id, "draw")
-    await _process_tp_debt_rewards(context, match_id)
+    await _process_technical_verdict(context, match_id, "draw", admin_id=query.from_user.id)
     await query.answer("✅ Назначена Техническая ничья 0:0", show_alert=True)
     await admin_view_match(update, context, match_id=match_id)
 
@@ -5355,15 +5566,98 @@ async def job_post_round_digest(context: ContextTypes.DEFAULT_TYPE) -> None:
 _debt_tracker_lock = asyncio.Lock()
 
 
+async def _resolve_debt_admins(division_id: int | None) -> list[int]:
+    """Admins who must decide the fate of a debt match.
+
+    Division admins first; if the division has none (or the match is not bound
+    to a division), fall back to the global admins from `config.ADMIN_IDS` so a
+    debt never sits unjudged.
+    """
+    admins: list[int] = []
+    if division_id:
+        try:
+            admins = list(await asyncio.to_thread(database.get_division_admins, division_id))
+        except Exception as e:
+            logger.warning(f"Failed to load admins for division {division_id}: {e}")
+            admins = []
+    if not admins:
+        admins = [int(a) for a in (config.ADMIN_IDS or [])]
+    # Keep order, drop duplicates.
+    seen: set[int] = set()
+    return [a for a in admins if a and not (a in seen or seen.add(a))]
+
+
+async def _escalate_debt_to_admin(context: ContextTypes.DEFAULT_TYPE, m: dict) -> bool:
+    """48h escalation: send the one-click verdict card to the division admins.
+
+    Returns True as soon as at least one admin received the card — the caller
+    then records the `admin_escalated_48h` stage so the 30-minute tracker does
+    not re-send it on every run.
+    """
+    m_id = m["id"]
+    rn = m.get("round_number", "?")
+    t1 = html.escape(m.get("player1_team") or "Хозяева")
+    t2 = html.escape(m.get("player2_team") or "Гости")
+    u1 = f"@{html.escape(m['p1_username'])}" if m.get("p1_username") else t1
+    u2 = f"@{html.escape(m['p2_username'])}" if m.get("p2_username") else t2
+    hours = int(m.get("hours_overdue", 0.0))
+
+    div_id = m.get("division_id")
+    div_name = ""
+    if div_id:
+        try:
+            div = await asyncio.to_thread(database.get_division, div_id)
+            if div:
+                div_name = f" — {html.escape(str(div['name']))}"
+        except Exception:
+            pass
+
+    text = (
+        f"⚖️ <b>ДОЛГ 48Ч: ТРЕБУЕТСЯ ВЕРДИКТ</b>{div_name}\n\n"
+        f"🏆 <b>{rn}-й тур</b> · матч #{m_id}\n"
+        f"🏠 <b>{t1}</b> ({u1})\n"
+        f"✈️ <b>{t2}</b> ({u2})\n"
+        f"⏳ Просрочка: <b>{hours}ч</b>\n\n"
+        f"<i>Матч не сыгран через 48 часов после дедлайна. Выберите решение:</i>\n"
+        f"• <b>ТП</b> — победителю +3 очка и −1 варн за долг, виновнику +1 варн.\n"
+        f"• <b>ТН 0:0</b> — по 1 очку каждому и <b>по +1 варну обоим</b>.\n"
+        f"• <b>Продлить</b> — долг замораживается, ставки остаются в игре.\n\n"
+        f"💰 <i>При любом ТП/ТН все ставки на матч возвращаются игрокам (кэф 1.00).</i>"
+    )
+
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton(f"🏆 ТП 1:0 ({t1})", callback_data=f"admin_tp_home_{m_id}")],
+        [InlineKeyboardButton(f"🏆 ТП 0:1 ({t2})", callback_data=f"admin_tp_away_{m_id}")],
+        [InlineKeyboardButton("🤝 ТН 0:0 (по 1 очку)", callback_data=f"admin_tp_draw_{m_id}")],
+        [InlineKeyboardButton("⏸ Продлить матч", callback_data=f"admin_extend_menu_{m_id}")],
+        [InlineKeyboardButton("⚽️ Карточка матча", callback_data=f"admin_view_match_{m_id}")],
+    ])
+
+    delivered = False
+    for admin_id in await _resolve_debt_admins(div_id):
+        try:
+            await context.bot.send_message(
+                chat_id=admin_id, text=text, reply_markup=keyboard, parse_mode="HTML"
+            )
+            delivered = True
+        except Exception as e:
+            logger.warning(f"Failed to escalate debt match #{m_id} to admin {admin_id}: {e}")
+    return delivered
+
+
 async def job_debt_lifecycle_tracker(context: ContextTypes.DEFAULT_TYPE) -> None:
     """
-    Automated debt lifecycle tracking:
-    - 0h overdue: Initial notification to both participants in DM.
-    - Every 12h: Cycle reminder in DM.
-    - Every 24h overdue (+24h, +48h, +72h, +96h): Auto-warn to both participants, post to ПРЕДЫ topic.
-    - On 4/4 warns: Auto-kick player from league and group, free up club, announce in ПРЕДЫ & Отчёты.
-    - If is_extended == 1: auto-warns and auto-kick are paused.
-    - Safety guard: Max 1 warn per player per 24 hours. No auto-warns before DEBT_TRACKING_START_DATETIME.
+    Automated debt lifecycle tracking (48-hour regulation):
+    - 0h overdue: match becomes a ДОЛГ, both participants get the 48h rules in DM.
+    - Every 12h: cycle reminder in DM.
+    - 24h overdue: soft reminder in DM only — NO warn is issued here.
+    - 48h overdue (and not extended): escalate to the division admin with a
+      one-click verdict card (ТП хозяевам / ТП гостям / ТН / продлить).
+    - A warn is only ever granted by the final verdict, so one debt match can
+      cost a player at most ONE warn. On 4/4 warns the player is auto-kicked.
+    - If is_extended == 1: the debt clock is frozen and nothing escalates. An
+      expired extension (`extended_until`) is resumed automatically here.
+    - No reminders or escalations before DEBT_TRACKING_START_DATETIME.
     """
     if _debt_tracker_lock.locked():
         logger.info("Debt tracker run skipped: another run is already in progress.")
@@ -5382,7 +5676,6 @@ async def _run_debt_lifecycle_tracker(context: ContextTypes.DEFAULT_TYPE) -> Non
     auto_warns_active = (start_dt is None or now >= start_dt)
 
     warns_updated = False
-    warned_users_this_run: set[int] = set()
 
     logger.info(
         f"Checking debt tracker: {len(overdue_matches)} overdue matches found "
@@ -5420,6 +5713,15 @@ async def _run_debt_lifecycle_tracker(context: ContextTypes.DEFAULT_TYPE) -> Non
         p1_valid = bool(p1_id and p1_id > 0)
         p2_valid = bool(p2_id and p2_id > 0)
 
+        # 0. An admin extension that has run out resumes the debt clock right
+        # away, so the match can escalate again in this very run instead of
+        # staying frozen until someone touches it manually.
+        if is_extended and m.get("extended_until"):
+            expiry = database.parse_flexible_datetime(m["extended_until"])
+            if expiry and now >= expiry:
+                await asyncio.to_thread(database.expire_match_extension, m_id)
+                is_extended = False
+
         # 1. Initial Notification: Moment deadline passed (0h)
         # Gated on auto_warns_active (no "deadline passed" claims before tracking starts)
         # and skipped for extended matches.
@@ -5431,9 +5733,14 @@ async def _run_debt_lifecycle_tracker(context: ContextTypes.DEFAULT_TYPE) -> Non
                 f"Матч переведён в категорию <b>ДОЛГ</b>:\n"
                 f"🏆 <b>{rn}-й тур</b>\n"
                 f"🏠 <b>{t1}</b> ({u1}) 🆚 ✈️ <b>{t2}</b> ({u2})\n\n"
-                f"⚠️ <i>Каждые 24 часа просрочки бот будет начислять авто-варн (+1 варн). "
-                f"При накоплении {MAX_WARNS_LIMIT}/{MAX_WARNS_LIMIT} варнов участник автоматически исключается из лиги.</i>\n"
-                f"🎁 <i>Каждый сыгранный матч-долг списывает 1 варн!</i>"
+                f"⏱ <b>У вас ровно 48 часов, чтобы отыграть этот матч.</b>\n\n"
+                f"🎁 <i>Факт сыгранного долга автоматически аннулирует варн за долг (−1 варн).</i>\n"
+                f"📸 <i>Если соперник игнорирует — отправьте пруфы переписки админу дивизиона, "
+                f"и ТП будет назначено виновнику.</i>\n"
+                f"🤝 <i>Если оба участника молчат — через 48 часов будет зафиксирована "
+                f"техническая ничья ТН 0:0 (по 1 очку каждому) и <b>обоим начислится по +1 варну</b>.</i>\n\n"
+                f"⚠️ <i>Лимит варнов — {MAX_WARNS_LIMIT}. При {MAX_WARNS_LIMIT}/{MAX_WARNS_LIMIT} "
+                f"участник автоматически исключается из лиги, а клуб уходит на замену.</i>"
             )
             initial_delivered = False
             for pid, is_v in ((p1_id, p1_valid), (p2_id, p2_valid)):
@@ -5468,11 +5775,13 @@ async def _run_debt_lifecycle_tracker(context: ContextTypes.DEFAULT_TYPE) -> Non
 
         if should_send_12h:
             hours_overdue_int = int(hours_overdue)
-            if not auto_warns_active and start_dt:
-                warn_time_str = f"после старта системы ({start_dt.strftime('%d.%m.%Y %H:%M')})"
+            # The only deadline that matters now is the 48h verdict, not a
+            # 24-hour warn cycle — that cascade no longer exists.
+            hours_left = 48 - hours_overdue_int
+            if hours_left > 0:
+                verdict_time_str = f"~{hours_left}ч"
             else:
-                next_warn_in_hours = max(1, 24 - (hours_overdue_int % 24))
-                warn_time_str = f"~{next_warn_in_hours}ч"
+                verdict_time_str = "в любой момент"
 
             delivered_any = False
 
@@ -5482,8 +5791,8 @@ async def _run_debt_lifecycle_tracker(context: ContextTypes.DEFAULT_TYPE) -> Non
                 p1_dm = (
                     f"⏰ <b>Напоминание о несыгранном долге!</b>\n\n"
                     f"🏆 <b>{rn}-й тур:</b> 🏠 <b>{t1}</b> ({u1}) 🆚 ✈️ <b>{t2}</b> ({u2})\n"
-                    f"⏳ Просрочка: <b>{hours_overdue_int}ч</b>\n"
-                    f"⚠️ До следующего авто-варна: <b>{warn_time_str}</b>\n"
+                    f"⏳ Просрочка: <b>{hours_overdue_int}ч</b> из 48ч\n"
+                    f"⚖️ До вердикта админа (ТП / ТН): <b>{verdict_time_str}</b>\n"
                     f"📊 Ваши текущие варны: <b>{p1_warns}/{MAX_WARNS_LIMIT}</b>\n\n"
                     f"<i>Пожалуйста, сыграйте матч и внесите результат в бота.</i>"
                 )
@@ -5499,8 +5808,8 @@ async def _run_debt_lifecycle_tracker(context: ContextTypes.DEFAULT_TYPE) -> Non
                 p2_dm = (
                     f"⏰ <b>Напоминание о несыгранном долге!</b>\n\n"
                     f"🏆 <b>{rn}-й тур:</b> 🏠 <b>{t1}</b> ({u1}) 🆚 ✈️ <b>{t2}</b> ({u2})\n"
-                    f"⏳ Просрочка: <b>{hours_overdue_int}ч</b>\n"
-                    f"⚠️ До следующего авто-варна: <b>{warn_time_str}</b>\n"
+                    f"⏳ Просрочка: <b>{hours_overdue_int}ч</b> из 48ч\n"
+                    f"⚖️ До вердикта админа (ТП / ТН): <b>{verdict_time_str}</b>\n"
                     f"📊 Ваши текущие варны: <b>{p2_warns}/{MAX_WARNS_LIMIT}</b>\n\n"
                     f"<i>Пожалуйста, сыграйте матч и внесите результат в бота.</i>"
                 )
@@ -5516,107 +5825,43 @@ async def _run_debt_lifecycle_tracker(context: ContextTypes.DEFAULT_TYPE) -> Non
             if delivered_any:
                 await asyncio.to_thread(database.record_debt_12h_reminder, m_id)
 
-        # 3. 24-hour Auto-Warn Cycles (+24h, +48h, +72h, +96h)
-        # (extended / not-active / invalid-opponent cases already skipped above)
+        # 3. Soft reminder at 24h — NO warn is issued here.
+        # Under the 48-hour regulation a debt match can only ever cost a player
+        # one warn, and that warn is granted by the final verdict (ТП / ТН).
+        if hours_overdue >= 24.0 and not (
+            await asyncio.to_thread(database.has_debt_stage, m_id, "warn_24h")
+        ):
+            soft_text = (
+                f"🔔 <b>Прошло 24 часа с дедлайна — матч всё ещё не сыгран.</b>\n\n"
+                f"🏆 <b>{rn}-й тур:</b> 🏠 <b>{t1}</b> ({u1}) 🆚 ✈️ <b>{t2}</b> ({u2})\n\n"
+                f"⏱ <i>Остались ещё сутки: ровно через 48 часов после дедлайна "
+                f"админ дивизиона вынесет вердикт.</i>\n"
+                f"🎁 <i>Сыграйте долг сейчас — варн за долг будет списан (−1 варн).</i>\n"
+                f"📸 <i>Соперник игнорирует? Отправьте пруфы переписки админу дивизиона — "
+                f"ТП получит виновник.</i>\n"
+                f"🤝 <i>Обоюдное молчание = ТН 0:0 и по +1 варну каждому.</i>\n\n"
+                f"ℹ️ <b>Варн за эти 24 часа НЕ начислен.</b>"
+            )
+            soft_delivered = False
+            for pid in (p1_id, p2_id):
+                if not pid:
+                    continue
+                try:
+                    await context.bot.send_message(chat_id=pid, text=soft_text, parse_mode="HTML")
+                    soft_delivered = True
+                except Exception:
+                    pass
+            if soft_delivered:
+                await asyncio.to_thread(database.record_debt_stage, m_id, "warn_24h")
 
-        warn_milestones = [
-            (24.0, "warn_24h", "24ч"),
-            (48.0, "warn_48h", "48ч"),
-            (72.0, "warn_72h", "72ч"),
-            (96.0, "warn_96h", "96ч"),
-        ]
-
-        # Only trigger at most ONE milestone per match per run to prevent cascades.
-        # Milestone stages are tracked PER PLAYER (warn_24h_p1 / warn_24h_p2) so a
-        # rate-limited player does not permanently lose the milestone because the
-        # other player got warned first. Legacy generic stages (warn_24h etc.)
-        # are still honoured for backwards compatibility.
-        for req_hours, stage_key, label in warn_milestones:
-            generic_done = await asyncio.to_thread(database.has_debt_stage, m_id, stage_key)
-            p1_stage = f"{stage_key}_p1"
-            p2_stage = f"{stage_key}_p2"
-            if hours_overdue >= req_hours and not (
-                generic_done
-                or (await asyncio.to_thread(database.has_debt_stage, m_id, p1_stage))
-                or (await asyncio.to_thread(database.has_debt_stage, m_id, p2_stage))
-            ):
-                warned_p1 = False
-                warned_p2 = False
-
-                # Apply warn to Player 1 (only if active, has club, and not warned within 20h)
-                if p1_id and p1_valid:
-                    can_warn_p1 = (
-                        p1_id not in warned_users_this_run
-                        and not (await asyncio.to_thread(database.has_user_been_warned_recently, p1_id, 20.0))
-                    )
-                    if can_warn_p1:
-                        warned_users_this_run.add(p1_id)
-                        new_cnt1, is_exceeded1 = await asyncio.to_thread(
-                            database.add_warn, p1_id, None, f"Авто-варн: просрочка {label} по {rn} туру"
-                        )
-                        warned_p1 = True
-                        warns_updated = True
-                        dm_warn1 = (
-                            f"🚨 <b>Вам начислен АВТО-ВАРН за задержку тура!</b>\n\n"
-                            f"Причина: Просрочка матча {rn}-го тура (vs {u2}) более {label}.\n"
-                            f"📊 <b>Текущие варны:</b> <b>{new_cnt1}/{MAX_WARNS_LIMIT}</b>\n\n"
-                            f"⚠️ <i>При достижении {MAX_WARNS_LIMIT}/{MAX_WARNS_LIMIT} варнов вы будете автоматически исключены из лиги, а клуб передан на замену. Сыграйте долг, чтобы снять варн!</i>"
-                        )
-                        try:
-                            await context.bot.send_message(chat_id=p1_id, text=dm_warn1, parse_mode="HTML")
-                        except Exception:
-                            pass
-                        if is_exceeded1:
-                            await _auto_kick_player(context, p1_id, m.get("p1_username"), m.get("player1_team"))
-
-                # Apply warn to Player 2 (only if active, has club, and not warned within 20h)
-                if p2_id and p2_valid:
-                    can_warn_p2 = (
-                        p2_id not in warned_users_this_run
-                        and not (await asyncio.to_thread(database.has_user_been_warned_recently, p2_id, 20.0))
-                    )
-                    if can_warn_p2:
-                        warned_users_this_run.add(p2_id)
-                        new_cnt2, is_exceeded2 = await asyncio.to_thread(
-                            database.add_warn, p2_id, None, f"Авто-варн: просрочка {label} по {rn} туру"
-                        )
-                        warned_p2 = True
-                        warns_updated = True
-                        dm_warn2 = (
-                            f"🚨 <b>Вам начислен АВТО-ВАРН за задержку тура!</b>\n\n"
-                            f"Причина: Просрочка матча {rn}-го тура (vs {u1}) более {label}.\n"
-                            f"📊 <b>Текущие варны:</b> <b>{new_cnt2}/{MAX_WARNS_LIMIT}</b>\n\n"
-                            f"⚠️ <i>При достижении {MAX_WARNS_LIMIT}/{MAX_WARNS_LIMIT} варнов вы будете автоматически исключены из лиги, а клуб передан на замену. Сыграйте долг, чтобы снять варн!</i>"
-                        )
-                        try:
-                            await context.bot.send_message(chat_id=p2_id, text=dm_warn2, parse_mode="HTML")
-                        except Exception:
-                            pass
-                        if is_exceeded2:
-                            await _auto_kick_player(context, p2_id, m.get("p2_username"), m.get("player2_team"))
-
-                # Post group notice to ПРЕДЫ topic and record per-player milestone
-                # stages ONLY for players who were actually warned.
-                if warned_p1 or warned_p2:
-                    if warned_p1:
-                        await asyncio.to_thread(database.record_debt_stage, m_id, p1_stage)
-                    if warned_p2:
-                        await asyncio.to_thread(database.record_debt_stage, m_id, p2_stage)
-                    p1_warn_now = await asyncio.to_thread(database.get_user_warn_count, p1_id) if p1_id else 0
-                    p2_warn_now = await asyncio.to_thread(database.get_user_warn_count, p2_id) if p2_id else 0
-                    thread_notice = (
-                        f"⚠️ <b>АВТО-ВАРН ЗА ПРОСРОЧКУ ТУРА</b>\n\n"
-                        f"👤 Участники: <b>{u1}</b> [{t1}] и <b>{u2}</b> [{t2}]\n"
-                        f"🏆 Матч: {rn}-й тур (Просрочка: {label})\n"
-                        f"📊 Текущий баланс варнов:\n"
-                        f"• {u1}: <b>{p1_warn_now}/{MAX_WARNS_LIMIT}</b>\n"
-                        f"• {u2}: <b>{p2_warn_now}/{MAX_WARNS_LIMIT}</b>\n\n"
-                        f"<i>Матч необходимо срочно доиграть и внести результат.</i>"
-                    )
-                    await _send_to_warns_thread(context, thread_notice)
-
-                # Crucial: break so only 1 milestone is handled per match per 30m run
-                break
+        # 4. Escalation to the division admin at 48h.
+        # Recorded as a stage so the admin is not pinged every 30 minutes.
+        if hours_overdue >= 48.0 and not (
+            await asyncio.to_thread(database.has_debt_stage, m_id, "admin_escalated_48h")
+        ):
+            escalated = await _escalate_debt_to_admin(context, m)
+            if escalated:
+                await asyncio.to_thread(database.record_debt_stage, m_id, "admin_escalated_48h")
 
     if warns_updated:
         await _post_or_update_debts_in_warns(context)

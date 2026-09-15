@@ -127,6 +127,8 @@ from handlers.admin import (
     admin_delete_player_execute,
     admin_toggle_round_bets,
     admin_extend_match_execute,
+    admin_extend_menu,
+    admin_extend_hours_execute,
     admin_list_overdue,
     admin_open_round_prompt,
     admin_open_round_save,
@@ -729,6 +731,8 @@ def _register_admin_handlers(app: Application) -> None:
     app.add_handler(CallbackQueryHandler(admin_set_tp_draw_execute, pattern="^admin_tp_draw_\\d+$"))
     app.add_handler(CallbackQueryHandler(admin_list_overdue, pattern=r"^admin_div_overdue:\d+$"))
     app.add_handler(CallbackQueryHandler(admin_extend_match_execute, pattern="^admin_extend_match_\\d+$"))
+    app.add_handler(CallbackQueryHandler(admin_extend_menu, pattern="^admin_extend_menu_\\d+$"))
+    app.add_handler(CallbackQueryHandler(admin_extend_hours_execute, pattern="^admin_extend_(24|48)h_\\d+$"))
     app.add_handler(CallbackQueryHandler(admin_toggle_role, pattern="^admin_toggle_role_-?\\d+_(player|admin)$"))
     app.add_handler(CallbackQueryHandler(admin_delete_options, pattern="^admin_delete_options_-?\\d+$"))
     app.add_handler(CallbackQueryHandler(admin_confirm_wipe_player, pattern="^admin_confirm_wipe_player_-?\\d+$"))

@@ -378,6 +378,13 @@ def init_db() -> None:
             ("live_minute", "INTEGER"),
             ("division_id", "INTEGER DEFAULT NULL"),
             ("season_id", "INTEGER NOT NULL DEFAULT 1"),
+            # Technical results (ТП / ТН): the score was assigned by an admin,
+            # not played. Bets on such a match are always fully refunded.
+            ("is_technical", "INTEGER DEFAULT 0"),
+            ("technical_type", "TEXT DEFAULT NULL"),
+            # Admin extension of a debt match (+24h / +48h): the moment the
+            # extension expires and the debt clock resumes.
+            ("extended_until", "TEXT DEFAULT NULL"),
         )
         for col_name, col_type in SAFE_COLUMNS:
             try:
@@ -2380,22 +2387,42 @@ def confirm_and_finalize_match(match_id: int, p1_score: int, p2_score: int, even
             logger.warning(f"Error settling bets for match {match_id}: {e}")
     return None
 
-def set_technical_result(match_id: int, p1_score: int, p2_score: int) -> str | None:
-    """Set technical result for match."""
+def set_technical_result(
+    match_id: int,
+    p1_score: int,
+    p2_score: int,
+    technical_type: str | None = None,
+) -> str | None:
+    """Set a technical result (ТП / ТН) for a match.
+
+    `technical_type` is one of 'tp_home', 'tp_away', 'tech_draw' (None keeps the
+    previous value for legacy callers). The match is flagged `is_technical = 1`,
+    its `match_events` are wiped so technical goals never reach the scorer
+    tables, and every bet on the match is settled as **voided** — i.e. a 100%
+    refund for singles and a 1.00 leg inside an express.
+    """
     if p1_score < 0 or p2_score < 0:
         raise ValueError("Scores must be non-negative integers")
     with transaction() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "UPDATE matches SET player1_score = ?, player2_score = ?, status = 'confirmed', played_at = ? WHERE id = ?",
-            (p1_score, p2_score, datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), match_id)
+            "UPDATE matches SET player1_score = ?, player2_score = ?, status = 'confirmed', played_at = ?, "
+            "is_technical = 1, technical_type = COALESCE(?, technical_type) WHERE id = ?",
+            (
+                p1_score,
+                p2_score,
+                datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                technical_type,
+                match_id,
+            )
         )
         # Тот же silent no-op, что и в confirm_and_finalize_match.
         if cursor.rowcount != 1:
             raise ValueError(f"Match {match_id} not found: technical result not saved")
         cursor.execute("DELETE FROM match_events WHERE match_id = ?", (match_id,))
         try:
-            settle_match_bets(match_id, p1_score, p2_score)
+            from services.settlement_engine import settle_match_predictions
+            settle_match_predictions(match_id, p1_score, p2_score, match_status="voided")
         except Exception as e:
             logger.warning(f"Error settling bets on technical result for match {match_id}: {e}")
     return None
@@ -3342,6 +3369,60 @@ def _apply_freeze_state(cursor: sqlite3.Cursor, match_id: int, new_val: int) -> 
             "frozen_seconds = COALESCE(frozen_seconds, 0) + ? WHERE id = ?",
             (extra, match_id)
         )
+
+
+def extend_match_deadline_by_hours(match_id: int, hours: int) -> str | None:
+    """Grant a debt match a fixed extension of `hours` (24 or 48).
+
+    Freezes the debt clock (`is_extended = 1`) and stamps `extended_until` with
+    the moment it resumes. The *round* deadline is deliberately left alone: it
+    is shared by every match of the round, so shifting it would silently extend
+    matches the admin never touched. The per-match freeze already shifts this
+    match's overdue timestamps by exactly the extension length.
+
+    The 48h admin escalation stage is cleared so the admin is asked again once
+    the extension runs out. Returns the new expiry as a string.
+    """
+    if hours <= 0:
+        raise ValueError("Extension length must be positive")
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM matches WHERE id = ?", (match_id,))
+        if not cursor.fetchone():
+            return None
+
+        _apply_freeze_state(cursor, match_id, 1)
+        until = datetime.datetime.now() + datetime.timedelta(hours=hours)
+        until_str = until.strftime("%Y-%m-%d %H:%M:%S")
+        cursor.execute("UPDATE matches SET extended_until = ? WHERE id = ?", (until_str, match_id))
+        cursor.execute(
+            "DELETE FROM debt_reminders WHERE match_id = ? AND stage = ?",
+            (match_id, "admin_escalated_48h")
+        )
+        return until_str
+
+
+def get_match_extension_expiry(match_id: int) -> datetime.datetime | None:
+    """When the current admin extension of a debt match runs out (None if none)."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT extended_until FROM matches WHERE id = ?", (match_id,))
+        row = cursor.fetchone()
+        if not row or not row["extended_until"]:
+            return None
+        return parse_flexible_datetime(row["extended_until"])
+
+
+def expire_match_extension(match_id: int) -> None:
+    """Resume the debt clock after an extension ran out.
+
+    Banks the frozen interval into `frozen_seconds` (so the overdue clock is
+    shifted, not skipped) and clears `extended_until`.
+    """
+    with transaction() as conn:
+        cursor = conn.cursor()
+        _apply_freeze_state(cursor, match_id, 0)
+        cursor.execute("UPDATE matches SET extended_until = NULL WHERE id = ?", (match_id,))
 
 
 def get_match_frozen_seconds(match_id: int) -> float:
@@ -6075,6 +6156,12 @@ def has_debt_stage(match_id: int, stage: str) -> bool:
         return cursor.fetchone() is not None
 
 
+def clear_debt_stage(match_id: int, stage: str) -> None:
+    """Forget a previously recorded debt lifecycle stage so it can fire again."""
+    with transaction() as conn:
+        conn.execute("DELETE FROM debt_reminders WHERE match_id = ? AND stage = ?", (match_id, stage))
+
+
 def record_debt_12h_reminder(match_id: int) -> None:
     """Record timestamp of 12h cycle debt reminder."""
     with transaction() as conn:
@@ -6151,7 +6238,7 @@ def get_detailed_overdue_matches(division_id: int | None = None, season_id: int 
                 SELECT 
                     m.id, m.round_number, COALESCE(m.is_extended, 0) AS is_extended,
                     COALESCE(m.frozen_seconds, 0) AS frozen_seconds,
-                    m.frozen_at,
+                    m.frozen_at, m.extended_until,
                     m.player1_team, m.player2_team, m.division_id, m.season_id
                 FROM matches m
                 WHERE (m.tournament_type IS NULL OR m.tournament_type = 'league')
@@ -6165,7 +6252,7 @@ def get_detailed_overdue_matches(division_id: int | None = None, season_id: int 
                 SELECT 
                     m.id, m.round_number, COALESCE(m.is_extended, 0) AS is_extended,
                     COALESCE(m.frozen_seconds, 0) AS frozen_seconds,
-                    m.frozen_at,
+                    m.frozen_at, m.extended_until,
                     m.player1_team, m.player2_team, m.division_id, m.season_id
                 FROM matches m
                 WHERE (m.tournament_type IS NULL OR m.tournament_type = 'league')
@@ -7736,18 +7823,25 @@ def settle_all_pending_finished_matches() -> list[dict]:
     with transaction() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT DISTINCT m.id, m.player1_score, m.player2_score
+            SELECT DISTINCT m.id, m.player1_score, m.player2_score, COALESCE(m.is_technical, 0) AS is_technical
             FROM bet_items bi
             JOIN matches m ON bi.match_id = m.id
-            WHERE bi.status = 'pending' 
+            WHERE bi.status = 'pending'
               AND m.status IN ('confirmed', 'completed')
-              AND m.player1_score IS NOT NULL 
+              AND m.player1_score IS NOT NULL
               AND m.player2_score IS NOT NULL
         """)
         matches = cursor.fetchall()
+        from services.settlement_engine import settle_match_predictions
         all_payouts = []
         for m in matches:
-            res = settle_match_bets(m["id"], m["player1_score"], m["player2_score"])
+            # A technical result (ТП / ТН) was never played: settle it as
+            # "voided" so every stake comes back instead of being graded
+            # against a score nobody put on the pitch.
+            status = "voided" if m["is_technical"] else "finished"
+            res = settle_match_predictions(
+                m["id"], m["player1_score"], m["player2_score"], match_status=status
+            )
             all_payouts.extend(res)
         return all_payouts
 
