@@ -20,7 +20,9 @@ scripts/seed_my_club_demo.py
 
 Использование:
   python scripts/seed_my_club_demo.py
-  python scripts/seed_my_club_demo.py --clean
+  python scripts/seed_my_club_demo.py --clean       # Очистить старые демо-данные и сгенерировать новые
+  python scripts/seed_my_club_demo.py --clean-only  # Только очистить базу от демо-данных (без генерации)
+  python scripts/seed_my_club_demo.py --list-users  # Показать список пользователей в базе
   python scripts/seed_my_club_demo.py --user-id 1642770076 --team "Реал Мадрид"
 """
 
@@ -165,6 +167,118 @@ def make_demo_svg(t1: str, s1: int, s2: int, t2: str, tour: int, events_text: li
     )
 
 
+def purge_demo_data(user_id: int | None = None, team_name: str = "Реал Мадрид", division_id: int = 1):
+    """
+    Полная очистка базы данных от всех тестовых/демо записей:
+    - Составы и игроки демо-команд (Реал, Барселона, Ман Сити, Бавария, Ливерпуль, Арсенал, Интер)
+    - Тестовые матчи и их события (голы/ассисты)
+    - Рынки ставок туров 1 и 2
+    - Виртуальные аккаунты соперников (990101..990106)
+    - Сброс клуба и варнов у целевого пользователя
+    - Сброс тестовых рейтингов Эло
+    """
+    print(f"\n🧹 Полная очистка тестовых данных Logovo.bet...")
+    database.init_db()
+
+    all_demo_teams = [team_name] + [o["team"] for o in DEMO_OPPONENTS]
+    demo_uids = [o["user_id"] for o in DEMO_OPPONENTS]
+
+    with database.transaction() as conn:
+        cursor = conn.cursor()
+
+        ph_teams = ",".join("?" for _ in all_demo_teams)
+        ph_uids = ",".join("?" for _ in demo_uids)
+
+        # 1. Удаление составов
+        cursor.execute(f"DELETE FROM squad_players WHERE team_name IN ({ph_teams})", all_demo_teams)
+        print(f"   ✓ Удалены составы демо-команд ({len(all_demo_teams)} клубов)")
+
+        # 2. Удаление событий матчей
+        cursor.execute(f"DELETE FROM match_events WHERE team_name IN ({ph_teams})", all_demo_teams)
+        print("   ✓ Удалены события матчей (голы, ассисты)")
+
+        # 3. Удаление ставок и транзакций по тестовым матчам и тестовым соперникам
+        cursor.execute(f"DELETE FROM coin_transactions WHERE user_id IN ({ph_uids})", demo_uids)
+        cursor.execute(f"DELETE FROM user_bets WHERE user_id IN ({ph_uids})", demo_uids)
+        cursor.execute(
+            f"""
+            DELETE FROM bet_items 
+            WHERE match_id IN (
+                SELECT id FROM matches 
+                WHERE player1_team IN ({ph_teams}) 
+                   OR player2_team IN ({ph_teams})
+                   OR player1_id IN ({ph_uids})
+                   OR player2_id IN ({ph_uids})
+            )
+            """,
+            all_demo_teams + all_demo_teams + demo_uids + demo_uids
+        )
+
+        # 4. Удаление рынков ставок туров 1 и 2 и демо-матчей
+        cursor.execute(
+            f"""
+            DELETE FROM bet_markets 
+            WHERE match_id IN (
+                SELECT id FROM matches 
+                WHERE player1_team IN ({ph_teams}) 
+                   OR player2_team IN ({ph_teams})
+                   OR player1_id IN ({ph_uids})
+                   OR player2_id IN ({ph_uids})
+            )
+            OR team1_name IN ({ph_teams})
+            OR team2_name IN ({ph_teams})
+            OR tour IN (1, 2)
+            """,
+            all_demo_teams + all_demo_teams + demo_uids + demo_uids + all_demo_teams + all_demo_teams
+        )
+        print("   ✓ Удалены рынки ставок демо-матчей и туров 1/2")
+
+        # 5. Удаление тестовых матчей
+        cursor.execute(
+            f"""
+            DELETE FROM matches 
+            WHERE player1_team IN ({ph_teams}) 
+               OR player2_team IN ({ph_teams})
+               OR player1_id IN ({ph_uids})
+               OR player2_id IN ({ph_uids})
+            """,
+            all_demo_teams + all_demo_teams + demo_uids + demo_uids
+        )
+        print("   ✓ Удалены тестовые матчи")
+
+        # 6. Удаление виртуальных соперников
+        cursor.execute(f"DELETE FROM users WHERE telegram_id IN ({ph_uids})", demo_uids)
+        cursor.execute(f"DELETE FROM user_wallets WHERE user_id IN ({ph_uids})", demo_uids)
+        print(f"   ✓ Удалены {len(demo_uids)} аккаунтов тестовых соперников")
+
+        # 7. Сброс клуба у пользователя
+        if user_id:
+            cursor.execute("UPDATE users SET team_name = NULL, warn_count = 0 WHERE telegram_id = ?", (user_id,))
+            print(f"   ✓ Сброшен клуб и варны у пользователя ID {user_id}")
+        cursor.execute("UPDATE users SET team_name = NULL, warn_count = 0 WHERE LOWER(team_name) = LOWER(?)", (team_name,))
+
+        # 8. Сброс рейтингов Эло
+        cursor.execute(f"DELETE FROM team_ratings WHERE LOWER(team_name) IN ({ph_teams})", [t.lower() for t in all_demo_teams])
+        print("   ✓ Сброшены рейтинги Эло для демо-команд")
+
+        # 9. Сброс ставок в турах и удаление пустых демо-туров
+        cursor.execute("UPDATE rounds SET bets_open = 0 WHERE division_id = ? AND round_number IN (1, 2)", (division_id,))
+        cursor.execute(
+            """
+            DELETE FROM rounds 
+            WHERE division_id = ? AND round_number IN (1, 2) 
+              AND deadline IN ('Сегодня, 23:59', '18.09.2026 21:00')
+              AND NOT EXISTS (
+                  SELECT 1 FROM matches WHERE matches.division_id = rounds.division_id AND matches.round_number = rounds.round_number
+              )
+            """,
+            (division_id,)
+        )
+        print("   ✓ Сброшены статусы ставок в турах")
+
+    print("\n✅ База данных успешно очищена от тестовых данных!")
+
+
 def seed_cabinet_demo(user_id: int, team_name: str = "Реал Мадрид", division_id: int = 1, clean: bool = False):
     print(f"\n🚀 Запуск комплексной генерации демо-данных для Logovo.bet...")
     print(f"   👤 Telegram ID игрока: {user_id}")
@@ -174,21 +288,12 @@ def seed_cabinet_demo(user_id: int, team_name: str = "Реал Мадрид", di
     database.init_db()
     database.ensure_canonical_divisions()
 
+    # 1. Очистка старых данных при необходимости
+    if clean:
+        purge_demo_data(user_id=user_id, team_name=team_name, division_id=division_id)
+
     with database.transaction() as conn:
         cursor = conn.cursor()
-
-        # 1. Очистка старых данных при необходимости
-        all_demo_teams = [team_name] + [o["team"] for o in DEMO_OPPONENTS]
-        if clean:
-            print("   🧹 Полная очистка предыдущих тестовых матчей, составов и рынков...")
-            ph = ",".join("?" for _ in all_demo_teams)
-            cursor.execute(f"DELETE FROM squad_players WHERE team_name IN ({ph})", all_demo_teams)
-            cursor.execute(f"DELETE FROM match_events WHERE team_name IN ({ph})", all_demo_teams)
-            cursor.execute(
-                f"DELETE FROM matches WHERE player1_team IN ({ph}) OR player2_team IN ({ph})",
-                all_demo_teams + all_demo_teams
-            )
-            cursor.execute("DELETE FROM bet_markets WHERE tour IN (1, 2)")
 
         # 2. Убеждаемся в наличии активного сезона
         cursor.execute("SELECT id FROM seasons WHERE status = 'active' ORDER BY id DESC LIMIT 1")
@@ -512,6 +617,7 @@ def main():
     parser.add_argument("--team", type=str, default="Реал Мадрид", help="Название клуба (default: Реал Мадрид)")
     parser.add_argument("--division-id", type=int, default=1, help="ID дивизиона (default: 1)")
     parser.add_argument("--clean", action="store_true", help="Очистить предыдущие демо-данные перед генерацией")
+    parser.add_argument("--clean-only", "--purge", action="store_true", help="Только очистить базу от тестовых данных (без генерации)")
     parser.add_argument("--list-users", action="store_true", help="Показать список пользователей в БД")
 
     args = parser.parse_args()
@@ -533,17 +639,29 @@ def main():
     target_user_id = args.user_id
     if not target_user_id:
         if candidates:
-            # Автоматически берем последнего активного пользователя из БД
-            target_user_id = candidates[0]["user_id"]
-            c_info = candidates[0]
+            # Ищем кандидата с уже привязанным демо-клубом (например, Реал Мадрид)
+            match_team = [c for c in candidates if c.get("team_name") and c["team_name"].lower() == args.team.lower()]
+            if match_team:
+                target_user_id = match_team[0]["user_id"]
+            else:
+                target_user_id = candidates[0]["user_id"]
+            c_info = next((c for c in candidates if c["user_id"] == target_user_id), candidates[0])
             un = f" (@{c_info['username']})" if c_info['username'] else ""
-            print(f"🎯 Автоматически выбран последний активный пользователь: Telegram ID {target_user_id}{un}")
+            print(f"🎯 Выбран пользователь: Telegram ID {target_user_id}{un}")
         elif config.ADMIN_IDS:
             target_user_id = config.ADMIN_IDS[0]
             print(f"🎯 Выбран ID администратора из config.ADMIN_IDS: {target_user_id}")
         else:
             target_user_id = 1642770076
             print(f"🎯 Выбран ID по умолчанию: {target_user_id}")
+
+    if args.clean_only:
+        purge_demo_data(
+            user_id=target_user_id,
+            team_name=args.team,
+            division_id=args.division_id
+        )
+        return
 
     seed_cabinet_demo(
         user_id=target_user_id,
