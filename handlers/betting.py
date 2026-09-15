@@ -18,6 +18,11 @@ from services.betting_engine import generate_round_markets
 
 logger = logging.getLogger(__name__)
 
+# Длина экспресса: от 2 до 5 событий (одно событие — ординар).
+# Серверная проверка живёт в database.place_user_bet; здесь — UI-зеркало.
+MIN_EXPRESS_EVENTS = database.MIN_EXPRESS_EVENTS
+MAX_EXPRESS_EVENTS = database.MAX_EXPRESS_EVENTS
+
 # Human-readable outcome names
 OUTCOME_TITLES = {
     "p1": "Победа 1",
@@ -145,7 +150,10 @@ async def cb_bet_view_tours(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if len(open_tours) == 1:
         # Single open tour -> display match list directly
         tour_num = open_tours[0]["round_number"]
-        await _render_tour_matches(query, tour_num, open_tours[0].get("deadline"))
+        await _render_tour_matches(
+            query, tour_num, open_tours[0].get("deadline"),
+            context=context, division_id=open_tours[0].get("division_id")
+        )
         return
 
     # Multiple open tours -> display interactive tour picker
@@ -173,13 +181,24 @@ async def cb_bet_pick_tour(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     tour_num = int(query.data.replace("bet_tour_", ""))
     r_info = await asyncio.to_thread(database.get_round_info, tour_num)
     dl = r_info.get("deadline") if r_info else None
-    await _render_tour_matches(query, tour_num, dl)
+    div_id = r_info.get("division_id") if r_info else None
+    await _render_tour_matches(query, tour_num, dl, context=context, division_id=div_id)
 
 
-async def _render_tour_matches(query, tour_num: int, deadline: str | None = None) -> None:
-    """Render match buttons for a given tour."""
-    await asyncio.to_thread(generate_round_markets, tour_num)
-    markets = await asyncio.to_thread(database.get_active_bet_markets, tour_num)
+async def _render_tour_matches(
+    query,
+    tour_num: int,
+    deadline: str | None = None,
+    context: ContextTypes.DEFAULT_TYPE | None = None,
+    division_id: int | None = None,
+) -> None:
+    """Render the tour line: the four central matches with inline odds buttons.
+
+    В линию тура выставлены ровно четыре центральных матча — здесь показываются
+    только они, по одной строке исходов на матч.
+    """
+    await asyncio.to_thread(generate_round_markets, tour_num, division_id)
+    markets = await asyncio.to_thread(database.get_active_bet_markets, tour_num, division_id)
 
     if not markets:
         text = (
@@ -193,21 +212,43 @@ async def _render_tour_matches(query, tour_num: int, deadline: str | None = None
         await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="HTML")
         return
 
+    slip = _get_slip(context) if context is not None else []
+    picked = {s["match_id"]: s for s in slip}
+
     dl_text = f"\n⏰ <b>Дедлайн тура:</b> <code>{deadline[:16]}</code>" if deadline else ""
-    text = f"📋 <b>Линия Logovo.bet • Тур {tour_num}</b>{dl_text}\n\nВыберите матч для ставки:\n"
+    lines = [
+        f"📋 <b>Линия Logovo.bet • Тур {tour_num}</b>{dl_text}",
+        f"<i>Центральные матчи тура — {len(markets)} из отобранных ИИ «Темшик».</i>",
+        ""
+    ]
     kb = []
-    for m in markets:
+    for idx, m in enumerate(markets, start=1):
         m_id = m.get("match_id")
-        t1 = m.get("team1_name", "Команда 1")
-        t2 = m.get("team2_name", "Команда 2")
-        btn_title = f"⚽ {t1} vs {t2}"
-        kb.append([InlineKeyboardButton(btn_title, callback_data=f"bet_match_{m_id}")])
+        t1 = html.escape(str(m.get("team1_name", "Команда 1")))
+        t2 = html.escape(str(m.get("team2_name", "Команда 2")))
+        chosen = picked.get(m_id)
+        mark = f" — <b>{OUTCOME_TITLES.get(chosen['outcome'], chosen['outcome'])}</b> ✅" if chosen else ""
+        lines.append(f"<b>{idx}.</b> ⚽ {t1} — {t2}{mark}")
+
+        kb.append([
+            InlineKeyboardButton(f"П1 {m['odd_p1']:.2f}", callback_data=f"bet_add_{m_id}_p1"),
+            InlineKeyboardButton(f"Х {m['odd_x']:.2f}", callback_data=f"bet_add_{m_id}_x"),
+            InlineKeyboardButton(f"П2 {m['odd_p2']:.2f}", callback_data=f"bet_add_{m_id}_p2"),
+        ])
+        extra_row = [InlineKeyboardButton("⚽ Тоталы / ОЗ", callback_data=f"bet_match_{m_id}")]
+        if chosen:
+            extra_row.append(InlineKeyboardButton(f"❌ Матч {idx}", callback_data=f"bet_del_{m_id}"))
+        kb.append(extra_row)
 
     kb.append([
-        InlineKeyboardButton("🎫 Перейти в купон", callback_data="bet_view_slip"),
-        InlineKeyboardButton("🔙 Все Туры", callback_data="bet_view_tours")
+        InlineKeyboardButton(f"🎫 Купон ({len(slip)})", callback_data="bet_view_slip"),
+        InlineKeyboardButton("🗑 Очистить", callback_data="bet_clear_slip"),
     ])
-    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="HTML")
+    kb.append([InlineKeyboardButton("🔙 Все Туры", callback_data="bet_view_tours")])
+
+    await query.edit_message_text(
+        "\n".join(lines), reply_markup=InlineKeyboardMarkup(kb), parse_mode="HTML"
+    )
 
 
 async def cb_bet_match_detail(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -281,9 +322,19 @@ async def cb_bet_add_outcome(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     slip = _get_slip(context)
 
+    # Экспресс — от 2 до 5 событий. Шестое событие в купон не добавляется;
+    # замена исхода в уже выбранном матче ограничением не является.
+    already_picked = any(s["match_id"] == match_id for s in slip)
+    if not already_picked and len(slip) >= MAX_EXPRESS_EVENTS:
+        await query.answer(
+            f"⚠️ В экспрессе может быть максимум {MAX_EXPRESS_EVENTS} событий!",
+            show_alert=True
+        )
+        return
+
     # Remove existing pick for this match if any
     context.user_data["bet_slip"] = [s for s in slip if s["match_id"] != match_id]
-    
+
     odd_val = market.get(f"odd_{outcome}", 1.85)
     context.user_data["bet_slip"].append({
         "match_id": match_id,
@@ -391,6 +442,15 @@ async def cb_bet_place_amount(update: Update, context: ContextTypes.DEFAULT_TYPE
         await query.answer("❌ Купон пуст!", show_alert=True)
         return
 
+    # Один исход — ординар, от 2 до 5 — экспресс. Больше пяти событий
+    # не принимается (дублирует серверную проверку place_user_bet).
+    if len(slip) > MAX_EXPRESS_EVENTS:
+        await query.answer(
+            f"⚠️ В экспрессе может быть максимум {MAX_EXPRESS_EVENTS} событий!",
+            show_alert=True
+        )
+        return
+
     # Atomically extract coupon and lock placement in-flight
     context.user_data["bet_slip"] = []
     context.user_data["_bet_in_flight"] = True
@@ -443,42 +503,103 @@ async def cb_bet_clear_slip(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     await cb_bet_view_slip(update, context)
 
 
-async def cb_bet_my_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Show list of recent bets for user."""
+async def cb_bet_remove_match(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Remove one match from the coupon (кнопка «❌ Матч N» в линии тура)."""
     query = update.callback_query
-    await query.answer()
+    match_id = int(query.data.replace("bet_del_", ""))
 
-    user_id = update.effective_user.id
-    bets = await asyncio.to_thread(database.get_user_bets, user_id, limit=8)
+    slip = _get_slip(context)
+    context.user_data["bet_slip"] = [s for s in slip if s["match_id"] != match_id]
+    await query.answer("❌ Событие убрано из купона")
 
-    if not bets:
-        text = "📜 <b>История Ставок</b>\n\n<i>У вас пока нет активных или рассчитанных ставок.</i>"
-        kb = [[InlineKeyboardButton("🔙 Меню", callback_data="bet_menu_main")]]
-        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="HTML")
+    market = await asyncio.to_thread(database.get_bet_market_by_match_id, match_id)
+    if not market:
+        await cb_bet_view_slip(update, context)
         return
+
+    tour_num = market["tour"]
+    r_info = await asyncio.to_thread(database.get_round_info, tour_num)
+    await _render_tour_matches(
+        query, tour_num,
+        r_info.get("deadline") if r_info else None,
+        context=context,
+        division_id=r_info.get("division_id") if r_info else None,
+    )
+
+
+# Статусы купона и отдельной ноги. 'refunded' — возврат: так рассчитываются
+# ставки на матч с техническим результатом (ТП/ТН), это не проигрыш.
+_BET_STATUS_TITLES = {
+    "pending": "⏳ В игре",
+    "won": "✅ Выигрыш",
+    "lost": "❌ Проигрыш",
+    "refunded": "🔄 Возврат",
+    "cancelled": "🔄 Возврат",
+}
+_ITEM_STATUS_EMOJI = {"pending": "⏳", "won": "✅", "lost": "❌", "refunded": "🔄"}
+
+
+async def _build_bet_history_text(user_id: int) -> str:
+    """Render the user's recent coupons as HTML (общий текст для /mybets и кнопки)."""
+    bets = await asyncio.to_thread(database.get_user_bets, user_id, limit=8)
+    if not bets:
+        return "📜 <b>История Ставок</b>\n\n<i>У вас пока нет активных или рассчитанных ставок.</i>"
 
     lines = ["📜 <b>Ваши Последние Ставки:</b>\n"]
     for b in bets:
-        status_emoji = "⏳ В игре" if b["status"] == "pending" else ("✅ Выигрыш" if b["status"] == "won" else "❌ Проигрыш")
+        status_title = _BET_STATUS_TITLES.get(b["status"], b["status"])
         b_type = "Ординар" if b["bet_type"] == "single" else "Экспресс"
+        total_odd = float(b["total_odd"] or 1.0)
         lines.append(
-            f"• <b>Ставка #{b['id']}</b> ({b_type}) — {status_emoji}\n"
-            f"  Сумма: <code>{b['amount']:,} 🪙</code> | Кэф: <b>{b['total_odd']:.2f}</b> | Выигрыш: <b>{b['potential_win']:,} 🪙</b>"
+            f"• <b>Ставка #{b['id']}</b> ({b_type}) — {status_title}\n"
+            f"  Сумма: <code>{b['amount']:,} 🪙</code> | Кэф: <b>{total_odd:.2f}</b> | Выигрыш: <b>{b['potential_win']:,} 🪙</b>"
         )
         for item in b.get("items", []):
             t1 = html.escape(item.get("team1_name") or "Команда 1")
             t2 = html.escape(item.get("team2_name") or "Команда 2")
             out_name = OUTCOME_TITLES.get(item["outcome_type"], item["outcome_type"])
-            item_emoji = "⏳" if item["status"] == "pending" else ("✅" if item["status"] == "won" else "❌")
-            lines.append(f"    {item_emoji} {t1} vs {t2} (<code>{out_name}</code>)")
+            item_emoji = _ITEM_STATUS_EMOJI.get(item["status"], "•")
+            # Возвращённая нога идёт в экспрессе по коэффициенту 1.00 и купон не рушит.
+            odd_note = " • кэф 1.00" if item["status"] == "refunded" else ""
+            lines.append(f"    {item_emoji} {t1} vs {t2} (<code>{out_name}</code>){odd_note}")
         lines.append("")
 
+    return "\n".join(lines)
+
+
+async def cb_bet_my_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show list of recent bets for user."""
+    query = update.callback_query
+    await query.answer()
+
+    text = await _build_bet_history_text(update.effective_user.id)
     kb = [
         [InlineKeyboardButton("📋 Линия на Тур", callback_data="bet_view_tours")],
         [InlineKeyboardButton("🔙 Главное Меню", callback_data="bet_menu_main")]
     ]
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="HTML")
 
-    await query.edit_message_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(kb), parse_mode="HTML")
+
+async def cmd_my_bets(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Direct command /mybets — мои ставки (ординары и экспрессы)."""
+    if not update.effective_user or not update.message:
+        return
+
+    user_id = update.effective_user.id
+    if not _check_betting_access(user_id):
+        await update.message.reply_text(
+            "🔒 <b>Logovo.bet временно недоступен</b>\n\n"
+            "<i>История ставок станет доступна после открытия букмекерки. 🎰</i>",
+            parse_mode="HTML"
+        )
+        return
+
+    text = await _build_bet_history_text(user_id)
+    kb = [
+        [InlineKeyboardButton("📋 Линия на Тур", callback_data="bet_view_tours")],
+        [InlineKeyboardButton("🎰 Букмекерская Контора", callback_data="bet_menu_main")]
+    ]
+    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="HTML")
 
 
 async def cb_bet_claim_bonus(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -537,9 +658,11 @@ def register_betting_handlers(app) -> None:
     """Register all Logovo.bet commands and callback queries."""
     app.add_handler(CommandHandler(["bet", "logovobet"], cmd_bet_hub))
     app.add_handler(CommandHandler(["bonus"], cmd_bonus))
+    app.add_handler(CommandHandler(["mybets"], cmd_my_bets))
     app.add_handler(CommandHandler(["bet_top", "top_bettors"], cb_bet_leaderboard))
 
-    app.add_handler(CallbackQueryHandler(cmd_bet_hub, pattern="^bet_menu_main$"))
+    # `betting_main_menu` — кнопка «🎰 Букмекерская Контора» из главного меню /start.
+    app.add_handler(CallbackQueryHandler(cmd_bet_hub, pattern="^(bet_menu_main|betting_main_menu)$"))
     app.add_handler(CallbackQueryHandler(cb_bet_view_tours, pattern="^bet_view_tours$"))
     app.add_handler(CallbackQueryHandler(cb_bet_pick_tour, pattern="^bet_tour_\\d+$"))
     app.add_handler(CallbackQueryHandler(cb_bet_match_detail, pattern="^bet_match_\\d+$"))
@@ -547,6 +670,7 @@ def register_betting_handlers(app) -> None:
     app.add_handler(CallbackQueryHandler(cb_bet_view_slip, pattern="^bet_view_slip$"))
     app.add_handler(CallbackQueryHandler(cb_bet_place_amount, pattern="^bet_place_\\d+$"))
     app.add_handler(CallbackQueryHandler(cb_bet_clear_slip, pattern="^bet_clear_slip$"))
+    app.add_handler(CallbackQueryHandler(cb_bet_remove_match, pattern="^bet_del_\\d+$"))
     app.add_handler(CallbackQueryHandler(cb_bet_my_history, pattern="^bet_my_history$"))
     app.add_handler(CallbackQueryHandler(cb_bet_claim_bonus, pattern="^bet_claim_bonus$"))
     app.add_handler(CallbackQueryHandler(cb_bet_leaderboard, pattern="^bet_leaderboard$"))

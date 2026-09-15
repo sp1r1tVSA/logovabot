@@ -206,7 +206,7 @@ class RiskEngine:
                 m_div_id = match_row["division_id"] if "division_id" in match_row.keys() and match_row["division_id"] is not None else 1
                 m_season_id = match_row["season_id"] if "season_id" in match_row.keys() else None
                 allowed, _gate_reason, gate_message = database.evaluate_round_betting_gate(
-                    cursor, r_num, m_div_id, m_season_id
+                    cursor, r_num, m_div_id, m_season_id, match_id=m_id
                 )
                 if not allowed:
                     return RiskDecision(

@@ -378,6 +378,8 @@ def init_db() -> None:
             ("live_minute", "INTEGER"),
             ("division_id", "INTEGER DEFAULT NULL"),
             ("season_id", "INTEGER NOT NULL DEFAULT 1"),
+            ("is_technical", "INTEGER DEFAULT 0"),
+            ("technical_type", "TEXT"),
         )
         for col_name, col_type in SAFE_COLUMNS:
             try:
@@ -2380,22 +2382,44 @@ def confirm_and_finalize_match(match_id: int, p1_score: int, p2_score: int, even
             logger.warning(f"Error settling bets for match {match_id}: {e}")
     return None
 
-def set_technical_result(match_id: int, p1_score: int, p2_score: int) -> str | None:
-    """Set technical result for match."""
+def _infer_technical_type(p1_score: int, p2_score: int) -> str:
+    """Вид технического результата по счёту: ТП хозяевам, ТП гостям или ТН."""
+    if p1_score > p2_score:
+        return "tp_home"
+    if p2_score > p1_score:
+        return "tp_away"
+    return "tn_draw"
+
+
+def set_technical_result(
+    match_id: int,
+    p1_score: int,
+    p2_score: int,
+    technical_type: str | None = None,
+) -> str | None:
+    """Set technical result for match (ТП 1:0 / 0:1 или ТН 0:0).
+
+    Матч помечается как технический (`is_technical = 1`), и по нему НЕ бывает
+    спортивных выплат: расчёт идёт со статусом `voided`, поэтому ординары
+    возвращаются игроку в полном объёме, а нога экспресса получает коэффициент
+    1.00 и купон не сгорает (см. `services/settlement_engine.py`).
+    """
     if p1_score < 0 or p2_score < 0:
         raise ValueError("Scores must be non-negative integers")
+    tech_type = technical_type or _infer_technical_type(p1_score, p2_score)
     with transaction() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "UPDATE matches SET player1_score = ?, player2_score = ?, status = 'confirmed', played_at = ? WHERE id = ?",
-            (p1_score, p2_score, datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), match_id)
+            "UPDATE matches SET player1_score = ?, player2_score = ?, status = 'confirmed', played_at = ?, "
+            "is_technical = 1, technical_type = ? WHERE id = ?",
+            (p1_score, p2_score, datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), tech_type, match_id)
         )
         # Тот же silent no-op, что и в confirm_and_finalize_match.
         if cursor.rowcount != 1:
             raise ValueError(f"Match {match_id} not found: technical result not saved")
         cursor.execute("DELETE FROM match_events WHERE match_id = ?", (match_id,))
         try:
-            settle_match_bets(match_id, p1_score, p2_score)
+            settle_match_bets(match_id, p1_score, p2_score, match_status="voided")
         except Exception as e:
             logger.warning(f"Error settling bets on technical result for match {match_id}: {e}")
     return None
@@ -3271,6 +3295,12 @@ def open_rounds_batch(
             f"open_rounds_batch: rounds {skipped} skipped (no schedule) "
             f"for division={division_id}, season={s_id}"
         )
+
+    # 🎰 Парный цикл «два через два»: открытые для игры туры ушли из линии —
+    # автоматически выставляем её на два следующих тура.
+    if opened:
+        advance_betting_line_pair(division_id=division_id, season_id=s_id)
+
     return {"opened": opened, "skipped": skipped}
 
 def get_open_pending_matches() -> list[dict]:
@@ -4421,11 +4451,76 @@ def reopen_round_betting_line(cursor, round_number: int, division_id: int, seaso
     )
 
 
+def prune_round_markets(
+    round_number: int,
+    keep_match_ids: list[int] | None,
+    division_id: int | None = None,
+    season_id: int | None = None,
+) -> int:
+    """Погасить рынки тура по матчам, не вошедшим в число центральных.
+
+    В линии тура стоит ровно четыре матча (`select_top_round_matches`). Если
+    состав центральных пар пересчитался, рынки выпавших матчей должны исчезнуть
+    из линии, иначе в ней накапливаются лишние пары.
+
+    Матч, по которому уже принята хоть одна ставка, из линии не выбрасывается
+    никогда: купон игрока рассчитывается по `match_id` и без рынка, но гасить
+    видимую пару с живыми ставками — значит вводить игрока в заблуждение.
+
+    Возвращает число погашенных legacy-рынков. Scope — `season + division + round`.
+    """
+    if season_id is None:
+        act = get_active_season()
+        s_id = act["id"] if act else 1
+    else:
+        s_id = season_id
+    div_id = division_id if division_id is not None else 1
+
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id FROM matches WHERE round_number = ? "
+            "AND COALESCE(division_id, 1) = ? AND COALESCE(season_id, 1) = ?",
+            (round_number, div_id, s_id)
+        )
+        round_match_ids = {int(r["id"]) for r in cursor.fetchall()}
+        keep = {int(m) for m in (keep_match_ids or [])}
+        stale = round_match_ids - keep
+        if not stale:
+            return 0
+
+        # Матчи с уже принятыми ставками остаются в линии.
+        placeholders = ",".join("?" for _ in stale)
+        cursor.execute(
+            f"SELECT DISTINCT match_id FROM bet_items WHERE match_id IN ({placeholders})",
+            tuple(stale)
+        )
+        stale -= {int(r["match_id"]) for r in cursor.fetchall()}
+        if not stale:
+            return 0
+
+        pruned = 0
+        for m_id in sorted(stale):
+            cursor.execute("UPDATE bet_markets SET is_active = 0 WHERE match_id = ? AND is_active = 1", (m_id,))
+            pruned += cursor.rowcount
+            cursor.execute(
+                "UPDATE markets SET status = 'closed' WHERE status IN ('open', 'suspended') AND match_id = ?",
+                (m_id,)
+            )
+            cursor.execute(
+                "UPDATE market_selections SET status = 'locked' WHERE status = 'active' "
+                "AND market_id IN (SELECT id FROM markets WHERE match_id = ?)",
+                (m_id,)
+            )
+        return pruned
+
+
 def evaluate_round_betting_gate(
     cursor,
     round_number: int | None,
     division_id: int | None,
     season_id: int | None = None,
+    match_id: int | None = None,
 ) -> tuple[bool, str | None, str | None]:
     """ЕДИНОЕ серверное правило приёма ставок на тур.
 
@@ -4478,6 +4573,16 @@ def evaluate_round_betting_gate(
         dl_dt = _parse_round_deadline(r_row["deadline"])
         if dl_dt and datetime.datetime.now() > dl_dt:
             return False, "DEADLINE_PASSED", f"Дедлайн для прогнозов на Тур {round_number} истек."
+
+    # Принцип pre-match: на сыгранный матч ставку не принять даже при открытой
+    # линии тура (матч мог быть подтверждён досрочно или получить ТП/ТН).
+    if match_id is not None:
+        cursor.execute("SELECT status FROM matches WHERE id = ? LIMIT 1", (match_id,))
+        m_row = cursor.fetchone()
+        if not m_row:
+            return False, "MATCH_NOT_FOUND", f"Матч #{match_id} не найден."
+        if m_row["status"] in ("confirmed", "completed"):
+            return False, "MATCH_FINISHED", f"Матч #{match_id} уже сыгран — приём прогнозов закрыт."
 
     return True, None, None
 
@@ -4646,12 +4751,9 @@ def update_round_status(round_number: int, is_open: bool, deadline: str | None =
         # 🎰 Линия тура N здесь НЕ генерируется: открытие тура для игры её закрывает.
         # Ставки на тур принимаются заранее — до его открытия (см. set_round_bets_open).
         #
-        # 🎰 Ранняя линия: как только тур N открыт для игры, приём прогнозов на
-        # тур N+1 открывается автоматически, чтобы линия всегда была на шаг впереди.
-        try:
-            set_round_bets_open(round_number + 1, True, division_id=division_id, season_id=s_id)
-        except Exception as e:
-            logger.warning(f"Could not pre-open betting line for round {round_number + 1}: {e}")
+        # 🎰 Парный цикл «два через два»: как только туры открыты для игры,
+        # линия автоматически уходит на два следующих тура.
+        advance_betting_line_pair(division_id=division_id, season_id=s_id)
 
 
 def set_round_bets_open(
@@ -4743,6 +4845,64 @@ def set_round_bets_open(
             logger.exception(f"Error generating early betting line for round {round_number}: {e}")
 
     return True
+
+
+# Сколько туров держится в линии одновременно — парный цикл «два через два».
+LINE_PAIR_SIZE = 2
+
+
+def advance_betting_line_pair(division_id: int | None = None, season_id: int | None = None) -> list[int]:
+    """Сдвинуть линию БК на следующую пару туров (автопилот «два через два»).
+
+    Линия всегда стоит на двух ближайших несыгранных турах. Как только туры
+    открываются для игры, их приём прогнозов закрывается, а линия автоматически
+    переезжает на два тура после самого позднего открытого: R_max+1 и R_max+2.
+
+    Туры без расписания пропускаются, поэтому в конце сезона цикл просто
+    затухает, ничего не ломая. Возвращает список туров, на которые линия
+    действительно встала.
+    """
+    if season_id is None:
+        act = get_active_season()
+        s_id = act["id"] if act else 1
+    else:
+        s_id = season_id
+
+    with transaction() as conn:
+        cursor = conn.cursor()
+        if division_id is not None:
+            cursor.execute(
+                "SELECT MAX(round_number) AS r FROM rounds WHERE is_open = 1 "
+                "AND division_id = ? AND (season_id = ? OR season_id IS NULL)",
+                (division_id, s_id)
+            )
+        else:
+            cursor.execute(
+                "SELECT MAX(round_number) AS r FROM rounds WHERE is_open = 1 "
+                "AND (season_id = ? OR season_id IS NULL)",
+                (s_id,)
+            )
+        row = cursor.fetchone()
+        max_open = row["r"] if row and row["r"] is not None else None
+
+    if max_open is None:
+        return []
+
+    advanced: list[int] = []
+    for offset in range(1, LINE_PAIR_SIZE + 1):
+        next_round = int(max_open) + offset
+        try:
+            if set_round_bets_open(next_round, True, division_id=division_id, season_id=s_id):
+                advanced.append(next_round)
+        except Exception as e:
+            logger.warning(f"Could not pre-open betting line for round {next_round}: {e}")
+
+    if advanced:
+        logger.info(
+            f"🎰 Betting line advanced to rounds {advanced} "
+            f"(division={division_id}, season={s_id})"
+        )
+    return advanced
 
 
 def get_all_rounds() -> list[int]:
@@ -6851,6 +7011,10 @@ def get_bet_market_by_match_id(match_id: int) -> dict | None:
 # Phase 5: Bet limits (server-side, cannot be bypassed by client)
 _MAX_BET: int = 50_000
 _MAX_PAYOUT: int = 500_000
+# Длина экспресса: от 2 до 5 событий. Один исход — это ординар.
+MIN_EXPRESS_EVENTS: int = 2
+MAX_EXPRESS_EVENTS: int = 5
+_MAX_EXPRESS_EVENTS: int = MAX_EXPRESS_EVENTS
 _bet_placement_lock = threading.RLock()
 
 
@@ -6884,6 +7048,15 @@ def place_user_bet(
 
     if not selections or not isinstance(selections, list):
         return False, "Купон пуст."
+
+    # Один исход — ординар; от двух до пяти — экспресс. Шестое событие
+    # в купон не принимается ни из Telegram, ни из Mini App, ни из REST API.
+    if len(selections) > _MAX_EXPRESS_EVENTS:
+        return False, {
+            "error": "MAX_EXPRESS_EVENTS_EXCEEDED",
+            "max_events": _MAX_EXPRESS_EVENTS,
+            "message": f"⚠️ В экспрессе может быть максимум {_MAX_EXPRESS_EVENTS} событий!"
+        }
 
     # Compute idempotency payload hash (Phase 5)
     _payload_for_hash = _json.dumps(
@@ -7039,7 +7212,9 @@ def place_user_bet(
             r_num = match_row["round_number"] if "round_number" in match_row.keys() else None
             m_div_id = match_row["division_id"] if "division_id" in match_row.keys() and match_row["division_id"] is not None else 1
             m_season_id = match_row["season_id"] if "season_id" in match_row.keys() else None
-            allowed, _reason, gate_message = evaluate_round_betting_gate(cursor, r_num, m_div_id, m_season_id)
+            allowed, _reason, gate_message = evaluate_round_betting_gate(
+                cursor, r_num, m_div_id, m_season_id, match_id=m_id
+            )
             if not allowed:
                 return False, gate_message
 
@@ -7719,35 +7894,43 @@ def get_tournament_results(limit: int = 30, division_id: int | None = None, seas
         return [dict(r) for r in cursor.fetchall()]
 
 
-def settle_match_bets(match_id: int, score1: int, score2: int) -> list[dict]:
+def settle_match_bets(match_id: int, score1: int, score2: int, match_status: str = "finished") -> list[dict]:
     """
     Settle all pending bets related to a finished match.
     Delegates to full-featured services.settlement_engine.
+
+    `match_status="voided"` — расчёт технического результата: спортивных выплат
+    нет, ординары возвращаются полностью, нога экспресса идёт по коэффициенту 1.00.
     """
     from services.settlement_engine import settle_match_predictions
-    return settle_match_predictions(match_id, score1, score2)
+    return settle_match_predictions(match_id, score1, score2, match_status=match_status)
 
 
 def settle_all_pending_finished_matches() -> list[dict]:
     """
     Self-healing trigger: Scan all pending bet items for matches that are already
     completed/confirmed in the database and settle them immediately.
+
+    Технические матчи (`is_technical = 1`) добираются здесь тем же правилом, что
+    и в `set_technical_result`: со статусом `voided`, то есть без спортивных выплат.
     """
     with transaction() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT DISTINCT m.id, m.player1_score, m.player2_score
+            SELECT DISTINCT m.id, m.player1_score, m.player2_score,
+                   COALESCE(m.is_technical, 0) AS is_technical
             FROM bet_items bi
             JOIN matches m ON bi.match_id = m.id
-            WHERE bi.status = 'pending' 
+            WHERE bi.status = 'pending'
               AND m.status IN ('confirmed', 'completed')
-              AND m.player1_score IS NOT NULL 
+              AND m.player1_score IS NOT NULL
               AND m.player2_score IS NOT NULL
         """)
         matches = cursor.fetchall()
         all_payouts = []
         for m in matches:
-            res = settle_match_bets(m["id"], m["player1_score"], m["player2_score"])
+            status = "voided" if m["is_technical"] == 1 else "finished"
+            res = settle_match_bets(m["id"], m["player1_score"], m["player2_score"], match_status=status)
             all_payouts.extend(res)
         return all_payouts
 
