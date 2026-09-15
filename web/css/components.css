@@ -1433,22 +1433,28 @@
 
 .mc-tab-btn, .mc-subtab-btn {
   flex: 1;
+  min-width: 0;
   background: transparent;
   border: none;
   color: var(--text-secondary);
   font-family: 'Outfit', sans-serif;
-  font-size: 0.82rem;
+  font-size: 0.78rem;
   font-weight: 700;
-  padding: 8px 4px;
+  letter-spacing: -0.015em;
+  padding: 8px 3px;
   border-radius: 7px;
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: background 0.2s ease, color 0.2s ease, box-shadow 0.2s ease;
   text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  box-sizing: border-box;
 }
 .mc-tab-btn.active, .mc-subtab-btn.active {
   background: var(--accent-gold);
   color: #000;
-  font-weight: 800;
+  font-weight: 700;
   box-shadow: 0 2px 8px rgba(245, 176, 39, 0.3);
 }
 
@@ -2595,6 +2601,16 @@
 
 .club-subtabs .mc-subtab-btn {
   white-space: nowrap;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@media (max-width: 380px) {
+  .mc-tab-btn, .mc-subtab-btn {
+    font-size: 0.74rem;
+    padding: 7px 2px;
+  }
 }
 
 .club-panel {
