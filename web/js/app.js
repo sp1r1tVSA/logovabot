@@ -772,7 +772,12 @@ class AppController {
           try {
             const data = await api.getLeaderboard();
             if (data.status === 'ok') {
-              UIRenderer.renderLeaderboardModal(data.leaderboard, data.my_rank);
+              // Модалка — «зал славы» по монетам: рендерер читает p.balance,
+              // а баланс есть только в leaders. entries/leaderboard оставлены
+              // запасным вариантом на случай смены источника на сервере.
+              const rows = data.leaders || data.entries || data.leaderboard || [];
+              const myRank = (data.user_pin && data.user_pin.rank) || data.my_rank || null;
+              UIRenderer.renderLeaderboardModal(rows, myRank);
             }
           } catch (err) {
             console.warn("Could not load leaderboard:", err);
@@ -792,11 +797,14 @@ class AppController {
         btn.disabled = true;
         try {
           const quoteRes = await api.getCashoutQuote(betId);
-          if (quoteRes.status !== 'ok' || !quoteRes.cashout_available) {
+          // Сервер отдаёт котировку вложенной в quote; вариант без вложения
+          // оставлен на случай ответа старого формата.
+          const quote = quoteRes.quote || quoteRes;
+          if (quoteRes.status !== 'ok' || !quote.cashout_available) {
             tgBridge.showAlert(quoteRes.message || "Кэшаут в данный момент недоступен для этого прогноза.");
             return;
           }
-          const quoteAmount = quoteRes.amount;
+          const quoteAmount = quote.amount;
           tgBridge.showConfirm(
             `💰 Досрочный расчет (Cashout)\n\nВы получите ${quoteAmount} 🪙 немедленно. Завершить ставку?`,
             async (confirmed) => {
@@ -805,10 +813,11 @@ class AppController {
                 const idempotencyKey = `co-${betId}-${Date.now()}`;
                 const execRes = await api.executeCashout(betId, idempotencyKey);
                 if (execRes.status === 'ok') {
-                  const newBal = execRes.new_balance;
+                  const res = execRes.result || execRes;
+                  const newBal = res.new_balance;
                   store.setUser({ ...store.state.user, balance: newBal });
                   tgBridge.hapticNotification('success');
-                  this.showSuccessModal('💰 Кэшаут выполнен!', `Зачислено: +${execRes.payout} 🪙.`);
+                  this.showSuccessModal('💰 Кэшаут выполнен!', `Зачислено: +${res.payout} 🪙.`);
                   try {
                     const myBetsRes = await api.getPredictions();
                     if (myBetsRes.status === 'ok') store.setMyBets(myBetsRes.predictions);

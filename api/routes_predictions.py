@@ -263,7 +263,15 @@ async def handle_get_cashout_quote(request: web.Request) -> web.Response:
 
     from services.cashout_engine import quote_cashout
     quote = quote_cashout(user_id=user_id, bet_id=bet_id)
-    return web.json_response({"status": "ok", "quote": quote})
+    # Движок называет поля available/offer, клиент читает cashout_available/amount.
+    # Алиасы кладём и внутрь quote, и на верхний уровень: вложенный объект нужен
+    # текущему клиенту, плоский — уже задеплоенным старым версиям Mini App.
+    payload = {
+        **quote,
+        "cashout_available": quote.get("available"),
+        "amount": quote.get("offer"),
+    }
+    return web.json_response({**payload, "quote": payload, "status": "ok"})
 
 
 async def handle_execute_cashout(request: web.Request) -> web.Response:
@@ -298,4 +306,8 @@ async def handle_execute_cashout(request: web.Request) -> web.Response:
             "message": result.get("message") if isinstance(result, dict) else str(result)
         }, status=400)
 
-    return web.json_response({"status": "ok", "result": result})
+    # result несёт balance/payout и собственный status="cashed_out". Дублируем
+    # new_balance и раскрываем поля на верхний уровень, но "status": "ok" ставим
+    # последним — иначе внутренний статус перебил бы статус ответа.
+    payload = {**result, "new_balance": result.get("balance")}
+    return web.json_response({**payload, "result": payload, "status": "ok"})

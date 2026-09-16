@@ -15,7 +15,7 @@ import asyncio
 import json
 import logging
 from aiohttp import web
-from config import ADMIN_IDS
+import config
 from .auth import get_authenticated_user
 import database
 from services.season_progression import SeasonProgressionEngine
@@ -34,7 +34,7 @@ def _get_admin_actor(request: web.Request) -> tuple[int | None, bool, list[int],
         return None, False, [], web.json_response({"status": "error", "error": "unauthorized"}, status=401)
 
     actor_id = int(user_info["id"])
-    is_global = (actor_id in ADMIN_IDS)
+    is_global = (actor_id in config.ADMIN_IDS)
 
     assigned_divs = []
     with database.transaction() as conn:

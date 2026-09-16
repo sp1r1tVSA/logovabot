@@ -16,6 +16,7 @@ import logging
 from typing import Any, Optional
 from aiohttp import web
 import database
+from api.auth import get_authenticated_user, check_user_access
 from services.live_ingestion import (
     get_live_events,
     get_live_match_state,
@@ -29,11 +30,26 @@ from services.sports_provider import get_sports_provider
 logger = logging.getLogger(__name__)
 
 
+def _auth(request: web.Request) -> tuple[dict | None, web.Response | None]:
+    """Validate initData and the rollout gate. Returns (user_info, error_response)."""
+    init_data = request.headers.get("X-Telegram-Init-Data", "")
+    user_info = get_authenticated_user(init_data)
+    if not user_info or "id" not in user_info:
+        return None, web.json_response({"status": "error", "error": "unauthorized"}, status=401)
+    if not check_user_access(user_info["id"]):
+        return None, web.json_response({"status": "error", "error": "LOGOVO_LOCKDOWN"}, status=403)
+    return user_info, None
+
+
 async def handle_get_live_matches(request: web.Request) -> web.Response:
     """
     GET /api/live
     List all ongoing live matches.
     """
+    _, err = _auth(request)
+    if err is not None:
+        return err
+
     division_id_str = request.query.get("division_id")
     season_id_str = request.query.get("season_id")
 
@@ -78,6 +94,10 @@ async def handle_get_live_match_detail(request: web.Request) -> web.Response:
     GET /api/live/{id}
     Retrieve full real-time match state, period, and minute.
     """
+    _, err = _auth(request)
+    if err is not None:
+        return err
+
     try:
         match_id = int(request.match_info["id"])
     except (KeyError, ValueError):
@@ -114,6 +134,10 @@ async def handle_get_live_events(request: web.Request) -> web.Response:
     GET /api/live/{id}/events
     Chronological live match timeline (goals, cards, substitutions, VAR).
     """
+    _, err = _auth(request)
+    if err is not None:
+        return err
+
     try:
         match_id = int(request.match_info["id"])
     except (KeyError, ValueError):
@@ -132,6 +156,10 @@ async def handle_get_live_stats(request: web.Request) -> web.Response:
     GET /api/live/{id}/stats
     Real-time in-play statistics. Unavailable metrics are strictly null (never fabricated 0s).
     """
+    _, err = _auth(request)
+    if err is not None:
+        return err
+
     try:
         match_id = int(request.match_info["id"])
     except (KeyError, ValueError):
@@ -151,6 +179,10 @@ async def handle_get_live_markets(request: web.Request) -> web.Response:
     GET /api/live/{id}/markets
     Retrieve in-play markets with status (open, suspended, closed).
     """
+    _, err = _auth(request)
+    if err is not None:
+        return err
+
     try:
         match_id = int(request.match_info["id"])
     except (KeyError, ValueError):
@@ -190,6 +222,10 @@ async def handle_get_odds_movers(request: web.Request) -> web.Response:
     GET /api/odds/movers
     Categorized odds movement intelligence: biggest drops, rises, fastest velocity, suspended.
     """
+    _, err = _auth(request)
+    if err is not None:
+        return err
+
     division_id_str = request.query.get("division_id")
     season_id_str = request.query.get("season_id")
     limit_str = request.query.get("limit", "10")
@@ -207,6 +243,10 @@ async def handle_get_live_intelligence(request: web.Request) -> web.Response:
     GET /api/live/{id}/intelligence
     Sports intelligence report: form, H2H, implied vs model probability, value edge, verifiable insights.
     """
+    _, err = _auth(request)
+    if err is not None:
+        return err
+
     try:
         match_id = int(request.match_info["id"])
     except (KeyError, ValueError):

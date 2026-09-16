@@ -76,10 +76,11 @@ class TestMiniAppApi(AioHTTPTestCase):
         self.assertIn("balance", data["user"])
 
     @unittest_run_loop
-    async def test_leaderboard_endpoint_access_restricted(self):
-        # Non-admin / unauthorized should be locked when betting is restricted
+    async def test_leaderboard_endpoint_unauthorized(self):
+        # Без initData это неаутентифицированный запрос, а не запрет доступа:
+        # 403 здесь не отличить от локдауна, поэтому строго 401 — как в /api/bootstrap.
         resp = await self.client.request("GET", "/api/leaderboard")
-        self.assertEqual(resp.status, 403)
+        self.assertEqual(resp.status, 401)
 
     @unittest_run_loop
     async def test_leaderboard_endpoint_admin(self):

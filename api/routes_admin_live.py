@@ -22,7 +22,7 @@ from aiohttp import web
 
 import database
 from api.auth import get_authenticated_user
-from config import ADMIN_IDS
+import config
 from services.sports_provider import get_sports_data_provider
 
 logger = logging.getLogger(__name__)
@@ -37,7 +37,7 @@ def _get_actor_id(request: web.Request) -> int | None:
 
 
 def _is_global_admin(actor_id: int) -> bool:
-    return actor_id in ADMIN_IDS
+    return actor_id in config.ADMIN_IDS
 
 
 def _get_division_admin_divisions(actor_id: int) -> list[int]:

@@ -27,6 +27,21 @@ atexit.register(shutil.rmtree, _TMP_DIR, ignore_errors=True)
 # so setting this here wins over a local .env.
 os.environ["LEAGUE_SQLITE_PATH"] = os.path.join(_TMP_DIR, "league.db")
 
+# То же окно и та же причина: десяток тестовых файлов делают
+# `from config import TOKEN` на уровне модуля, то есть снимают значение до
+# запуска любой фикстуры. Без .env оно приходит None, а initData тесты
+# подписывают плейсхолдером — подписи расходятся, и запросы получают 401.
+# Значение — публичный пример из документации Telegram; setdefault оставляет
+# приоритет за переменной, уже заданной в окружении, а настоящий токен из .env
+# в тесты не попадает и попадать не должен.
+os.environ.setdefault("TELEGRAM_BOT_TOKEN", "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11")
+
+# Та же история с админами: часть файлов берёт `ADMIN_IDS[0]` на уровне модуля
+# и ждёт, что этот id пройдёт в /api/admin/*. С пустым списком они выбирают
+# запасной id, который админом не является, и получают 403. Id заведомо вне
+# диапазонов, которые тесты используют под обычных игроков.
+os.environ.setdefault("ADMIN_IDS", "990000001")
+
 import pytest  # noqa: E402  (must come after the env var above)
 
 
@@ -92,6 +107,37 @@ def _disable_api_rate_limit():
     yield
     config.API_RATE_LIMIT_ENABLED = original
     rate_limiter.reset_all()
+
+
+_CANONICAL_ADMIN_IDS = None
+
+
+@pytest.fixture(autouse=True)
+def _stable_admin_ids():
+    """
+    Держать `config.ADMIN_IDS` одним и тем же объектом списка на весь процесс.
+
+    Часть файлов снимает список на импорте (`from config import ADMIN_IDS`) и
+    потом дописывает туда своего админа через `.append()`, рассчитывая, что
+    правку увидит и `config`. Другая часть подменяет сам атрибут новым списком,
+    иногда не возвращая старый. С `--dist loadfile` оба вида файлов попадают в
+    один воркер, и первый вид начинает править список, на который `config` уже
+    не смотрит: админ перестаёт быть админом, /api/admin/* отдаёт 403.
+
+    Фикстура возвращает исходный объект на место после каждого теста и
+    восстанавливает его содержимое — подмены внутри теста при этом работают
+    как раньше.
+    """
+    import config
+
+    global _CANONICAL_ADMIN_IDS
+    if _CANONICAL_ADMIN_IDS is None:
+        _CANONICAL_ADMIN_IDS = config.ADMIN_IDS
+
+    snapshot = list(config.ADMIN_IDS)
+    yield
+    _CANONICAL_ADMIN_IDS[:] = snapshot
+    config.ADMIN_IDS = _CANONICAL_ADMIN_IDS
 
 
 @pytest.fixture(autouse=True)

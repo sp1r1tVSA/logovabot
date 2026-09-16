@@ -23,7 +23,7 @@ import logging
 from aiohttp import web
 import database
 from api.auth import get_authenticated_user
-from config import ADMIN_IDS
+import config
 from services.betting_limits import BettingLimitsService
 from services.exposure_service import get_market_exposure, get_division_exposure, get_global_exposure
 import services.risk_alerts as risk_alerts
@@ -41,7 +41,7 @@ def _get_actor_id(request: web.Request) -> int | None:
 
 
 def _is_global_admin(actor_id: int) -> bool:
-    return actor_id in ADMIN_IDS
+    return actor_id in config.ADMIN_IDS
 
 
 def _get_division_admin_divisions(actor_id: int) -> list[int]:

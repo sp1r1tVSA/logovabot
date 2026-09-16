@@ -147,22 +147,13 @@ async def handle_get_leaderboard(request: web.Request) -> web.Response:
     Global leaderboard with pagination and user pin.
     Query params: page, limit, metric, period, season_id.
     """
+    # Возвращаем ошибку как есть: _get_auth_user отдаёт 401 при отсутствующей или
+    # подделанной подписи и 403 при закрытом доступе. Подменять первое на второе
+    # нельзя — клиент не сможет отличить протухшую сессию от локдауна.
     user_info, err = _get_auth_user(request)
     if err is not None:
-        return web.json_response({
-            "status": "error",
-            "error": "access_restricted",
-            "message": "Logovo.bet временно недоступен."
-        }, status=403)
+        return err
     user_id = user_info["id"]
-
-    from api.routes_wallet import check_user_access
-    if not check_user_access(user_id):
-        return web.json_response({
-            "status": "error",
-            "error": "access_restricted",
-            "message": "Logovo.bet временно недоступен."
-        }, status=403)
 
     try:
         page = int(request.query.get("page", 1))
