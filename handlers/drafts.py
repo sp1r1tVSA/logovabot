@@ -302,6 +302,7 @@ async def _process_draft_group_delayed(buffer_key: str, update: Update, context:
             "a_assists": a_assists,
             "is_single_timeline": is_single_timeline,
             "events": events,
+            "mvp_player": m_info.get("mvp_player"),
             "reporter_id": user_id,
             "photo_id": photo_file_ids[idx] if idx < len(photo_file_ids) else (photo_file_ids[0] if photo_file_ids else None),
             "division_id": cur_match.get("division_id") or division_id
@@ -330,6 +331,7 @@ async def _process_draft_group_delayed(buffer_key: str, update: Update, context:
             "a_assists": g["a_assists"],
             "is_single_timeline": g["is_single_timeline"],
             "events": g["events"],
+            "mvp_player": g.get("mvp_player"),
             "reporter_id": g["reporter_id"],
             "photo_id": g["photo_id"],
             "division_id": g.get("division_id"),
@@ -350,7 +352,8 @@ async def _process_draft_group_delayed(buffer_key: str, update: Update, context:
             is_single_timeline=g["is_single_timeline"],
             is_pm=False,
             match_id=g["match_id"],
-            is_draft=True
+            is_draft=True,
+            mvp_player=g.get("mvp_player")
         )
     else:
         draft_data = {
@@ -384,6 +387,9 @@ async def _process_draft_group_delayed(buffer_key: str, update: Update, context:
                 post_lines.append(f"⚽ <b>Голы ({a_team_esc}):</b> {html.escape(a_g_str) if a_g_str else 'не указаны'}")
                 if not g["is_single_timeline"]:
                     post_lines.append(f"🎯 <b>Ассисты ({a_team_esc}):</b> {html.escape(a_a_str) if a_a_str else 'Нет'}")
+            # 👑 Показываем только распознанную золотую корону; серую OCR отбрасывает сам.
+            if g.get("mvp_player"):
+                post_lines.append(f"👑 <b>MVP матча:</b> {html.escape(str(g['mvp_player']))}")
             post_lines.append("")
 
         post_lines.append("\n⏳ <i>Ожидает подтверждения администратором...</i>")
@@ -503,7 +509,8 @@ async def cb_draft_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             await asyncio.to_thread(
                 database.confirm_and_finalize_match,
                 m_id, g["h_score"], g["a_score"], g["events"],
-                reporter_id=g["reporter_id"], photo_id=g["photo_id"]
+                reporter_id=g["reporter_id"], photo_id=g["photo_id"],
+                mvp_player=g.get("mvp_player")
             )
         except Exception as e:
             # Пост в РЕЗУЛЬТАТЫ обязан следовать за записью в базу, а не идти
@@ -566,7 +573,8 @@ async def cb_draft_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             is_single_timeline=g.get('is_single_timeline', False),
             is_pm=False,
             match_id=m_id,
-            is_draft=False
+            is_draft=False,
+            mvp_player=g.get('mvp_player')
         )
 
         # Append "debt closed" note when the match was an overdue debt

@@ -97,6 +97,26 @@ def clean_team_name(raw_name: str) -> str:
     return name
 
 
+def clean_mvp_name(raw_name) -> str | None:
+    """
+    Normalizes the `mvp_player` field returned by the OCR model.
+
+    Runs the raw value through `clean_player_name` (it strips the very crown badge
+    the model was told to look at) and rejects the ways a model spells "no MVP":
+    JSON null, the strings "null"/"None", a dash or an empty cell. Returns a clean
+    player name or None — never an empty string, so a falsy check is enough
+    downstream.
+    """
+    if raw_name is None:
+        return None
+    name = clean_player_name(raw_name)
+    if not name:
+        return None
+    if name.strip().lower() in ("null", "none", "nan", "-", "—", "нет"):
+        return None
+    return name
+
+
 PROMPT_TEXT = """
 Ты — узкоспециализированный OCR-сканер для извлечения сырых данных из скриншотов FIFA / EA FC Mobile / eFootball.
 
@@ -221,6 +241,15 @@ PROMPT_TEXT = """
 - ⚠️ КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО добавлять игрока в голы, если в его колонке Г/G стоит 0!
 - ⚠️ Если у игрока в обеих колонках стоят нули (0 0), он НЕ ДОЛЖЕН попадать ни в голы, ни в ассисты!
 
+👑 ОПРЕДЕЛЕНИЕ ИГРОКА МАТЧА (MVP):
+В EA FC Mobile рядом с именами игроков отображаются круглые значки с короной. ОБРАТИ СТРОГОЕ ВНИМАНИЕ НА ЦВЕТ ЗНАЧКА:
+- 🟡 ЗОЛОТАЯ КОРОНА (ярко-жёлтый / золотистый кружок с короной):
+  Это официальный MVP (лучший игрок всего матча). В матче может быть МАКСИМУМ ОДИН игрок с ЗОЛОТОЙ короной!
+  Запиши его чистое имя в поле "mvp_player" (например: "mvp_player": "Ricardo Horta").
+- ⚪ СЕРАЯ / СЕРЕБРИСТАЯ КОРОНА (тускло-серый или белый кружок):
+  Это утешительный значок проигравшей команды или капитан. Считай это за шум и ИГНОРИРУЙ — в "mvp_player" его НЕ записывай!
+- Если золотой короны нет ни у одного игрока на скриншоте — верни "mvp_player": null.
+
 3. **ЛЕВАЯ ПОЛОВИНА (LEFT SIDE — ЛЕВАЯ КОМАНДА):**
    - Порядок столбцов: `ПОЗ/POS` | `ИГРОКИ/PLAYERS` | `ОБЩ/OVR` | `ИС/PS` | `Г/G` (Голы) | `А/A` (Ассисты)
    - Имена игроков левой команды находятся в ЛЕВОЙ КОЛОНКЕ (слева от ОБЩ/OVR).
@@ -302,7 +331,8 @@ PROMPT_TEXT = """
       "left_goals": ["ИмяИгрокаA", "ИмяИгрокаB", "ИмяИгрокаB"],
       "right_goals": ["ИмяИгрокаC", "ИмяИгрокаD"],
       "left_assists": ["ИмяИгрокаE", "ИмяИгрокаF"],
-      "right_assists": ["ИмяИгрокаG", "ИмяИгрокаD"]
+      "right_assists": ["ИмяИгрокаG", "ИмяИгрокаD"],
+      "mvp_player": "ИмяИгрокаB"
     }
   ]
 }
@@ -488,6 +518,10 @@ def recognize_match_screenshots_bytes(
                         m["right_goals"] = [clean_player_name(p) for p in m["right_goals"] if clean_player_name(p)]
                         m["left_assists"] = [clean_player_name(p) for p in m["left_assists"] if clean_player_name(p)]
                         m["right_assists"] = [clean_player_name(p) for p in m["right_assists"] if clean_player_name(p)]
+
+                        # 👑 Игрок матча: то же перцептивное правило, что и с голами —
+                        # модель читает золотую корону с экрана, Python нормализует имя.
+                        m["mvp_player"] = clean_mvp_name(m.get("mvp_player"))
 
                         # Clean team names off the scoreboard plate (level badges, league captions)
                         m["team1"] = clean_team_name(m.get("team1"))

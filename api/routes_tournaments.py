@@ -188,7 +188,7 @@ async def handle_get_results(request: web.Request) -> web.Response:
 async def handle_get_top_scorers(request: web.Request) -> web.Response:
     """
     GET /api/tournaments/{id}/top-scorers?division_id=X
-    Returns top goalscorers and assist leaders.
+    Returns top goalscorers, assist leaders and MVP (player-of-the-match) leaders.
     """
     init_data = request.headers.get("X-Telegram-Init-Data", "")
     user_info = get_authenticated_user(init_data)
@@ -204,6 +204,7 @@ async def handle_get_top_scorers(request: web.Request) -> web.Response:
 
     raw_scorers = await asyncio.to_thread(database.get_top_scorers, limit=15, division_id=div_id)
     raw_assists = await asyncio.to_thread(database.get_top_assists, limit=15, division_id=div_id)
+    raw_mvps = await asyncio.to_thread(database.get_top_mvps, division_id=div_id, limit=15)
 
     top_scorers = [
         {
@@ -222,10 +223,21 @@ async def handle_get_top_scorers(request: web.Request) -> web.Response:
         for a in raw_assists
     ]
 
+    # 👑 Лидеры по наградам «Игрок матча». Ключ mvp_count оставлен как есть —
+    # фронт читает его напрямую, алиасов вида goals/total_goals здесь не нужно.
+    top_mvps = [
+        {
+            **mv,
+            "mvp_count": mv.get("mvp_count", 0),
+        }
+        for mv in raw_mvps
+    ]
+
     return web.json_response({
         "status": "ok",
         "top_scorers": top_scorers,
-        "top_assists": top_assists
+        "top_assists": top_assists,
+        "top_mvps": top_mvps
     })
 
 

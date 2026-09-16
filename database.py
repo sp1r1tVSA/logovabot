@@ -394,6 +394,20 @@ def init_db() -> None:
 
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_matches_season_div ON matches(season_id, division_id)")
 
+        # 👑 Игрок матча (MVP), распознанный по золотой короне на скриншоте.
+        # Хранится именем, а не ссылкой на squad_players: OCR может увидеть игрока
+        # раньше, чем состав заявлен в боте (та же логика, что у match_events).
+        cursor.execute("PRAGMA table_info(matches)")
+        _match_cols = [row[1] for row in cursor.fetchall()]
+        if "mvp_player" not in _match_cols:
+            cursor.execute("ALTER TABLE matches ADD COLUMN mvp_player TEXT DEFAULT NULL")
+        # Индекс создаётся отдельно от ALTER: на базе, где колонка уже добавлена
+        # предыдущей версией миграции, индекса иначе не появилось бы никогда.
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_matches_mvp_player "
+            "ON matches(mvp_player) WHERE mvp_player IS NOT NULL"
+        )
+
         # Safely migration-add division_id to users and rounds
         try:
             cursor.execute("ALTER TABLE users ADD COLUMN division_id INTEGER DEFAULT NULL")
@@ -2345,8 +2359,12 @@ def get_match(match_id: int) -> dict | None:
 
 get_match_by_id = get_match
 
-def confirm_and_finalize_match(match_id: int, p1_score: int, p2_score: int, events: list, reporter_id: int = None, photo_id: str = None) -> str | None:
-    """Instantly save and confirm a match with events in database."""
+def confirm_and_finalize_match(match_id: int, p1_score: int, p2_score: int, events: list, reporter_id: int = None, photo_id: str = None, mvp_player: str | None = None) -> str | None:
+    """Instantly save and confirm a match with events in database.
+
+    `mvp_player` — игрок матча с золотой короны скриншота (или None). Пустая
+    строка нормализуется в NULL, чтобы `get_top_mvps` не считала «безымянных».
+    """
     if p1_score < 0 or p2_score < 0:
         raise ValueError("Scores must be non-negative integers")
     with transaction() as conn:
@@ -2373,9 +2391,12 @@ def confirm_and_finalize_match(match_id: int, p1_score: int, p2_score: int, even
                 "INSERT INTO match_events (match_id, team_name, player_name, event_type, count) VALUES (?, ?, ?, ?, ?)",
                 (match_id, t_name, p_name, e_type, cnt)
             )
+        mvp_clean = (mvp_player or "").strip() or None
         cursor.execute(
-            "UPDATE matches SET player1_score = ?, player2_score = ?, reported_by = ?, photo_id = ?, status = 'confirmed', played_at = ? WHERE id = ?",
-            (p1_score, p2_score, reporter_id, photo_id, datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), match_id)
+            "UPDATE matches SET player1_score = ?, player2_score = ?, reported_by = ?, photo_id = ?, "
+            "mvp_player = ?, status = 'confirmed', played_at = ? WHERE id = ?",
+            (p1_score, p2_score, reporter_id, photo_id, mvp_clean,
+             datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), match_id)
         )
         if cursor.rowcount != 1:
             # Матч исчез между проверкой и записью — откатываем, чтобы не остаться
@@ -2415,7 +2436,7 @@ def set_technical_result(
         cursor = conn.cursor()
         cursor.execute(
             "UPDATE matches SET player1_score = ?, player2_score = ?, status = 'confirmed', played_at = ?, "
-            "is_technical = 1, technical_type = ? WHERE id = ?",
+            "is_technical = 1, technical_type = ?, mvp_player = NULL WHERE id = ?",
             (p1_score, p2_score, datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), tech_type, match_id)
         )
         # Тот же silent no-op, что и в confirm_and_finalize_match.
@@ -2471,7 +2492,7 @@ def reset_match(match_id: int) -> None:
         s_id = m["cup_series_id"] if m else None
 
         cursor.execute(
-            "UPDATE matches SET status = 'pending', player1_score = NULL, player2_score = NULL, reported_by = NULL, photo_id = NULL, dispute_photos = NULL WHERE id = ?",
+            "UPDATE matches SET status = 'pending', player1_score = NULL, player2_score = NULL, reported_by = NULL, photo_id = NULL, dispute_photos = NULL, mvp_player = NULL WHERE id = ?",
             (match_id,)
         )
         # A fresh start also drops any freeze state from the previous result
@@ -5073,6 +5094,69 @@ def get_top_assists(limit: int = 20, division_id: int | None = None, season_id: 
         query += """
             GROUP BY me.player_name, me.team_name
             ORDER BY total_assists DESC, me.player_name ASC
+            LIMIT ?
+        """
+        params.append(limit)
+        cursor.execute(query, tuple(params))
+        return [dict(row) for row in cursor.fetchall()]
+
+
+def get_top_mvps(division_id: int | None = None, season_id: int | None = None, limit: int = 15) -> list[dict]:
+    """Игроки с наибольшим числом наград «Игрок матча» (золотая корона на скриншоте).
+
+    Возвращает [{"player_name": str, "team_name": str, "mvp_count": int}, ...].
+
+    В `matches.mvp_player` лежит только имя, без ссылки на клуб, поэтому клуб
+    восстанавливается детерминированно: сперва по событиям того же матча
+    (`match_events.team_name` — там игрок уже привязан к стороне), затем по
+    заявленному составу (`squad_players`). Не нашлось ни там, ни там — клуб
+    отдаётся пустой строкой, но награда не теряется.
+
+    Группировка идёт по имени без учёта регистра, а не по паре (имя, клуб):
+    иначе один и тот же игрок с нераспознанным клубом в одном из матчей
+    разъехался бы на две строки. Имена клубов в лиге глобально уникальны, так
+    что имя игрока внутри дивизиона однозначно.
+    """
+    limit = max(1, int(limit))
+    with transaction() as conn:
+        cursor = conn.cursor()
+        target_season_id = season_id
+        if target_season_id is None:
+            act = get_active_season()
+            target_season_id = act["id"] if act else 1
+
+        query = """
+            SELECT
+                MIN(player_name) AS player_name,
+                COALESCE(MAX(NULLIF(team_name, '')), '') AS team_name,
+                COUNT(*) AS mvp_count
+            FROM (
+                SELECT
+                    TRIM(m.mvp_player) AS player_name,
+                    COALESCE(
+                        (SELECT me.team_name FROM match_events me
+                          WHERE me.match_id = m.id
+                            AND LOWER(TRIM(me.player_name)) = LOWER(TRIM(m.mvp_player))
+                          LIMIT 1),
+                        (SELECT sp.team_name FROM squad_players sp
+                          WHERE LOWER(TRIM(sp.player_name)) = LOWER(TRIM(m.mvp_player))
+                          LIMIT 1),
+                        ''
+                    ) AS team_name
+                FROM matches m
+                WHERE m.status = 'confirmed'
+                  AND m.mvp_player IS NOT NULL
+                  AND TRIM(m.mvp_player) <> ''
+                  AND (m.season_id = ? OR m.season_id IS NULL)
+        """
+        params = [target_season_id]
+        if division_id is not None:
+            query += " AND m.division_id = ?"
+            params.append(division_id)
+        query += """
+            )
+            GROUP BY LOWER(player_name)
+            ORDER BY mvp_count DESC, player_name ASC
             LIMIT ?
         """
         params.append(limit)
@@ -10118,7 +10202,7 @@ def get_cabinet_squad_stats(team_name: str) -> dict:
     ограничен CHECK ('goal', 'assist'), а в `squad_players` карточных колонок нет.
     Поля отдаются нулями, чтобы контракт API оставался стабильным.
     """
-    empty = {"players": [], "top_scorer": None, "top_assistant": None}
+    empty = {"players": [], "top_scorer": None, "top_assistant": None, "top_mvp": None}
     if not team_name:
         return empty
 
@@ -10126,6 +10210,7 @@ def get_cabinet_squad_stats(team_name: str) -> dict:
 
     goals: dict[str, int] = {}
     assists: dict[str, int] = {}
+    raw_mvps: dict[str, int] = {}
     with transaction() as conn:
         cursor = conn.cursor()
         cursor.execute(
@@ -10142,6 +10227,26 @@ def get_cabinet_squad_stats(team_name: str) -> dict:
             bucket = goals if row["event_type"] == "goal" else assists
             bucket[row["player_name"]] = int(row["total"] or 0)
 
+        # 👑 Награды «Игрок матча» во всех подтверждённых матчах клуба.
+        # Корона могла достаться сопернику, поэтому ниже строки фильтруются по
+        # принадлежности к этому клубу — имя, которого нет ни в составе, ни в
+        # событиях клуба, не засчитывается.
+        cursor.execute(
+            """
+            SELECT TRIM(m.mvp_player) AS player_name, COUNT(*) AS total
+            FROM matches m
+            WHERE m.status = 'confirmed'
+              AND m.mvp_player IS NOT NULL
+              AND TRIM(m.mvp_player) <> ''
+              AND (LOWER(TRIM(m.player1_team)) = LOWER(TRIM(?))
+                   OR LOWER(TRIM(m.player2_team)) = LOWER(TRIM(?)))
+            GROUP BY LOWER(TRIM(m.mvp_player))
+            """,
+            (team_name.strip(), team_name.strip())
+        )
+        for row in cursor.fetchall():
+            raw_mvps[row["player_name"]] = int(row["total"] or 0)
+
     names = [p.get("player_name") for p in roster if p.get("player_name")]
     positions = {p.get("player_name"): p.get("position") for p in roster}
     # Бомбардир мог быть распознан OCR раньше, чем состав попал в squad_players.
@@ -10150,12 +10255,17 @@ def get_cabinet_squad_stats(team_name: str) -> dict:
             names.append(extra)
             positions[extra] = None
 
+    # Награды сопоставляются с игроками клуба без учёта регистра: OCR пишет имя
+    # так, как оно видно на экране, а состав мог быть заявлен иначе.
+    mvps_by_key = {k.strip().lower(): v for k, v in raw_mvps.items()}
+
     players = [
         {
             "player_name": name,
             "position": positions.get(name),
             "goals": goals.get(name, 0),
             "assists": assists.get(name, 0),
+            "mvp_count": mvps_by_key.get((name or "").strip().lower(), 0),
             "yellow_cards": 0,
             "red_cards": 0,
         }
@@ -10169,5 +10279,15 @@ def get_cabinet_squad_stats(team_name: str) -> dict:
     if by_assists and by_assists[0]["assists"] > 0:
         top_assistant = by_assists[0]
 
-    return {"players": players, "top_scorer": top_scorer, "top_assistant": top_assistant}
+    top_mvp = None
+    by_mvp = sorted(players, key=lambda p: (-p["mvp_count"], p["player_name"] or ""))
+    if by_mvp and by_mvp[0]["mvp_count"] > 0:
+        top_mvp = {"player_name": by_mvp[0]["player_name"], "mvp_count": by_mvp[0]["mvp_count"]}
+
+    return {
+        "players": players,
+        "top_scorer": top_scorer,
+        "top_assistant": top_assistant,
+        "top_mvp": top_mvp,
+    }
 
