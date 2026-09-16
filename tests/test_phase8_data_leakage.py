@@ -4,7 +4,11 @@ tests/test_phase8_data_leakage.py
 Phase 8 — Point-in-Time Integrity & Data Leakage Prevention Test Suite.
 Verifies:
 1. Zero future data leakage in feature extraction:
-   - Matches with id >= target_match_id are strictly excluded from Form, Elo, and H2H.
+   - Under a point-in-time cutoff, matches with id >= the cutoff are strictly excluded
+     from Form, Elo, and H2H. The cutoff is `as_of_match_id`, and it defaults to the
+     target's own id once that match has been played.
+   - A still-pending fixture deliberately has no cutoff: it is predicted live, so every
+     match already played is legitimate history regardless of its id (see 4f193aa).
 2. Snapshot Immutability:
    - Stored AI predictions in ai_predictions are immutable and cannot be retroactively altered by subsequent matches.
 3. Strict Division and Season boundaries in point-in-time calculation.
@@ -51,9 +55,10 @@ class TestPhase8DataLeakage(unittest.TestCase):
             """)
 
     def test_future_matches_excluded_from_features(self) -> None:
-        """Features for Match #9100 must include Match #9090 but strictly exclude Match #9110."""
-        features = FeatureEngine.extract_match_features(self.target_match_id)
-
+        """Under an explicit cutoff at #9100, features include Match #9090 and strictly exclude #9110."""
+        features = FeatureEngine.extract_match_features(
+            self.target_match_id, as_of_match_id=self.target_match_id
+        )
 
         # Arsenal's historical matches should only include Match #9090 (3 goals scored, 1 conceded)
         t1_overall = features["team1_features"]["overall"]
@@ -70,6 +75,22 @@ class TestPhase8DataLeakage(unittest.TestCase):
 
         self.assertEqual(h2h["team1_wins"], 1)
         self.assertEqual(h2h["team2_wins"], 0)
+
+    def test_played_match_defaults_to_its_own_cutoff(self) -> None:
+        """Re-deriving features for a played match must not pull in results entered after it."""
+        features = FeatureEngine.extract_match_features(9110)
+
+        # Only #9090 predates #9110 and is completed; #9100 is still unplayed.
+        self.assertEqual(features["team1_features"]["overall"]["matches_played"], 1)
+        self.assertEqual(features["h2h_features"]["total_meetings"], 1)
+
+    def test_pending_fixture_sees_every_match_already_played(self) -> None:
+        """A live prediction is made with today's knowledge, so a played higher-id match counts."""
+        features = FeatureEngine.extract_match_features(self.target_match_id)
+
+        # #9110 was entered later but has actually been played — history, not leakage.
+        self.assertEqual(features["team1_features"]["overall"]["matches_played"], 2)
+        self.assertEqual(features["h2h_features"]["total_meetings"], 2)
 
     def test_prediction_snapshot_immutability(self) -> None:
         """A stored prediction snapshot is not mutated by subsequent match executions."""

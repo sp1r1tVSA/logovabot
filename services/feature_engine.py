@@ -34,8 +34,17 @@ class FeatureEngine:
     ) -> dict[str, Any]:
         """
         Extract comprehensive feature set for match_id.
-        as_of_match_id: if set, limits historical query strictly to matches with id < as_of_match_id.
-        Defaults to match_id itself to prevent data leakage from current or future fixtures.
+
+        as_of_match_id: if set, limits the historical query strictly to matches with
+        id < as_of_match_id. Pass it whenever features are re-derived after the fact
+        (backtesting, model evaluation) — it is the only way to pin the cutoff.
+
+        Without it the cutoff depends on the target's own status:
+          * already played  -> match_id, so results that came after it cannot leak in;
+          * still pending   -> open, so the fixture sees every match played so far.
+        The open cutoff is not leakage: rounds in this league are played out of order,
+        and every historical query below already filters to completed statuses, so a
+        higher id merely means "entered later", not "happens later".
         """
         with database.transaction() as conn:
             cursor = conn.cursor()

@@ -367,6 +367,30 @@ def test_all_inline_buttons_match_registered_handlers():
                 if m:
                     constants[m.group(1)] = m.group(2)
 
+    # Module-level string constants that hold callback patterns, e.g.
+    # LEGACY_BET_CALLBACK_PATTERN in handlers/betting.py. Without these, a handler
+    # registered as pattern=SOME_CONSTANT is invisible to this audit and every button
+    # it serves is reported as orphaned.
+    pattern_consts = {}
+    for fname in os.listdir(handlers_dir):
+        if not fname.endswith(".py"):
+            continue
+        fpath = os.path.join(handlers_dir, fname)
+        with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
+            try:
+                tree = ast.parse(f.read())
+            except SyntaxError:
+                continue
+        for node in tree.body:
+            if not isinstance(node, ast.Assign):
+                continue
+            # Implicit concatenation across lines is folded into one Constant by the parser.
+            if not isinstance(node.value, ast.Constant) or not isinstance(node.value.value, str):
+                continue
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    pattern_consts[target.id] = node.value.value
+
     # Extract all CallbackQueryHandler patterns
     handlers_list = []
     for fname in os.listdir(handlers_dir):
@@ -376,14 +400,25 @@ def test_all_inline_buttons_match_registered_handlers():
         with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
             content = f.read()
 
-        matches = re.finditer(r'CallbackQueryHandler\s*\(\s*([a-zA-Z0-9_]+)\s*,\s*pattern\s*=\s*([rR]?["\'].*?["\'])\s*\)', content)
+        matches = re.finditer(
+            r'CallbackQueryHandler\s*\(\s*([a-zA-Z0-9_]+)\s*,\s*pattern\s*=\s*'
+            r'([rR]?["\'].*?["\']|[A-Za-z_][A-Za-z0-9_]*)\s*\)',
+            content,
+        )
         for m in matches:
             func = m.group(1)
             pat_str = m.group(2)
-            try:
-                pat = ast.literal_eval(pat_str.lstrip("rR"))
-            except Exception:
-                pat = pat_str.strip('rR"\'')
+            if re.match(r'^[rR]?["\']', pat_str):
+                try:
+                    pat = ast.literal_eval(pat_str.lstrip("rR"))
+                except Exception:
+                    pat = pat_str.strip('rR"\'')
+            elif pat_str in pattern_consts:
+                pat = pattern_consts[pat_str]
+            else:
+                # A name we cannot resolve statically — skip rather than compile the
+                # identifier itself as a regex, which would match by accident.
+                continue
             if pat in (".*", "^.*$"):
                 continue
             handlers_list.append({"func": func, "regex": re.compile(pat)})
