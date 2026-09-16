@@ -27,8 +27,8 @@ Targets, by default, только зарегистрированных игро�
   * не создаёт кошельки и прогресс тем, у кого их нет — такой игрок получит
     дефолтные значения сам при первом входе (get_or_create_wallet /
     get_or_create_progression)
-  * не трогает счётчики ставок, серии и рамки — только по флагам
-    --reset-stats / --reset-streaks
+  * не трогает счётчики ставок, серии и квесты/достижения — только по флагам
+    --reset-stats / --reset-streaks / --reset-quests (или --reset-achievements)
   * не отменяет и не рассчитывает ставки
 
 Порядок запуска на сервере (бота лучше остановить — иначе он может принять
@@ -178,6 +178,22 @@ def fetch_pending_bets(user_ids: list[int]) -> dict[int, dict]:
         return {r["user_id"]: dict(r) for r in cursor.fetchall()}
 
 
+def fetch_achievements_counts(user_ids: list[int]) -> dict[int, int]:
+    """Количество открытых квестов/достижений на каждого пользователя."""
+    if not user_ids:
+        return {}
+    placeholders = ",".join("?" for _ in user_ids)
+    with database.transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute(f"""
+            SELECT user_id, COUNT(*) AS cnt
+            FROM user_achievements
+            WHERE user_id IN ({placeholders})
+            GROUP BY user_id
+        """, user_ids)
+        return {r["user_id"]: r["cnt"] for r in cursor.fetchall()}
+
+
 def describe(row: dict) -> str:
     who = f"@{row['username']}" if row.get("username") else str(row["telegram_id"])
     club = row.get("team_name") or "без клуба"
@@ -189,7 +205,13 @@ def describe(row: dict) -> str:
 
 def apply_reset(rows: list[dict], args: argparse.Namespace) -> dict:
     """Reset every target in ONE transaction: either all of it lands, or none."""
-    stats = {"wallets": 0, "progressions": 0, "coins_removed": 0, "coins_added": 0}
+    stats = {
+        "wallets": 0,
+        "progressions": 0,
+        "coins_removed": 0,
+        "coins_added": 0,
+        "achievements_cleared": 0,
+    }
 
     with database.transaction() as conn:
         cursor = conn.cursor()
@@ -248,10 +270,14 @@ def apply_reset(rows: list[dict], args: argparse.Namespace) -> dict:
                     """, (DEFAULT_LEVEL, DEFAULT_XP, DEFAULT_XP, DEFAULT_TITLE, uid))
                 stats["progressions"] += 1
 
+            if getattr(args, "reset_quests", False):
+                cursor.execute("DELETE FROM user_achievements WHERE user_id = ?", (uid,))
+                stats["achievements_cleared"] += cursor.rowcount
+
     return stats
 
 
-def verify(rows: list[dict]) -> list[str]:
+def verify(rows: list[dict], args: argparse.Namespace) -> list[str]:
     """Read the affected rows back and report anything that is still off."""
     problems: list[str] = []
     ids = [r["telegram_id"] for r in rows]
@@ -278,6 +304,16 @@ def verify(rows: list[dict]) -> list[str]:
                 f"прогресс {r['user_id']}: ур. {r['level']}, XP {r['current_xp']}/{r['total_xp_earned']}"
             )
 
+        if getattr(args, "reset_quests", False):
+            cursor.execute(f"""
+                SELECT user_id, COUNT(*) AS cnt FROM user_achievements
+                WHERE user_id IN ({placeholders})
+                GROUP BY user_id
+            """, ids)
+            for r in cursor.fetchall():
+                if r["cnt"] > 0:
+                    problems.append(f"квесты {r['user_id']}: осталось {r['cnt']} записей в user_achievements")
+
     return problems
 
 
@@ -303,6 +339,9 @@ def main() -> int:
                         help="Дополнительно обнулить счётчики ставок и таймер дневного бонуса")
     parser.add_argument("--reset-streaks", action="store_true",
                         help="Дополнительно сбросить серии входов и щиты до дефолта")
+    parser.add_argument("--reset-quests", "--reset-achievements", action="store_true",
+                        dest="reset_quests",
+                        help="Дополнительно сбросить все полученные квесты и достижения (очищает user_achievements)")
     parser.add_argument("--allow-pending", action="store_true",
                         help="Не прерываться, если у игроков есть нерассчитанные купоны")
     args = parser.parse_args()
@@ -324,6 +363,7 @@ def main() -> int:
         return 0
 
     pending = fetch_pending_bets([r["telegram_id"] for r in rows])
+    ach_counts = fetch_achievements_counts([r["telegram_id"] for r in rows]) if args.reset_quests else {}
 
     mode = "ПРИМЕНЕНИЕ" if args.apply else "DRY-RUN (ничего не изменено)"
     print(f"\n=== {mode} ===")
@@ -352,6 +392,10 @@ def main() -> int:
             line += (f"\n      прогресс: ур. {row['level']} / XP {row['total_xp_earned']}"
                      f" «{row['equipped_title']}» → ур. {DEFAULT_LEVEL} / XP {DEFAULT_XP}"
                      f" «{DEFAULT_TITLE}»")
+
+        if args.reset_quests:
+            ac_cnt = ach_counts.get(row["telegram_id"], 0)
+            line += f"\n      квесты: {ac_cnt} получено → 0 (будут очищены)"
 
         p = pending.get(row["telegram_id"])
         if p:
@@ -386,8 +430,10 @@ def main() -> int:
     print(f"\nОбновлено кошельков: {stats['wallets']}")
     print(f"Обновлено записей прогресса: {stats['progressions']}")
     print(f"Изъято монет: {stats['coins_removed']} 🪙, начислено: {stats['coins_added']} 🪙")
+    if args.reset_quests:
+        print(f"Сброшено записей квестов/достижений: {stats['achievements_cleared']}")
 
-    problems = verify(rows)
+    problems = verify(rows, args)
     if problems:
         print("\n❌ ПРОВЕРКА НЕ ПРОЙДЕНА:")
         for p in problems:
