@@ -21,41 +21,80 @@ GEMINI_MODELS = [
 POS_TOKENS = {
     'вр', 'gk', 'цз', 'cb', 'пз', 'rb', 'лз', 'lb', 'цоп', 'cdm',
     'цп', 'cm', 'лп', 'lm', 'пп', 'rm', 'цап', 'cam', 'лв', 'lw',
-    'пв', 'rw', 'фрд', 'cf', 'нп', 'st', 'нап', 'lf', 'rf'
+    'пв', 'rw', 'фрд', 'cf', 'нп', 'st', 'нап', 'lf', 'rf',
+    # EA FC Mobile RU: ФРВ (форвард) — встречается в реальных скриншотах
+    'фрв', 'пфз', 'лфз', 'rwb', 'lwb', 'rcb', 'lcb', 'rcm', 'lcm', 'rdm', 'ldm',
 }
+
+# Captain / MOTM / MVP badges that Gemini may transcribe in several ways.
+# Deliberately NOT here: 'li'/'ли' — «Li» is a real surname, and «ЛИ» is not an
+# EA FC Mobile badge. Matched without stripping a trailing dot, so the initial in
+# "C. Ronaldo" survives while a bare captain marker "Ronaldo C" does not.
+BADGE_CHARS = r'⚽👑©Ⓒ★☆⭐🌟🏅🥇🥈🥉✪✦⚑🧤⚡'
+BADGE_WORDS = {'c', 'с', 'к', 'mvp', 'мвп', 'motm', 'cap', 'кап'}
+
+LEAGUE_NOISE = {
+    'нет лиги', 'no league', 'champions', 'champions clups', 'champions clubs',
+    'логово фифарей', 'division rivals', 'elite division',
+}
+
 
 def clean_player_name(raw_name: str) -> str:
     """
     Cleans raw player name extracted by OCR:
     - Strips player ratings (e.g. 108, 113, 75).
-    - Strips player positions (e.g. ЦОП, ПП, ЦАП, ПВ, GK, ST, LW).
-    - Strips badges, icons (👑, ⚽, ©, Ⓒ, C).
+    - Strips player positions (e.g. ЦОП, ПП, ЦАП, ПВ, ФРВ, GK, ST, LW).
+    - Strips badges, icons (👑, ⚽, ★, ©, Ⓒ) and bare badge letters (C, К, MVP).
     - Strips minute marks (e.g. 32', 45').
     - Normalizes multiple spaces and punctuation.
     """
     if not raw_name:
         return ""
     name = str(raw_name).strip()
-    
+
     # Strip emojis, symbols and minute marks
-    name = re.sub(r'[⚽👑©Ⓒ\(\)\[\]\{\}\*#~|/\\<>]', ' ', name)
-    name = re.sub(r'\b\d+[\'’]\b', ' ', name)
-    
+    name = re.sub(rf'[{BADGE_CHARS}\(\)\[\]\{{\}}\*#~|/\\<>]', ' ', name)
+    # No trailing \b: an apostrophe is a non-word char, so "Addai 32'" at the end
+    # of the string never matched and left a stray quote behind.
+    name = re.sub(r'\b\d+[\'’]', ' ', name)
+
     # Strip leading/trailing rating numbers (e.g. "108 Bardghji" or "Bardghji 108")
     name = re.sub(r'^\d+\s+', '', name)
     name = re.sub(r'\s+\d+$', '', name)
-    
+
     tokens = name.split()
-    if len(tokens) > 1:
-        if tokens[0].lower() in POS_TOKENS:
+    # Peel positions and bare badge letters from both ends, but never empty the name
+    changed = True
+    while changed and len(tokens) > 1:
+        changed = False
+        head_raw, tail_raw = tokens[0].lower(), tokens[-1].lower()
+        head, tail = head_raw.strip('.'), tail_raw.strip('.')
+        if head in POS_TOKENS or head_raw in BADGE_WORDS:
             tokens = tokens[1:]
-        if tokens and tokens[-1].lower() in POS_TOKENS:
+            changed = True
+        if len(tokens) > 1 and (tail in POS_TOKENS or tail_raw in BADGE_WORDS):
             tokens = tokens[:-1]
-            
+            changed = True
+
     name = " ".join(tokens).strip()
     name = re.sub(r'\b\d+\b', '', name).strip()
     name = re.sub(r'\s+', ' ', name)
     return name.strip()
+
+
+def clean_team_name(raw_name: str) -> str:
+    """
+    Cleans a team/gamertag read off the scoreboard plate:
+    strips level badges ("15 LV"), stray icons, and rejects league captions.
+    """
+    if not raw_name:
+        return ""
+    name = re.sub(rf'[{BADGE_CHARS}]', ' ', str(raw_name)).strip()
+    name = re.sub(r'\b\d{1,3}\s*(?:lv|lvl|ур)\b\.?', ' ', name, flags=re.IGNORECASE)
+    name = re.sub(r'\s+', ' ', name).strip(' .,-')
+    if name.lower() in LEAGUE_NOISE:
+        return ""
+    return name
 
 
 PROMPT_TEXT = """
@@ -63,7 +102,21 @@ PROMPT_TEXT = """
 
 Твоя единственная задача — БУКВАЛЬНО считать голы, ассисты и счёт с экрана, НЕ ПЫТАЯСЬ угадывать логику матча.
 
-⚠️ ИГНОРИРУЙ любые клубные эмблемы и названия лиг на самом скриншоте (например, Trafic Family FC, НЕТ ЛИГИ, Champions Clups).
+⚠️ ИГНОРИРУЙ любые клубные эмблемы, гербы и названия лиг на самом скриншоте
+   (например: Trafic Family FC, НЕТ ЛИГИ, Champions Clups, Champions, Логово Фифарей,
+   Логово фифарей, Elite Division, Division Rivals).
+
+⚠️ КАК ЧИТАТЬ НАЗВАНИЯ КОМАНД С ВЕРХНЕЙ ПЛАШКИ (ТАБЛО):
+Плашка со счётом устроена так (слева и справа зеркально):
+   [эмблема клуба] [КРУПНЫЙ ЖИРНЫЙ ТЕКСТ] [бейдж уровня «15 LV»]
+                   [мелкий серый текст под ним]
+- Название команды = ТОЛЬКО КРУПНЫЙ ЖИРНЫЙ ТЕКСТ (это ник/клуб игрока).
+- МЕЛКИЙ СЕРЫЙ ТЕКСТ ПОД НИМ — это НАЗВАНИЕ ЛИГИ. НИКОГДА не бери его как team1/team2.
+- Бейдж уровня («15 LV», «18 LV») и цифры рядом с именем в team1/team2 НЕ ВКЛЮЧАЙ.
+- Эмблема клуба (например, герб ПСЖ) НЕ определяет название команды — читай текст.
+- Пример: слева крупно «badbadnotgood», под ним серым «Логово фифарей», бейдж «15 LV»
+  → team1 = "badbadnotgood" (НЕ «Логово фифарей», НЕ «PSG», НЕ «badbadnotgood 15»).
+
 ⚠️ СТОРОНЫ И НАЗВАНИЯ КОМАНД (team1 и team2):
 - `team1` — это ВСЕГДА команда, играющая СЛЕВА на скриншоте (чей счёт `left_score`, голы `left_goals` и ассисты `left_assists`).
 - `team2` — это ВСЕГДА команда, играющая СПРАВА на скриншоте (чей счёт `right_score`, голы `right_goals` и ассисты `right_assists`).
@@ -130,6 +183,37 @@ PROMPT_TEXT = """
                                     |     |         |     |
                            [Предпоследняя] [Крайняя] [Крайняя] [Вторая от центра]
 
+⚠️⚠️ ГЛАВНОЕ ПРАВИЛО ЧТЕНИЯ ЦИФР — ЯКОРЬ ПО ЗАГОЛОВКУ, А НЕ ПО ПОРЯДКУ:
+НЕ СЧИТАЙ КОЛОНКИ ПО ПОРЯДКУ СЛЕВА НАПРАВО. Вместо этого:
+1. Сначала найди в шапке таблицы буквы-заголовки `Г`/`G` и `А`/`A` и ЗАПОМНИ ИХ
+   ГОРИЗОНТАЛЬНУЮ КООРДИНАТУ (X) — отдельно для левой и отдельно для правой таблицы.
+2. Затем для каждой строки бери цифру, стоящую СТРОГО ПОД этим заголовком
+   (в той же вертикальной полосе X).
+3. Если цифра не попадает точно под заголовок `Г` или `А` — она НЕ ОТНОСИТСЯ к голам
+   и ассистам, игнорируй её.
+
+⚠️⚠️ КОЛОНКА `ИС` / `PS` ЧАСТО ПОЛНОСТЬЮ ПУСТАЯ — ЭТО НОРМАЛЬНО, ЭТО ЛОВУШКА:
+- Когда `ИС` пустая, между `ОБЩ` и цифрами `Г`/`А` образуется БОЛЬШОЙ ПУСТОЙ ПРОМЕЖУТОК.
+- ⚠️ КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО «сдвигать» цифры в этот пустой промежуток!
+- В левой таблице ПОСЛЕДНИЕ ДВЕ цифры строки — это ВСЕГДА `Г` и `А` (именно в этом
+  порядке), даже если между ОБЩ и ними зияет пустота.
+- В правой таблице ПЕРВЫЕ ДВЕ цифры строки (считая от центра экрана) — это ВСЕГДА
+  `А` и `Г` (именно в этом порядке).
+- НЕПРАВИЛЬНО: `Grillitsch 114 ⟨пусто⟩ 0 1` → ИС=0, Г=1. ЭТО ОШИБКА!
+- ПРАВИЛЬНО:   `Grillitsch 114 ⟨пусто⟩ 0 1` → ИС=пусто, Г=0, А=1 (0 голов, 1 ассист).
+
+⚠️⚠️ ЦЕНТРАЛЬНЫЙ РАЗДЕЛИТЕЛЬ:
+Цифры левой таблицы и цифры правой таблицы разделены вертикальной линией по центру
+экрана. Крайняя правая цифра ЛЕВОЙ таблицы (`А` левой команды) и крайняя левая цифра
+ПРАВОЙ таблицы (`А` правой команды) стоят близко друг к другу. НИКОГДА не приписывай
+цифру левой команды правой и наоборот — ориентируйся на центральную линию.
+
+⚠️⚠️ СКАНИРУЙ ОБЕ ТАБЛИЦЫ ЦЕЛИКОМ, ОТ ШАПКИ ДО САМОЙ НИЖНЕЙ СТРОКИ:
+Последняя строка таблицы вплотную примыкает к кнопкам интерфейса
+(«ДОБАВИТЬ ДРУГА», «ПРОДОЛЖИТЬ», «ПОВТОР» и т.п.) и часто содержит результативные
+действия. Никогда не обрывай чтение на предпоследней строке. Перед ответом
+ПЕРЕСЧИТАЙ количество строк в левой и в правой таблице — оно должно совпадать.
+
 ⚠️ ПРАВИЛО ЧТЕНИЯ ИМЕН И НУЛЕЙ:
 - ЧИТАЙ СТРОГО ТЕ ИМЕНА, КОТОРЫЕ НАПИСАНЫ В КОЛОНКЕ «ИГРОКИ» (PLAYERS) ДЛЯ ДАННОЙ СТРОКИ!
 - Игнорируй иконки капитана или бейджи (короны 👑, значки C, мячики ⚽) рядом с фамилией игрока — извлекай чистое имя.
@@ -170,6 +254,18 @@ PROMPT_TEXT = """
    - Если Бенфика забила 4 гола (`right_score = 4`), у неё в `right_assists` может быть МАКСИМУМ 4 ассиста (например, Rodrygo (2), João Pedro (2) = 4). 5-го ассиста быть НЕ МОЖЕТ!
    - Если Фейеноорд забил 5 голов (`left_score = 5`), у него в `left_assists` может быть МАКСИМУМ 5 ассистов!
 
+5-БИС. **ОБЯЗАТЕЛЬНАЯ САМОПРОВЕРКА ПЕРЕД ОТВЕТОМ (ТИП 2):**
+   Прежде чем выдать JSON, выполни сверку и, если она не сходится, ПЕРЕЧИТАЙ таблицу:
+   - Сумма всех цифр в колонке `Г` левой таблицы ДОЛЖНА быть равна `left_score`.
+     → значит `len(left_goals) == left_score`.
+   - Сумма всех цифр в колонке `Г` правой таблицы ДОЛЖНА быть равна `right_score`.
+     → значит `len(right_goals) == right_score`.
+   - Если голов НЕ ХВАТАЕТ — ты пропустил строку. Чаще всего это САМАЯ НИЖНЯЯ строка
+     или строка, где цифра стоит далеко от имени из-за пустой колонки `ИС`.
+   - Если голов БОЛЬШЕ, чем счёт — ты прочитал цифру из колонки `А` как `Г`
+     (проверь зеркальный порядок правой таблицы).
+   - `len(left_assists) <= left_score` и `len(right_assists) <= right_score`.
+
 6. **ОБРАБОТКА ДВУХ СКРИНШОТОВ ОДНОЙ ТАБЛИЦЫ (ПРИ ПРОКРУТКЕ/СКРОЛЛЕ):**
    - Если прислано 2 скриншота одной игры (верхняя и нижняя часть состава), один и тот же игрок может попасть на оба скриншота на стыке (например, `Diomande 1 0` или `Rodrygo 2 2`).
    - НЕ ДУБЛИРУЙ ЕГО! Это одна и та же строка одного матча — учитывай её ровно 1 раз!
@@ -198,18 +294,22 @@ PROMPT_TEXT = """
 {
   "matches": [
     {
-      "team1": "Название левой команды (например, Брага)",
-      "team2": "Название правой команды (например, Рейнджерс)",
+      "team1": "НазваниеЛевойКоманды",
+      "team2": "НазваниеПравойКоманды",
       "left_score": 3,
       "right_score": 2,
       "is_single_timeline": false,
-      "left_goals": ["Addai", "Ricardo Horta", "Ricardo Horta"],
-      "right_goals": ["Diomande", "Leweling"],
-      "left_assists": ["Vitor Carvalho", "Leonardo Lelo"],
-      "right_assists": ["Ziyech", "Leweling"]
+      "left_goals": ["ИмяИгрокаA", "ИмяИгрокаB", "ИмяИгрокаB"],
+      "right_goals": ["ИмяИгрокаC", "ИмяИгрокаD"],
+      "left_assists": ["ИмяИгрокаE", "ИмяИгрокаF"],
+      "right_assists": ["ИмяИгрокаG", "ИмяИгрокаD"]
     }
   ]
 }
+
+⚠️ ИМЕНА В ПРИМЕРЕ ВЫШЕ — ЭТО ПЛЕЙСХОЛДЕРЫ, ОБОЗНАЧАЮЩИЕ ТОЛЬКО ФОРМАТ.
+⚠️ Все имена, названия команд и числа бери ИСКЛЮЧИТЕЛЬНО с изображения.
+⚠️ КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО копировать в ответ любые имена из примеров этой инструкции.
 """
 
 def clean_json_response(raw_text: str) -> str:
@@ -227,34 +327,36 @@ def validate_and_sanitize_match_events(m: dict) -> None:
     """
     Enforces deterministic football laws and eliminates duplicate/hallucinated assists:
     1. Total assists for a team cannot exceed total goals (team score).
-    2. If len(assists) > team_score, prioritize pure assist-makers and remove goal-scorers who had duplicate assists hallucinated.
+    2. If len(assists) > team_score, prioritize pure assist-makers and remove goal-scorers
+       who had duplicate assists hallucinated.
+    3. Flags (does not silently patch) a goals/score mismatch — usually a row the OCR cut off.
     """
     left_score = int(m.get("left_score", 0))
     right_score = int(m.get("right_score", 0))
-    
-    # Sanitize left assists
-    if left_score >= 0 and len(m.get("left_assists", [])) > left_score:
-        excess = len(m["left_assists"]) - left_score
-        dual_players = [p for p in m["left_assists"] if p in m.get("left_goals", [])]
-        for p in dual_players:
-            if excess <= 0:
-                break
-            m["left_assists"].remove(p)
-            excess -= 1
-        while len(m["left_assists"]) > left_score:
-            m["left_assists"].pop()
 
-    # Sanitize right assists
-    if right_score >= 0 and len(m.get("right_assists", [])) > right_score:
-        excess = len(m["right_assists"]) - right_score
-        dual_players = [p for p in m["right_assists"] if p in m.get("right_goals", [])]
-        for p in dual_players:
-            if excess <= 0:
-                break
-            m["right_assists"].remove(p)
-            excess -= 1
-        while len(m["right_assists"]) > right_score:
-            m["right_assists"].pop()
+    for side, score in (("left", left_score), ("right", right_score)):
+        assists = m.get(f"{side}_assists") or []
+        if len(assists) > score:
+            excess = len(assists) - score
+            for p in [p for p in assists if p in (m.get(f"{side}_goals") or [])]:
+                if excess <= 0:
+                    break
+                assists.remove(p)
+                excess -= 1
+            while len(assists) > score:
+                assists.pop()
+
+    # Goal/score reconciliation: a short goal list means a table row was missed.
+    mismatches = []
+    for side, score in (("left", left_score), ("right", right_score)):
+        n_goals = len(m.get(f"{side}_goals") or [])
+        if score > 0 and n_goals != score:
+            mismatches.append(f"{side}: {n_goals} goal(s) vs score {score}")
+    if mismatches:
+        m["ocr_needs_review"] = True
+        logger.warning(
+            "OCR goal/score mismatch (likely a cut-off table row): %s", "; ".join(mismatches)
+        )
 
 
 def _check_proxy_alive(proxy_url: str) -> bool:
@@ -268,13 +370,6 @@ def _check_proxy_alive(proxy_url: str) -> bool:
         if not host:
             return False
         with socket.create_connection((host, port), timeout=2.0):
-            return True
-    except Exception:
-        return False
-        parsed = urlparse(proxy_url if "://" in proxy_url else f"http://{proxy_url}")
-        host = parsed.hostname or "127.0.0.1"
-        port = parsed.port or 4001
-        with socket.create_connection((host, port), timeout=0.5):
             return True
     except Exception:
         return False
@@ -393,6 +488,10 @@ def recognize_match_screenshots_bytes(
                         m["right_goals"] = [clean_player_name(p) for p in m["right_goals"] if clean_player_name(p)]
                         m["left_assists"] = [clean_player_name(p) for p in m["left_assists"] if clean_player_name(p)]
                         m["right_assists"] = [clean_player_name(p) for p in m["right_assists"] if clean_player_name(p)]
+
+                        # Clean team names off the scoreboard plate (level badges, league captions)
+                        m["team1"] = clean_team_name(m.get("team1"))
+                        m["team2"] = clean_team_name(m.get("team2"))
 
                         # Enforce mathematical football laws (assists <= goals)
                         validate_and_sanitize_match_events(m)
