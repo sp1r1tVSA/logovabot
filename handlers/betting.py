@@ -3,7 +3,7 @@ handlers/betting.py
 
 Logovo.bet — Telegram Interactive UI & Betting Engine Handlers.
 Manages user wallets, betting line navigation, single & express slips,
-daily bonus collection, and leaderboard display.
+and leaderboard display.
 """
 
 import html
@@ -109,7 +109,6 @@ async def cmd_bet_hub(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             InlineKeyboardButton("📜 Мои Ставки", callback_data="bet_my_history")
         ],
         [
-            InlineKeyboardButton("🎁 Бонус (+250 🪙)", callback_data="bet_claim_bonus"),
             InlineKeyboardButton("🏆 Топ Капперов", callback_data="bet_leaderboard")
         ]
     ]
@@ -602,33 +601,6 @@ async def cmd_my_bets(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="HTML")
 
 
-async def cb_bet_claim_bonus(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Claim daily bonus via callback button."""
-    query = update.callback_query
-    user_id = update.effective_user.id
-
-    success, val, msg = await asyncio.to_thread(database.claim_daily_bonus, user_id, 250)
-    await query.answer(msg, show_alert=True)
-    await cmd_bet_hub(update, context)
-
-
-async def cmd_bonus(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Direct command /bonus."""
-    if not update.effective_user:
-        return
-
-    user_id = update.effective_user.id
-    if not _check_betting_access(user_id):
-        await update.message.reply_text(
-            "🔒 <b>Logovo.bet временно недоступен</b>\n\n"
-            "<i>Функция ежедневного бонуса станет доступна после открытия букмекерки. 🎰</i>",
-            parse_mode="HTML"
-        )
-        return
-
-    success, val, msg = await asyncio.to_thread(database.claim_daily_bonus, user_id, 250)
-    await update.message.reply_text(msg, parse_mode="HTML")
-
 
 async def cb_bet_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Display top bettors leaderboard."""
@@ -654,23 +626,72 @@ async def cb_bet_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await query.edit_message_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(kb), parse_mode="HTML")
 
 
-def register_betting_handlers(app) -> None:
-    """Register all Logovo.bet commands and callback queries."""
-    app.add_handler(CommandHandler(["bet", "logovobet"], cmd_bet_hub))
-    app.add_handler(CommandHandler(["bonus"], cmd_bonus))
-    app.add_handler(CommandHandler(["mybets"], cmd_my_bets))
-    app.add_handler(CommandHandler(["bet_top", "top_bettors"], cb_bet_leaderboard))
+LEGACY_BET_CALLBACK_PATTERN = (
+    r"^(betting_main_menu|bet_menu_main|bet_view_tours|bet_tour_\d+|"
+    r"bet_match_\d+|bet_add_\d+_.+|bet_view_slip|bet_place_\d+|"
+    r"bet_clear_slip|bet_del_\d+|bet_my_history|bet_claim_bonus|bet_leaderboard)$"
+)
 
-    # `betting_main_menu` — кнопка «🎰 Букмекерская Контора» из главного меню /start.
-    app.add_handler(CallbackQueryHandler(cmd_bet_hub, pattern="^(bet_menu_main|betting_main_menu)$"))
-    app.add_handler(CallbackQueryHandler(cb_bet_view_tours, pattern="^bet_view_tours$"))
-    app.add_handler(CallbackQueryHandler(cb_bet_pick_tour, pattern="^bet_tour_\\d+$"))
-    app.add_handler(CallbackQueryHandler(cb_bet_match_detail, pattern="^bet_match_\\d+$"))
-    app.add_handler(CallbackQueryHandler(cb_bet_add_outcome, pattern="^bet_add_\\d+_.+$"))
-    app.add_handler(CallbackQueryHandler(cb_bet_view_slip, pattern="^bet_view_slip$"))
-    app.add_handler(CallbackQueryHandler(cb_bet_place_amount, pattern="^bet_place_\\d+$"))
-    app.add_handler(CallbackQueryHandler(cb_bet_clear_slip, pattern="^bet_clear_slip$"))
-    app.add_handler(CallbackQueryHandler(cb_bet_remove_match, pattern="^bet_del_\\d+$"))
-    app.add_handler(CallbackQueryHandler(cb_bet_my_history, pattern="^bet_my_history$"))
-    app.add_handler(CallbackQueryHandler(cb_bet_claim_bonus, pattern="^bet_claim_bonus$"))
-    app.add_handler(CallbackQueryHandler(cb_bet_leaderboard, pattern="^bet_leaderboard$"))
+BET_MOVED_TEXT = (
+    "🎰 <b>Logovo.bet переехал в приложение!</b>\n\n"
+    "Все ставки, купоны и статистика теперь доступны только в Telegram Mini App. "
+    "Нажмите кнопку ниже для перехода:"
+)
+
+
+def _get_bet_redirect_markup(context: ContextTypes.DEFAULT_TYPE = None, is_private: bool = True) -> InlineKeyboardMarkup:
+    import config
+    from telegram import WebAppInfo
+    webapp_url = getattr(config, "WEBAPP_URL", "")
+    kb = []
+    if is_private and webapp_url and (webapp_url.startswith("https://") or "localhost" in webapp_url):
+        kb.append([InlineKeyboardButton("🎰 Открыть Logovo.bet", web_app=WebAppInfo(url=webapp_url))])
+    elif webapp_url and webapp_url.startswith("http"):
+        kb.append([InlineKeyboardButton("🎰 Открыть Logovo.bet", url=webapp_url)])
+    else:
+        bot_user = context.bot.username if context and context.bot else ""
+        if bot_user:
+            kb.append([InlineKeyboardButton("🎰 Открыть Logovo.bet", url=f"https://t.me/{bot_user}?start=miniapp")])
+        else:
+            kb.append([InlineKeyboardButton("🎰 Открыть Logovo.bet", url="https://t.me")])
+    return InlineKeyboardMarkup(kb)
+
+
+async def cmd_bet_moved(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Redirect deprecated betting commands to Mini App."""
+    if not update.effective_message:
+        return
+    is_private = bool(update.effective_chat and update.effective_chat.type == "private")
+    markup = _get_bet_redirect_markup(context, is_private=is_private)
+    await update.effective_message.reply_text(BET_MOVED_TEXT, reply_markup=markup, parse_mode="HTML")
+
+
+async def cb_bet_moved(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Redirect legacy inline betting buttons to Mini App."""
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+    is_private = bool(update.effective_chat and update.effective_chat.type == "private")
+    markup = _get_bet_redirect_markup(context, is_private=is_private)
+    try:
+        await query.edit_message_text(BET_MOVED_TEXT, reply_markup=markup, parse_mode="HTML")
+    except Exception:
+        try:
+            if update.effective_chat:
+                await update.effective_chat.send_message(BET_MOVED_TEXT, reply_markup=markup, parse_mode="HTML")
+        except Exception:
+            pass
+
+
+def register_betting_handlers(app) -> None:
+    """Register Logovo.bet handlers.
+    In-chat betting UI is deprecated in favor of Telegram Mini App.
+    Legacy commands and callback queries redirect the user to the Mini App.
+    """
+    # Deprecated in-chat commands -> redirect to Mini App
+    app.add_handler(CommandHandler(["bet", "logovobet", "mybets", "bet_top", "top_bettors", "bonus"], cmd_bet_moved))
+
+    # Deprecated callback buttons from previously sent messages -> redirect to Mini App
+    app.add_handler(CallbackQueryHandler(cb_bet_moved, pattern=LEGACY_BET_CALLBACK_PATTERN))
+

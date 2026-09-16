@@ -22,9 +22,6 @@ logger = logging.getLogger(__name__)
 async def post_init(application: Application) -> None:
     await application.bot.set_my_commands([
         BotCommand("start", "Открыть главное меню"),
-        BotCommand("bet", "Букмекерская контора Logovo.bet"),
-        BotCommand("bonus", "Ежедневный бонус монет"),
-        BotCommand("mybets", "Мои ставки (Ординары и Экспрессы)")
     ])
 
     # 🎰 Start Logovo.bet Telegram Mini App API server

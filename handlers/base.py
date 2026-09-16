@@ -195,13 +195,9 @@ def get_main_inline_keyboard(telegram_id: int) -> InlineKeyboardMarkup:
     
     webapp_url = getattr(config, "WEBAPP_URL", "")
     if webapp_url and (webapp_url.startswith("https://") or "localhost" in webapp_url):
-        keyboard.append([InlineKeyboardButton("Logovo.bet", web_app=WebAppInfo(url=webapp_url))])
+        keyboard.append([InlineKeyboardButton("🎰 Logovo.bet", web_app=WebAppInfo(url=webapp_url))])
     elif webapp_url and webapp_url.startswith("http"):
-        keyboard.append([InlineKeyboardButton("Logovo.bet", url=webapp_url)])
-
-    # Букмекерская контора внутри самого бота: кнопка показывается всем и всегда,
-    # независимо от того, настроен ли внешний WEBAPP_URL для Mini App.
-    keyboard.append([InlineKeyboardButton("🎰 Букмекерская Контора", callback_data="betting_main_menu")])
+        keyboard.append([InlineKeyboardButton("🎰 Logovo.bet", url=webapp_url)])
 
     keyboard.append([InlineKeyboardButton("👤 Мой Кабинет", callback_data=CB_MENU_CABINET)])
     if is_admin(telegram_id):
