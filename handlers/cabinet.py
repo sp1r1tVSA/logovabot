@@ -2515,7 +2515,8 @@ def build_formatted_match_post(
     is_pm: bool = False,
     pm_title: str = "🎉 <b>Результат успешно занесен в лигу!</b>",
     match_id: int | None = None,
-    is_draft: bool = False
+    is_draft: bool = False,
+    mvp_player: str | None = None
 ) -> str:
     """
     Constructs a unified match result text block with goals and assists for PM notifications and group posts.
@@ -2554,6 +2555,10 @@ def build_formatted_match_post(
             lines.append(f"🎯 <b>Ассисты ({away_team_esc}):</b> <i>не отображаются в данном формате скриншота</i>")
         else:
             lines.append(f"🎯 <b>Ассисты ({away_team_esc}):</b> {safe_escape(a_assists_str) if a_assists_str else 'Нет'}")
+
+    # 👑 Игрок матча — только если золотая корона действительно распознана.
+    if mvp_player and str(mvp_player).strip():
+        lines.append(f"👑 <b>Игрок матча (MVP):</b> {safe_escape(str(mvp_player).strip())}")
 
     events_block = ("\n\n" + "\n".join(lines)) if lines else ""
 

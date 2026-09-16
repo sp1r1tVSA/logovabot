@@ -2980,6 +2980,13 @@
   color: #38bdf8;
 }
 
+/* 👑 Награда «Игрок матча»: фиолетовый, чтобы не спорить с золотом голов. */
+.club-stat-badge.mvp {
+  background: rgba(167, 139, 250, 0.14);
+  border-color: rgba(167, 139, 250, 0.34);
+  color: #a78bfa;
+}
+
 .club-squad-note {
   padding: 0 4px;
   font-size: 0.68rem;

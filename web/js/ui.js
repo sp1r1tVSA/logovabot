@@ -652,7 +652,30 @@ export class UIRenderer {
     };
   }
 
-  static renderTournaments(standings, results, topScorers, activeTab = 'standings', form = {}, sort = null) {
+  /**
+   * Одна строка списка лидеров: место, логотип клуба, имя, клуб и число справа.
+   * Общая для бомбардиров, ассистентов и обладателей награды «Игрок матча» —
+   * меняются только иконка и поле со значением.
+   */
+  static renderLeaderRows(rows, icon, valueOf) {
+    return rows.map((row, idx) => `
+      <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 4px; border-bottom: 1px solid rgba(255,255,255,0.04);">
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <span style="font-weight: 800; color: ${idx < 3 ? 'var(--accent-gold)' : 'var(--text-secondary)'}; width: 22px;">#${idx + 1}</span>
+          ${renderTeamLogoHtml(row.team_name, 26)}
+          <div>
+            <div style="font-weight: 700; color: #fff; font-size: 0.88rem;">${escapeHtml(row.player_name || '')}</div>
+            <div style="font-size: 0.75rem; color: var(--text-muted);">${escapeHtml(row.team_name || '—')}</div>
+          </div>
+        </div>
+        <div style="font-family: 'Outfit', sans-serif; font-weight: 900; color: var(--accent-gold); font-size: 1.05rem;">
+          ${icon} ${valueOf(row)}
+        </div>
+      </div>
+    `).join('');
+  }
+
+  static renderTournaments(standings, results, topStats = {}, activeTab = 'standings', form = {}, sort = null, leaderTab = 'scorers') {
     const container = document.getElementById('tournaments-content-container');
     if (!container) return;
 
@@ -763,29 +786,48 @@ export class UIRenderer {
         `;
       }).join('');
     } else if (activeTab === 'scorers') {
-      if (!topScorers || topScorers.length === 0) {
-        container.innerHTML = '<div style="text-align: center; padding: 40px; color: var(--text-muted);">Список бомбардиров формируется.</div>';
-        return;
-      }
-      container.innerHTML = `
-        <div style="background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 10px;">
-          ${topScorers.map((sc, idx) => `
-            <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 4px; border-bottom: 1px solid rgba(255,255,255,0.04);">
-              <div style="display: flex; align-items: center; gap: 10px;">
-                <span style="font-weight: 800; color: ${idx < 3 ? 'var(--accent-gold)' : 'var(--text-secondary)'}; width: 22px;">#${idx + 1}</span>
-                ${renderTeamLogoHtml(sc.team_name, 26)}
-                <div>
-                  <div style="font-weight: 700; color: #fff; font-size: 0.88rem;">${sc.player_name}</div>
-                  <div style="font-size: 0.75rem; color: var(--text-muted);">${sc.team_name}</div>
-                </div>
-              </div>
-              <div style="font-family: 'Outfit', sans-serif; font-weight: 900; color: var(--accent-gold); font-size: 1.05rem;">
-                ⚽ ${sc.goals ?? sc.total_goals ?? 0}
-              </div>
-            </div>
+      const leaderViews = {
+        scorers: {
+          label: '⚽ Бомбардиры',
+          icon: '⚽',
+          empty: 'Список бомбардиров формируется.',
+          rows: topStats?.top_scorers || [],
+          valueOf: (r) => r.goals ?? r.total_goals ?? 0
+        },
+        assists: {
+          label: '🎯 Ассистенты',
+          icon: '🎯',
+          empty: 'Список ассистентов формируется.',
+          rows: topStats?.top_assists || [],
+          valueOf: (r) => r.assists ?? r.total_assists ?? 0
+        },
+        mvps: {
+          label: '👑 Лидеры MVP',
+          icon: '👑',
+          empty: 'Наград «Игрок матча» пока нет.',
+          rows: topStats?.top_mvps || [],
+          valueOf: (r) => r.mvp_count ?? 0
+        }
+      };
+
+      const activeLeader = leaderViews[leaderTab] ? leaderTab : 'scorers';
+      const view = leaderViews[activeLeader];
+
+      const tabsHtml = `
+        <div class="mc-tabs">
+          ${Object.entries(leaderViews).map(([key, v]) => `
+            <button class="mc-subtab-btn${key === activeLeader ? ' active' : ''}" data-leader-tab="${key}">${v.label}</button>
           `).join('')}
         </div>
       `;
+
+      const bodyHtml = view.rows.length === 0
+        ? `<div style="text-align: center; padding: 40px; color: var(--text-muted);">${view.empty}</div>`
+        : `<div style="background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 10px;">
+             ${UIRenderer.renderLeaderRows(view.rows, view.icon, view.valueOf)}
+           </div>`;
+
+      container.innerHTML = tabsHtml + bodyHtml;
     }
   }
 
@@ -1747,8 +1789,9 @@ export class UIRenderer {
 
     const topScorer = meta.top_scorer ? meta.top_scorer.player_name : null;
     const topAssistant = meta.top_assistant ? meta.top_assistant.player_name : null;
+    const topMvp = meta.top_mvp ? meta.top_mvp.player_name : null;
 
-    const leadersHtml = (topScorer || topAssistant) ? `
+    const leadersHtml = (topScorer || topAssistant || topMvp) ? `
       <div class="club-leaders">
         ${topScorer ? `
           <div class="club-leader-card">
@@ -1764,12 +1807,20 @@ export class UIRenderer {
             <span class="club-leader-value">${meta.top_assistant.assists}</span>
           </div>
         ` : ''}
+        ${topMvp ? `
+          <div class="club-leader-card">
+            <span class="club-leader-label">👑 MVP Клуба</span>
+            <span class="club-leader-name">${escapeHtml(topMvp)}</span>
+            <span class="club-leader-value">${meta.top_mvp.mvp_count}</span>
+          </div>
+        ` : ''}
       </div>
     ` : '';
 
     const rowsHtml = players.map((p, idx) => {
       const isLeader = (topScorer && p.player_name === topScorer) ||
-                       (topAssistant && p.player_name === topAssistant);
+                       (topAssistant && p.player_name === topAssistant) ||
+                       (topMvp && p.player_name === topMvp);
       return `
         <div class="club-player-row ${isLeader ? 'leader' : ''}">
           <span class="club-player-num">${idx + 1}</span>
@@ -1779,6 +1830,7 @@ export class UIRenderer {
           </div>
           <span class="club-stat-badge goals" title="Голы">⚽ ${p.goals || 0}</span>
           <span class="club-stat-badge assists" title="Ассисты">👟 ${p.assists || 0}</span>
+          ${p.mvp_count ? `<span class="club-stat-badge mvp" title="Награды «Игрок матча»">👑 ${p.mvp_count}</span>` : ''}
         </div>
       `;
     }).join('');

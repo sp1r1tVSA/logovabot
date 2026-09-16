@@ -132,7 +132,8 @@ async def handle_get_cabinet_matches(request: web.Request) -> web.Response:
 async def handle_get_cabinet_squad(request: web.Request) -> web.Response:
     """
     GET /api/cabinet/squad
-    Состав клуба с индивидуальной статистикой (голы, ассисты) и лидерами клуба.
+    Состав клуба с индивидуальной статистикой (голы, ассисты, награды MVP)
+    и лидерами клуба.
     """
     user_info, err = _auth(request)
     if err is not None:
@@ -144,7 +145,8 @@ async def handle_get_cabinet_squad(request: web.Request) -> web.Response:
         if not team_name:
             return web.json_response({
                 "status": "ok", "registered": False,
-                "players": [], "top_scorer": None, "top_assistant": None
+                "players": [], "top_scorer": None, "top_assistant": None,
+                "top_mvp": None
             })
 
         squad = await asyncio.to_thread(database.get_cabinet_squad_stats, team_name)
@@ -159,6 +161,7 @@ async def handle_get_cabinet_squad(request: web.Request) -> web.Response:
         "players": squad.get("players", []),
         "top_scorer": squad.get("top_scorer"),
         "top_assistant": squad.get("top_assistant"),
+        "top_mvp": squad.get("top_mvp"),
     })
 
 

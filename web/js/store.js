@@ -26,7 +26,10 @@ class StateStore {
       standings: [],
       standingsForm: {},
       results: [],
-      topScorers: [],
+      // Лидеры дивизиона: бомбардиры, ассистенты и обладатели награды «Игрок матча».
+      // Ключи повторяют ответ /api/tournaments/{id}/top-scorers, чтобы не плодить
+      // переименования между API и рендером.
+      tournamentTopStats: { top_scorers: [], top_assists: [], top_mvps: [] },
       myBets: [],
       myBetsFilter: 'all',
       savedCoupons: [],
@@ -46,7 +49,7 @@ class StateStore {
       // Вкладка «Мой Клуб» (личный кабинет игрока)
       myClub: { overview: null, matches: [], squad: [] },
       myClubRecent: [],
-      myClubSquadMeta: { top_scorer: null, top_assistant: null },
+      myClubSquadMeta: { top_scorer: null, top_assistant: null, top_mvp: null },
       myClubSubTab: 'matches', // 'matches' | 'squad' | 'history'
       myClubLoading: false,
       // Sports Intelligence State (LIVE-центр удалён)
@@ -142,10 +145,16 @@ class StateStore {
     this.notify();
   }
 
-  setTournamentData(standings, results, topScorers, form = null) {
+  setTournamentData(standings, results, topStats, form = null) {
     if (standings) this.state.standings = standings;
     if (results) this.state.results = results;
-    if (topScorers) this.state.topScorers = topScorers;
+    if (topStats) {
+      this.state.tournamentTopStats = {
+        top_scorers: topStats.top_scorers || [],
+        top_assists: topStats.top_assists || [],
+        top_mvps: topStats.top_mvps || []
+      };
+    }
     // Форма последних матчей приходит вместе с таблицей; пустой ответ её не стирает.
     if (form) this.state.standingsForm = form;
     this.notify();
@@ -200,9 +209,9 @@ class StateStore {
     this.notify();
   }
 
-  setMyClubSquad(players, topScorer = null, topAssistant = null) {
+  setMyClubSquad(players, topScorer = null, topAssistant = null, topMvp = null) {
     this.state.myClub.squad = players || [];
-    this.state.myClubSquadMeta = { top_scorer: topScorer, top_assistant: topAssistant };
+    this.state.myClubSquadMeta = { top_scorer: topScorer, top_assistant: topAssistant, top_mvp: topMvp };
     this.notify();
   }
 

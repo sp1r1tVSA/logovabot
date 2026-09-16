@@ -3,15 +3,17 @@
  * Comprehensive App Controller and Event Orchestrator for Logovo.bet (v2.0).
  */
 
-import { api } from './api.js?v=2.4.7';
-import { store } from './store.js?v=2.4.7';
-import { tgBridge } from './tg.js?v=2.4.7';
-import { UIRenderer } from './ui.js?v=2.4.7';
-import { ParticleEffects } from './effects.js?v=2.4.7';
+import { api } from './api.js?v=2.4.9';
+import { store } from './store.js?v=2.4.9';
+import { tgBridge } from './tg.js?v=2.4.9';
+import { UIRenderer } from './ui.js?v=2.4.9';
+import { ParticleEffects } from './effects.js?v=2.4.9';
 
 class AppController {
   constructor() {
     this.currentTournamentTab = 'standings';
+    // Какой список лидеров открыт внутри вкладки «Лидеры»: 'scorers' | 'assists' | 'mvps'.
+    this.currentLeaderTab = 'scorers';
     // Сортировка таблицы: по умолчанию как её отдаёт бэкенд — по очкам, вниз.
     this.standingsSort = { key: 'points', dir: 'desc' };
     this.init();
@@ -28,7 +30,7 @@ class AppController {
       UIRenderer.renderRecommendations(state.recommendations, state.searchQuery);
       UIRenderer.renderMatches(state.tours, state.marketCategoryFilter, state.searchQuery, state.selectedDivisionId);
       UIRenderer.renderMatchCenter(state.matchDetail, state.matchStats, state.matchH2H, state.matchInsights, state.matchLive, state.matchMarkets, state.matchCenterSubTab);
-      UIRenderer.renderTournaments(state.standings, state.results, state.topScorers, this.currentTournamentTab, state.standingsForm, this.standingsSort);
+      UIRenderer.renderTournaments(state.standings, state.results, state.tournamentTopStats, this.currentTournamentTab, state.standingsForm, this.standingsSort, this.currentLeaderTab);
       UIRenderer.renderPredictionsHistory(state.myBets, state.myBetsFilter);
       UIRenderer.renderSavedCoupons(state.savedCoupons);
       UIRenderer.renderProfile(state.user, state.progression, state.myStats, state.achievements);
@@ -177,10 +179,11 @@ class AppController {
     UIRenderer.renderTournaments(
       store.state.standings,
       store.state.results,
-      store.state.topScorers,
+      store.state.tournamentTopStats,
       tab || this.currentTournamentTab,
       store.state.standingsForm,
-      this.standingsSort
+      this.standingsSort,
+      this.currentLeaderTab
     );
   }
 
@@ -195,7 +198,13 @@ class AppController {
       store.setTournamentData(
         stRes.status === 'ok' ? stRes.standings : [],
         resRes.status === 'ok' ? resRes.results : [],
-        topRes.status === 'ok' ? topRes.top_scorers : [],
+        topRes.status === 'ok'
+          ? {
+              top_scorers: topRes.top_scorers || [],
+              top_assists: topRes.top_assists || [],
+              top_mvps: topRes.top_mvps || []
+            }
+          : { top_scorers: [], top_assists: [], top_mvps: [] },
         stRes.status === 'ok' ? (stRes.form || {}) : {}
       );
     } catch (e) {
@@ -237,7 +246,7 @@ class AppController {
         store.setMyClubMatches(matchesRes.matches || [], matchesRes.recent || []);
       }
       if (squadRes && squadRes.status === 'ok') {
-        store.setMyClubSquad(squadRes.players || [], squadRes.top_scorer, squadRes.top_assistant);
+        store.setMyClubSquad(squadRes.players || [], squadRes.top_scorer, squadRes.top_assistant, squadRes.top_mvp);
       }
     } catch (e) {
       console.warn("Could not load My Club data:", e);
@@ -536,6 +545,16 @@ class AppController {
     const tournamentsContainer = document.getElementById('tournaments-content-container');
     if (tournamentsContainer) {
       tournamentsContainer.addEventListener('click', (e) => {
+        // 9c. Переключатель списков лидеров (бомбардиры / ассистенты / MVP).
+        // Кнопки живут внутри перерисовываемого контейнера — только делегирование.
+        const leaderBtn = e.target.closest('[data-leader-tab]');
+        if (leaderBtn) {
+          this.currentLeaderTab = leaderBtn.dataset.leaderTab;
+          this.renderTournamentTab(this.currentTournamentTab);
+          tgBridge.hapticImpact('light');
+          return;
+        }
+
         const th = e.target.closest('th[data-sort-key]');
         if (!th) return;
         const key = th.dataset.sortKey;
