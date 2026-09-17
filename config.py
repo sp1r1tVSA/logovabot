@@ -21,12 +21,19 @@ def _get_admin_ids() -> list[int]:
 ADMIN_IDS = _get_admin_ids()
 _env_db_path = os.getenv("LEAGUE_SQLITE_PATH", "league.db")
 DB_PATH = str(PROJECT_ROOT / _env_db_path) if not os.path.isabs(_env_db_path) else _env_db_path
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
+def _get_gemini_api_keys() -> list[str]:
+    keys_raw = os.getenv("GEMINI_API_KEY", "")
+    return [k.strip() for k in keys_raw.split(",") if k.strip()]
+
+GEMINI_API_KEYS = _get_gemini_api_keys()
+GEMINI_API_KEY = GEMINI_API_KEYS[0] if GEMINI_API_KEYS else ""
+
 def _get_gemini_chat_keys() -> list[str]:
     keys_raw = os.getenv("GEMINI_CHAT_API_KEY", "")
     return [k.strip() for k in keys_raw.split(",") if k.strip()]
 
 GEMINI_CHAT_API_KEYS = _get_gemini_chat_keys()
+GEMINI_CHAT_API_KEY = GEMINI_CHAT_API_KEYS[0] if GEMINI_CHAT_API_KEYS else ""
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite").strip()
 # ─── Phase 8: Real Sports Provider Configuration ──────────────────────────────
 SPORTS_PROVIDER = os.getenv("SPORTS_PROVIDER", "auto").strip()
@@ -161,6 +168,6 @@ TRACKER_SESSION_TTL_SECONDS = int(os.getenv("TRACKER_SESSION_TTL_SECONDS", "8640
 API_RATE_LIMIT_TRACKER_RPM = int(os.getenv("API_RATE_LIMIT_TRACKER_RPM", "180"))
 # Кадр плашки события: 2 МБ с запасом хватает на скриншот телефона в JPEG.
 TRACKER_MAX_SCREENSHOT_BYTES = int(os.getenv("TRACKER_MAX_SCREENSHOT_BYTES", str(2 * 1024 * 1024)))
-# Распознавание фамилии с кадра — необязательный шаг, его можно выключить.
-TRACKER_OCR_ENABLED = os.getenv("TRACKER_OCR_ENABLED", "true").strip().lower() in ("true", "1", "yes")
+# Распознавание фамилии с кадра — отключено по умолчанию для экономии лимитов Gemini API.
+TRACKER_OCR_ENABLED = os.getenv("TRACKER_OCR_ENABLED", "false").strip().lower() in ("true", "1", "yes")
 

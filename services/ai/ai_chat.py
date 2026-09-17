@@ -2,6 +2,7 @@ import os
 import base64
 import json
 import logging
+import threading
 import urllib.request
 import urllib.error
 import config
@@ -9,6 +10,56 @@ import database
 from services.ai import persona_base
 
 logger = logging.getLogger(__name__)
+
+GEMINI_CHAT_MODELS = [
+    "gemini-3.1-flash-lite",
+    "gemini-3.5-flash-lite",
+    "gemini-2.5-flash-lite",
+]
+
+_chat_key_index = 0
+_chat_key_lock = threading.Lock()
+
+def get_ordered_chat_keys(api_key: str | None = None) -> list[str]:
+    """
+    Возвращает список API-ключей Gemini для чата и аналитики с ротацией Round-Robin.
+    Каждый следующий вызов сдвигает начальный ключ, распределяя запросы
+    равномерно по пулу GEMINI_CHAT_API_KEYS.
+    """
+    if api_key:
+        return [k.strip() for k in api_key.split(",") if k.strip()]
+
+    keys = getattr(config, "GEMINI_CHAT_API_KEYS", [])
+    if not keys:
+        single = (getattr(config, "GEMINI_CHAT_API_KEY", "") or "").strip()
+        keys = [k.strip() for k in single.split(",") if k.strip()]
+
+    if not keys:
+        return []
+    if len(keys) == 1:
+        return keys
+
+    global _chat_key_index
+    with _chat_key_lock:
+        idx = _chat_key_index % len(keys)
+        _chat_key_index += 1
+        return keys[idx:] + keys[:idx]
+
+_chat_model_index = 0
+_chat_model_lock = threading.Lock()
+
+def get_ordered_chat_models() -> list[str]:
+    """
+    Возвращает список моделей Gemini для чата и аналитики с ротацией Round-Robin.
+    Каждый следующий вызов сдвигает начальную модель, балансируя нагрузку
+    между всеми тремя моделями:
+    gemini-3.1-flash-lite -> gemini-3.5-flash-lite -> gemini-2.5-flash-lite.
+    """
+    global _chat_model_index
+    with _chat_model_lock:
+        idx = _chat_model_index % len(GEMINI_CHAT_MODELS)
+        _chat_model_index += 1
+        return GEMINI_CHAT_MODELS[idx:] + GEMINI_CHAT_MODELS[:idx]
 
 def generate_chat_reply(
     user_id: int, 
@@ -23,20 +74,10 @@ def generate_chat_reply(
     Sends chat history and current user text or audio to Gemini for a conversational response.
     Returns the text reply from the AI.
     """
-    api_keys = config.GEMINI_CHAT_API_KEYS
-    if not api_keys:
+    keys_to_try = get_ordered_chat_keys()
+    if not keys_to_try:
         logger.warning("GEMINI_CHAT_API_KEY is not set.")
         return "Ошибка: Не настроен ключ для чата (GEMINI_CHAT_API_KEY)."
-
-    import random
-    keys_to_try = list(api_keys)
-    random.shuffle(keys_to_try)
-
-    # List of valid, official Google Gemini API models in order of preference
-    candidate_models = [
-        "gemini-3.1-flash-lite",
-        "gemini-3.5-flash-lite",
-    ]
 
     if mode == "persona2":
         system_instruction = _build_persona2_instruction(context_data)
@@ -82,7 +123,7 @@ def generate_chat_reply(
     from services.ai.ai_recognizer import _get_gemini_opener
     opener = _get_gemini_opener()
 
-    for model_name in candidate_models:
+    for model_name in get_ordered_chat_models():
         base_url = os.environ.get("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com").rstrip("/")
         for api_key in keys_to_try:
             url = f"{base_url}/v1beta/models/{model_name}:generateContent?key={api_key}"
@@ -108,10 +149,11 @@ def generate_chat_reply(
                     return "\n".join(cleaned_lines).strip()
                     
             except urllib.error.HTTPError as e:
-                if e.code in (400, 404, 429):
-                    logger.warning(f"AI Chat: Model '{model_name}' HTTP {e.code} (rate-limit / location / 404) with current key. Trying fallback...")
+                key_suffix = f"...{api_key[-4:]}" if len(api_key) > 4 else "***"
+                if e.code in (400, 403, 404, 429, 503):
+                    logger.warning(f"AI Chat: Model '{model_name}' (key {key_suffix}) HTTP {e.code} (rate-limit / quota / 404). Trying next key/model fallback...")
                 else:
-                    logger.warning(f"AI Chat: Model '{model_name}' HTTP Error {e.code}: {e}")
+                    logger.warning(f"AI Chat: Model '{model_name}' (key {key_suffix}) HTTP Error {e.code}: {e}")
                 continue
             except Exception as e:
                 logger.exception(f"AI Chat: Unexpected error generating reply with model '{model_name}'")

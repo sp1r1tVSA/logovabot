@@ -24,14 +24,16 @@ import urllib.request
 
 import config
 import database
+from services.ai.ai_chat import (
+    GEMINI_CHAT_MODELS,
+    get_ordered_chat_keys,
+    get_ordered_chat_models,
+)
 
 logger = logging.getLogger(__name__)
 
-# Те же модели и тот же порядок предпочтения, что и в services/ai/ai_chat.py
-CANDIDATE_MODELS = [
-    "gemini-3.1-flash-lite",
-    "gemini-3.5-flash-lite",
-]
+# Те же 3 модели с ротацией Round-Robin, что и в services/ai/ai_chat.py
+CANDIDATE_MODELS = GEMINI_CHAT_MODELS
 
 PREVIEW_MAX_CHARS = 3500
 CAPTION_MAX_CHARS = 1000
@@ -275,15 +277,12 @@ _DIGEST_INSTRUCTION = (
 )
 
 
-def _call_gemini(system_text: str, payload: dict, max_output_tokens: int) -> str | None:
+def _call_gemini(system_text: str, payload: dict, max_output_tokens: int, api_key: str | None = None) -> str | None:
     """Один вызов Gemini по той же механике, что и services/ai/ai_chat.py."""
-    api_keys = config.GEMINI_CHAT_API_KEYS
-    if not api_keys:
+    keys_to_try = get_ordered_chat_keys(api_key)
+    if not keys_to_try:
         logger.warning("Round analytics: GEMINI_CHAT_API_KEY is not set, falling back to a template.")
         return None
-
-    keys_to_try = list(api_keys)
-    random.shuffle(keys_to_try)
 
     request_payload = {
         "system_instruction": {"parts": [{"text": system_text}]},
@@ -302,9 +301,9 @@ def _call_gemini(system_text: str, payload: dict, max_output_tokens: int) -> str
     opener = _get_gemini_opener()
     base_url = os.environ.get("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com").rstrip("/")
 
-    for model_name in CANDIDATE_MODELS:
-        for api_key in keys_to_try:
-            url = f"{base_url}/v1beta/models/{model_name}:generateContent?key={api_key}"
+    for model_name in get_ordered_chat_models():
+        for target_key in keys_to_try:
+            url = f"{base_url}/v1beta/models/{model_name}:generateContent?key={target_key}"
             req = urllib.request.Request(
                 url,
                 data=payload_bytes,
@@ -322,7 +321,10 @@ def _call_gemini(system_text: str, payload: dict, max_output_tokens: int) -> str
                 text = result["candidates"][0]["content"]["parts"][0]["text"]
                 return text.replace("**", "").replace("##", "").strip()
             except urllib.error.HTTPError as e:
-                logger.warning(f"Round analytics: model '{model_name}' HTTP {e.code}, trying fallback.")
+                key_suffix = f"...{target_key[-4:]}" if len(target_key) > 4 else "***"
+                logger.warning(f"Round analytics: model '{model_name}' (key {key_suffix}) HTTP {e.code}, trying fallback.")
+                if e.code in (400, 403, 404, 429, 503):
+                    continue
                 continue
             except Exception:
                 logger.exception(f"Round analytics: unexpected error calling model '{model_name}'.")
