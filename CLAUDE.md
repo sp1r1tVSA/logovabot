@@ -7,8 +7,10 @@ e-sports championships: divisions and rounds, match result intake via AI screens
 standings and Pillow-rendered infographics, a debt/warn discipline system, and a virtual
 prediction market ("Logovo.bet") exposed through a Telegram Mini App.
 
-The project is well past MVP — ~200 Python modules, 60 SQLite tables, 78 test files, ten
-completed development phases documented in the `PHASE_*.md` reports at the repo root.
+The project is well past MVP — 246 Python files (117 application modules + 129 pytest
+files), 59 SQLite tables, and ten completed development phases documented in the
+`PHASE_*.md` reports at the repo root. Post-phase work is logged in the numbered
+`FIX_*.md` notes and the `*_AUDIT.md` reports beside them.
 
 ---
 
@@ -20,7 +22,10 @@ completed development phases documented in the `PHASE_*.md` reports at the repo 
 - Pillow + `pillow-heif` + `opencv-python-headless` + `numpy` for graphics and image prep
 - `aiohttp` also serves the Mini App API; deployed as a single `worker: python main.py`
 
-`requirements.txt` is runtime-only. `pytest` is a dev dependency and is not listed there.
+`requirements.txt` is runtime-only — the worker installs just that file, so no test tooling
+may be added to it. `requirements-dev.txt` pulls it in via `-r` and adds `pytest` and
+`pytest-xdist`. Deployment artefacts at the root: `Procfile` (`worker: python main.py`),
+`Dockerfile`, `.dockerignore`.
 
 ---
 
@@ -50,13 +55,35 @@ Run serially when debugging shared state:
 python -m pytest tests/ -n0
 ```
 
+Install the dev dependencies first:
+
+```bash
+pip install -r requirements-dev.txt
+```
+
 `pytest.ini` is the only config (there is no `pyproject.toml` / `setup.cfg`). It sets
 `testpaths = tests` and `addopts = -q -n auto --dist loadfile`, so runs are parallel across
 cores by default, with each file pinned to one worker. Tests that share module or class
-state within a file therefore keep their order, but tests in *different* files run
-concurrently against the same `league.db` — give fixtures unique names (see the `uuid4`
-suffixes in `tests/test_chat_division_scope.py`) rather than assuming exclusive DB access.
-`markers` declares `slow`, excluded via `-m "not slow"`.
+state within a file therefore keep their order. `markers` declares `slow`, excluded via
+`-m "not slow"`.
+
+The repo-root `conftest.py` is the test bootstrap and does the DB isolation, because
+`config.py` resolves `DB_PATH` at import time:
+
+- it sets `LEAGUE_SQLITE_PATH` to a per-process temp file before anything imports `config`,
+  and provides placeholder `TELEGRAM_BOT_TOKEN` / `ADMIN_IDS` via `setdefault` for the
+  module-level `from config import …` in many test files;
+- a module-scoped autouse fixture then gives **every test module its own** `league.db` and
+  calls `init_db()` on it, so files are not order-dependent and the repo-root `league.db`
+  is never touched;
+- further autouse fixtures disable API rate limiting, keep `config.ADMIN_IDS` the same list
+  object across the process, and drop the cached per-thread SQLite connection around each
+  test (needed on Windows, where an open handle silently blocks file deletion).
+
+CI is `.github/workflows/tests.yml` — Python 3.11, `pip install -r requirements-dev.txt`,
+`python -m pytest tests/` on pushes to `main` and on every PR. It passes deliberately fake
+secrets as env vars; real values live only in the server `.env` and must never become
+repository secrets.
 
 ---
 
@@ -71,20 +98,29 @@ never prevents the bot itself from starting. Preserve that isolation.
 |---|---|
 | `main.py` | Entrypoint, `post_init`, background job registration |
 | `config.py` | All env parsing. Every setting must be read here, never via `os.getenv` at a call site |
-| `database.py` | ~8.7k lines: schema, migrations, and every repository function |
+| `database.py` | ~10.5k lines: schema, migrations, and every repository function |
 | `constants.py` | Shared enums and literals |
 | `club_registry.py` | Canonical club names, aliases, and the tiered name resolver. Imports `config` only |
-| `handlers/` | Telegram entrypoints — `admin`, `cabinet`, `drafts`, `betting`, `chat`, `topic_management`, `text_commands`, `base` |
-| `services/ai/` | `ai_recognizer.py` (Gemini Vision OCR), `ai_chat.py` («Темшик» persona), `persona_base.py` |
-| `services/graphics/` | Pillow renderers: standings tables, club/player/FC cards, schedules, top-stats |
-| `services/sports/` + `sports_provider.py` | External live-football provider adapters |
-| `services/` (root) | Betting/market engines, ELO, Poisson, risk, settlement, gamification, seasons |
-| `api/` | `aiohttp` Mini App API — `server.py`, `auth.py`, and `routes_*.py` modules |
-| `web/` | Mini App frontend (static `index.html`, `css/`, `js/`) |
-| `scripts/` | One-off operational scripts (DB audit, backfills, cache refresh) |
-| `tests/` | 78 pytest files, one per feature area |
+| `conftest.py` | Test bootstrap: per-module temp SQLite DB and the autouse fixtures (see Commands) |
+| `handlers/` (11 modules) | Telegram entrypoints — `admin`, `cabinet`, `drafts`, `betting`, `chat`, `topic_management`, `text_commands`, `squad_ai`, `tracker`, `base` |
+| `services/ai/` | `ai_recognizer.py` (match-result Gemini Vision OCR), `squad_recognizer.py` (lineup OCR), `ai_chat.py` («Темшик» persona), `persona_base.py` |
+| `services/graphics/` (9 modules) | Pillow renderers: standings tables, club/player/FC cards, club schedules, round digests, top-stats, `division_theme.py`, `player_photos.py` |
+| `services/sports/` + `sports_provider.py` | External live-football provider adapters plus `cache`, `circuit`, `limiter`, `freshness`, `health`, `odds_sync` |
+| `services/` (root, ~39 modules) | Betting/market engines, ELO, Poisson, risk, settlement, gamification, seasons, `topic_cache.py` |
+| `api/` (18 modules) | `aiohttp` Mini App API — `server.py`, `auth.py`, `rate_limiter.py`, and 15 `routes_*.py` modules |
+| `web/` | Mini App frontend (static `index.html`, `css/`, `js/` — `api`, `app`, `effects`, `store`, `tg`, `ui`) |
+| `utils/` | `media_utils.py`, a thin re-export wrapper over `services/animation_sender.py` |
+| `scripts/` (10 scripts) | One-off operational scripts (DB audit, backfills, imports, cache refresh, season reset) |
+| `tests/` | 129 `test_*.py` files, one per feature area; no `__init__.py`, no local `conftest.py` |
+| `assets/`, `players_cache/` | Club logos, OCR crop scratch space, cached generated player cards |
+| `tasks/`, `docs/`, `sandbox/` | Working plan/todo notes, `PURGE_SEASON_GUIDE.md`, and throwaway preview scripts |
+| `.github/workflows/` | `tests.yml` — the pytest CI job |
 
 `handlers/base.py` holds shared helpers, including the role checks described below.
+`handlers/squad_ai.py` exists as its own module because `handlers/admin.py` already imports
+from `handlers/cabinet.py` and both need it. `handlers/tracker.py` + `api/routes_tracker.py`
+serve the Logovo Tracker mobile app: `/tracker` and `/app` issue a single-use 4-digit PIN,
+valid 10 minutes, that the app exchanges for a session token.
 
 ### Handler registration order matters
 
@@ -176,6 +212,12 @@ connection is closed by a SQLite authorizer) and `--emit-config` prints a ready 
 Three job-queue tasks drive it — deadline reminders and the debt lifecycle tracker every
 30 min, a debts digest to the ПРЕДЫ thread every 12 h. `MAX_WARNS_LIMIT = 4`.
 
+`register_jobs()` in `main.py` schedules six more beyond those three, each in its own
+try/except block: live provider sync (45 s), intelligence cache (5 min), the notification
+queue (15 s), bet settlement (60 s), and the round preview / round digest posts to the
+АНАЛИТИКА topic (10 / 15 min). Settlement in particular used to run inline on Mini App
+requests — keep it off the request path.
+
 **Betting** ("Logovo.bet") is a closed virtual-currency system: `user_wallets`,
 `coin_transactions`, `markets`/`market_selections`, `user_bets`/`bet_items`, plus risk,
 exposure, cashout and settlement engines. No real money is involved anywhere.
@@ -230,13 +272,18 @@ data and is likewise never committed.
 
 ## Related files
 
-- `.agents/AGENTS.md` — the ECC agent framework's project instructions. Its module map is
-  **stale**: it lists `ai_recognizer.py`, `ai_chat.py`, and `table_generator.py` at the
-  repo root, but they now live under `services/ai/` and `services/graphics/`. It also
-  names a `google-genai` dependency that the project does not use, and an incorrect
-  project path. Prefer this file when the two disagree.
+- `.agents/AGENTS.md` — the ECC agent framework's project instructions. Its project path is
+  now correct, but its module map is still **stale**: it lists `ai_recognizer.py`,
+  `ai_chat.py`, and `table_generator.py` at the repo root, but they now live under
+  `services/ai/` and `services/graphics/`. It also names a `google-genai` dependency that
+  the project does not use. Prefer this file when the two disagree.
 - `.claude/prds/logovobot.prd.md` — original product brief. Its milestones still read
   "pending" although the corresponding features shipped; treat it as historical intent,
   not current status.
-- `PHASE_*.md`, `PRODUCTION_AUDIT.md`, `BUTTON_AUDIT.md` — per-phase plans, test matrices,
-  and final reports. Useful history for why a subsystem looks the way it does.
+- `SPEC.md`, `SPEC-team-name-resolution.md` — current specs; the second is the authority on
+  the resolver tiers and thresholds described above.
+- `PHASE_*.md`, `FIX_0*.md`, `PRODUCTION_AUDIT.md`, `FULL_BOT_AUDIT.md`, `BUTTON_AUDIT.md`,
+  `MINIAPP_ROUTE_AUDIT.md`, `Project_Audit_Report.md` — per-phase plans, test matrices,
+  fix notes and final reports. Useful history for why a subsystem looks the way it does.
+- `.claude/` (agents, commands, skills, prds) and `.apm/` hold agent tooling, not runtime
+  code. `.claude/worktrees/` contains throwaway git worktrees.
