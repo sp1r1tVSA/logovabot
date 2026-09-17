@@ -125,5 +125,37 @@ class TestUserStartup(unittest.TestCase):
         # Ensure no active warns returned
         self.assertEqual(len(database.get_all_active_warns()), 0)
 
+    def test_pre_register_to_division_and_startup_preserves_division(self):
+        """Verify that pre-registering to division assigns division_id and startup preserves it."""
+        temp_id = database.pre_register_player_to_division("new_div_player", 4)
+        self.assertLess(temp_id, 0)
+        
+        pre = database.get_user(temp_id)
+        self.assertIsNotNone(pre)
+        self.assertEqual(pre['username'], 'new_div_player')
+        self.assertEqual(pre['division_id'], 4)
+        self.assertIsNone(pre['team_name'])
+
+        # Real user starts bot
+        database.handle_user_startup(777888999, 'new_div_player', 'user')
+        real_u = database.get_user(777888999)
+        self.assertIsNotNone(real_u)
+        self.assertEqual(real_u['username'], 'new_div_player')
+        self.assertEqual(real_u['division_id'], 4)
+        self.assertIsNone(database.get_user(temp_id))
+
+    def test_pre_register_to_division_existing_user_startup_merge(self):
+        """Verify that pre-registering an existing user without division merges division on startup."""
+        with database.transaction() as conn:
+            c = conn.cursor()
+            c.execute("INSERT INTO users (telegram_id, username, role, division_id) VALUES (444555, 'existing_boy', 'user', NULL)")
+        
+        temp_id = database.pre_register_player_to_division("existing_boy", 2)
+        # Since user already exists with positive ID, pre_register_player_to_division updates existing
+        self.assertEqual(temp_id, 444555)
+        u = database.get_user(444555)
+        self.assertEqual(u['division_id'], 2)
+
 if __name__ == '__main__':
     unittest.main()
+

@@ -3692,6 +3692,33 @@ def pre_register_player(username: str, team_name: str) -> int:
         )
         return temp_id
 
+def pre_register_player_to_division(username: str, division_id: int) -> int:
+    """Pre-register or update a player by username into a division without a club assigned."""
+    username_clean = username.strip().lstrip("@")
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT telegram_id FROM users WHERE LOWER(username) = LOWER(?)", (username_clean,))
+        row = cursor.fetchone()
+        if row:
+            tg_id = row[0]
+            cursor.execute(
+                "UPDATE users SET division_id = ?, role = CASE WHEN role = 'admin' THEN 'admin' ELSE 'player' END WHERE telegram_id = ?",
+                (division_id, tg_id)
+            )
+            return tg_id
+        
+        cursor.execute("SELECT MIN(telegram_id) FROM users")
+        min_row = cursor.fetchone()
+        min_id = min_row[0] if min_row and min_row[0] else 0
+        temp_id = min(min_id - 1, -1)
+        
+        cursor.execute(
+            "INSERT INTO users (telegram_id, username, team_name, league_name, role, division_id, warn_count) "
+            "VALUES (?, ?, NULL, 'Основная', 'player', ?, 0)",
+            (temp_id, username_clean, division_id)
+        )
+        return temp_id
+
 def handle_user_startup(telegram_id: int, username: str | None, default_role: str = 'user') -> None:
     """
     Handle a user starting the bot.
@@ -3721,6 +3748,7 @@ def handle_user_startup(telegram_id: int, username: str | None, default_role: st
                 new_league = exists['league_name'] or pre_reg['league_name']
                 new_role = pre_reg['role'] if exists['role'] == 'user' else exists['role']
                 new_notif = 1 if (pre_reg['team_name'] and not exists['team_name']) else exists['pending_notification']
+                new_division = exists['division_id'] if ('division_id' in exists.keys() and exists['division_id'] is not None) else (pre_reg['division_id'] if 'division_id' in pre_reg.keys() else None)
                 
                 # Free team_name on old record to prevent UNIQUE constraint conflict
                 cursor.execute("UPDATE users SET team_name = NULL WHERE telegram_id = ?", (old_id,))
@@ -3737,8 +3765,8 @@ def handle_user_startup(telegram_id: int, username: str | None, default_role: st
                 cursor.execute("DELETE FROM users WHERE telegram_id = ?", (old_id,))
                 
                 cursor.execute(
-                    "UPDATE users SET username = ?, team_name = ?, league_name = ?, role = ?, pending_notification = ? WHERE telegram_id = ?",
-                    (username, new_team, new_league, new_role, new_notif, telegram_id)
+                    "UPDATE users SET username = ?, team_name = ?, league_name = ?, role = ?, pending_notification = ?, division_id = ? WHERE telegram_id = ?",
+                    (username, new_team, new_league, new_role, new_notif, new_division, telegram_id)
                 )
                 logger.info(f"Merged pre-registered user @{username} (old_id: {old_id}) into existing user {telegram_id}")
             else:
@@ -3757,12 +3785,13 @@ def handle_user_startup(telegram_id: int, username: str | None, default_role: st
             
             # 2. Insert new user record first so foreign keys (matches, user_warns) can reference real telegram_id
             cursor.execute(
-                "INSERT INTO users (telegram_id, username, team_name, league_name, role, registered_at, pending_notification, warn_count, squad_photo_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO users (telegram_id, username, team_name, league_name, role, registered_at, pending_notification, warn_count, squad_photo_id, division_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     telegram_id, username, old_team, pre_reg['league_name'], 
                     pre_reg['role'], pre_reg['registered_at'], 1 if old_team else 0,
                     pre_reg['warn_count'] if 'warn_count' in pre_reg.keys() else 0,
-                    pre_reg['squad_photo_id'] if 'squad_photo_id' in pre_reg.keys() else None
+                    pre_reg['squad_photo_id'] if 'squad_photo_id' in pre_reg.keys() else None,
+                    pre_reg['division_id'] if 'division_id' in pre_reg.keys() else None
                 )
             )
             
