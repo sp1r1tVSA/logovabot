@@ -17,6 +17,7 @@ from handlers.base import (
     admin_only,
     post_league_table_to_reports,
     round_schedule_missing_message,
+    max_active_rounds_message,
 )
 from handlers.cabinet import notify_match_confirmed, safe_send_notification, cb_report_choice_manual, safe_edit_or_reply
 import config
@@ -980,7 +981,9 @@ ADMIN_EXPECT_MANUAL_CLUB = 214
 # Conversation States for Admin Match management
 ADMIN_EXPECT_MATCH_SCORE = 205
 ADMIN_WAITING_FOR_DEADLINE = 209
-ADMIN_WAITING_FOR_BATCH_ROUNDS = 210
+# 210 — бывший ADMIN_WAITING_FOR_BATCH_ROUNDS (ручной ввод диапазона туров).
+# Пару туров теперь подбирает `get_next_rounds_to_open`, шаг убран; номер не
+# переиспользуем, чтобы висящие диалоги старой версии не попали в чужое состояние.
 ADMIN_WAITING_FOR_BATCH_DEADLINE = 211
 
 # Conversation States for Admin Division management
@@ -1475,7 +1478,7 @@ async def admin_div_manage_matches(update: Update, context: ContextTypes.DEFAULT
     # массовое открытие и долги — всё в скоупе этого дивизиона.
     keyboard = [
         [InlineKeyboardButton("🎲 Сгенерировать матчи", callback_data=f"admin_gen_div_{div_id}")],
-        [InlineKeyboardButton("📦 Открыть несколько туров", callback_data=f"admin_batch_open_div:{div_id}")],
+        [InlineKeyboardButton("📦 Открыть туры", callback_data=f"admin_batch_open_div:{div_id}")],
         [InlineKeyboardButton("⏰ Просроченные", callback_data=f"admin_div_overdue:{div_id}")],
     ]
     row = []
@@ -2550,6 +2553,22 @@ async def admin_open_round_prompt(update: Update, context: ContextTypes.DEFAULT_
         )
         return ConversationHandler.END
 
+    # Лимит активных туров — второе предусловие, и проверяется тоже до запроса
+    # дедлайна. Уже открытый тур собственный слот не занимает: смена дедлайна
+    # такому туру разрешена, иначе его нельзя было бы продлить.
+    round_info = await asyncio.to_thread(database.get_round_info, round_number, div_id)
+    if not (round_info and round_info.get("is_open")):
+        active = await asyncio.to_thread(database.get_active_open_rounds, div_id)
+        if len(active) >= config.MAX_OPEN_ROUNDS_PER_DIVISION:
+            await query.edit_message_text(
+                max_active_rounds_message(active),
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(
+                    [[InlineKeyboardButton("« К турам", callback_data=f"admin_div_manage_matches:{div_id}")]]
+                ),
+            )
+            return ConversationHandler.END
+
     context.user_data["admin_round_to_open"] = round_number
     context.user_data["admin_round_open_div"] = div_id
 
@@ -2601,6 +2620,15 @@ async def admin_open_round_save(update: Update, context: ContextTypes.DEFAULT_TY
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
         return ConversationHandler.END
+    except database.MaxActiveRoundsExceededError:
+        active = await asyncio.to_thread(database.get_active_open_rounds, div_id)
+        keyboard = [[InlineKeyboardButton("« К турам", callback_data=f"admin_div_manage_matches:{div_id}")]]
+        await update.message.reply_text(
+            max_active_rounds_message(active),
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return ConversationHandler.END
 
     announced = await _announce_rounds_opened(
         context,
@@ -2638,48 +2666,43 @@ async def admin_open_batch_prompt(update: Update, context: ContextTypes.DEFAULT_
         return ConversationHandler.END
     context.user_data["batch_div_id"] = div_id
 
-    keyboard = [[InlineKeyboardButton("Отмена", callback_data="admin_cancel_match_action")]]
-    await query.edit_message_text(
-        "Укажите диапазон туров для открытия.\n"
-        "Формат: `Начальный-Конечный` (например: `1-3` или просто `2`)\n\n"
-        "Отправьте текст:",
-        parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup(keyboard)
+    back_keyboard = InlineKeyboardMarkup(
+        [[InlineKeyboardButton("« К турам", callback_data=f"admin_div_manage_matches:{div_id}")]]
     )
-    return ADMIN_WAITING_FOR_BATCH_ROUNDS
 
-async def admin_open_batch_rounds(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    user = update.effective_user
-    if not user or not is_admin(user.id):
+    # Диапазон админ больше не вводит: туры идут строго парами, и какая пара
+    # следующая — вопрос к БД, а не к админу. Сначала лимит, потом подбор пары.
+    active = await asyncio.to_thread(database.get_active_open_rounds, div_id)
+    if len(active) >= config.MAX_OPEN_ROUNDS_PER_DIVISION:
+        await query.edit_message_text(
+            max_active_rounds_message(active),
+            parse_mode="HTML",
+            reply_markup=back_keyboard,
+        )
         return ConversationHandler.END
 
-    if not update.message or not update.message.text:
-        return ADMIN_WAITING_FOR_BATCH_ROUNDS
-        
-    text = update.message.text.strip()
-    normalized = text.replace("–", "-").replace("—", "-").replace(" ", "")
-    try:
-        if "-" in normalized:
-            parts = normalized.split("-")
-            start_r = int(parts[0])
-            end_r = int(parts[1])
-        else:
-            start_r = end_r = int(normalized)
-        if start_r > end_r:
-            start_r, end_r = end_r, start_r
-    except Exception:
-        await update.message.reply_text("❌ Неверный формат. Используйте `1-3` или `2`.", parse_mode="Markdown")
-        return ADMIN_WAITING_FOR_BATCH_ROUNDS
-        
+    free_slots = config.MAX_OPEN_ROUNDS_PER_DIVISION - len(active)
+    next_rounds = await asyncio.to_thread(database.get_next_rounds_to_open, div_id, None, free_slots)
+    div_name = await _division_display_name(div_id)
+    if not next_rounds:
+        await query.edit_message_text(
+            f"❌ Нельзя открыть следующие туры — {html.escape(div_name)}: "
+            "расписание ещё не сгенерировано. Сначала создайте матчи через меню админа.",
+            parse_mode="HTML",
+            reply_markup=back_keyboard,
+        )
+        return ConversationHandler.END
+
+    start_r, end_r = next_rounds[0], next_rounds[-1]
     context.user_data["batch_start"] = start_r
     context.user_data["batch_end"] = end_r
-    
+
+    rounds_label = f"{start_r} и {end_r}" if start_r != end_r else str(start_r)
     keyboard = [[InlineKeyboardButton("Отмена", callback_data="admin_cancel_match_action")]]
-    await update.message.reply_text(
-        f"Выбраны туры: с {start_r} по {end_r}.\n\n"
-        "Теперь укажите строгий дедлайн для этих туров.\n"
-        "Формат: `ДД.ММ.ГГГГ ЧЧ:ММ` (например: `29.07.2026 23:59`)",
-        parse_mode="Markdown",
+    await query.edit_message_text(
+        f"📅 <b>Открытие туров {rounds_label} ({html.escape(div_name)})</b>\n\n"
+        "Укажите дедлайн (ДД.ММ.ГГГГ ЧЧ:ММ):",
+        parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
     return ADMIN_WAITING_FOR_BATCH_DEADLINE
@@ -2705,11 +2728,24 @@ async def admin_open_batch_deadline(update: Update, context: ContextTypes.DEFAUL
     if not start_r or not end_r or not div_id:
         return ConversationHandler.END
 
+    keyboard = [[InlineKeyboardButton("« К турам", callback_data=f"admin_div_manage_matches:{div_id}")]]
+
     # Туры без расписания пачка не открывает — они возвращаются в `skipped`.
-    report = await asyncio.to_thread(database.open_rounds_batch, start_r, end_r, deadline_text, division_id=div_id)
+    # Лимит проверяется и здесь, а не только в prompt: пока админ набирал дату,
+    # туры мог открыть другой админ или текстовая команда.
+    try:
+        report = await asyncio.to_thread(database.open_rounds_batch, start_r, end_r, deadline_text, division_id=div_id)
+    except database.MaxActiveRoundsExceededError:
+        active = await asyncio.to_thread(database.get_active_open_rounds, div_id)
+        await update.message.reply_text(
+            max_active_rounds_message(active),
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return ConversationHandler.END
+
     opened_rounds = report.get("opened", [])
     skipped_rounds = report.get("skipped", [])
-    keyboard = [[InlineKeyboardButton("« К турам", callback_data=f"admin_div_manage_matches:{div_id}")]]
 
     if not opened_rounds:
         div_name = await _division_display_name(div_id)

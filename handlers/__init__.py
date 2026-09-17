@@ -135,9 +135,7 @@ from handlers.admin import (
     admin_open_round_save,
     ADMIN_WAITING_FOR_DEADLINE,
     admin_open_batch_prompt,
-    admin_open_batch_rounds,
     admin_open_batch_deadline,
-    ADMIN_WAITING_FOR_BATCH_ROUNDS,
     ADMIN_WAITING_FOR_BATCH_DEADLINE,
     admin_close_round,
     admin_round_matches,
@@ -586,7 +584,6 @@ def _register_admin_handlers(app: Application) -> None:
             CallbackQueryHandler(admin_open_batch_prompt, pattern=r"^admin_batch_open_div:\d+$")
         ],
         states={
-            ADMIN_WAITING_FOR_BATCH_ROUNDS: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_open_batch_rounds)],
             ADMIN_WAITING_FOR_BATCH_DEADLINE: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_open_batch_deadline)]
         },
         fallbacks=[

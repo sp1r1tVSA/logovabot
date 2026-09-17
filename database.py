@@ -6,7 +6,7 @@ import threading
 import asyncio
 from typing import Generator
 from contextlib import contextmanager
-from config import DB_PATH, INITIAL_WALLET_BALANCE
+from config import DB_PATH, INITIAL_WALLET_BALANCE, MAX_OPEN_ROUNDS_PER_DIVISION
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +34,29 @@ class RoundScheduleMissingError(ValueError):
             f"Round {round_number} (division={division_id}, season={season_id}) has no matches: "
             "the schedule has not been generated yet."
         )
+
+
+class MaxActiveRoundsExceededError(ValueError):
+    """Бросается, когда открытие тура превышает лимит туров с неистекшим дедлайном.
+
+    Активным считается тур с `is_open = 1` И `deadline > now()`. Число сыгранных
+    матчей не проверяется: слот освобождает только наступление дедлайна, зато
+    освобождает сам — админу не нужно закрывать старые туры руками.
+
+    Наследуется от ValueError по той же причине, что и
+    `RoundScheduleMissingError`: вызывающие уже ловят ValueError от сезонного
+    гейта в тех же самых местах.
+    """
+
+    def __init__(self, division_id: int, active_rounds: list[int], limit: int = MAX_OPEN_ROUNDS_PER_DIVISION):
+        self.division_id = division_id
+        self.active_rounds = active_rounds
+        self.limit = limit
+        super().__init__(
+            f"В дивизионе #{division_id} уже открыто {len(active_rounds)} тура(ов) "
+            f"с действующим дедлайном ({active_rounds}). Лимит: {limit}."
+        )
+
 
 def get_connection() -> sqlite3.Connection:
     """Establish and return a new SQLite database connection."""
@@ -3240,6 +3263,91 @@ def count_round_matches(round_number: int, division_id: int | None = None, seaso
         return _count_round_matches(conn.cursor(), round_number, division_id, s_id)
 
 
+def _resolve_season_id(season_id: int | None) -> int:
+    """Явный сезон или активный; 1 — когда активного сезона в БД ещё нет."""
+    if season_id is not None:
+        return season_id
+    act = get_active_season()
+    return act["id"] if act else 1
+
+
+def _active_open_rounds(cursor, division_id: int, season_id: int) -> list[dict]:
+    """Туры дивизиона, которые прямо сейчас занимают слот открытия.
+
+    Единственная точка, где решается «тур ещё активен или уже нет»: слот держит
+    `is_open = 1` вместе с дедлайном строго в будущем. Тур с истёкшим дедлайном
+    остаётся в БД открытым, но слот освобождает — ручное закрытие админом не
+    требуется. Тур без разбираемого дедлайна (NULL или мусор) слот не занимает:
+    иначе один такой тур блокировал бы дивизион навсегда.
+    """
+    cursor.execute(
+        "SELECT round_number, is_open, deadline, division_id, season_id FROM rounds "
+        "WHERE is_open = 1 AND division_id = ? AND (season_id = ? OR season_id IS NULL) "
+        "ORDER BY round_number",
+        (division_id, season_id)
+    )
+    now = datetime.datetime.now()
+    active: list[dict] = []
+    for row in cursor.fetchall():
+        dt = parse_flexible_datetime(row["deadline"])
+        if dt and dt > now:
+            active.append(dict(row))
+    return active
+
+
+def get_active_open_rounds(division_id: int, season_id: int | None = None) -> list[dict]:
+    """Открытые туры дивизиона с неистекшим дедлайном, по возрастанию номера."""
+    s_id = _resolve_season_id(season_id)
+    with transaction() as conn:
+        return _active_open_rounds(conn.cursor(), division_id, s_id)
+
+
+def _assert_rounds_within_limit(cursor, round_numbers: list[int], division_id: int, season_id: int) -> None:
+    """Гейт лимита: проверяет, влезут ли `round_numbers` в свободные слоты.
+
+    Туры, которые уже среди активных, слот не занимают повторно — продление или
+    смена дедлайна уже открытого тура проходит свободно. Проверка идёт внутри
+    транзакции вызывающего и ДО первой записи, чтобы отказ не оставлял следов.
+    """
+    active = _active_open_rounds(cursor, division_id, season_id)
+    active_numbers = [r["round_number"] for r in active]
+    incoming = [r for r in round_numbers if r not in set(active_numbers)]
+    if not incoming:
+        return
+    if len(active_numbers) + len(incoming) > MAX_OPEN_ROUNDS_PER_DIVISION:
+        raise MaxActiveRoundsExceededError(division_id, active_numbers, MAX_OPEN_ROUNDS_PER_DIVISION)
+
+
+def get_next_rounds_to_open(
+    division_id: int,
+    season_id: int | None = None,
+    count: int = MAX_OPEN_ROUNDS_PER_DIVISION,
+) -> list[int]:
+    """Следующие `count` туров дивизиона, готовых к открытию.
+
+    Отсчёт идёт от максимального когда-либо открытого тура (истёкший дедлайн
+    значения не имеет — тур всё равно был открыт), поэтому после туров 1–2 сразу
+    предлагаются 3–4. Если не открывался ни один — `[1, 2]`. Туры без
+    сгенерированного расписания отбрасываются: открыть их всё равно нельзя.
+    """
+    s_id = _resolve_season_id(season_id)
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT MAX(round_number) AS max_r FROM rounds "
+            "WHERE is_open = 1 AND division_id = ? AND (season_id = ? OR season_id IS NULL)",
+            (division_id, s_id)
+        )
+        row = cursor.fetchone()
+        max_r = (row["max_r"] if row else None) or 0
+
+        return [
+            r_num
+            for r_num in range(max_r + 1, max_r + 1 + count)
+            if _count_round_matches(cursor, r_num, division_id, s_id) > 0
+        ]
+
+
 def open_rounds_batch(
     start_round: int,
     end_round: int,
@@ -3280,6 +3388,20 @@ def open_rounds_batch(
                 opened.append(r_num)
             else:
                 skipped.append(r_num)
+
+        # Лимит считается по турам, которые реально откроются: пропущенные из-за
+        # отсутствия расписания слотов не занимают. Проверка — до первой записи,
+        # поэтому превышение не открывает даже часть диапазона.
+        if opened:
+            if division_id is not None:
+                _assert_rounds_within_limit(cursor, opened, div_id, s_id)
+            else:
+                for scope_div_id in sorted({
+                    d
+                    for r_num in opened
+                    for d in _round_scope_divisions(cursor, r_num, s_id)
+                }):
+                    _assert_rounds_within_limit(cursor, opened, scope_div_id, s_id)
 
         for r_num in opened:
             cursor.execute(
@@ -4751,6 +4873,15 @@ def update_round_status(round_number: int, is_open: bool, deadline: str | None =
             # без пар не мог появиться даже частично.
             if _count_round_matches(cursor, round_number, division_id, s_id) == 0:
                 raise RoundScheduleMissingError(round_number, division_id, s_id)
+
+            # Лимит одновременно активных туров — второе предусловие открытия.
+            # Уже активный тур собственный слот повторно не занимает, поэтому
+            # смена дедлайна открытого тура сюда не упирается.
+            if division_id is not None:
+                _assert_rounds_within_limit(cursor, [round_number], division_id, s_id)
+            else:
+                for scope_div_id in _round_scope_divisions(cursor, round_number, s_id):
+                    _assert_rounds_within_limit(cursor, [round_number], scope_div_id, s_id)
 
             if division_id is not None:
                 cursor.execute(
