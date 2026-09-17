@@ -3446,10 +3446,11 @@ def open_rounds_batch(
 
     # 🎰 Парный цикл «два через два»: открытые для игры туры ушли из линии —
     # автоматически выставляем её на два следующих тура.
+    advanced = []
     if opened:
-        advance_betting_line_pair(division_id=division_id, season_id=s_id)
+        advanced = advance_betting_line_pair(division_id=division_id, season_id=s_id)
 
-    return {"opened": opened, "skipped": skipped}
+    return {"opened": opened, "skipped": skipped, "advanced": advanced}
 
 def get_open_pending_matches() -> list[dict]:
     """Get all pending matches where the round is open and not extended, scoped by division and season."""
@@ -4993,7 +4994,8 @@ def update_round_status(round_number: int, is_open: bool, deadline: str | None =
         #
         # 🎰 Парный цикл «два через два»: как только туры открыты для игры,
         # линия автоматически уходит на два следующих тура.
-        advance_betting_line_pair(division_id=division_id, season_id=s_id)
+        return advance_betting_line_pair(division_id=division_id, season_id=s_id)
+    return []
 
 
 def set_round_bets_open(

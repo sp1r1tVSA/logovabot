@@ -927,6 +927,13 @@ async def admin_generate_matches_execute(update: Update, context: ContextTypes.D
     # линия сразу встаёт на Туры 1 и 2 (is_open = 0, bets_open = 1). Ошибка
     # здесь не должна отменять уже сгенерированное расписание.
     line_rounds = await _open_preseason_line(div_id, season_id)
+    if line_rounds:
+        try:
+            from services.betting_notifications import notify_division_betting_line_opened
+            for r_num in line_rounds:
+                await notify_division_betting_line_opened(context, div_id, r_num)
+        except Exception as e:
+            logger.warning(f"Failed to send betting line notification after round robin: {e}")
 
     keyboard = [[InlineKeyboardButton("« К турам", callback_data=f"admin_div_manage_matches:{div_id}")]]
     if line_rounds:
@@ -2327,8 +2334,18 @@ async def admin_toggle_round_bets(update: Update, context: ContextTypes.DEFAULT_
 
     if ok and opening:
         await query.answer(f"🎰 Линия на Тур {round_number} открыта", show_alert=True)
+        try:
+            from services.betting_notifications import notify_division_betting_line_opened
+            await notify_division_betting_line_opened(context, div_id, round_number)
+        except Exception as e:
+            logger.warning(f"Failed to send betting line opened notification: {e}")
     elif ok:
         await query.answer(f"🚫 Линия на Тур {round_number} закрыта", show_alert=True)
+        try:
+            from services.betting_notifications import notify_division_betting_line_closed
+            await notify_division_betting_line_closed(context, div_id, round_number, was_open=True)
+        except Exception as e:
+            logger.warning(f"Failed to send betting line closed notification: {e}")
     else:
         await query.answer(
             f"❌ Не удалось открыть линию на Тур {round_number}: нет матчей или сезон неактивен.",
@@ -2356,6 +2373,12 @@ async def admin_open_preseason_line(update: Update, context: ContextTypes.DEFAUL
 
     opened = await _open_preseason_line(div_id)
     if opened:
+        try:
+            from services.betting_notifications import notify_division_betting_line_opened
+            for r_num in opened:
+                await notify_division_betting_line_opened(context, div_id, r_num)
+        except Exception as e:
+            logger.warning(f"Failed to send preseason betting line notification: {e}")
         await query.answer(
             f"🎰 Линия открыта на Туры: {', '.join(str(r) for r in opened)}",
             show_alert=True
@@ -2607,8 +2630,11 @@ async def admin_open_round_save(update: Update, context: ContextTypes.DEFAULT_TY
 
     # Гейт расписания стоит и здесь, а не только в prompt: между запросом
     # дедлайна и вводом ответа матчи тура могли быть удалены.
+    r_info = await asyncio.to_thread(database.get_round_info, round_number, div_id)
+    was_bets_open = bool(r_info and r_info.get("bets_open"))
+
     try:
-        await asyncio.to_thread(
+        advanced = await asyncio.to_thread(
             database.update_round_status, round_number, is_open=True, deadline=deadline_text, division_id=div_id
         )
     except database.RoundScheduleMissingError:
@@ -2650,6 +2676,20 @@ async def admin_open_round_save(update: Update, context: ContextTypes.DEFAULT_TY
     )
 
     await notify_players_rounds_opened(context, [round_number], deadline_text, division_id=div_id)
+
+    if was_bets_open:
+        try:
+            from services.betting_notifications import notify_division_betting_line_closed
+            await notify_division_betting_line_closed(context, div_id, round_number, was_open=True)
+        except Exception as e:
+            logger.warning(f"Failed to notify betting line closed for round {round_number}: {e}")
+
+    for adv_r in (advanced or []):
+        try:
+            from services.betting_notifications import notify_division_betting_line_opened
+            await notify_division_betting_line_opened(context, div_id, adv_r)
+        except Exception as e:
+            logger.warning(f"Failed to notify betting line opened for advanced round {adv_r}: {e}")
     return ConversationHandler.END
 
 @admin_only
@@ -2733,6 +2773,12 @@ async def admin_open_batch_deadline(update: Update, context: ContextTypes.DEFAUL
     # Туры без расписания пачка не открывает — они возвращаются в `skipped`.
     # Лимит проверяется и здесь, а не только в prompt: пока админ набирал дату,
     # туры мог открыть другой админ или текстовая команда.
+    rounds_with_bets_open = []
+    for r_num in range(start_r, end_r + 1):
+        r_info = await asyncio.to_thread(database.get_round_info, r_num, div_id)
+        if r_info and r_info.get("bets_open"):
+            rounds_with_bets_open.append(r_num)
+
     try:
         report = await asyncio.to_thread(database.open_rounds_batch, start_r, end_r, deadline_text, division_id=div_id)
     except database.MaxActiveRoundsExceededError:
@@ -2793,6 +2839,21 @@ async def admin_open_batch_deadline(update: Update, context: ContextTypes.DEFAUL
     )
 
     await notify_players_rounds_opened(context, opened_rounds, deadline_text, division_id=div_id)
+
+    for r_num in opened_rounds:
+        if r_num in rounds_with_bets_open:
+            try:
+                from services.betting_notifications import notify_division_betting_line_closed
+                await notify_division_betting_line_closed(context, div_id, r_num, was_open=True)
+            except Exception as e:
+                logger.warning(f"Failed to notify betting line closed for batch round {r_num}: {e}")
+
+    for adv_r in report.get("advanced", []):
+        try:
+            from services.betting_notifications import notify_division_betting_line_opened
+            await notify_division_betting_line_opened(context, div_id, adv_r)
+        except Exception as e:
+            logger.warning(f"Failed to notify betting line opened for batch advanced round {adv_r}: {e}")
     return ConversationHandler.END
 
 @admin_only

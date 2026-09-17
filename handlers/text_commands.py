@@ -603,12 +603,22 @@ async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_T
                 f"Прогнозы принимаются, даже пока тур закрыт для внесения результатов.",
                 parse_mode="HTML"
             )
+            try:
+                from services.betting_notifications import notify_division_betting_line_opened
+                await notify_division_betting_line_opened(context, division_id, rn)
+            except Exception as e:
+                logger.warning(f"Failed to notify betting line opened: {e}")
         else:
             await msg.reply_text(
                 f"🚫 <b>Линия на Тур {rn} — {html.escape(division_name)} закрыта.</b> "
                 f"Приём прогнозов остановлен.",
                 parse_mode="HTML"
             )
+            try:
+                from services.betting_notifications import notify_division_betting_line_closed
+                await notify_division_betting_line_closed(context, division_id, rn, was_open=True)
+            except Exception as e:
+                logger.warning(f"Failed to notify betting line closed: {e}")
         return True
 
     if (
@@ -638,8 +648,10 @@ async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_T
             return True
         rn = int(nums[0])
         division_name = await _division_name(division_id)
+        r_info = await asyncio.to_thread(database.get_round_info, rn, division_id)
+        was_bets_open = bool(r_info and r_info.get("bets_open"))
         try:
-            await asyncio.to_thread(database.update_round_status, rn, is_open=True, division_id=division_id)
+            advanced = await asyncio.to_thread(database.update_round_status, rn, is_open=True, division_id=division_id)
         except database.RoundScheduleMissingError:
             await msg.reply_text(
                 round_schedule_missing_message(rn, division_name),
@@ -658,6 +670,18 @@ async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_T
             f"Участники могут вносить результаты.",
             parse_mode="HTML"
         )
+        if was_bets_open:
+            try:
+                from services.betting_notifications import notify_division_betting_line_closed
+                await notify_division_betting_line_closed(context, division_id, rn, was_open=True)
+            except Exception as e:
+                logger.warning(f"Failed to notify betting line closed on text round open: {e}")
+        for adv_r in (advanced or []):
+            try:
+                from services.betting_notifications import notify_division_betting_line_opened
+                await notify_division_betting_line_opened(context, division_id, adv_r)
+            except Exception as e:
+                logger.warning(f"Failed to notify betting line opened on text round open: {e}")
         return True
 
     if (
@@ -727,9 +751,11 @@ async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_T
             return True
 
         division_name = await _division_name(division_id)
+        r_info = await asyncio.to_thread(database.get_round_info, rn, division_id)
+        was_bets_open = bool(r_info and r_info.get("bets_open"))
         # Команда дедлайна тур ещё и открывает, поэтому подчиняется тому же гейту.
         try:
-            await asyncio.to_thread(
+            advanced = await asyncio.to_thread(
                 database.update_round_status, rn, is_open=True, deadline=dl_text, division_id=division_id
             )
         except database.RoundScheduleMissingError:
@@ -750,6 +776,18 @@ async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_T
             f"<code>{html.escape(dl_text)}</code>.",
             parse_mode="HTML"
         )
+        if was_bets_open:
+            try:
+                from services.betting_notifications import notify_division_betting_line_closed
+                await notify_division_betting_line_closed(context, division_id, rn, was_open=True)
+            except Exception as e:
+                logger.warning(f"Failed to notify betting line closed on text deadline: {e}")
+        for adv_r in (advanced or []):
+            try:
+                from services.betting_notifications import notify_division_betting_line_opened
+                await notify_division_betting_line_opened(context, division_id, adv_r)
+            except Exception as e:
+                logger.warning(f"Failed to notify betting line opened on text deadline: {e}")
         return True
 
     if action in ("топики", "топик", "topics", "topiki"):
