@@ -9208,27 +9208,45 @@ def assign_user_division(telegram_id: int, division_id: int | None) -> None:
         )
 
 
-def get_division_users(division_id: int | None) -> list[dict]:
+def get_division_users(division_id: int | None, with_team_only: bool = False) -> list[dict]:
     """
     Retrieve all users belonging to a specific division.
     If division_id is None, returns legacy users without assigned division.
+    If with_team_only is True, returns only users who have a team_name assigned.
     """
     with transaction() as conn:
         cursor = conn.cursor()
         if division_id is None:
-            cursor.execute("""
-                SELECT telegram_id, username, team_name, league_name, role, division_id, warn_count, squad_photo_id
-                FROM users
-                WHERE division_id IS NULL AND team_name IS NOT NULL AND team_name != ''
-                ORDER BY team_name ASC
-            """)
+            if with_team_only:
+                cursor.execute("""
+                    SELECT telegram_id, username, team_name, league_name, role, division_id, warn_count, squad_photo_id
+                    FROM users
+                    WHERE division_id IS NULL AND team_name IS NOT NULL AND team_name != ''
+                    ORDER BY team_name ASC
+                """)
+            else:
+                cursor.execute("""
+                    SELECT telegram_id, username, team_name, league_name, role, division_id, warn_count, squad_photo_id
+                    FROM users
+                    WHERE division_id IS NULL
+                    ORDER BY COALESCE(team_name, username, CAST(telegram_id AS TEXT)) ASC
+                """)
         else:
-            cursor.execute("""
-                SELECT telegram_id, username, team_name, league_name, role, division_id, warn_count, squad_photo_id
-                FROM users
-                WHERE division_id = ? AND team_name IS NOT NULL AND team_name != ''
-                ORDER BY team_name ASC
-            """, (division_id,))
+            if with_team_only:
+                cursor.execute("""
+                    SELECT telegram_id, username, team_name, league_name, role, division_id, warn_count, squad_photo_id
+                    FROM users
+                    WHERE division_id = ? AND team_name IS NOT NULL AND team_name != ''
+                    ORDER BY team_name ASC
+                """, (division_id,))
+            else:
+                cursor.execute("""
+                    SELECT telegram_id, username, team_name, league_name, role, division_id, warn_count, squad_photo_id
+                    FROM users
+                    WHERE division_id = ?
+                    ORDER BY CASE WHEN team_name IS NOT NULL AND team_name != '' THEN 0 ELSE 1 END,
+                             COALESCE(team_name, username, CAST(telegram_id AS TEXT)) ASC
+                """, (division_id,))
         return [dict(r) for r in cursor.fetchall()]
 
 

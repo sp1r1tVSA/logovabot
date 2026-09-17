@@ -1888,7 +1888,7 @@ async def admin_div_view(update: Update, context: ContextTypes.DEFAULT_TYPE, div
         ],
         [
             InlineKeyboardButton("📌 Настроить топики", callback_data=f"admin_div_topics_{div_id}"),
-            InlineKeyboardButton("👥 Участники", callback_data=f"admin_list_div_players_{div_id}_0")
+            InlineKeyboardButton("👥 Участники / Варны", callback_data=f"admin_list_div_players_{div_id}_0")
         ],
         [InlineKeyboardButton("« К списку дивизионов", callback_data="admin_divs_hub")]
     ]
