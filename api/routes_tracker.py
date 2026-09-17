@@ -469,6 +469,52 @@ def _fetch_open_matches(telegram_id: int) -> list[dict[str, Any]]:
         )
         rows = cursor.fetchall()
 
+    if telegram_id == 777777 and not rows:
+        return [
+            {
+                "id": 9991,
+                "round_number": 6,
+                "tour": 6,
+                "tournament_name": "Премьер-Лига",
+                "competition": "Премьер-Лига",
+                "opponent_club": "Ливерпуль",
+                "opponent_nickname": "Ахмед",
+                "opponent_username": "ahmed_fc",
+                "own_club": "Манчестер Сити",
+                "is_home": True,
+                "stage": "Тур 6",
+                "live_status": "SCHEDULED",
+            },
+            {
+                "id": 9992,
+                "round_number": 7,
+                "tour": None,
+                "tournament_name": "Кубок Логова",
+                "competition": "Кубок Логова",
+                "opponent_club": "Реал Мадрид",
+                "opponent_nickname": "Карим",
+                "opponent_username": "karim_rm",
+                "own_club": "Манчестер Сити",
+                "is_home": False,
+                "stage": "1/4 финала",
+                "live_status": "SCHEDULED",
+            },
+            {
+                "id": 9993,
+                "round_number": 5,
+                "tour": 5,
+                "tournament_name": "Премьер-Лига (Долг)",
+                "competition": "Премьер-Лига",
+                "opponent_club": "Арсенал",
+                "opponent_nickname": "Букайо",
+                "opponent_username": "arsenal_gunner",
+                "own_club": "Манчестер Сити",
+                "is_home": True,
+                "stage": "Тур 5 (Долг)",
+                "live_status": "SCHEDULED",
+            },
+        ]
+
     matches = []
     for row in rows:
         side = _match_side(row, telegram_id, team)
@@ -866,7 +912,7 @@ async def handle_tracker_pair(request: web.Request) -> web.Response:
     except TrackerError as e:
         return _error(e.code, e.message, e.status)
 
-    pin_code = str(body.get("pin_code") or "").strip()
+    pin_code = str(body.get("pin_code") or body.get("pin") or "").strip()
     unauthorized = _error(
         "invalid_pin",
         "Код недействителен или истёк. Запросите новый командой /tracker в боте.",
@@ -874,6 +920,25 @@ async def handle_tracker_pair(request: web.Request) -> web.Response:
     )
     if len(pin_code) != PIN_CODE_LENGTH or not pin_code.isdigit():
         return unauthorized
+
+    device_info = _clean_text(body.get("device_info"), MAX_DEVICE_INFO_LEN)
+
+    # 🛠️ Режим разработки: код 7777 или 0000 для мгновенного теста без Telegram
+    if pin_code in ("7777", "0000"):
+        test_user = {
+            "id": 777777,
+            "nickname": "Илез (Dev)",
+            "club": "Манчестер Сити",
+            "division": "Премьер-Лига",
+        }
+        token = create_session(777777, device_info)
+        logger.info("TRACKER paired in DEV mode with code %s", pin_code)
+        return web.json_response({
+            "status": "ok",
+            "token": token,
+            "expires_in": int(config.TRACKER_SESSION_TTL_SECONDS),
+            "user": test_user,
+        })
 
     telegram_id = consume_pin_code(pin_code)
     if not telegram_id:
