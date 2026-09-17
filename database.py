@@ -3622,7 +3622,7 @@ def get_matches_by_round(round_number: int, division_id: int | None = None, seas
                 FROM matches m
                 LEFT JOIN users u1 ON LOWER(m.player1_team) = LOWER(u1.team_name)
                 LEFT JOIN users u2 ON LOWER(m.player2_team) = LOWER(u2.team_name)
-                WHERE m.round_number = ? AND m.division_id = ?
+                WHERE m.round_number = ? AND COALESCE(m.division_id, 1) = ?
                   AND (m.season_id = ? OR m.season_id IS NULL)
                 ORDER BY m.id ASC
             """, (round_number, division_id, target_season_id))

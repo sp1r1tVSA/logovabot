@@ -78,14 +78,16 @@ async def handle_get_tours(request: web.Request) -> web.Response:
 
     for t in open_tours:
         r_num = t["round_number"]
+        if t.get("total_matches") == 0:
+            continue
         # Ensure markets are generated
         try:
-            generate_round_markets(r_num, division_id=div_id)
+            generate_round_markets(r_num, division_id=div_id, season_id=s_id)
         except Exception as e:
             logger.debug(f"Could not generate round markets for tour #{r_num}: {e}")
 
-        markets = await asyncio.to_thread(database.get_active_bet_markets, r_num, division_id=div_id)
-        round_matches = await asyncio.to_thread(database.get_matches_by_round, r_num, division_id=div_id)
+        markets = await asyncio.to_thread(database.get_active_bet_markets, r_num, division_id=div_id, season_id=s_id)
+        round_matches = await asyncio.to_thread(database.get_matches_by_round, r_num, division_id=div_id, season_id=s_id)
 
         matches_list = []
         seen_match_ids = set()

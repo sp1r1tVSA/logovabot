@@ -215,6 +215,10 @@ def generate_round_markets(tour: int, division_id: int | None = None, season_id:
     матчей тура (см. `select_top_round_matches`). Рынки остальных матчей тура
     гасятся, чтобы после пересчёта в линии не оставалось лишних пар.
     """
+    if season_id is None:
+        act = database.get_active_season()
+        season_id = act["id"] if act else 1
+
     selected = select_top_round_matches(tour, division_id=division_id, season_id=season_id)
     keep_ids = [m.get("id") for m in selected if m.get("id")]
 
