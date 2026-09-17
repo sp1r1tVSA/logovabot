@@ -15,9 +15,15 @@ import logging
 import sqlite3
 from typing import Any, Optional
 
+import config
 import database
 
 logger = logging.getLogger(__name__)
+
+
+def is_smart_notifications_enabled() -> bool:
+    """Check if smart notifications service is enabled in config."""
+    return bool(getattr(config, "SMART_NOTIFICATIONS_ENABLED", False))
 
 # Standard notification event types
 EVENT_TYPE_MATCH_STARTED = "MATCH_STARTED"
@@ -97,17 +103,22 @@ def queue_notification(
 ) -> tuple[bool, str]:
     """
     Queue a notification event for delivery:
-    1. Checks user preference (skips if disabled).
-    2. Checks cooldown for this (user_id, event_type) if cooldown_seconds > 0 and priority not in HIGH_PRIORITY_TYPES.
-    3. Attempts INSERT into notification_events (enforcing UNIQUE(user_id, event_type, source_event_id)).
-    4. Also inserts into legacy in-app notifications for instant Mini App visibility.
+    1. Checks if smart notifications are globally enabled (skips if in development/disabled).
+    2. Checks user preference (skips if disabled).
+    3. Checks cooldown for this (user_id, event_type) if cooldown_seconds > 0 and priority not in HIGH_PRIORITY_TYPES.
+    4. Attempts INSERT into notification_events (enforcing UNIQUE(user_id, event_type, source_event_id)).
+    5. Also inserts into legacy in-app notifications for instant Mini App visibility.
 
     Returns:
         (True, "queued") on success
-        (False, "disabled") if user turned off this notification type
+        (False, "disabled") if user turned off this notification type or service disabled
         (False, "cooldown") if throttled by cooldown
         (False, "duplicate") if already queued/sent (DB unique constraint)
     """
+    if not is_smart_notifications_enabled():
+        logger.debug("Smart notifications are globally disabled (in development).")
+        return False, "disabled"
+
     if not is_notification_enabled(user_id, event_type):
         logger.debug("Notification %s disabled by user %s", event_type, user_id)
         return False, "disabled"
@@ -167,6 +178,10 @@ def broadcast_match_event(
 
     Returns count of successfully queued notifications.
     """
+    if not is_smart_notifications_enabled():
+        logger.debug("Smart notifications are globally disabled (in development); skipping broadcast.")
+        return 0
+
     with database.transaction() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT player1_team, player2_team FROM matches WHERE id = ?", (match_id,))

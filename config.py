@@ -50,6 +50,9 @@ SPORTS_RATE_LIMIT_RPM = int(os.getenv("SPORTS_RATE_LIMIT_RPM", "60"))
 LIVE_DATA_STALE_AFTER_SECONDS = int(os.getenv("LIVE_DATA_STALE_AFTER_SECONDS", "120"))
 LIVE_DATA_EXPIRED_AFTER_SECONDS = int(os.getenv("LIVE_DATA_EXPIRED_AFTER_SECONDS", "300"))
 
+# ─── Phase 6: Smart Notifications Service (В разработке - отключено) ─────────
+SMART_NOTIFICATIONS_ENABLED = os.getenv("SMART_NOTIFICATIONS_ENABLED", "0").lower() in ("1", "true", "yes")
+
 def _get_group_id() -> int | None:
     group_raw = os.getenv("TELEGRAM_GROUP_ID", "").strip()
     if not group_raw:

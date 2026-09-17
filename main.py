@@ -65,7 +65,10 @@ def register_jobs(application: Application) -> None:
         )
         application.job_queue.run_repeating(sync_live_provider_job, interval=45, first=15)
         application.job_queue.run_repeating(sync_intelligence_cache_job, interval=300, first=45)
-        application.job_queue.run_repeating(process_notification_queue_job, interval=15, first=20)
+        if getattr(config, "SMART_NOTIFICATIONS_ENABLED", False):
+            application.job_queue.run_repeating(process_notification_queue_job, interval=15, first=20)
+        else:
+            logger.info("Smart notifications background queue job disabled (in development).")
         # Bet settlement used to run inline on Mini App requests; now scheduled off the loop.
         application.job_queue.run_repeating(settle_finished_bets_job, interval=60, first=25)
     except Exception as e:
