@@ -253,6 +253,11 @@ any internal error must reject, never allow.
 - Background jobs register in `register_jobs()` and are wrapped in try/except so one
   failing subsystem cannot take down the others.
 - Commits follow Conventional Commits (`feat:`, `fix(web):`, `refactor:`, `chore(agents):`).
+- The repository is [`sp1r1tVSA/logovobot`](https://github.com/sp1r1tVSA/logovobot), default
+  branch `main`. Work lands **directly on `main`** — do not create feature branches or open
+  pull requests unless asked. A session running in a `.claude/worktrees/` worktree still
+  pushes its commits to `main` (`git push origin HEAD:main`) rather than leaving them on the
+  throwaway `claude/*` branch.
 - OCR must stay **perceptual**: Gemini extracts what is visibly on screen — coordinates,
   text, goals, assists — and `team1`/`team2` map to screen left/right. Team identification,
   side assignment, and squad enrichment are done deterministically afterwards in Python and
