@@ -2,7 +2,7 @@
 
 This repository contains **Logovobot** (Логово Фифарей / ИИ «Темшик») — a high-performance, asynchronous Telegram bot for managing FIFA/FC e-sports championships, cups, match drafts, automated Gemini AI OCR vision processing, SQLite statistics, and graphics generation.
 
-**Project Path:** `c:\Users\Илез\Desktop\logovobot`  
+**Project Path:** `C:\Users\Ислам\Desktop\Projects\log\logovobot`  
 **Stack:** Python 3.11+, `python-telegram-bot` v21 (async), SQLite (WAL mode, parameterized transactions), Google Gemini AI OCR (`google-genai` / `google-generativeai`), Pillow (Retina 2x/3x graphics rendering), APScheduler / JobQueue.
 
 ---
@@ -62,6 +62,6 @@ This repository contains **Logovobot** (Логово Фифарей / ИИ «Т�
 
 ## Workspace Project Isolation
 
-- **Primary Project**: `c:\Users\Илез\Desktop\logovobot` (Python 3.11+, Telegram Bot, Gemini AI, SQLite).
+- **Primary Project**: `C:\Users\Ислам\Desktop\Projects\log\logovobot` (Python 3.11+, Telegram Bot, Gemini AI, SQLite).
 - Confine all edits, test runs, and context reads strictly to this repository.
 - Never modify or expose secrets in `.env` or `league.db`.
