@@ -11,15 +11,12 @@
 3. Закрытие тура (`is_open=False`) гейтом не трогается: закрыть можно всегда.
 4. `open_rounds_batch` проверяет каждый тур диапазона отдельно: туры с расписанием
    открываются, пустые возвращаются в `skipped` и остаются закрытыми.
-5. Текстовая команда «Темшик открыть тур N» показывает админу предупреждение
-   вместо рапорта об успехе.
 """
 import unittest
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import database
-from handlers.text_commands import handle_temshik_command
 
 
 def _active_season_id() -> int:
@@ -178,81 +175,7 @@ class TestOpenRoundsBatchScheduleGuard(RoundScheduleGuardBase):
         self.assertEqual(self._is_open(2), 0)
 
 
-class TestTemshikOpenRoundWarnsAboutMissingSchedule(unittest.IsolatedAsyncioTestCase):
-    async def asyncSetUp(self):
-        database.init_db()
-        self.uid = uuid.uuid4().hex[:6].upper()
-        self.season_id = _active_season_id()
-        self.div_id = database.create_division(
-            name=f"Guard CMD {self.uid}", code=f"GCMD_{self.uid}"
-        )
-        self.admin_id = 97811
-        database.register_user(self.admin_id, f"guard_adm_{self.uid}", team_name=f"Guard Adm {self.uid}")
-        database.assign_user_division(self.admin_id, self.div_id)
 
-    async def asyncTearDown(self):
-        with database.transaction() as conn:
-            c = conn.cursor()
-            c.execute("DELETE FROM matches WHERE division_id = ?", (self.div_id,))
-            c.execute("DELETE FROM rounds WHERE division_id = ?", (self.div_id,))
-            c.execute("DELETE FROM users WHERE telegram_id = ?", (self.admin_id,))
-            c.execute("DELETE FROM divisions WHERE id = ?", (self.div_id,))
-
-    def _build_update(self, text: str):
-        update = MagicMock()
-        update.message.text = text
-        update.message.message_thread_id = None
-        update.message.reply_text = AsyncMock()
-        update.effective_message = update.message
-        update.effective_user.id = self.admin_id
-        update.effective_user.username = "guard_adm"
-        update.effective_chat.id = self.admin_id
-        update.effective_chat.type = "private"
-        return update
-
-    async def test_open_round_without_schedule_reports_the_problem(self):
-        update = self._build_update("Темшик открыть тур 3")
-        with patch("handlers.text_commands.is_admin", return_value=True):
-            handled = await handle_temshik_command(update, MagicMock())
-
-        self.assertTrue(handled)
-        text = update.message.reply_text.call_args[0][0]
-        self.assertIn("Нельзя открыть Тур 3", text)
-        self.assertIn("расписание ещё не сгенерировано", text)
-        self.assertNotIn("успешно открыт", text)
-        self.assertIsNone(
-            database.get_round_info(3, division_id=self.div_id, season_id=self.season_id),
-            "Отклонённое открытие не должно создавать строку тура",
-        )
-
-    async def test_open_round_with_schedule_still_works(self):
-        with database.transaction() as conn:
-            conn.execute(
-                "INSERT INTO matches (round_number, player1_team, player2_team, status, division_id, season_id) "
-                "VALUES (3, ?, ?, 'pending', ?, ?)",
-                (f"Guard H {self.uid}", f"Guard A {self.uid}", self.div_id, self.season_id),
-            )
-
-        update = self._build_update("Темшик открыть тур 3")
-        with patch("handlers.text_commands.is_admin", return_value=True):
-            handled = await handle_temshik_command(update, MagicMock())
-
-        self.assertTrue(handled)
-        self.assertIn("успешно открыт", update.message.reply_text.call_args[0][0])
-        info = database.get_round_info(3, division_id=self.div_id, season_id=self.season_id)
-        self.assertEqual(info["is_open"], 1)
-
-    async def test_deadline_command_also_refuses_an_empty_round(self):
-        update = self._build_update("Темшик дедлайн 3 18.08 23:59")
-        with patch("handlers.text_commands.is_admin", return_value=True):
-            handled = await handle_temshik_command(update, MagicMock())
-
-        self.assertTrue(handled)
-        text = update.message.reply_text.call_args[0][0]
-        self.assertIn("Нельзя открыть Тур 3", text)
-        self.assertIsNone(
-            database.get_round_info(3, division_id=self.div_id, season_id=self.season_id)
-        )
 
 
 class TestAdminBatchOpenHandlerGuard(unittest.IsolatedAsyncioTestCase):

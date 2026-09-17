@@ -1021,7 +1021,10 @@ async def admin_list_players_page(update: Update, context: ContextTypes.DEFAULT_
     page = 0
     if query.data.startswith("admin_list_players_page_"):
         page = int(query.data.replace("admin_list_players_page_", ""))
-        
+
+    if context.user_data is not None:
+        context.user_data["admin_player_back_cb"] = f"admin_list_players_page_{page}"
+
     players = await asyncio.to_thread(database.list_users)
     if not players:
         keyboard = [[InlineKeyboardButton("« Назад", callback_data="admin_manage_players_info")]]
@@ -1067,6 +1070,9 @@ async def admin_div_players_menu(update: Update, context: ContextTypes.DEFAULT_T
     if not query or not is_admin(query.from_user.id):
         return
     await query.answer()
+
+    if context.user_data is not None:
+        context.user_data["admin_list_div_back"] = "admin_div_players_menu"
 
     divisions = await asyncio.to_thread(database.get_divisions)
     all_users = await asyncio.to_thread(database.list_users)
@@ -1145,10 +1151,21 @@ async def admin_list_div_players(update: Update, context: ContextTypes.DEFAULT_T
     div_raw = parts[0]
     page = int(parts[1]) if len(parts) > 1 else 0
 
+    if context.user_data is not None:
+        context.user_data["admin_player_back_cb"] = f"admin_list_div_players_{div_raw}_{page}"
+
+    back_cb = "admin_div_players_menu"
+    back_text = "« К дивизионам"
+    if div_raw != "none" and div_raw.isdigit():
+        custom_back = context.user_data.get("admin_list_div_back") if context.user_data else None
+        if custom_back != "admin_div_players_menu":
+            back_cb = _div_home_cb(update, int(div_raw))
+            back_text = "« К дивизиону" if update.effective_user and is_global_admin(update.effective_user.id) else "« Назад в панель"
+
     page_players, div_title, total, page, total_pages = await _load_div_players_page(div_raw, page)
 
     if not page_players:
-        keyboard = [[InlineKeyboardButton("« К дивизионам", callback_data="admin_div_players_menu")]]
+        keyboard = [[InlineKeyboardButton(back_text, callback_data=back_cb)]]
         await query.edit_message_text(f"👥 В «{html.escape(div_title)}» нет участников.", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
         return
 
@@ -1163,7 +1180,7 @@ async def admin_list_div_players(update: Update, context: ContextTypes.DEFAULT_T
     if nav_row:
         keyboard.append(nav_row)
 
-    keyboard.append([InlineKeyboardButton("« К дивизионам", callback_data="admin_div_players_menu")])
+    keyboard.append([InlineKeyboardButton(back_text, callback_data=back_cb)])
 
     text = f"📋 <b>Участники: {html.escape(div_title)}</b> (Всего: {total}):\n\nВыберите игрока:"
     await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
@@ -1777,10 +1794,16 @@ async def admin_div_manage_players(update: Update, context: ContextTypes.DEFAULT
     if not await _ensure_division_access(update, div_id):
         return
 
+    if context.user_data is not None:
+        context.user_data["admin_player_back_cb"] = f"admin_div_players:{div_id}:{page}"
+
+    home_cb = _div_home_cb(update, div_id)
+    back_btn_text = "« К дивизиону" if update.effective_user and is_global_admin(update.effective_user.id) else "« Назад в панель"
+
     page_players, div_title, total, page, total_pages = await _load_div_players_page(str(div_id), page)
 
     if not page_players:
-        keyboard = [[InlineKeyboardButton("« Назад в панель", callback_data=f"admin_div_panel:{div_id}")]]
+        keyboard = [[InlineKeyboardButton(back_btn_text, callback_data=home_cb)]]
         await query.edit_message_text(f"👥 В «{html.escape(div_title)}» нет участников.", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
         return
 
@@ -1795,9 +1818,9 @@ async def admin_div_manage_players(update: Update, context: ContextTypes.DEFAULT
     if nav_row:
         keyboard.append(nav_row)
 
-    keyboard.append([InlineKeyboardButton("« Назад в панель", callback_data=f"admin_div_panel:{div_id}")])
+    keyboard.append([InlineKeyboardButton(back_btn_text, callback_data=home_cb)])
 
-    text = f"📋 <b>Участники: {html.escape(div_title)}</b> (Всего: {total}):\n\nВыберите игрока для выдачи варнов:"
+    text = f"📋 <b>Участники: {html.escape(div_title)}</b> (Всего: {total}):\n\nВыберите игрока:"
     await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
 
 # --- Division Management Handlers ---
@@ -1885,7 +1908,7 @@ async def admin_div_view(update: Update, context: ContextTypes.DEFAULT_TYPE, div
         ],
         [
             InlineKeyboardButton("📌 Настроить топики", callback_data=f"admin_div_topics_{div_id}"),
-            InlineKeyboardButton("👥 Участники", callback_data=f"admin_list_div_players_{div_id}_0")
+            InlineKeyboardButton("👥 Участники", callback_data=f"admin_div_players:{div_id}:0")
         ],
         [InlineKeyboardButton("« К списку дивизионов", callback_data="admin_divs_hub")]
     ]
@@ -4284,9 +4307,16 @@ async def admin_view_player(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         ],
         [InlineKeyboardButton("🗑 Исключить из лиги", callback_data=f"admin_delete_player_confirm_{p_id}")],
     ]
-    # Админ дивизиона возвращается в список своего дивизиона, супер-админ — в общий список.
+    # Админ возвращается туда, откуда пришёл (в список дивизиона или общий список).
     p_div_id = p_dict.get("division_id")
-    if p_div_id and not is_global_admin(query.from_user.id):
+    back_cb = context.user_data.get("admin_player_back_cb") if context and context.user_data else None
+    if back_cb:
+        if "div_players" in back_cb:
+            back_text = "« К участникам дивизиона"
+        else:
+            back_text = "« К списку участников"
+        keyboard.append([InlineKeyboardButton(back_text, callback_data=back_cb)])
+    elif p_div_id and not is_global_admin(query.from_user.id):
         keyboard.append([InlineKeyboardButton("« К участникам дивизиона", callback_data=f"admin_div_players:{p_div_id}:0")])
     else:
         keyboard.append([InlineKeyboardButton("« К списку участников", callback_data="admin_list_players_page_0")])
