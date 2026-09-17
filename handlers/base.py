@@ -144,6 +144,50 @@ def round_schedule_missing_message(round_number: int, division_name: str) -> str
     )
 
 
+def _format_round_list(round_numbers: list[int]) -> str:
+    """«3», «3 и 4», «3, 4 и 5» — перечисление номеров туров в тексте админу."""
+    nums = [str(r) for r in round_numbers]
+    if len(nums) <= 1:
+        return "".join(nums)
+    return ", ".join(nums[:-1]) + " и " + nums[-1]
+
+
+def _active_rounds_deadline(active_rounds: list[dict]) -> str:
+    """Дедлайн, до которого дивизион заблокирован.
+
+    Туры открываются парой с общим дедлайном, поэтому берём дедлайн самого
+    старшего активного тура — он же и последний по времени открытия.
+    """
+    if not active_rounds:
+        return ""
+    return str(active_rounds[-1].get("deadline") or "")
+
+
+def max_active_rounds_message(active_rounds: list[dict]) -> str:
+    """Отказ админ-панели: свободных слотов под новые туры в дивизионе нет.
+
+    На вход — строки из `database.get_active_open_rounds`. Отправлять с
+    `parse_mode="HTML"`.
+    """
+    nums = [r["round_number"] for r in active_rounds]
+    return (
+        f"⛔ <b>В дивизионе уже открыты туры {_format_round_list(nums)}.</b>\n"
+        f"Дедлайн: <code>{html.escape(_active_rounds_deadline(active_rounds))}</code>.\n"
+        "Следующие туры можно открыть после наступления дедлайна."
+    )
+
+
+def max_active_rounds_short_message(active_rounds: list[dict]) -> str:
+    """Тот же отказ одной строкой — для текстовых команд «Темшик ...»."""
+    nums = [r["round_number"] for r in active_rounds]
+    return (
+        f"⚠️ <b>Лимит туров!</b> В этом дивизионе уже открыты туры "
+        f"{_format_round_list(nums)} с дедлайном до "
+        f"{html.escape(_active_rounds_deadline(active_rounds))}. "
+        "Следующие туры можно открыть только после завершения дедлайна."
+    )
+
+
 def is_logovo_access_allowed(user_id: int) -> bool:
     """
     Check if a user is permitted to access Logovo.bet.

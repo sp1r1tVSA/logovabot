@@ -11,6 +11,7 @@ from handlers.base import (
     generate_league_table_image,
     resolve_division_id,
     round_schedule_missing_message,
+    max_active_rounds_short_message,
 )
 
 logger = logging.getLogger(__name__)
@@ -645,6 +646,13 @@ async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_T
                 parse_mode="HTML"
             )
             return True
+        except database.MaxActiveRoundsExceededError:
+            active = await asyncio.to_thread(database.get_active_open_rounds, division_id)
+            await msg.reply_text(
+                max_active_rounds_short_message(active),
+                parse_mode="HTML"
+            )
+            return True
         await msg.reply_text(
             f"🔓 <b>Тур {rn} — {html.escape(division_name)} успешно открыт!</b> "
             f"Участники могут вносить результаты.",
@@ -727,6 +735,13 @@ async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_T
         except database.RoundScheduleMissingError:
             await msg.reply_text(
                 round_schedule_missing_message(rn, division_name),
+                parse_mode="HTML"
+            )
+            return True
+        except database.MaxActiveRoundsExceededError:
+            active = await asyncio.to_thread(database.get_active_open_rounds, division_id)
+            await msg.reply_text(
+                max_active_rounds_short_message(active),
                 parse_mode="HTML"
             )
             return True
