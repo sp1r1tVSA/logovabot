@@ -7,9 +7,9 @@ e-sports championships: divisions and rounds, match result intake via AI screens
 standings and Pillow-rendered infographics, a debt/warn discipline system, and a virtual
 prediction market ("Logovo.bet") exposed through a Telegram Mini App.
 
-The project is well past MVP — 246 Python files (117 application modules + 129 pytest
+The project is well past MVP — 245 Python files (116 application modules + 129 pytest
 files), 59 SQLite tables, and ten completed development phases documented in the
-`PHASE_*.md` reports at the repo root. Post-phase work is logged in the numbered
+`PHASE_*.md` reports under `reports/`. Post-phase work is logged in the numbered
 `FIX_*.md` notes and the `*_AUDIT.md` reports beside them.
 
 ---
@@ -112,8 +112,9 @@ never prevents the bot itself from starting. Preserve that isolation.
 | `utils/` | `media_utils.py`, a thin re-export wrapper over `services/animation_sender.py` |
 | `scripts/` (10 scripts) | One-off operational scripts (DB audit, backfills, imports, cache refresh, season reset) |
 | `tests/` | 129 `test_*.py` files, one per feature area; no `__init__.py`, no local `conftest.py` |
-| `assets/`, `players_cache/` | Club logos, OCR crop scratch space, cached generated player cards |
-| `tasks/`, `docs/`, `sandbox/` | Working plan/todo notes, `PURGE_SEASON_GUIDE.md`, and throwaway preview scripts |
+| `assets/` | **Not in git** — emptied on 2026-09-18 with the КПЛ season. Runtime recreates `avatars/` and `players/` on demand; `logos/` must be refilled by hand (see below) |
+| `reports/` | Historical `PHASE_*.md` plans/matrices/reports, `FIX_0*.md` notes and `*_AUDIT.md` audits, moved off the repo root |
+| `tasks/`, `docs/` | Working plan/todo notes and `PURGE_SEASON_GUIDE.md` |
 | `.github/workflows/` | `tests.yml` — the pytest CI job |
 
 `handlers/base.py` holds shared helpers, including the role checks described below.
@@ -208,6 +209,15 @@ recoverable; silently merging two coaches' clubs is not.
 collisions and clubs that sit too close to the fuzzy threshold; it is read-only (the
 connection is closed by a SQLite authorizer) and `--emit-config` prints a ready block.
 
+**Club logos** are a second, independent step. `assets/logos/` was emptied with the КПЛ
+season and is not in git, so every club currently renders with the blank-badge fallback.
+Restoring one takes two edits: drop the PNG into `assets/logos/`, then map the Russian club
+name to that filename in `TEAM_LOGO_MAP` (`services/graphics/table_generator.py:16`) — the
+single source of truth, which the other renderers consume via `get_team_logo_filename`.
+The map still holds the 16 КПЛ names pointing at deleted files; replace them rather than
+adding beside them. Every load site is guarded by `os.path.exists`, so a missing or
+unmapped logo degrades to an empty badge and never raises.
+
 **Discipline:** unplayed matches accrue debts, tracked from `DEBT_TRACKING_START_DATETIME`.
 Three job-queue tasks drive it — deadline reminders and the debt lifecycle tracker every
 30 min, a debts digest to the ПРЕДЫ thread every 12 h. `MAX_WARNS_LIMIT = 4`.
@@ -287,8 +297,10 @@ data and is likewise never committed.
   not current status.
 - `SPEC.md`, `SPEC-team-name-resolution.md` — current specs; the second is the authority on
   the resolver tiers and thresholds described above.
-- `PHASE_*.md`, `FIX_0*.md`, `PRODUCTION_AUDIT.md`, `FULL_BOT_AUDIT.md`, `BUTTON_AUDIT.md`,
-  `MINIAPP_ROUTE_AUDIT.md`, `Project_Audit_Report.md` — per-phase plans, test matrices,
-  fix notes and final reports. Useful history for why a subsystem looks the way it does.
+- `reports/` — `PHASE_*.md`, `FIX_0*.md`, `PRODUCTION_AUDIT.md`, `FULL_BOT_AUDIT.md`,
+  `BUTTON_AUDIT.md`, `MINIAPP_ROUTE_AUDIT.md`, `Project_Audit_Report.md` and
+  `MANUAL_TEST_DIVISION_COMMANDS.md` — per-phase plans, test matrices, fix notes and final
+  reports. Useful history for why a subsystem looks the way it does. Moved off the repo
+  root on 2026-09-18; only `CLAUDE.md`, `README.md` and the two `SPEC*.md` stay there.
 - `.claude/` (agents, commands, skills, prds) and `.apm/` hold agent tooling, not runtime
   code. `.claude/worktrees/` contains throwaway git worktrees.
