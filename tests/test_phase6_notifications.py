@@ -15,6 +15,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import config
 import database
 from services.notification_service import (
     EVENT_TYPE_BET_SETTLED,
@@ -34,17 +35,19 @@ from services.notification_service import (
 class TestPhase6Notifications(unittest.TestCase):
 
     def setUp(self) -> None:
+        self._orig_notif = getattr(config, "SMART_NOTIFICATIONS_ENABLED", False)
+        config.SMART_NOTIFICATIONS_ENABLED = True
         database.init_db()
         with database.transaction() as conn:
             cursor = conn.cursor()
-            cursor.execute("DELETE FROM notification_events WHERE user_id >= 779000")
-            cursor.execute("DELETE FROM notifications WHERE user_id >= 779000")
-            cursor.execute("DELETE FROM user_notification_settings WHERE user_id >= 779000")
-            cursor.execute("DELETE FROM favorites WHERE user_id >= 779000")
-            cursor.execute("DELETE FROM bet_items WHERE bet_id IN (SELECT id FROM user_bets WHERE user_id >= 779000)")
-            cursor.execute("DELETE FROM user_bets WHERE user_id >= 779000")
-            cursor.execute("DELETE FROM user_wallets WHERE user_id >= 779000")
-            cursor.execute("DELETE FROM users WHERE telegram_id >= 779000")
+            cursor.execute("DELETE FROM notification_events WHERE user_id IN (779001, 779002)")
+            cursor.execute("DELETE FROM notifications WHERE user_id IN (779001, 779002)")
+            cursor.execute("DELETE FROM user_notification_settings WHERE user_id IN (779001, 779002)")
+            cursor.execute("DELETE FROM favorites WHERE user_id IN (779001, 779002)")
+            cursor.execute("DELETE FROM bet_items WHERE bet_id IN (SELECT id FROM user_bets WHERE user_id IN (779001, 779002))")
+            cursor.execute("DELETE FROM user_bets WHERE user_id IN (779001, 779002)")
+            cursor.execute("DELETE FROM user_wallets WHERE user_id IN (779001, 779002)")
+            cursor.execute("DELETE FROM users WHERE telegram_id IN (779001, 779002)")
             cursor.execute("DELETE FROM matches WHERE id = 99501")
 
             # Seed user 779001 and 779002
@@ -71,15 +74,16 @@ class TestPhase6Notifications(unittest.TestCase):
     def tearDown(self) -> None:
         with database.transaction() as conn:
             cursor = conn.cursor()
-            cursor.execute("DELETE FROM notification_events WHERE user_id >= 779000")
-            cursor.execute("DELETE FROM notifications WHERE user_id >= 779000")
-            cursor.execute("DELETE FROM user_notification_settings WHERE user_id >= 779000")
-            cursor.execute("DELETE FROM favorites WHERE user_id >= 779000")
-            cursor.execute("DELETE FROM bet_items WHERE bet_id IN (SELECT id FROM user_bets WHERE user_id >= 779000)")
-            cursor.execute("DELETE FROM user_bets WHERE user_id >= 779000")
-            cursor.execute("DELETE FROM user_wallets WHERE user_id >= 779000")
-            cursor.execute("DELETE FROM users WHERE telegram_id >= 779000")
+            cursor.execute("DELETE FROM notification_events WHERE user_id IN (779001, 779002)")
+            cursor.execute("DELETE FROM notifications WHERE user_id IN (779001, 779002)")
+            cursor.execute("DELETE FROM user_notification_settings WHERE user_id IN (779001, 779002)")
+            cursor.execute("DELETE FROM favorites WHERE user_id IN (779001, 779002)")
+            cursor.execute("DELETE FROM bet_items WHERE bet_id IN (SELECT id FROM user_bets WHERE user_id IN (779001, 779002))")
+            cursor.execute("DELETE FROM user_bets WHERE user_id IN (779001, 779002)")
+            cursor.execute("DELETE FROM user_wallets WHERE user_id IN (779001, 779002)")
+            cursor.execute("DELETE FROM users WHERE telegram_id IN (779001, 779002)")
             cursor.execute("DELETE FROM matches WHERE id = 99501")
+        config.SMART_NOTIFICATIONS_ENABLED = getattr(self, "_orig_notif", False)
 
     def test_queue_notification_success_and_read(self) -> None:
         """Successfully queue a notification and verify it is returned for the user."""
@@ -234,6 +238,34 @@ class TestPhase6Notifications(unittest.TestCase):
         events_2 = get_user_notification_events(779002)
         self.assertEqual(len(events_1), 1)
         self.assertEqual(len(events_2), 1)
+
+    def test_smart_notifications_disabled_flag(self) -> None:
+        """When SMART_NOTIFICATIONS_ENABLED is False, notifications and broadcasts are inert."""
+        from services.notification_service import is_smart_notifications_enabled
+        config.SMART_NOTIFICATIONS_ENABLED = False
+
+        self.assertFalse(is_smart_notifications_enabled())
+
+        # queue_notification returns (False, 'disabled')
+        ok, status = queue_notification(
+            user_id=779001,
+            event_type=EVENT_TYPE_GOAL,
+            source_event_id="disabled_test_1",
+            title="Гол!",
+            body="Тест"
+        )
+        self.assertFalse(ok)
+        self.assertEqual(status, "disabled")
+
+        # broadcast_match_event returns 0
+        b_count = broadcast_match_event(
+            match_id=99501,
+            event_type=EVENT_TYPE_GOAL,
+            source_event_id="disabled_test_2",
+            title="Гол!",
+            body="Тест"
+        )
+        self.assertEqual(b_count, 0)
 
 
 if __name__ == "__main__":

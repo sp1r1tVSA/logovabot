@@ -135,9 +135,7 @@ from handlers.admin import (
     admin_open_round_save,
     ADMIN_WAITING_FOR_DEADLINE,
     admin_open_batch_prompt,
-    admin_open_batch_rounds,
     admin_open_batch_deadline,
-    ADMIN_WAITING_FOR_BATCH_ROUNDS,
     ADMIN_WAITING_FOR_BATCH_DEADLINE,
     admin_close_round,
     admin_round_matches,
@@ -378,6 +376,11 @@ def _register_user_handlers(app: Application) -> None:
     app.add_handler(CallbackQueryHandler(show_support, pattern="^menu_support$"))
     app.add_handler(CallbackQueryHandler(show_main_menu, pattern="^main_menu$"))
     app.add_handler(CommandHandler("club", club_command))
+
+    # Logovo Tracker: /tracker и /app выдают ПИН для мобильного приложения.
+    from handlers.tracker import tracker_command
+    app.add_handler(CommandHandler(["tracker", "app"], tracker_command))
+
     app.add_handler(CallbackQueryHandler(show_my_club_card, pattern="^cb_my_club_card$"))
     app.add_handler(CallbackQueryHandler(show_clubs_catalog, pattern="^cb_clubs_catalog$"))
     app.add_handler(CallbackQueryHandler(show_clubs_catalog_for_division, pattern=r"^clubs_catalog_div:(\d+)$"))
@@ -581,7 +584,6 @@ def _register_admin_handlers(app: Application) -> None:
             CallbackQueryHandler(admin_open_batch_prompt, pattern=r"^admin_batch_open_div:\d+$")
         ],
         states={
-            ADMIN_WAITING_FOR_BATCH_ROUNDS: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_open_batch_rounds)],
             ADMIN_WAITING_FOR_BATCH_DEADLINE: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_open_batch_deadline)]
         },
         fallbacks=[

@@ -1,10 +1,27 @@
-"""Inspect the server DB snapshot: schema state and data relevant to debt backfill."""
+import argparse
 import sqlite3
 import datetime
+import os
+import sys
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DB = str(PROJECT_ROOT / "server_league.db")
+
+parser = argparse.ArgumentParser(description="Inspect server DB snapshot")
+parser.add_argument("--db", default=None, help="Path to SQLite db (default: server_league.db or league.db)")
+args = parser.parse_args()
+
+if args.db:
+    DB = args.db
+elif (PROJECT_ROOT / "server_league.db").exists():
+    DB = str(PROJECT_ROOT / "server_league.db")
+else:
+    DB = str(PROJECT_ROOT / "league.db")
+
+if not os.path.exists(DB):
+    sys.exit(f"❌ База данных не найдена: {DB}")
+
+print(f"База данных: {DB}")
 conn = sqlite3.connect(DB)
 conn.row_factory = sqlite3.Row
 

@@ -283,7 +283,17 @@ class TestBettingSystemV2(unittest.TestCase):
         for rnd in (5, 6):
             self.assertEqual(state(rnd), (0, 0), f"Тур {rnd} ещё вне линии")
 
-        # Шаг 3: цикл повторяется — Туры 3-4 в игре, линия на 5-6.
+        # Шаг 3: цикл повторяется — Туры 3-4 в игре, линия на 5-6. Но сначала
+        # должен истечь дедлайн Туров 1-2: одновременно активных туров в
+        # дивизионе не больше MAX_OPEN_ROUNDS_PER_DIVISION, и слот освобождает
+        # именно дедлайн, а не ручное закрытие (см. test_max_active_rounds_limit).
+        with database.transaction() as conn:
+            conn.execute(
+                "UPDATE rounds SET deadline = ? WHERE division_id = ? AND season_id = ? "
+                "AND round_number IN (1, 2)",
+                (PAST_DEADLINE, DIV_ID, SEASON_ID)
+            )
+
         report = database.open_rounds_batch(3, 4, FUTURE_DEADLINE, division_id=DIV_ID, season_id=SEASON_ID)
         self.assertEqual(report["opened"], [3, 4])
         for rnd in (3, 4):

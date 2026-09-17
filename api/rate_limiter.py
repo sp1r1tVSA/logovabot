@@ -15,6 +15,7 @@ Logovo.bet Mini App API.
 меняется на Redis-бэкенд, а вызывающий код остаётся прежним.
 """
 
+import hashlib
 import logging
 import time
 from collections import deque
@@ -158,8 +159,13 @@ SENSITIVE_PATH_MARKERS = (
     "/api/cabinet/match-time",
 )
 
+# Мобильный трекер живёт по своим правилам: он шлёт тики каждые несколько секунд
+# и авторизуется Bearer-токеном, а не initData.
+TRACKER_PATH_PREFIX = "/api/tracker/"
+
 _read_limiter = SlidingWindowLimiter()
 _write_limiter = SlidingWindowLimiter()
+_tracker_limiter = SlidingWindowLimiter()
 _sensitive_interval = MinIntervalLimiter()
 _in_flight = InFlightRegistry()
 
@@ -168,6 +174,7 @@ def reset_all() -> None:
     """Сбросить всё накопленное состояние. Нужно тестам для изоляции."""
     _read_limiter.reset()
     _write_limiter.reset()
+    _tracker_limiter.reset()
     _sensitive_interval.reset()
     _in_flight.reset()
 
@@ -214,6 +221,24 @@ def resolve_identity(request) -> tuple[str, bool]:
     return f"ip:{client_ip(request)}", False
 
 
+def tracker_identity(request) -> str:
+    """
+    Ключ лимита для мобильного трекера.
+
+    Считается из хеша Bearer-токена: сам токен в ключи словаря не кладём, а
+    проверять сессию здесь незачем — лимитер работает до обработчика и не должен
+    зависеть от его хранилища. Запрос без токена всё равно отобьётся 401, но
+    свой лимит он расходует по IP, иначе перебор токенов был бы бесплатным.
+    """
+    header = request.headers.get("Authorization", "")
+    if header.startswith("Bearer "):
+        token = header[7:].strip()
+        if token:
+            digest = hashlib.sha256(token.encode("utf-8")).hexdigest()[:32]
+            return f"tracker:{digest}"
+    return f"tracker-anon:{client_ip(request)}"
+
+
 def check_request(request) -> tuple[bool, str, int]:
     """
     Проверить лимиты окна для запроса.
@@ -222,6 +247,17 @@ def check_request(request) -> tuple[bool, str, int]:
     """
     path = request.path
     method = request.method
+
+    # Трекер считается отдельно и до общих веток: обычный write-бюджет (20/мин)
+    # отрезал бы трансляцию уже на третьей минуте матча.
+    if path.startswith(TRACKER_PATH_PREFIX):
+        allowed, retry_after = _tracker_limiter.check(
+            tracker_identity(request), config.API_RATE_LIMIT_TRACKER_RPM
+        )
+        if not allowed:
+            return False, "rate_limit_exceeded", retry_after
+        return True, "", 0
+
     identity, authenticated = resolve_identity(request)
 
     if method == "GET":

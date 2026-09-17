@@ -62,6 +62,14 @@ from api.routes_player_cabinet import (
     handle_get_cabinet_squad,
     handle_post_cabinet_match_time,
 )
+from api.routes_tracker import (
+    handle_tracker_pair,
+    handle_tracker_matches,
+    handle_tracker_session_start,
+    handle_tracker_session_tick,
+    handle_tracker_session_event,
+    handle_tracker_session_finish,
+)
 from api.routes_user_extras import (
     handle_get_my_stats,
     handle_get_profile_analytics,
@@ -234,6 +242,13 @@ async def lockdown_middleware(request: web.Request, handler):
         return await handler(request)
 
     if not request.path.startswith("/api/"):
+        return await handler(request)
+
+    # Мобильный трекер авторизуется Bearer-токеном сессии, а не initData, поэтому
+    # проверка ниже отбивала бы его безусловным 401. Тот же гейт доступа он
+    # проходит внутри себя: api/routes_tracker.py::_require_session вызывает
+    # check_user_access на каждом запросе, так же FAIL-CLOSED.
+    if request.path.startswith("/api/tracker/"):
         return await handler(request)
 
     from config import is_global_lockdown_enabled
@@ -414,6 +429,14 @@ def create_app() -> web.Application:
     app.router.add_get("/api/cabinet/matches", handle_get_cabinet_matches)
     app.router.add_get("/api/cabinet/squad", handle_get_cabinet_squad)
     app.router.add_post("/api/cabinet/match-time", handle_post_cabinet_match_time)
+
+    # 13. Logovo Tracker («мобильное приложение live-трансляции»)
+    app.router.add_post("/api/tracker/auth/pair", handle_tracker_pair)
+    app.router.add_get("/api/tracker/matches", handle_tracker_matches)
+    app.router.add_post("/api/tracker/session/start", handle_tracker_session_start)
+    app.router.add_post("/api/tracker/session/tick", handle_tracker_session_tick)
+    app.router.add_post("/api/tracker/session/event", handle_tracker_session_event)
+    app.router.add_post("/api/tracker/session/finish", handle_tracker_session_finish)
 
     # Static SPA Frontend & Assets
     app.router.add_get("/", handle_index)

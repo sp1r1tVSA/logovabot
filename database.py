@@ -6,7 +6,7 @@ import threading
 import asyncio
 from typing import Generator
 from contextlib import contextmanager
-from config import DB_PATH, INITIAL_WALLET_BALANCE
+from config import DB_PATH, INITIAL_WALLET_BALANCE, MAX_OPEN_ROUNDS_PER_DIVISION
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +34,29 @@ class RoundScheduleMissingError(ValueError):
             f"Round {round_number} (division={division_id}, season={season_id}) has no matches: "
             "the schedule has not been generated yet."
         )
+
+
+class MaxActiveRoundsExceededError(ValueError):
+    """Бросается, когда открытие тура превышает лимит туров с неистекшим дедлайном.
+
+    Активным считается тур с `is_open = 1` И `deadline > now()`. Число сыгранных
+    матчей не проверяется: слот освобождает только наступление дедлайна, зато
+    освобождает сам — админу не нужно закрывать старые туры руками.
+
+    Наследуется от ValueError по той же причине, что и
+    `RoundScheduleMissingError`: вызывающие уже ловят ValueError от сезонного
+    гейта в тех же самых местах.
+    """
+
+    def __init__(self, division_id: int, active_rounds: list[int], limit: int = MAX_OPEN_ROUNDS_PER_DIVISION):
+        self.division_id = division_id
+        self.active_rounds = active_rounds
+        self.limit = limit
+        super().__init__(
+            f"В дивизионе #{division_id} уже открыто {len(active_rounds)} тура(ов) "
+            f"с действующим дедлайном ({active_rounds}). Лимит: {limit}."
+        )
+
 
 def get_connection() -> sqlite3.Connection:
     """Establish and return a new SQLite database connection."""
@@ -3240,6 +3263,91 @@ def count_round_matches(round_number: int, division_id: int | None = None, seaso
         return _count_round_matches(conn.cursor(), round_number, division_id, s_id)
 
 
+def _resolve_season_id(season_id: int | None) -> int:
+    """Явный сезон или активный; 1 — когда активного сезона в БД ещё нет."""
+    if season_id is not None:
+        return season_id
+    act = get_active_season()
+    return act["id"] if act else 1
+
+
+def _active_open_rounds(cursor, division_id: int, season_id: int) -> list[dict]:
+    """Туры дивизиона, которые прямо сейчас занимают слот открытия.
+
+    Единственная точка, где решается «тур ещё активен или уже нет»: слот держит
+    `is_open = 1` вместе с дедлайном строго в будущем. Тур с истёкшим дедлайном
+    остаётся в БД открытым, но слот освобождает — ручное закрытие админом не
+    требуется. Тур без разбираемого дедлайна (NULL или мусор) слот не занимает:
+    иначе один такой тур блокировал бы дивизион навсегда.
+    """
+    cursor.execute(
+        "SELECT round_number, is_open, deadline, division_id, season_id FROM rounds "
+        "WHERE is_open = 1 AND division_id = ? AND (season_id = ? OR season_id IS NULL) "
+        "ORDER BY round_number",
+        (division_id, season_id)
+    )
+    now = datetime.datetime.now()
+    active: list[dict] = []
+    for row in cursor.fetchall():
+        dt = parse_flexible_datetime(row["deadline"])
+        if dt and dt > now:
+            active.append(dict(row))
+    return active
+
+
+def get_active_open_rounds(division_id: int, season_id: int | None = None) -> list[dict]:
+    """Открытые туры дивизиона с неистекшим дедлайном, по возрастанию номера."""
+    s_id = _resolve_season_id(season_id)
+    with transaction() as conn:
+        return _active_open_rounds(conn.cursor(), division_id, s_id)
+
+
+def _assert_rounds_within_limit(cursor, round_numbers: list[int], division_id: int, season_id: int) -> None:
+    """Гейт лимита: проверяет, влезут ли `round_numbers` в свободные слоты.
+
+    Туры, которые уже среди активных, слот не занимают повторно — продление или
+    смена дедлайна уже открытого тура проходит свободно. Проверка идёт внутри
+    транзакции вызывающего и ДО первой записи, чтобы отказ не оставлял следов.
+    """
+    active = _active_open_rounds(cursor, division_id, season_id)
+    active_numbers = [r["round_number"] for r in active]
+    incoming = [r for r in round_numbers if r not in set(active_numbers)]
+    if not incoming:
+        return
+    if len(active_numbers) + len(incoming) > MAX_OPEN_ROUNDS_PER_DIVISION:
+        raise MaxActiveRoundsExceededError(division_id, active_numbers, MAX_OPEN_ROUNDS_PER_DIVISION)
+
+
+def get_next_rounds_to_open(
+    division_id: int,
+    season_id: int | None = None,
+    count: int = MAX_OPEN_ROUNDS_PER_DIVISION,
+) -> list[int]:
+    """Следующие `count` туров дивизиона, готовых к открытию.
+
+    Отсчёт идёт от максимального когда-либо открытого тура (истёкший дедлайн
+    значения не имеет — тур всё равно был открыт), поэтому после туров 1–2 сразу
+    предлагаются 3–4. Если не открывался ни один — `[1, 2]`. Туры без
+    сгенерированного расписания отбрасываются: открыть их всё равно нельзя.
+    """
+    s_id = _resolve_season_id(season_id)
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT MAX(round_number) AS max_r FROM rounds "
+            "WHERE is_open = 1 AND division_id = ? AND (season_id = ? OR season_id IS NULL)",
+            (division_id, s_id)
+        )
+        row = cursor.fetchone()
+        max_r = (row["max_r"] if row else None) or 0
+
+        return [
+            r_num
+            for r_num in range(max_r + 1, max_r + 1 + count)
+            if _count_round_matches(cursor, r_num, division_id, s_id) > 0
+        ]
+
+
 def open_rounds_batch(
     start_round: int,
     end_round: int,
@@ -3280,6 +3388,20 @@ def open_rounds_batch(
                 opened.append(r_num)
             else:
                 skipped.append(r_num)
+
+        # Лимит считается по турам, которые реально откроются: пропущенные из-за
+        # отсутствия расписания слотов не занимают. Проверка — до первой записи,
+        # поэтому превышение не открывает даже часть диапазона.
+        if opened:
+            if division_id is not None:
+                _assert_rounds_within_limit(cursor, opened, div_id, s_id)
+            else:
+                for scope_div_id in sorted({
+                    d
+                    for r_num in opened
+                    for d in _round_scope_divisions(cursor, r_num, s_id)
+                }):
+                    _assert_rounds_within_limit(cursor, opened, scope_div_id, s_id)
 
         for r_num in opened:
             cursor.execute(
@@ -3324,10 +3446,11 @@ def open_rounds_batch(
 
     # 🎰 Парный цикл «два через два»: открытые для игры туры ушли из линии —
     # автоматически выставляем её на два следующих тура.
+    advanced = []
     if opened:
-        advance_betting_line_pair(division_id=division_id, season_id=s_id)
+        advanced = advance_betting_line_pair(division_id=division_id, season_id=s_id)
 
-    return {"opened": opened, "skipped": skipped}
+    return {"opened": opened, "skipped": skipped, "advanced": advanced}
 
 def get_open_pending_matches() -> list[dict]:
     """Get all pending matches where the round is open and not extended, scoped by division and season."""
@@ -3570,6 +3693,33 @@ def pre_register_player(username: str, team_name: str) -> int:
         )
         return temp_id
 
+def pre_register_player_to_division(username: str, division_id: int) -> int:
+    """Pre-register or update a player by username into a division without a club assigned."""
+    username_clean = username.strip().lstrip("@")
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT telegram_id FROM users WHERE LOWER(username) = LOWER(?)", (username_clean,))
+        row = cursor.fetchone()
+        if row:
+            tg_id = row[0]
+            cursor.execute(
+                "UPDATE users SET division_id = ?, role = CASE WHEN role = 'admin' THEN 'admin' ELSE 'player' END WHERE telegram_id = ?",
+                (division_id, tg_id)
+            )
+            return tg_id
+        
+        cursor.execute("SELECT MIN(telegram_id) FROM users")
+        min_row = cursor.fetchone()
+        min_id = min_row[0] if min_row and min_row[0] else 0
+        temp_id = min(min_id - 1, -1)
+        
+        cursor.execute(
+            "INSERT INTO users (telegram_id, username, team_name, league_name, role, division_id, warn_count) "
+            "VALUES (?, ?, NULL, 'Основная', 'player', ?, 0)",
+            (temp_id, username_clean, division_id)
+        )
+        return temp_id
+
 def handle_user_startup(telegram_id: int, username: str | None, default_role: str = 'user') -> None:
     """
     Handle a user starting the bot.
@@ -3599,6 +3749,7 @@ def handle_user_startup(telegram_id: int, username: str | None, default_role: st
                 new_league = exists['league_name'] or pre_reg['league_name']
                 new_role = pre_reg['role'] if exists['role'] == 'user' else exists['role']
                 new_notif = 1 if (pre_reg['team_name'] and not exists['team_name']) else exists['pending_notification']
+                new_division = exists['division_id'] if ('division_id' in exists.keys() and exists['division_id'] is not None) else (pre_reg['division_id'] if 'division_id' in pre_reg.keys() else None)
                 
                 # Free team_name on old record to prevent UNIQUE constraint conflict
                 cursor.execute("UPDATE users SET team_name = NULL WHERE telegram_id = ?", (old_id,))
@@ -3615,8 +3766,8 @@ def handle_user_startup(telegram_id: int, username: str | None, default_role: st
                 cursor.execute("DELETE FROM users WHERE telegram_id = ?", (old_id,))
                 
                 cursor.execute(
-                    "UPDATE users SET username = ?, team_name = ?, league_name = ?, role = ?, pending_notification = ? WHERE telegram_id = ?",
-                    (username, new_team, new_league, new_role, new_notif, telegram_id)
+                    "UPDATE users SET username = ?, team_name = ?, league_name = ?, role = ?, pending_notification = ?, division_id = ? WHERE telegram_id = ?",
+                    (username, new_team, new_league, new_role, new_notif, new_division, telegram_id)
                 )
                 logger.info(f"Merged pre-registered user @{username} (old_id: {old_id}) into existing user {telegram_id}")
             else:
@@ -3635,12 +3786,13 @@ def handle_user_startup(telegram_id: int, username: str | None, default_role: st
             
             # 2. Insert new user record first so foreign keys (matches, user_warns) can reference real telegram_id
             cursor.execute(
-                "INSERT INTO users (telegram_id, username, team_name, league_name, role, registered_at, pending_notification, warn_count, squad_photo_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO users (telegram_id, username, team_name, league_name, role, registered_at, pending_notification, warn_count, squad_photo_id, division_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     telegram_id, username, old_team, pre_reg['league_name'], 
                     pre_reg['role'], pre_reg['registered_at'], 1 if old_team else 0,
                     pre_reg['warn_count'] if 'warn_count' in pre_reg.keys() else 0,
-                    pre_reg['squad_photo_id'] if 'squad_photo_id' in pre_reg.keys() else None
+                    pre_reg['squad_photo_id'] if 'squad_photo_id' in pre_reg.keys() else None,
+                    pre_reg['division_id'] if 'division_id' in pre_reg.keys() else None
                 )
             )
             
@@ -4752,6 +4904,15 @@ def update_round_status(round_number: int, is_open: bool, deadline: str | None =
             if _count_round_matches(cursor, round_number, division_id, s_id) == 0:
                 raise RoundScheduleMissingError(round_number, division_id, s_id)
 
+            # Лимит одновременно активных туров — второе предусловие открытия.
+            # Уже активный тур собственный слот повторно не занимает, поэтому
+            # смена дедлайна открытого тура сюда не упирается.
+            if division_id is not None:
+                _assert_rounds_within_limit(cursor, [round_number], division_id, s_id)
+            else:
+                for scope_div_id in _round_scope_divisions(cursor, round_number, s_id):
+                    _assert_rounds_within_limit(cursor, [round_number], scope_div_id, s_id)
+
             if division_id is not None:
                 cursor.execute(
                     "INSERT OR IGNORE INTO rounds (season_id, division_id, round_number, is_open, deadline) VALUES (?, ?, ?, 0, NULL)",
@@ -4833,7 +4994,8 @@ def update_round_status(round_number: int, is_open: bool, deadline: str | None =
         #
         # 🎰 Парный цикл «два через два»: как только туры открыты для игры,
         # линия автоматически уходит на два следующих тура.
-        advance_betting_line_pair(division_id=division_id, season_id=s_id)
+        return advance_betting_line_pair(division_id=division_id, season_id=s_id)
+    return []
 
 
 def set_round_bets_open(
@@ -9048,27 +9210,45 @@ def assign_user_division(telegram_id: int, division_id: int | None) -> None:
         )
 
 
-def get_division_users(division_id: int | None) -> list[dict]:
+def get_division_users(division_id: int | None, with_team_only: bool = False) -> list[dict]:
     """
     Retrieve all users belonging to a specific division.
     If division_id is None, returns legacy users without assigned division.
+    If with_team_only is True, returns only users who have a team_name assigned.
     """
     with transaction() as conn:
         cursor = conn.cursor()
         if division_id is None:
-            cursor.execute("""
-                SELECT telegram_id, username, team_name, league_name, role, division_id, warn_count, squad_photo_id
-                FROM users
-                WHERE division_id IS NULL AND team_name IS NOT NULL AND team_name != ''
-                ORDER BY team_name ASC
-            """)
+            if with_team_only:
+                cursor.execute("""
+                    SELECT telegram_id, username, team_name, league_name, role, division_id, warn_count, squad_photo_id
+                    FROM users
+                    WHERE division_id IS NULL AND team_name IS NOT NULL AND team_name != ''
+                    ORDER BY team_name ASC
+                """)
+            else:
+                cursor.execute("""
+                    SELECT telegram_id, username, team_name, league_name, role, division_id, warn_count, squad_photo_id
+                    FROM users
+                    WHERE division_id IS NULL
+                    ORDER BY COALESCE(team_name, username, CAST(telegram_id AS TEXT)) ASC
+                """)
         else:
-            cursor.execute("""
-                SELECT telegram_id, username, team_name, league_name, role, division_id, warn_count, squad_photo_id
-                FROM users
-                WHERE division_id = ? AND team_name IS NOT NULL AND team_name != ''
-                ORDER BY team_name ASC
-            """, (division_id,))
+            if with_team_only:
+                cursor.execute("""
+                    SELECT telegram_id, username, team_name, league_name, role, division_id, warn_count, squad_photo_id
+                    FROM users
+                    WHERE division_id = ? AND team_name IS NOT NULL AND team_name != ''
+                    ORDER BY team_name ASC
+                """, (division_id,))
+            else:
+                cursor.execute("""
+                    SELECT telegram_id, username, team_name, league_name, role, division_id, warn_count, squad_photo_id
+                    FROM users
+                    WHERE division_id = ?
+                    ORDER BY CASE WHEN team_name IS NOT NULL AND team_name != '' THEN 0 ELSE 1 END,
+                             COALESCE(team_name, username, CAST(telegram_id AS TEXT)) ASC
+                """, (division_id,))
         return [dict(r) for r in cursor.fetchall()]
 
 

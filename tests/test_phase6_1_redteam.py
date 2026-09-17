@@ -34,10 +34,12 @@ import sys
 import threading
 import time
 import unittest
+from unittest.mock import patch
 from urllib.parse import urlencode
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import config
 import database
 from api.auth import validate_telegram_init_data, get_authenticated_user
 from config import TOKEN
@@ -531,24 +533,25 @@ class TestIntelligenceMathAndNotifications(Phase61RedTeamTestBase):
 
     def test_19_notification_flood_attack_deduplication(self) -> None:
         """STEP 30: 100 identical notification dispatches produce exactly 1 queued event."""
-        queued_count = 0
-        duplicate_count = 0
+        with patch.object(config, "SMART_NOTIFICATIONS_ENABLED", True, create=True):
+            queued_count = 0
+            duplicate_count = 0
 
-        for _ in range(100):
-            ok, status = queue_notification(
-                user_id=886601,
-                event_type="GOAL",
-                source_event_id="flood_event_goal_99",
-                title="Гол!",
-                body="Порту забил гол"
-            )
-            if ok:
-                queued_count += 1
-            elif status == "duplicate":
-                duplicate_count += 1
+            for _ in range(100):
+                ok, status = queue_notification(
+                    user_id=886601,
+                    event_type="GOAL",
+                    source_event_id="flood_event_goal_99",
+                    title="Гол!",
+                    body="Порту забил гол"
+                )
+                if ok:
+                    queued_count += 1
+                elif status == "duplicate":
+                    duplicate_count += 1
 
-        self.assertEqual(queued_count, 1, "Exactly one notification must be queued")
-        self.assertEqual(duplicate_count, 99, "99 duplicates must be rejected by unique constraint")
+            self.assertEqual(queued_count, 1, "Exactly one notification must be queued")
+            self.assertEqual(duplicate_count, 99, "99 duplicates must be rejected by unique constraint")
 
 
 class TestDatabaseIntegrityAndPaginationBounds(Phase61RedTeamTestBase):

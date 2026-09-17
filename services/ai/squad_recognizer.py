@@ -21,6 +21,8 @@ from services.ai.ai_recognizer import (
     _get_gemini_opener,
     clean_json_response,
     clean_player_name,
+    get_ordered_ocr_keys,
+    get_ordered_ocr_models,
 )
 
 logger = logging.getLogger(__name__)
@@ -28,59 +30,56 @@ logger = logging.getLogger(__name__)
 MAX_SQUAD_PLAYERS = 40
 
 PROMPT_TEXT = """
-Ты — узкоспециализированный OCR-сканер скриншотов состава команды из FIFA / EA FC Mobile / eFootball.
+You are an expert OCR system for football / soccer squad and lineup screens (EA Sports FC, FIFA Mobile, eFootball).
+Extract the visible starting lineup and substitutes shown on the screenshot.
 
-Твоя единственная задача — БУКВАЛЬНО считать со скриншота фамилии/имена футболистов и подписанную рядом позицию.
-
-ПРАВИЛА:
-1. Считывай ТОЛЬКО то, что реально напечатано на изображении. Ничего не додумывай, не дополняй состав «известными» игроками клуба и не исправляй фамилии на «правильные».
-2. Если игрок на скриншоте есть, но его позиция не подписана — верни "position": null. НЕ угадывай позицию.
-3. Считывай всех видимых футболистов: стартовый состав, запас и резерв.
-4. Не включай тренеров, названия клубов, названия лиг, кнопки интерфейса, рейтинги, химию, цену и номера игроков в поле "name".
-5. Позиция — ровно тот код, что напечатан на экране (ВР, ЦЗ, ЛЗ, ПЗ, ЦОП, ЦП, ЦАП, ЛП, ПП, ЛВ, ПВ, ФРД, НАП, GK, CB, LB, RB, CDM, CM, CAM, LM, RM, LW, RW, CF, ST).
-6. Если один и тот же футболист виден дважды — верни его один раз.
-7. Если на изображении нет состава футбольной команды — верни {"players": []}.
-
-ФОРМАТ ОТВЕТА — строго JSON, без markdown и без комментариев:
+Return JSON strictly matching this schema:
 {
   "players": [
-    {"name": "Viktor Gyökeres", "position": "ST"},
-    {"name": "Francisco Trincão", "position": null}
+    {"name": "SURNAME or FULL NAME", "position": "ST"}
   ]
 }
+
+Rules:
+- Read only names that are visibly rendered. Do NOT guess unreadable names.
+- Drop kit numbers, ratings, chemistry values, club badges.
+- 'position' must be the 2-4 letter abbreviation printed near the player (e.g. ST, CF, LW, RW, CAM, CM, CDM, LM, RM, CB, LB, RB, LWB, RWB, GK, or Russian equivalents: ВР, ЦЗ, ПЗ, ЛЗ, ЦОП, ЦП, ЦАП, ЛП, ПП, ЛВ, ПВ, НАП, ФРВ). If no position is printed, use null.
+- If the image is not a lineup/squad screen, return {"players": []}.
+- Return ONLY valid JSON, without markdown formatting or code fences.
 """
 
 
-def _parse_players(parsed_data: dict) -> list[dict]:
-    raw = parsed_data.get("players")
-    if not isinstance(raw, list):
+def _parse_players(payload: dict) -> list[dict]:
+    raw_list = payload.get("players")
+    if not isinstance(raw_list, list):
         return []
 
-    players: list[dict] = []
+    result: list[dict] = []
     seen: set[str] = set()
-    for item in raw:
-        if isinstance(item, dict):
-            raw_name = item.get("name") or item.get("player_name") or ""
-            raw_pos = item.get("position") or item.get("pos")
-        else:
-            raw_name, raw_pos = str(item), None
-
-        name = clean_player_name(raw_name)
-        if not name or len(name) > 50 or not re.search(r"[^\W\d_]", name):
+    for item in raw_list:
+        if not isinstance(item, dict):
             continue
-
-        key = name.casefold()
-        if key in seen:
+        raw_name = item.get("name") or ""
+        cleaned_name = clean_player_name(str(raw_name))
+        if not cleaned_name:
             continue
-        seen.add(key)
+        norm_key = cleaned_name.lower()
+        if norm_key in seen:
+            continue
+        seen.add(norm_key)
 
-        pos = str(raw_pos).strip() if raw_pos else None
-        players.append({"player_name": name, "position": pos or None})
+        raw_pos = item.get("position")
+        pos_str = str(raw_pos).strip().upper() if raw_pos else None
+        if pos_str and len(pos_str) > 6:
+            pos_str = None
 
-        if len(players) >= MAX_SQUAD_PLAYERS:
+        result.append({
+            "player_name": cleaned_name,
+            "position": pos_str,
+        })
+        if len(result) >= MAX_SQUAD_PLAYERS:
             break
-
-    return players
+    return result
 
 
 def recognize_squad_screenshot_bytes(
@@ -94,8 +93,8 @@ def recognize_squad_screenshot_bytes(
     Returns `[{"player_name": str, "position": str | None}, ...]`, an empty list
     when the image holds no readable squad, or None when every model failed.
     """
-    target_api_key = (api_key or config.GEMINI_API_KEY).strip()
-    if not target_api_key:
+    keys_to_try = get_ordered_ocr_keys(api_key)
+    if not keys_to_try:
         logger.error("GEMINI_API_KEY is empty or not set!")
         return None
     if not image_bytes:
@@ -118,41 +117,45 @@ def recognize_squad_screenshot_bytes(
     }
     body = json.dumps(payload).encode("utf-8")
 
-    for m_name in GEMINI_MODELS:
-        try:
-            req = urllib.request.Request(
-                f"{base_url}/v1beta/models/{m_name}:generateContent?key={target_api_key}",
-                data=body,
-                headers={
-                    "Content-Type": "application/json",
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-                },
-            )
-            with opener.open(req, timeout=30) as response:
-                res_json = json.loads(response.read().decode("utf-8"))
+    for m_name in get_ordered_ocr_models():
+        for target_api_key in keys_to_try:
+            try:
+                req = urllib.request.Request(
+                    f"{base_url}/v1beta/models/{m_name}:generateContent?key={target_api_key}",
+                    data=body,
+                    headers={
+                        "Content-Type": "application/json",
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                    },
+                )
+                with opener.open(req, timeout=30) as response:
+                    res_json = json.loads(response.read().decode("utf-8"))
 
-            candidates = res_json.get("candidates", [])
-            if not candidates or "content" not in candidates[0]:
-                logger.warning(f"Gemini model '{m_name}' returned no candidates for squad OCR")
+                candidates = res_json.get("candidates", [])
+                if not candidates or "content" not in candidates[0]:
+                    logger.warning(f"Gemini model '{m_name}' returned no candidates for squad OCR")
+                    continue
+
+                text_content = candidates[0]["content"]["parts"][0]["text"]
+                parsed_data = json.loads(clean_json_response(text_content))
+                if not isinstance(parsed_data, dict):
+                    logger.warning(f"Gemini model '{m_name}' returned non-dict JSON for squad OCR")
+                    continue
+
+                players = _parse_players(parsed_data)
+                logger.info(f"Squad OCR ({m_name}) recognized {len(players)} player(s)")
+                return players
+
+            except urllib.error.HTTPError as e:
+                error_body = e.read().decode("utf-8", errors="ignore")
+                key_suffix = f"...{target_api_key[-4:]}" if len(target_api_key) > 4 else "***"
+                logger.warning(f"Gemini model '{m_name}' (key {key_suffix}) HTTP {e.code}: {error_body[:300]}")
+                if e.code in (429, 403, 503):
+                    continue
+                continue
+            except Exception as e:
+                logger.exception(f"Gemini model '{m_name}' squad recognition error: {e}")
                 continue
 
-            text_content = candidates[0]["content"]["parts"][0]["text"]
-            parsed_data = json.loads(clean_json_response(text_content))
-            if not isinstance(parsed_data, dict):
-                logger.warning(f"Gemini model '{m_name}' returned non-dict JSON for squad OCR")
-                continue
-
-            players = _parse_players(parsed_data)
-            logger.info(f"Squad OCR ({m_name}) recognized {len(players)} player(s)")
-            return players
-
-        except urllib.error.HTTPError as e:
-            error_body = e.read().decode("utf-8", errors="ignore")
-            logger.warning(f"Gemini model '{m_name}' HTTP {e.code}: {error_body[:300]}")
-            continue
-        except Exception as e:
-            logger.exception(f"Gemini model '{m_name}' squad recognition error: {e}")
-            continue
-
-    logger.error("All Gemini models failed for squad recognition.")
+    logger.error("All Gemini models and keys failed for squad recognition.")
     return None

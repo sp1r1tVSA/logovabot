@@ -3,6 +3,7 @@ import base64
 import json
 import re
 import logging
+import threading
 import urllib.request
 import urllib.error
 import config
@@ -12,10 +13,7 @@ logger = logging.getLogger(__name__)
 GEMINI_MODELS = [
     "gemini-3.1-flash-lite",
     "gemini-3.5-flash-lite",
-    "gemini-3.5-flash",
-    "gemini-3.6-flash",
-    "gemini-2.0-flash",
-    "gemini-2.0-flash-lite",
+    "gemini-2.5-flash-lite",
 ]
 
 POS_TOKENS = {
@@ -427,6 +425,49 @@ def _get_gemini_opener():
     # Explicitly disable proxy for direct connection if proxy is inactive/down
     return urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
+_ocr_key_index = 0
+_ocr_key_lock = threading.Lock()
+
+def get_ordered_ocr_keys(api_key: str | None = None) -> list[str]:
+    """
+    Возвращает список API-ключей Gemini для Vision OCR с ротацией Round-Robin.
+    Каждый следующий вызов сдвигает начальный ключ, распределяя запросы
+    равномерно по всем доступным ключам (балансировка лимитов RPM).
+    """
+    if api_key:
+        return [k.strip() for k in api_key.split(",") if k.strip()]
+
+    keys = getattr(config, "GEMINI_API_KEYS", [])
+    if not keys:
+        single = (getattr(config, "GEMINI_API_KEY", "") or "").strip()
+        keys = [k.strip() for k in single.split(",") if k.strip()]
+
+    if not keys:
+        return []
+    if len(keys) == 1:
+        return keys
+
+    global _ocr_key_index
+    with _ocr_key_lock:
+        idx = _ocr_key_index % len(keys)
+        _ocr_key_index += 1
+        return keys[idx:] + keys[:idx]
+
+_ocr_model_index = 0
+_ocr_model_lock = threading.Lock()
+
+def get_ordered_ocr_models() -> list[str]:
+    """
+    Возвращает список моделей Gemini для Vision OCR с ротацией Round-Robin.
+    Каждый следующий вызов сдвигает начальную модель, балансируя нагрузку
+    по квотам и лимитам RPM между всеми тремя моделями.
+    """
+    global _ocr_model_index
+    with _ocr_model_lock:
+        idx = _ocr_model_index % len(GEMINI_MODELS)
+        _ocr_model_index += 1
+        return GEMINI_MODELS[idx:] + GEMINI_MODELS[:idx]
+
 def recognize_match_screenshots_bytes(
     images_bytes_list: list[bytes], 
     mime_type: str = "image/jpeg", 
@@ -434,9 +475,8 @@ def recognize_match_screenshots_bytes(
     caption: str = "",
     squad_hints: dict[str, list[str]] = None
 ) -> dict | None:
-    target_api_key = (api_key or config.GEMINI_API_KEY).strip()
-
-    if not target_api_key:
+    keys_to_try = get_ordered_ocr_keys(api_key)
+    if not keys_to_try:
         logger.error("GEMINI_API_KEY is empty or not set!")
         return None
 
@@ -445,47 +485,48 @@ def recognize_match_screenshots_bytes(
 
     opener = _get_gemini_opener()
 
-    for m_name in GEMINI_MODELS:
-        try:
-            prompt_with_caption = PROMPT_TEXT
-            if squad_hints:
-                prompt_with_caption += "\n\n--- ОФИЦИАЛЬНЫЕ СОСТАВЫ КЛУБОВ ИЗ БАЗЫ ДАННЫХ ---\n"
-                for tname, splayers in squad_hints.items():
-                    if splayers:
-                        prompt_with_caption += f"• Клуб «{tname}»: {', '.join(splayers)}\n"
-            if caption:
-                prompt_with_caption += f"\n\n--- ПОДПИСЬ ПОЛЬЗОВАТЕЛЯ ---\n{caption}"
-                
-            parts = [{"text": prompt_with_caption}]
-            for img_bytes in images_bytes_list:
-                parts.append({
-                    "inline_data": {
-                        "mime_type": mime_type,
-                        "data": base64.b64encode(img_bytes).decode("utf-8")
-                    }
-                })
-
-            # Безопасный payload без конфликтных полей в generationConfig
-            payload = {
-                "contents": [{"parts": parts}],
-                "generationConfig": {
-                    "temperature": 0.0
-                }
+    prompt_with_caption = PROMPT_TEXT
+    if squad_hints:
+        prompt_with_caption += "\n\n--- ОФИЦИАЛЬНЫЕ СОСТАВЫ КЛУБОВ ИЗ БАЗЫ ДАННЫХ ---\n"
+        for tname, splayers in squad_hints.items():
+            if splayers:
+                prompt_with_caption += f"• Клуб «{tname}»: {', '.join(splayers)}\n"
+    if caption:
+        prompt_with_caption += f"\n\n--- ПОДПИСЬ ПОЛЬЗОВАТЕЛЯ ---\n{caption}"
+        
+    parts = [{"text": prompt_with_caption}]
+    for img_bytes in images_bytes_list:
+        parts.append({
+            "inline_data": {
+                "mime_type": mime_type,
+                "data": base64.b64encode(img_bytes).decode("utf-8")
             }
+        })
 
-            base_url = os.environ.get("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com").rstrip("/")
-            url = f"{base_url}/v1beta/models/{m_name}:generateContent?key={target_api_key}"
-            req = urllib.request.Request(
-                url,
-                data=json.dumps(payload).encode("utf-8"),
-                headers={
-                    "Content-Type": "application/json",
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-                }
-            )
+    payload = {
+        "contents": [{"parts": parts}],
+        "generationConfig": {
+            "temperature": 0.0
+        }
+    }
+    payload_bytes = json.dumps(payload).encode("utf-8")
+    base_url = os.environ.get("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com").rstrip("/")
 
-            with opener.open(req, timeout=30) as response:
-                res_json = json.loads(response.read().decode("utf-8"))
+    for m_name in get_ordered_ocr_models():
+        for target_api_key in keys_to_try:
+            try:
+                url = f"{base_url}/v1beta/models/{m_name}:generateContent?key={target_api_key}"
+                req = urllib.request.Request(
+                    url,
+                    data=payload_bytes,
+                    headers={
+                        "Content-Type": "application/json",
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+                    }
+                )
+
+                with opener.open(req, timeout=30) as response:
+                    res_json = json.loads(response.read().decode("utf-8"))
 
                 candidates = res_json.get("candidates", [])
                 if candidates and "content" in candidates[0]:
@@ -577,18 +618,19 @@ def recognize_match_screenshots_bytes(
                     logger.warning(f"Gemini model '{m_name}' returned no candidates: {res_json}")
                     continue
 
-        except urllib.error.HTTPError as e:
-            error_body = e.read().decode("utf-8", errors="ignore")
-            logger.warning(f"Gemini model '{m_name}' HTTP {e.code}: {error_body[:300]}")
-            if e.code == 429:
-                import time
-                time.sleep(1.0)
-            continue
-        except Exception as e:
-            logger.exception(f"Gemini model '{m_name}' recognition error: {e}")
-            continue
+            except urllib.error.HTTPError as e:
+                error_body = e.read().decode("utf-8", errors="ignore")
+                key_suffix = f"...{target_api_key[-4:]}" if len(target_api_key) > 4 else "***"
+                logger.warning(f"Gemini model '{m_name}' (key {key_suffix}) HTTP {e.code}: {error_body[:300]}")
+                if e.code in (429, 403, 503):
+                    # Лимит или временная недоступность ключа -> сразу пробуем следующий ключ из пула
+                    continue
+                continue
+            except Exception as e:
+                logger.exception(f"Gemini model '{m_name}' recognition error: {e}")
+                continue
 
-    logger.error("All Gemini Vision fallback models failed or were rate-limited.")
+    logger.error("All Gemini Vision fallback models and keys failed or were rate-limited.")
     return None
 
 def recognize_match_screenshot_bytes(image_bytes: bytes, mime_type: str = "image/jpeg", api_key: str = None, caption: str = "") -> dict | None:

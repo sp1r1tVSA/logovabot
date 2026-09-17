@@ -16,6 +16,7 @@ from typing import Any
 
 from telegram.error import TelegramError
 
+import config
 import database
 from services.intelligence_engine import get_match_intelligence
 from services.notification_service import mark_notification_sent
@@ -87,6 +88,9 @@ async def process_notification_queue_job(context: Any) -> None:
     Dispatches pending notifications to users via Telegram bot.
     Runs every 10-15 seconds.
     """
+    if not getattr(config, "SMART_NOTIFICATIONS_ENABLED", False):
+        return
+
     if not hasattr(context, "bot") or context.bot is None:
         return
 
