@@ -142,3 +142,18 @@ API_SENSITIVE_MIN_INTERVAL = float(os.getenv("API_SENSITIVE_MIN_INTERVAL", "2.0"
 # поэтому доверяем заголовку только при явном включении (за nginx/Cloudflare).
 API_TRUST_PROXY_HEADERS = os.getenv("API_TRUST_PROXY_HEADERS", "false").strip().lower() in ("true", "1", "yes")
 
+
+# Logovo Tracker: мобильное приложение live-трансляции матчей (api/routes_tracker.py).
+# Одноразовый ПИН из бота живёт 10 минут — столько нужно, чтобы дойти до телефона.
+TRACKER_PIN_TTL_SECONDS = int(os.getenv("TRACKER_PIN_TTL_SECONDS", "600"))
+# Сессия устройства протухает после суток без запросов: матч длится минуты,
+# а забытый на чужом телефоне токен — нет.
+TRACKER_SESSION_TTL_SECONDS = int(os.getenv("TRACKER_SESSION_TTL_SECONDS", "86400"))
+# Приложение шлёт тики каждые несколько секунд, поэтому обычный write-лимит
+# (API_RATE_LIMIT_WRITE_RPM) ему не подходит — у трекера свой бюджет.
+API_RATE_LIMIT_TRACKER_RPM = int(os.getenv("API_RATE_LIMIT_TRACKER_RPM", "180"))
+# Кадр плашки события: 2 МБ с запасом хватает на скриншот телефона в JPEG.
+TRACKER_MAX_SCREENSHOT_BYTES = int(os.getenv("TRACKER_MAX_SCREENSHOT_BYTES", str(2 * 1024 * 1024)))
+# Распознавание фамилии с кадра — необязательный шаг, его можно выключить.
+TRACKER_OCR_ENABLED = os.getenv("TRACKER_OCR_ENABLED", "true").strip().lower() in ("true", "1", "yes")
+

@@ -378,6 +378,11 @@ def _register_user_handlers(app: Application) -> None:
     app.add_handler(CallbackQueryHandler(show_support, pattern="^menu_support$"))
     app.add_handler(CallbackQueryHandler(show_main_menu, pattern="^main_menu$"))
     app.add_handler(CommandHandler("club", club_command))
+
+    # Logovo Tracker: /tracker и /app выдают ПИН для мобильного приложения.
+    from handlers.tracker import tracker_command
+    app.add_handler(CommandHandler(["tracker", "app"], tracker_command))
+
     app.add_handler(CallbackQueryHandler(show_my_club_card, pattern="^cb_my_club_card$"))
     app.add_handler(CallbackQueryHandler(show_clubs_catalog, pattern="^cb_clubs_catalog$"))
     app.add_handler(CallbackQueryHandler(show_clubs_catalog_for_division, pattern=r"^clubs_catalog_div:(\d+)$"))
