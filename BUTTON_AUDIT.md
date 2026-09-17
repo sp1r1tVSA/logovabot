@@ -119,7 +119,7 @@
 | BTN-TG-062 | UNKNOWN | Telegram | admin_div_toggle | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
 | BTN-TG-063 | ✏️ Переименовать | Telegram | admin_div_rename_start | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
 | BTN-TG-064 | 📌 Настроить топики | Telegram | admin_div_topics_menu | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
-| BTN-TG-065 | 👥 Участники | Telegram | admin_list_div_players | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
+| BTN-TG-065 | 👥 Участники | Telegram | admin_div_manage_players | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
 | BTN-TG-066 | « К списку дивизионов | Telegram | admin_divs_hub | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
 | BTN-TG-067 | 📸 Драфты: {drafts_tid or  | Telegram | admin_div_settopic_prompt | N/A (Bot Callback) | Нет | Да | 🟢 PASS |
 | BTN-TG-068 | 📢 Результаты: {results_tid or  | Telegram | admin_div_settopic_prompt | N/A (Bot Callback) | Нет | Да | 🟢 PASS |

@@ -8,7 +8,13 @@ import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import database
-from handlers.admin import admin_div_view, admin_divs_hub, show_super_admin_panel
+from handlers.admin import (
+    admin_div_manage_players,
+    admin_div_view,
+    admin_divs_hub,
+    admin_view_player,
+    show_super_admin_panel,
+)
 
 # Разделы, вход в которые теперь только через карточку дивизиона.
 REMOVED_GLOBAL_SECTIONS = (
@@ -157,6 +163,58 @@ class TestAdminDivisionNavigation(unittest.IsolatedAsyncioTestCase):
             await admin_div_view(update, context)
 
             self.assertFalse(update.callback_query.edit_message_text.called)
+
+    async def test_card_participants_button_points_to_division_players(self):
+        """Кнопка «👥 Участники» в карточке дивизиона ведёт на admin_div_players:{div_id}:0."""
+        update = self._build_update(self.super_id, f"admin_div_view_{self.div_id}")
+        context = MagicMock()
+        p_base, p_adm, p_glob, p_edit = self._patches()
+        with p_base, p_adm, p_glob, p_edit:
+            await admin_div_view(update, context)
+
+            markup = update.callback_query.edit_message_text.call_args[1]["reply_markup"]
+            callbacks = self._callbacks(markup)
+            self.assertIn(f"admin_div_players:{self.div_id}:0", callbacks)
+
+    async def test_admin_div_manage_players_back_button_for_super_admin(self):
+        """Из списка участников дивизиона супер-админ возвращается в карточку дивизиона."""
+        update = self._build_update(self.super_id, f"admin_div_players:{self.div_id}:0")
+        context = MagicMock()
+        context.user_data = {}
+        p_base, p_adm, p_glob, p_edit = self._patches()
+        with p_base, p_adm, p_glob, p_edit:
+            await admin_div_manage_players(update, context)
+
+            self.assertEqual(context.user_data.get("admin_player_back_cb"), f"admin_div_players:{self.div_id}:0")
+            markup = update.callback_query.edit_message_text.call_args[1]["reply_markup"]
+            callbacks = self._callbacks(markup)
+            self.assertIn(f"admin_div_view_{self.div_id}", callbacks)
+
+    async def test_admin_view_player_back_button_from_division_list(self):
+        """В карточке игрока кнопка «Назад» возвращает в список участников дивизиона."""
+        test_player_id = 981123
+        with database.transaction() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO users (telegram_id, username, team_name, role, division_id) VALUES (?, ?, ?, ?, ?)",
+                (test_player_id, "nav_tester", "Nav Club", "player", self.div_id)
+            )
+
+        try:
+            update = self._build_update(self.super_id, f"admin_view_player_{test_player_id}")
+            context = MagicMock()
+            context.user_data = {"admin_player_back_cb": f"admin_div_players:{self.div_id}:0"}
+            p_base, p_adm, p_glob, p_edit = self._patches()
+            with p_base, p_adm, p_glob, p_edit:
+                await admin_view_player(update, context, player_id=test_player_id)
+
+                markup = update.callback_query.edit_message_text.call_args[1]["reply_markup"]
+                callbacks = self._callbacks(markup)
+                self.assertIn(f"admin_div_players:{self.div_id}:0", callbacks)
+                labels = [btn.text for row in markup.inline_keyboard for btn in row if btn.callback_data == f"admin_div_players:{self.div_id}:0"]
+                self.assertEqual(labels[0], "« К участникам дивизиона")
+        finally:
+            with database.transaction() as conn:
+                conn.execute("DELETE FROM users WHERE telegram_id = ?", (test_player_id,))
 
 
 if __name__ == "__main__":

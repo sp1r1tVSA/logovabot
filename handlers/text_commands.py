@@ -10,8 +10,6 @@ from handlers.base import (
     is_admin,
     generate_league_table_image,
     resolve_division_id,
-    round_schedule_missing_message,
-    max_active_rounds_short_message,
 )
 
 logger = logging.getLogger(__name__)
@@ -125,29 +123,6 @@ async def _division_name(division_id: int) -> str:
     return (division or {}).get("name") or f"Дивизион {division_id}"
 
 
-async def _line_failure_reason(round_number: int, division_id: int, opening: bool) -> str:
-    """
-    Объяснить отказ `set_round_bets_open` словами.
-
-    Функция возвращает голый False, а причин у него три, и самая частая —
-    «тур уже открыт для игры»: состояние is_open=1 AND bets_open=1 запрещено.
-    Порядок проверок повторяет порядок в самой `set_round_bets_open`.
-    """
-    if not opening:
-        return "Проверьте, что сезон активен."
-
-    info = await asyncio.to_thread(database.get_round_info, round_number, division_id)
-    if info and info.get("is_open"):
-        return (
-            "Тур уже открыт для внесения результатов — линия на такой тур не выставляется.\n"
-            f"Сначала закройте его: <code>Темшик закрыть тур {round_number}</code>"
-        )
-
-    matches = await asyncio.to_thread(database.get_matches_by_round, round_number, division_id)
-    if not matches:
-        return "У тура нет матчей в этом дивизионе — выставлять в линию нечего."
-
-    return "Проверьте, что сезон активен."
 
 
 async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
@@ -210,12 +185,8 @@ async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_T
         if is_adm:
             help_text += (
                 "\n👑 <b>Команды администратора:</b>\n"
-                "<i>Туры и линия — в рамках дивизиона:</i>\n"
-                "• <code>Темшик открыть тур [номер] [дивизион]</code>\n"
+                "<i>Туры — в рамках дивизиона:</i>\n"
                 "• <code>Темшик закрыть тур [номер] [дивизион]</code>\n"
-                "• <code>Темшик дедлайн [номер] [дата/время] [дивизион]</code> — дедлайн тура\n"
-                "• <code>Темшик открыть линию [номер] [дивизион]</code> — приём прогнозов Logovo.bet\n"
-                "• <code>Темшик закрыть линию [номер] [дивизион]</code>\n"
                 "• <code>Темшик топики [дивизион]</code> — статус настройки форумных топиков\n\n"
                 "<i>Составы и клубы:</i>\n"
                 "• <code>Темшик +игрок [клуб] [имена]</code> — добавить в состав\n"
@@ -554,135 +525,6 @@ async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_T
         await msg.reply_text(f"{'✅' if ok else '❌'} {text_res}", parse_mode="HTML")
         return True
 
-    # Ранняя линия Logovo.bet: приём прогнозов открывается до открытия тура для игры.
-    # Проверяется раньше «открыть тур», иначе префикс «открыть» перехватит команду.
-    if (
-        full_cmd.startswith("открыть линию") or
-        full_cmd.startswith("открой линию") or
-        full_cmd.startswith("закрыть линию") or
-        full_cmd.startswith("закрой линию")
-    ):
-        if not is_adm:
-            await msg.reply_text("⚠️ Эта команда доступна только администраторам турнира.")
-            return True
-
-        opening = full_cmd.startswith("откр")
-        line_args = re.sub(
-            r"^(?:открыть|открой|закрыть|закрой)\s+лини[юияей]*\s*", "", cmd_text, flags=re.IGNORECASE
-        ).strip()
-        division_id, rest, divisions = await resolve_command_division(update, line_args)
-        if division_id is None:
-            await msg.reply_text(
-                _division_hint(divisions, "Темшик открыть линию 19 Дивизион 2"),
-                parse_mode="HTML",
-            )
-            return True
-
-        nums = re.findall(r"\d+", rest)
-        if not nums:
-            await msg.reply_text(
-                "ℹ️ Формат: <code>Темшик открыть линию [номер тура] [дивизион]</code>\n"
-                "Пример: <code>Темшик открыть линию 19 Дивизион 2</code>",
-                parse_mode="HTML"
-            )
-            return True
-
-        rn = int(nums[0])
-        division_name = await _division_name(division_id)
-        ok = await asyncio.to_thread(database.set_round_bets_open, rn, opening, division_id=division_id)
-        if not ok:
-            reason = await _line_failure_reason(rn, division_id, opening)
-            await msg.reply_text(
-                f"❌ <b>Не удалось изменить линию на тур {rn} — {html.escape(division_name)}.</b>\n"
-                f"{reason}",
-                parse_mode="HTML"
-            )
-        elif opening:
-            await msg.reply_text(
-                f"🎰 <b>Линия на Тур {rn} — {html.escape(division_name)} открыта!</b>\n"
-                f"Прогнозы принимаются, даже пока тур закрыт для внесения результатов.",
-                parse_mode="HTML"
-            )
-            try:
-                from services.betting_notifications import notify_division_betting_line_opened
-                await notify_division_betting_line_opened(context, division_id, rn)
-            except Exception as e:
-                logger.warning(f"Failed to notify betting line opened: {e}")
-        else:
-            await msg.reply_text(
-                f"🚫 <b>Линия на Тур {rn} — {html.escape(division_name)} закрыта.</b> "
-                f"Приём прогнозов остановлен.",
-                parse_mode="HTML"
-            )
-            try:
-                from services.betting_notifications import notify_division_betting_line_closed
-                await notify_division_betting_line_closed(context, division_id, rn, was_open=True)
-            except Exception as e:
-                logger.warning(f"Failed to notify betting line closed: {e}")
-        return True
-
-    if (
-        action in ("открыть", "открой", "open_round") or
-        full_cmd.startswith("открыть тур") or
-        full_cmd.startswith("открой тур")
-    ):
-        if not is_adm:
-            await msg.reply_text("⚠️ Эта команда доступна только администраторам турнира.")
-            return True
-
-        division_id, rest, divisions = await resolve_command_division(update, args_str)
-        if division_id is None:
-            await msg.reply_text(
-                _division_hint(divisions, "Темшик открыть тур 18 Дивизион 2"),
-                parse_mode="HTML",
-            )
-            return True
-
-        nums = re.findall(r"\d+", rest)
-        if not nums:
-            await msg.reply_text(
-                "ℹ️ Формат: <code>Темшик открыть тур [номер] [дивизион]</code>\n"
-                "Пример: <code>Темшик открыть тур 18 Дивизион 2</code>",
-                parse_mode="HTML"
-            )
-            return True
-        rn = int(nums[0])
-        division_name = await _division_name(division_id)
-        r_info = await asyncio.to_thread(database.get_round_info, rn, division_id)
-        was_bets_open = bool(r_info and r_info.get("bets_open"))
-        try:
-            advanced = await asyncio.to_thread(database.update_round_status, rn, is_open=True, division_id=division_id)
-        except database.RoundScheduleMissingError:
-            await msg.reply_text(
-                round_schedule_missing_message(rn, division_name),
-                parse_mode="HTML"
-            )
-            return True
-        except database.MaxActiveRoundsExceededError:
-            active = await asyncio.to_thread(database.get_active_open_rounds, division_id)
-            await msg.reply_text(
-                max_active_rounds_short_message(active),
-                parse_mode="HTML"
-            )
-            return True
-        await msg.reply_text(
-            f"🔓 <b>Тур {rn} — {html.escape(division_name)} успешно открыт!</b> "
-            f"Участники могут вносить результаты.",
-            parse_mode="HTML"
-        )
-        if was_bets_open:
-            try:
-                from services.betting_notifications import notify_division_betting_line_closed
-                await notify_division_betting_line_closed(context, division_id, rn, was_open=True)
-            except Exception as e:
-                logger.warning(f"Failed to notify betting line closed on text round open: {e}")
-        for adv_r in (advanced or []):
-            try:
-                from services.betting_notifications import notify_division_betting_line_opened
-                await notify_division_betting_line_opened(context, division_id, adv_r)
-            except Exception as e:
-                logger.warning(f"Failed to notify betting line opened on text round open: {e}")
-        return True
 
     if (
         action in ("закрыть", "закрой", "close_round") or
@@ -718,77 +560,6 @@ async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_T
         )
         return True
 
-    if action in ("дедлайн", "deadline"):
-        if not is_adm:
-            await msg.reply_text("⚠️ Эта команда доступна только администраторам турнира.")
-            return True
-
-        division_id, rest, divisions = await resolve_command_division(update, args_str)
-        if division_id is None:
-            await msg.reply_text(
-                _division_hint(divisions, "Темшик дедлайн 18 18.08 23:59 Дивизион 2"),
-                parse_mode="HTML",
-            )
-            return True
-
-        nums = re.findall(r"\d+", rest)
-        if not nums:
-            await msg.reply_text(
-                "ℹ️ Формат: <code>Темшик дедлайн [номер_тура] [дата и время] [дивизион]</code>\n"
-                "Пример: <code>Темшик дедлайн 18 18.08 23:59 Дивизион 2</code>",
-                parse_mode="HTML"
-            )
-            return True
-
-        rn = int(nums[0])
-        dl_text = re.sub(r"^\d+\s*(?:тур)?\s*", "", rest, flags=re.IGNORECASE).strip()
-        if not dl_text:
-            await msg.reply_text(
-                "ℹ️ Укажите дату и время дедлайна, например: "
-                "<code>Темшик дедлайн 18 18.08 23:59 Дивизион 2</code>",
-                parse_mode="HTML"
-            )
-            return True
-
-        division_name = await _division_name(division_id)
-        r_info = await asyncio.to_thread(database.get_round_info, rn, division_id)
-        was_bets_open = bool(r_info and r_info.get("bets_open"))
-        # Команда дедлайна тур ещё и открывает, поэтому подчиняется тому же гейту.
-        try:
-            advanced = await asyncio.to_thread(
-                database.update_round_status, rn, is_open=True, deadline=dl_text, division_id=division_id
-            )
-        except database.RoundScheduleMissingError:
-            await msg.reply_text(
-                round_schedule_missing_message(rn, division_name),
-                parse_mode="HTML"
-            )
-            return True
-        except database.MaxActiveRoundsExceededError:
-            active = await asyncio.to_thread(database.get_active_open_rounds, division_id)
-            await msg.reply_text(
-                max_active_rounds_short_message(active),
-                parse_mode="HTML"
-            )
-            return True
-        await msg.reply_text(
-            f"⏰ <b>Дедлайн тура {rn} — {html.escape(division_name)} установлен на:</b> "
-            f"<code>{html.escape(dl_text)}</code>.",
-            parse_mode="HTML"
-        )
-        if was_bets_open:
-            try:
-                from services.betting_notifications import notify_division_betting_line_closed
-                await notify_division_betting_line_closed(context, division_id, rn, was_open=True)
-            except Exception as e:
-                logger.warning(f"Failed to notify betting line closed on text deadline: {e}")
-        for adv_r in (advanced or []):
-            try:
-                from services.betting_notifications import notify_division_betting_line_opened
-                await notify_division_betting_line_opened(context, division_id, adv_r)
-            except Exception as e:
-                logger.warning(f"Failed to notify betting line opened on text deadline: {e}")
-        return True
 
     if action in ("топики", "топик", "topics", "topiki"):
         if not is_adm:

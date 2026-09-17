@@ -15,7 +15,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import database
 from handlers.text_commands import (
-    _line_failure_reason,
     _match_division_in_args,
     handle_temshik_command,
 )
@@ -121,9 +120,10 @@ class TestTemshikCommandsAreDivisionScoped(unittest.IsolatedAsyncioTestCase):
             await handle_temshik_command(update, MagicMock())
 
         text = update.message.reply_text.call_args[0][0]
-        self.assertIn("Темшик открыть тур [номер] [дивизион]", text)
-        self.assertIn("Темшик дедлайн [номер] [дата/время] [дивизион]", text)
-        self.assertIn("Темшик открыть линию [номер] [дивизион]", text)
+        self.assertIn("Темшик закрыть тур [номер] [дивизион]", text)
+        self.assertNotIn("Темшик открыть тур", text)
+        self.assertNotIn("Темшик дедлайн", text)
+        self.assertNotIn("Темшик открыть линию", text)
         self.assertIn("Темшик топики [дивизион]", text)
         self.assertIn("/naznachit_topik", text)
         self.assertIn("/diviziony", text)
@@ -206,26 +206,17 @@ class TestTemshikCommandsAreDivisionScoped(unittest.IsolatedAsyncioTestCase):
 
     # ------------------------------------------------------------- админские туры
 
-    async def test_open_round_uses_the_explicit_division(self):
-        update = build_update(self.user_a, f"Темшик открыть тур 18 CMD Бета {self.uid}")
+    async def test_close_round_uses_the_explicit_division(self):
+        update = build_update(self.user_a, f"Темшик закрыть тур 18 CMD Бета {self.uid}")
         with patch("handlers.text_commands.is_admin", return_value=True), \
              patch("database.update_round_status") as upd:
             handled = await handle_temshik_command(update, MagicMock())
 
         self.assertTrue(handled)
         self.assertEqual(upd.call_args.args[0], 18)
-        self.assertIs(upd.call_args.kwargs.get("is_open"), True)
+        self.assertIs(upd.call_args.kwargs.get("is_open"), False)
         self.assertEqual(upd.call_args.kwargs.get("division_id"), self.div_b_id)
         self.assertIn(f"CMD Бета {self.uid}", update.message.reply_text.call_args[0][0])
-
-    async def test_open_round_falls_back_to_the_context_division(self):
-        update = build_update(self.user_a, "Темшик открыть тур 4")
-        with patch("handlers.text_commands.is_admin", return_value=True), \
-             patch("database.update_round_status") as upd:
-            await handle_temshik_command(update, MagicMock())
-
-        self.assertEqual(upd.call_args.args[0], 4)
-        self.assertEqual(upd.call_args.kwargs.get("division_id"), self.div_a_id)
 
     async def test_close_round_is_scoped(self):
         update = build_update(self.user_a, "Темшик закрыть тур 4")
@@ -236,46 +227,15 @@ class TestTemshikCommandsAreDivisionScoped(unittest.IsolatedAsyncioTestCase):
         self.assertIs(upd.call_args.kwargs.get("is_open"), False)
         self.assertEqual(upd.call_args.kwargs.get("division_id"), self.div_a_id)
 
-    async def test_open_round_without_any_division_refuses(self):
-        """Без дивизиона тур не открываем нигде — это запись, а не чтение."""
-        update = build_update(self.orphan, "Темшик открыть тур 4")
+    async def test_close_round_without_any_division_refuses(self):
+        """Без дивизиона тур не закрываем нигде — это запись, а не чтение."""
+        update = build_update(self.orphan, "Темшик закрыть тур 4")
         with patch("handlers.text_commands.is_admin", return_value=True), \
              patch("database.update_round_status") as upd:
             await handle_temshik_command(update, MagicMock())
 
         upd.assert_not_called()
         self.assertIn("дивизион", update.message.reply_text.call_args[0][0].lower())
-
-    async def test_deadline_keeps_the_date_and_adds_the_division(self):
-        update = build_update(self.user_a, f"Темшик дедлайн 18 18.08 23:59 CMD Бета {self.uid}")
-        with patch("handlers.text_commands.is_admin", return_value=True), \
-             patch("database.update_round_status") as upd:
-            await handle_temshik_command(update, MagicMock())
-
-        self.assertEqual(upd.call_args.args[0], 18)
-        self.assertEqual(upd.call_args.kwargs.get("deadline"), "18.08 23:59")
-        self.assertEqual(upd.call_args.kwargs.get("division_id"), self.div_b_id)
-
-    async def test_betting_line_is_scoped(self):
-        update = build_update(self.user_a, f"Темшик открыть линию 19 CMD Бета {self.uid}")
-        with patch("handlers.text_commands.is_admin", return_value=True), \
-             patch("database.set_round_bets_open", return_value=True) as line:
-            handled = await handle_temshik_command(update, MagicMock())
-
-        self.assertTrue(handled)
-        self.assertEqual(line.call_args.args[0], 19)
-        self.assertIs(line.call_args.args[1], True)
-        self.assertEqual(line.call_args.kwargs.get("division_id"), self.div_b_id)
-        self.assertIn(f"CMD Бета {self.uid}", update.message.reply_text.call_args[0][0])
-
-    async def test_closing_line_is_scoped_too(self):
-        update = build_update(self.user_a, "Темшик закрыть линию 19")
-        with patch("handlers.text_commands.is_admin", return_value=True), \
-             patch("database.set_round_bets_open", return_value=True) as line:
-            await handle_temshik_command(update, MagicMock())
-
-        self.assertIs(line.call_args.args[1], False)
-        self.assertEqual(line.call_args.kwargs.get("division_id"), self.div_a_id)
 
     # ------------------------------------------------------------------- топики
 
@@ -299,45 +259,6 @@ class TestTemshikCommandsAreDivisionScoped(unittest.IsolatedAsyncioTestCase):
             await handle_temshik_command(update, MagicMock())
 
         self.assertIn("администратор", update.message.reply_text.call_args[0][0].lower())
-
-
-class TestLineFailureReason(unittest.IsolatedAsyncioTestCase):
-    """Отказ линии должен называть причину, а не отправлять админа гадать.
-
-    На ручной проверке 12.09.2026 «открыть линию» после «открыть тур» упало с
-    подсказкой «проверьте, что матчи созданы», хотя матчи были ни при чём:
-    `set_round_bets_open` отказывает открытому туру, потому что состояние
-    is_open=1 AND bets_open=1 запрещено.
-    """
-
-    async def test_open_round_is_named_as_the_reason(self):
-        with patch("database.get_round_info", return_value={"round_number": 3, "is_open": 1}):
-            reason = await _line_failure_reason(3, 2, opening=True)
-
-        self.assertIn("уже открыт", reason)
-        self.assertIn("Темшик закрыть тур 3", reason)
-
-    async def test_missing_matches_is_named_as_the_reason(self):
-        with patch("database.get_round_info", return_value={"round_number": 3, "is_open": 0}), \
-             patch("database.get_matches_by_round", return_value=[]):
-            reason = await _line_failure_reason(3, 2, opening=True)
-
-        self.assertIn("нет матчей", reason)
-
-    async def test_closed_round_with_matches_falls_back_to_season(self):
-        with patch("database.get_round_info", return_value={"round_number": 3, "is_open": 0}), \
-             patch("database.get_matches_by_round", return_value=[{"id": 1}]):
-            reason = await _line_failure_reason(3, 2, opening=True)
-
-        self.assertIn("сезон", reason.lower())
-
-    async def test_closing_does_not_probe_the_round(self):
-        # При закрытии линии причина одна — неактивный сезон, лишние запросы ни к чему.
-        with patch("database.get_round_info") as info:
-            reason = await _line_failure_reason(3, 2, opening=False)
-
-        info.assert_not_called()
-        self.assertIn("сезон", reason.lower())
 
 
 if __name__ == "__main__":
