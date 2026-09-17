@@ -25,6 +25,9 @@ from scripts.audit_team_resolution import (
     open_read_only,
 )
 
+# Снимок боевого реестра на момент импорта: к нему возвращается tearDown.
+REAL_REGISTRY = list(config.CLUB_REGISTRY)
+
 
 class _TempRosterDB(unittest.TestCase):
     """Общая временная база с одной таблицей users."""
@@ -94,23 +97,24 @@ class TestAuditIsReadOnly(_TempRosterDB):
 
 
 class TestAuditFindsCollisions(_TempRosterDB):
-    # «расинг клаб» — алиас «Расинга»: разные строки, один канон, одна строка таблицы.
+    # «Фенербахе» — опечатка «Фенербахче» (фаззи 0.947): разные строки в users,
+    # один канон, одна строка таблицы. Ровно это аудит и обязан заметить.
     clubs = (
-        (1, "Расинг", 1),
-        (2, "расинг клаб", 1),
+        (1, "Фенербахче", 1),
+        (2, "Фенербахе", 1),
         (3, "Реал Мадрид", 1),
         (4, "реал мадрид  ", 1),
     )
 
     def setUp(self):
         super().setUp()
-        # Реестр задаём явно: иначе тест поедет, как только в T8 приедут настоящие
-        # 80 клубов и «Расинг» из заглушки КПЛ оттуда исчезнет.
-        config.CLUB_REGISTRY = ["Расинг"]
+        # Реестр задаём явно, одним клубом: тест про механику аудита, а не про
+        # боевой состав, и «Реал Мадрид» должен остаться для него незнакомым.
+        config.CLUB_REGISTRY = ["Фенербахче"]
         club_registry.reload_registry()
 
     def tearDown(self):
-        config.CLUB_REGISTRY = []
+        config.CLUB_REGISTRY = list(REAL_REGISTRY)
         club_registry.reload_registry()
         super().tearDown()
 
@@ -125,7 +129,7 @@ class TestAuditFindsCollisions(_TempRosterDB):
         self.assertIsNotNone(finding, "Коллизия канонов не найдена")
         self.assertEqual(finding.code, "COLLISION")
         self.assertEqual(len(finding.lines), 1)
-        self.assertIn("расинг клаб", finding.lines[0])
+        self.assertIn("Фенербахе", finding.lines[0])
 
     def test_names_differing_only_by_normalization_are_reported(self):
         conn = open_read_only(self.path)

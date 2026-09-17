@@ -16,6 +16,9 @@ import club_registry
 import config
 import database
 
+# Снимок боевого реестра на момент импорта: к нему возвращается tearDown.
+REAL_REGISTRY = list(config.CLUB_REGISTRY)
+
 
 class TestRegistryDrift(unittest.TestCase):
     def setUp(self):
@@ -35,9 +38,10 @@ class TestRegistryDrift(unittest.TestCase):
             database.assign_user_division(tg_id, self.division_id)
 
     def tearDown(self):
-        # Порядок важен: сначала гасим подставной реестр, потом перезагружаем,
-        # иначе кэш резолва останется с чужими именами.
-        config.CLUB_REGISTRY = []
+        # Порядок важен: сначала возвращаем боевой реестр, потом перезагружаем,
+        # иначе кэш резолва останется с чужими именами. Именно боевой, а не
+        # пустой: пустой реестр — это пустой реестр, отката на легаси-сид нет.
+        config.CLUB_REGISTRY = list(REAL_REGISTRY)
         club_registry.reload_registry()
         with database.transaction() as conn:
             c = conn.cursor()

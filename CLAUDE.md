@@ -170,12 +170,14 @@ registration — call `topic_cache.reload_cache()` after mutating division topic
 
 **Teams** live in `users.team_name`, one club per coach. Club names are globally unique —
 `idx_users_team_name_unique` enforces `UNIQUE(LOWER(TRIM(team_name)))` across all divisions,
-so a name identifies a club on its own and name-keyed lookups are safe. The roster is
-growing toward ~16 clubs per division across 5 divisions (~80 total).
+so a name identifies a club on its own and name-keyed lookups are safe.
 
-`config.CLUBS` / `config.KPL_TEAMS` hold only the 16 clubs of the pre-division КПЛ era —
-roughly one division's worth. Treat them as legacy seed data, **not** as the list of
-participants; query `users` scoped by `division_id` instead.
+`config.DIVISION_CLUBS` holds the season's roster: a `{division code: [16 club names]}` map
+over `DIV_1`…`DIV_5`, 80 clubs in total. It is **seed data, not the participant list** — an
+actual participant exists only once a coach registers and lands in `users.team_name`.
+Anything that needs the real roster queries `users` scoped by `division_id`; the map
+supplies the canonical spelling of a name and nothing more. The КПЛ-era `config.CLUBS` /
+`config.KPL_TEAMS` lists are gone.
 
 Team-name resolution from OCR output goes through `resolve_team_name` and
 `detect_teams_from_players`, both backed by **`club_registry.py`** — a pure-CPU module at
@@ -194,20 +196,27 @@ no safe version. `resolve_team_name` returns its input unchanged when nothing re
 caller needs to know *how* confident the answer is. Results are memoised —
 `reload_registry()` is the only thing that invalidates them.
 
-⚠️ The canonical list is `config.CLUB_REGISTRY`, and it is **still an empty stub** falling
-back to `KPL_TEAMS ∪ CLUBS`. It cannot be bulk-filled yet: the live database was audited on
-2026-09-12 and its roster is empty — the five divisions exist, but the previous season was
-purged and no coach has registered a club since, so there are no names to harvest. The
-registry therefore fills in one name at a time, as coaches join. Two consequences while it
-is short: a club outside the list resolves to itself, which is safe — it is no longer coerced into a КПЛ name — but
-`teams_match` will not merge an OCR typo of such a club, because a typo cannot be told
-apart from a genuinely similar club without knowing the club list. Refusing to merge is
-recoverable; silently merging two coaches' clubs is not.
+The canonical list is `config.CLUB_REGISTRY` — a flat slice of `DIVISION_CLUBS`, built at
+import. The resolver does not care which division a name belongs to, and names are unique
+league-wide anyway, so one flat list is the whole registry. There is deliberately **no
+fallback**: an empty `CLUB_REGISTRY` means an empty registry, and every name then resolves
+to itself. A club outside the list also resolves to itself, which is safe, but `teams_match`
+will not merge an OCR typo of it — a typo cannot be told apart from a genuinely similar club
+without knowing the club list. Refusing to merge is recoverable; silently merging two
+coaches' clubs is not.
 
-**Adding a club to the tournament means adding its name to `CLUB_REGISTRY`.**
-`python scripts/audit_team_resolution.py` reports registry↔`users.team_name` drift, name
-collisions and clubs that sit too close to the fuzzy threshold; it is read-only (the
-connection is closed by a SQLite authorizer) and `--emit-config` prints a ready block.
+Only six clubs carried over from the КПЛ era, so `TEAM_ALIASES` covers just those
+(Бенфика, Аякс, ПСВ, Порту, Спортинг, Ривер Плейт). The other 74 resolve by exact name,
+prefix or fuzzy alone — short OCR forms like `Ман Сити`, `МЮ`, `Реал` or `Барса` do **not**
+resolve today, and ambiguous prefixes (`Реал` → Мадрид/Сосьедад, `Интер` → Милан/Майми,
+`Манчестер` → Сити/Юнайтед) correctly return no match rather than guessing. Add aliases as
+real OCR output shows what coaches actually type.
+
+**Adding a club to the tournament means adding its name to the right division in
+`DIVISION_CLUBS`.** `python scripts/audit_team_resolution.py` reports
+registry↔`users.team_name` drift, name collisions and clubs that sit too close to the fuzzy
+threshold; it is read-only (the connection is closed by a SQLite authorizer) and
+`--emit-config` prints a ready block.
 
 **Club logos** are a second, independent step. `assets/logos/` was emptied with the КПЛ
 season and is not in git, so every club currently renders with the blank-badge fallback.

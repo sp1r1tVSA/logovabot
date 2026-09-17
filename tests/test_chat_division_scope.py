@@ -164,21 +164,24 @@ class TestChatDivisionScope(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("Клубов в этом дивизионе: 2", ctx_a)
 
-    async def test_new_era_club_names_are_not_swapped_for_kpl_names(self):
-        """Ростер вырос за 16 клубов: имя новичка не должно подменяться каноническим клубом КПЛ.
+    async def test_club_names_are_not_swapped_for_registry_names(self):
+        """Клуб вне реестра обязан приехать в контекст под своим именем.
 
-        resolve_team_name фуззи-матчит против config.KPL_TEAMS, поэтому клуб из
-        новых дивизионов рискует приехать в контекст под чужим названием.
+        resolve_team_name фуззи-матчит против config.CLUB_REGISTRY, поэтому клуб,
+        которого там нет, рискует подмениться похожим каноном — и тренер увидит
+        в ответе бота чужое название.
         """
         import config
 
         ctx_a = await self._capture_context(self.user_a1)
 
-        for canon in config.KPL_TEAMS:
+        self.assertIn(f"• {self.team_a1} —", ctx_a)
+        self.assertIn(f"• {self.team_a2} —", ctx_a)
+        for canon in config.CLUB_REGISTRY:
             self.assertNotIn(
                 f"• {canon} —",
                 ctx_a,
-                f"Клуб дивизиона подменён каноническим именем КПЛ: {canon}",
+                f"Клуб дивизиона подменён каноническим именем реестра: {canon}",
             )
 
 

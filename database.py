@@ -2193,20 +2193,14 @@ def get_standings(division_id: int | None = None, season_id: int | None = None, 
                   AND (? IS NULL OR m.round_number <= ?)
             """, (division_id, target_season_id, up_to_round, up_to_round))
         else:
-            from config import KPL_TEAMS
             cursor.execute("SELECT telegram_id, team_name, username FROM users WHERE team_name IS NOT NULL AND team_name != ''")
             all_users = cursor.fetchall()
-            for t in KPL_TEAMS:
-                canon = resolve_team_name(t) or t
-                u = None
-                for row in all_users:
-                    if teams_match(row["team_name"], canon):
-                        u = row
-                        break
+            for row in all_users:
+                canon = resolve_team_name(row["team_name"]) or row["team_name"]
                 teams[canon] = {
-                    "telegram_id": u["telegram_id"] if u else None,
+                    "telegram_id": row["telegram_id"],
                     "team_name": canon,
-                    "username": u["username"] if u and u["username"] else "",
+                    "username": row["username"] if row["username"] else "",
                     "played": 0,
                     "wins": 0,
                     "draws": 0,
@@ -2262,8 +2256,10 @@ def get_standings(division_id: int | None = None, season_id: int | None = None, 
                         matched_u2 = obj
                         break
 
-            # If division_id is set and team was not in div_users, dynamically add it
-            if matched_u1 is None and division_id is not None and t1:
+            # Team played a confirmed match but has no row in users: add it on the fly.
+            # Both branches seed `teams` from users only, so a club whose coach has not
+            # registered yet would otherwise drop its matches out of the table silently.
+            if matched_u1 is None and t1:
                 teams[t1] = {
                     "telegram_id": None,
                     "team_name": t1,
@@ -2278,7 +2274,7 @@ def get_standings(division_id: int | None = None, season_id: int | None = None, 
                 }
                 matched_u1 = teams[t1]
 
-            if matched_u2 is None and division_id is not None and t2:
+            if matched_u2 is None and t2:
                 teams[t2] = {
                     "telegram_id": None,
                     "team_name": t2,
@@ -2934,17 +2930,18 @@ def get_teams_recent_form(limit: int = 5, division_id: int | None = None, season
             cursor.execute("SELECT team_name FROM users WHERE division_id = ? AND team_name IS NOT NULL AND team_name != ''", (division_id,))
             team_candidates = [r["team_name"] for r in cursor.fetchall()]
         else:
-            from config import KPL_TEAMS
             cursor.execute("""
                 SELECT player1_team, player2_team, player1_score, player2_score
                 FROM matches
-                WHERE status = 'confirmed' 
+                WHERE status = 'confirmed'
                   AND (tournament_type IS NULL OR tournament_type = 'league')
                   AND (season_id = ? OR season_id IS NULL)
                 ORDER BY round_number DESC, id DESC
             """, (target_season_id,))
             all_matches = cursor.fetchall()
-            team_candidates = list(KPL_TEAMS)
+
+            cursor.execute("SELECT team_name FROM users WHERE team_name IS NOT NULL AND team_name != ''")
+            team_candidates = [r["team_name"] for r in cursor.fetchall()]
 
         form_map = {}
         for t in team_candidates:
@@ -6152,9 +6149,13 @@ def get_club_schedule_and_results(team_name: str, limit: int = 25) -> dict:
 
 def get_all_clubs_summary() -> list[dict]:
     """
-    Get summary list of all KPL clubs for the clubs catalog.
+    Get summary list of every league club for the clubs catalog.
+
+    Seeded from config.CLUB_REGISTRY (all five divisions) so that a club shows up
+    in the catalog before its coach registers, plus any registered club missing
+    from the registry — that one is a drift signal, not a reason to hide it.
     """
-    from config import KPL_TEAMS
+    from config import CLUB_REGISTRY
     standings = get_standings()
     form_map = get_teams_recent_form(limit=5)
     
@@ -6165,8 +6166,16 @@ def get_all_clubs_summary() -> list[dict]:
 
     standings_map = {resolve_team_name(s["team_name"]).lower(): (rank, s) for rank, s in enumerate(standings, 1) if resolve_team_name(s["team_name"])}
 
+    catalog: list[str] = list(CLUB_REGISTRY)
+    known = {resolve_team_name(t).lower() for t in catalog if resolve_team_name(t)}
+    for u in users.values():
+        canon = resolve_team_name(u["team_name"]) or u["team_name"]
+        if canon.lower() not in known:
+            known.add(canon.lower())
+            catalog.append(canon)
+
     result = []
-    for t in KPL_TEAMS:
+    for t in catalog:
         canon = resolve_team_name(t) or t
         canon_lower = canon.lower()
         

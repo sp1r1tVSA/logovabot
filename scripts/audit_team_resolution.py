@@ -305,10 +305,10 @@ def main() -> int:
 
     print(f"База: {args.db}", file=out)
     registry = club_registry.get_registry()
-    stub = not config.CLUB_REGISTRY
+    empty = not config.CLUB_REGISTRY
     print(
         f"Реестр: {len(registry)} имён"
-        + (" (заглушка: KPL_TEAMS ∪ CLUBS, см. TODO(P3-7) в config.py)" if stub else ""),
+        + (" (ПУСТ: config.CLUB_REGISTRY не заполнен, всё резолвится само в себя)" if empty else ""),
         file=out,
     )
     dropped = club_registry.get_dropped_aliases()

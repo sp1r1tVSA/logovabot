@@ -1,14 +1,16 @@
-"""Резолв имени клуба: коллизии канонов при ростере в ~80 клубов (аудит, P3-7).
+"""Резолв имени клуба: коллизии канонов на ростере из 80 клубов (аудит, P3-7).
 
-`resolve_team_name` матчит против 16 имён `config.KPL_TEAMS` и словаря `TEAM_ALIASES`.
-На пяти дивизионах это схлопывает разные клубы в один канон, а `get_standings` ключует
-аккумулятор этим каноном (`teams[canon]`) — клуб пропадает из таблицы вместе с тренером.
-
-Файл характеризационный: часть тестов красная намеренно (описывает дефект), часть зелёная
-и фиксирует поведение, которое чинить нельзя. Красное чинится в T3/T4, зелёное обязано
-оставаться зелёным на каждом шаге.
+`resolve_team_name` матчит против `config.CLUB_REGISTRY` — плоского среза
+`config.DIVISION_CLUBS` (5 дивизионов × 16 клубов) — и словаря `TEAM_ALIASES`.
+Пока реестром были 16 имён КПЛ, разные клубы схлопывались в один канон, а
+`get_standings` ключует аккумулятор этим каноном (`teams[canon]`) — клуб пропадал из
+таблицы вместе с тренером. Тесты ниже стерегут, чтобы это не вернулось.
 
 Тесты чистые: обращений к БД нет, только резолвер и словарь алиасов.
+
+Реестр здесь — глобальное состояние модуля `config`, поэтому каждый тест, который его
+подменяет, обязан вернуть настоящий `REAL_REGISTRY`, а не пустой список: пустой реестр
+теперь значит именно пустой реестр, отката на легаси-сид больше нет.
 """
 import unittest
 
@@ -23,35 +25,40 @@ from database import (
 )
 
 
-# Клубы вне 16 канонических имён КПЛ. Каждый обязан резолвиться в себя: чужого канона
-# у него нет, и молча стать другим клубом он не должен.
-# Справа — что функция возвращает сегодня.
+# Снимок настоящего реестра на момент импорта: к нему возвращается каждый tearDown.
+REAL_REGISTRY = list(config.CLUB_REGISTRY)
+
+
+def restore_registry():
+    """Вернуть боевой реестр после теста, подменявшего config.CLUB_REGISTRY."""
+    config.CLUB_REGISTRY = list(REAL_REGISTRY)
+    club_registry.reload_registry()
+
+
+# Клубы вне реестра. Каждый обязан резолвиться в себя: чужого канона у него нет,
+# и молча стать другим клубом он не должен.
+# Справа — в кого имя схлопывалось до починки резолвера.
 COLLIDING_CLUBS = [
     ("Расинг Сантандер", "Расинг"),      # тир 4, подстрока алиаса 'расинг'
     ("Расинг Ланс", "Расинг"),           # тир 4
     ("Расинг Авельянеда", "Расинг"),     # тир 4
     ("Спортинг Хихон", "Порту"),         # тир 4, алиас 'порт' лежит внутри 'спортинг'
-    ("ПСЖ", "ПСВ"),                      # тир 5, SequenceMatcher = 0.667 >= 0.65
     ("Спарта Прага", "Брага"),           # тир 5
     ("Спартак", "Спортинг"),             # тир 5
-    ("Бешикташ", "Бенфика"),             # тир 5
 ]
 
 # Многословные формы, которые схлопываться в канон ОБЯЗАНЫ: это тот же клуб, а не другой.
-# Часть держится на алиасах, часть — на подстрочном тире, который удаляется в T3.
-# Тем, кто помечен alias_backed=False, в T3 нужен явный алиас, иначе распознавание упадёт.
+# Все держатся на явных алиасах — подстрочного тира, который делал это раньше, больше нет.
 VERBOSE_FORMS = [
     ("Спортинг Лиссабон", "Спортинг", True),
     ("Бенфика Лиссабон", "Бенфика", True),
-    ("Рейнджерс Глазго", "Рейнджерс", True),
-    ("АЕК Афины", "АЕК", True),
-    ("Аякс Амстердам", "Аякс", False),
-    ("Селтик Глазго", "Селтик", False),
+    ("Аякс Амстердам", "Аякс", True),
+    ("ПСВ Эйндховен", "ПСВ", True),
 ]
 
 
 class TestCollidingClubsResolveToThemselves(unittest.TestCase):
-    """КРАСНЫЕ до T3. Клуб вне 16 канонических имён не должен становиться другим клубом."""
+    """ЗЕЛЁНЫЕ с T3. Клуб вне реестра не должен становиться другим клубом."""
 
     def test_each_colliding_club_resolves_to_itself(self):
         for name, current in COLLIDING_CLUBS:
@@ -70,9 +77,12 @@ class TestCollidingClubsResolveToThemselves(unittest.TestCase):
         )
 
     def test_short_name_is_never_fuzzy_matched(self):
-        # 'псж' против 'псв' — 0.667 при пороге 0.65. На трёх буквах похожесть
-        # неотличима от другого клуба, фаззи здесь применяться не должен вообще.
+        # 'псж' против 'псв' — 0.667 при старом пороге 0.65. Теперь оба клуба в
+        # реестре и играют в разных дивизионах: на трёх буквах похожесть неотличима
+        # от другого клуба, фаззи здесь применяться не должен вообще.
         self.assertEqual(resolve_team_name("ПСЖ"), "ПСЖ")
+        self.assertEqual(resolve_team_name("ПСВ"), "ПСВ")
+        self.assertFalse(teams_match("ПСЖ", "ПСВ"))
 
     def test_unknown_club_is_returned_unchanged(self):
         # Контракт вызывающих мест: resolve_team_name(x) or x. На непустом входе
@@ -97,10 +107,9 @@ class TestTeamsMatchContract(unittest.TestCase):
     """ЗЕЛЁНЫЕ с T4. Что teams_match обязан склеивать, а что — нет."""
 
     def tearDown(self):
-        # Порядок важен: config сбрасывается до перезагрузки, иначе реестр
+        # Порядок важен: config возвращается до перезагрузки, иначе реестр
         # соберётся обратно из подставного списка.
-        config.CLUB_REGISTRY = []
-        club_registry.reload_registry()
+        restore_registry()
 
     def _with_registry(self, names):
         config.CLUB_REGISTRY = list(names)
@@ -113,8 +122,8 @@ class TestTeamsMatchContract(unittest.TestCase):
     def test_alias_and_typo_still_match_their_club(self):
         for a, b in (
             ("Порту", "фк порту"),
-            ("Фейеноорд", "Фейенорд"),
-            ("Будё Глимт", "bodo/glimt"),
+            ("Фенербахче", "Фенербахе"),
+            ("Буде-Глимпт", "Будё Глимт"),
             ("Спортинг", "Спортинг Лиссабон"),
         ):
             with self.subTest(pair=(a, b)):
@@ -149,20 +158,27 @@ class TestAliasContractPreserved(unittest.TestCase):
     """ЗЕЛЁНЫЕ. Словарь OCR-опечаток и транслита — ронять его нельзя ни на одном шаге."""
 
     def test_every_alias_key_resolves_to_its_canonical_value(self):
-        self.assertGreater(len(TEAM_ALIASES), 100, "словарь алиасов подозрительно похудел")
+        self.assertGreater(len(TEAM_ALIASES), 30, "словарь алиасов подозрительно похудел")
         for alias, canonical in TEAM_ALIASES.items():
             with self.subTest(alias=alias):
                 self.assertEqual(resolve_team_name(alias), canonical)
 
-    def test_every_kpl_team_resolves_to_itself(self):
-        for team in config.KPL_TEAMS:
+    def test_every_alias_points_at_a_club_in_the_registry(self):
+        # Алиас на клуб вне реестра отбрасывается при загрузке и только засоряет
+        # аудит. Реестр — источник истины, словарь обязан следовать за ним.
+        self.assertEqual(club_registry.get_orphan_aliases(), ())
+        canons = set(TEAM_ALIASES.values())
+        self.assertTrue(canons <= set(REAL_REGISTRY), f"алиасы ведут наружу: {canons - set(REAL_REGISTRY)}")
+
+    def test_every_registered_club_resolves_to_itself(self):
+        for team in REAL_REGISTRY:
             with self.subTest(team=team):
                 self.assertEqual(resolve_team_name(team), team)
 
     def test_verbose_forms_still_collapse_to_their_club(self):
-        # Ловушка для T3: 'Аякс Амстердам' и 'Селтик Глазго' сегодня держатся на
-        # подстрочном тире. Удалите тир без добавления алиасов — этот тест покраснеет,
-        # и это будет правильным сигналом, а не поводом вернуть тир.
+        # Подстрочного тира, который раньше делал эту работу, больше нет: каждая
+        # форма обязана держаться на явном алиасе. Если тест покраснеет — нужен
+        # алиас, а не возврат тира.
         for name, canonical, _alias_backed in VERBOSE_FORMS:
             with self.subTest(form=name):
                 self.assertEqual(resolve_team_name(name), canonical)
@@ -190,15 +206,23 @@ class TestNormalizationPreserved(unittest.TestCase):
 class TestTotalityInvariant(unittest.TestCase):
     """ЗЕЛЁНЫЙ. Главный страж: два разных клуба реестра не имеют общего канона.
 
-    Сейчас идёт по 16 именам КПЛ. Когда в T8 приедут реальные ~80, инвариант
-    расширится автоматически — именно он не даст дефекту вернуться с новым клубом.
+    Идёт по всем 80 именам сезона. Инвариант расширяется сам вместе с
+    `config.DIVISION_CLUBS` — именно он не даст дефекту вернуться с новым клубом.
     """
 
     def _registry(self):
-        registry = getattr(config, "CLUB_REGISTRY", None)
-        if registry:
-            return sorted(set(registry))
-        return sorted(set(config.KPL_TEAMS) | set(config.CLUBS))
+        return sorted(set(REAL_REGISTRY))
+
+    def test_registry_covers_every_division_in_full(self):
+        # Реестр — плоский срез DIVISION_CLUBS, и имена уникальны глобально:
+        # idx_users_team_name_unique не даст двум тренерам один клуб даже из разных
+        # дивизионов, поэтому дубликат здесь — заявка на коллизию канонов.
+        self.assertEqual(len(config.DIVISION_CLUBS), 5)
+        for code, clubs in config.DIVISION_CLUBS.items():
+            with self.subTest(division=code):
+                self.assertEqual(len(clubs), 16)
+        self.assertEqual(len(REAL_REGISTRY), 80)
+        self.assertEqual(len(set(REAL_REGISTRY)), 80, "имя клуба встречается дважды")
 
     def test_distinct_clubs_never_share_a_canonical_name(self):
         collisions = {}
@@ -228,7 +252,7 @@ class TestResolverIsPureCpu(unittest.TestCase):
         try:
             for name, _ in COLLIDING_CLUBS:
                 resolve_team_name(name)
-            teams_match("Расинг", "Брага")
+            teams_match("Расинг", "Порту")
         finally:
             database.get_connection = original
 
@@ -248,24 +272,24 @@ class TestResolveTiers(unittest.TestCase):
         self.assertEqual(res.confidence, 1.0)
 
     def test_alias_tier(self):
-        res = club_registry.resolve_team_name_ex("feyenoor")
-        self.assertEqual(res.canonical, "Фейеноорд")
+        res = club_registry.resolve_team_name_ex("benfica")
+        self.assertEqual(res.canonical, "Бенфика")
         self.assertEqual(res.method, club_registry.ResolveMethod.ALIAS)
 
     def test_joined_tier_glues_tokens(self):
-        self.assertEqual(self._method("Будё Глимт"), club_registry.ResolveMethod.EXACT)
-        res = club_registry.resolve_team_name_ex("Бока  Х униорс")
-        self.assertEqual(res.canonical, "Бока Хуниорс")
+        self.assertEqual(self._method("Буде-Глимпт"), club_registry.ResolveMethod.EXACT)
+        res = club_registry.resolve_team_name_ex("Ривер  П лейт")
+        self.assertEqual(res.canonical, "Ривер Плейт")
         self.assertEqual(res.method, club_registry.ResolveMethod.JOINED)
 
     def test_prefix_tier_when_exactly_one_club_matches(self):
-        res = club_registry.resolve_team_name_ex("коп")
-        self.assertEqual(res.canonical, "Копенгаген")
+        res = club_registry.resolve_team_name_ex("фенер")
+        self.assertEqual(res.canonical, "Фенербахче")
         self.assertEqual(res.method, club_registry.ResolveMethod.PREFIX)
 
     def test_fuzzy_tier_catches_an_ocr_typo(self):
-        res = club_registry.resolve_team_name_ex("копенгаен")
-        self.assertEqual(res.canonical, "Копенгаген")
+        res = club_registry.resolve_team_name_ex("фенербахе")
+        self.assertEqual(res.canonical, "Фенербахче")
         self.assertEqual(res.method, club_registry.ResolveMethod.FUZZY)
         self.assertGreaterEqual(res.confidence, club_registry.FUZZY_THRESHOLD)
 
@@ -275,7 +299,7 @@ class TestResolveTiers(unittest.TestCase):
         for name, canonical in (
             ("Порту ФК", "Порту"),
             ("Спортинг CP", "Спортинг"),
-            ("ФК Брюгге", "Брюгге"),
+            ("ФК Лацио", "Лацио"),
         ):
             with self.subTest(name=name):
                 self.assertEqual(resolve_team_name(name), canonical)
@@ -289,8 +313,7 @@ class TestAmbiguityStopsResolution(unittest.TestCase):
     """ЗЕЛЁНЫЕ с T3. Спорный вход не должен «дорешаться» более слабым тиром."""
 
     def tearDown(self):
-        config.CLUB_REGISTRY = []
-        club_registry.reload_registry()
+        restore_registry()
 
     def _with_registry(self, names):
         config.CLUB_REGISTRY = list(names)
@@ -315,8 +338,12 @@ class TestAmbiguityStopsResolution(unittest.TestCase):
         self.assertEqual(res.candidates, ("Атлетик", "Атлетико"))
 
     def test_fuzzy_min_len_blocks_short_names(self):
-        self.assertLess(len("псж"), club_registry.FUZZY_MIN_LEN)
-        self.assertIsNone(club_registry.resolve_team_name_ex("ПСЖ").canonical)
+        # 'Байа' — одна буква от зарегистрированной 'Байя', но коротким именам
+        # фаззи недоступен вообще: на четырёх буквах опечатка и другой клуб
+        # неразличимы.
+        self.assertLess(len("байа"), club_registry.FUZZY_MIN_LEN)
+        self.assertIn("Байя", REAL_REGISTRY)
+        self.assertIsNone(club_registry.resolve_team_name_ex("Байа").canonical)
 
     def test_fuzzy_threshold_blocks_a_merely_similar_name(self):
         # 'спортинг хихон' даёт 0.774 к 'Спортинг': выше старых 0.65, ниже новых 0.87.
@@ -345,8 +372,7 @@ class TestCaptionWordResolution(unittest.TestCase):
     def tearDown(self):
         database.get_all_teams = self._orig_teams
         database.get_all_squads = self._orig_squads
-        config.CLUB_REGISTRY = []
-        club_registry.reload_registry()
+        restore_registry()
 
     def test_caption_finds_both_real_clubs(self):
         team1, team2 = database.detect_teams_from_players([], [], "расинг сантандер vs порту")
@@ -364,13 +390,12 @@ class TestResolveCache(unittest.TestCase):
     """ЗЕЛЁНЫЕ с T5. Кэш обязан ускорять и обязан забывать при смене реестра."""
 
     def tearDown(self):
-        config.CLUB_REGISTRY = []
-        club_registry.reload_registry()
+        restore_registry()
 
     def test_repeated_resolves_hit_the_cache(self):
         club_registry.reload_registry()  # сбрасывает счётчики
         for _ in range(50):
-            resolve_team_name("Фейенорд")
+            resolve_team_name("фенербахе")
         info = club_registry._resolve_cached.cache_info()
         self.assertEqual(info.misses, 1)
         self.assertEqual(info.hits, 49)
@@ -387,31 +412,37 @@ class TestResolveCache(unittest.TestCase):
         # Кэш отдаёт один и тот же объект всем вызывающим: менять его нельзя.
         res = club_registry.resolve_team_name_ex("Порту")
         with self.assertRaises(Exception):
-            res.canonical = "Брага"
+            res.canonical = "Бенфика"
 
 
 class TestClubRegistry(unittest.TestCase):
     """ЗЕЛЁНЫЕ. Реестр: индекс, перезагрузка, отбраковка алиасов-теней."""
 
     def tearDown(self):
-        club_registry.reload_registry()
+        restore_registry()
 
-    def test_registry_falls_back_to_legacy_seed_while_empty(self):
-        # Пока config.CLUB_REGISTRY не заполнен (T8), реестр = KPL_TEAMS ∪ CLUBS,
-        # то есть поведение не хуже прежнего.
+    def test_registry_is_the_flat_slice_of_the_divisions(self):
         registry = club_registry.get_registry()
-        self.assertTrue(registry)
-        for team in config.KPL_TEAMS:
-            with self.subTest(team=team):
-                self.assertIn(team, registry)
+        expected = [club for clubs in config.DIVISION_CLUBS.values() for club in clubs]
+        self.assertEqual(sorted(registry), sorted(expected))
+
+    def test_empty_registry_has_no_fallback(self):
+        # Отката на легаси-сид КПЛ больше нет: пустой реестр значит пустой реестр,
+        # и каждое имя резолвится само в себя. Иначе новый клуб молча схлопывался
+        # бы в чужое имя из прошлого сезона.
+        config.CLUB_REGISTRY = []
+        self.assertEqual(club_registry.reload_registry(), 0)
+        self.assertEqual(club_registry.get_registry(), ())
+        self.assertEqual(resolve_team_name("Бенфика"), "Бенфика")
+        self.assertIsNone(club_registry.resolve_team_name_ex("Бенфика").canonical)
 
     def test_index_maps_normalized_name_to_canonical(self):
         index = club_registry.get_registry_index()
-        self.assertEqual(index.get("буде глимт"), "Будё Глимт")
+        self.assertEqual(index.get("буде глимпт"), "Буде-Глимпт")
         self.assertEqual(index.get("ривер плейт"), "Ривер Плейт")
 
     def test_is_registered_ignores_case_and_separators(self):
-        self.assertTrue(club_registry.is_registered("будё-глимт"))
+        self.assertTrue(club_registry.is_registered("будё-глимпт"))
         self.assertTrue(club_registry.is_registered("  РИВЕР ПЛЕЙТ  "))
         self.assertFalse(club_registry.is_registered("Расинг Сантандер"))
 

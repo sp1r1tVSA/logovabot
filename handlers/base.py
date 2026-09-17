@@ -9,7 +9,7 @@ import asyncio
 import database
 import logging
 import config
-from config import ADMIN_IDS, CLUBS
+from config import ADMIN_IDS
 from services.graphics.table_generator import generate_league_table_image
 from services.graphics import top_stats_generator
 from constants import (
