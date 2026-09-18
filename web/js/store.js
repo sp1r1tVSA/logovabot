@@ -13,6 +13,7 @@ class StateStore {
       marketCategoryFilter: 'all',
       searchQuery: '',
       slip: [], // [ { match_id, outcome, odd, market_id, selection_id, selection_name, team1_name, team2_name, tour }, ... ]
+      slipMode: 'express', // 'express' | 'single'
       stakeAmount: 100,
       activeView: 'lobby', // 'lobby' | 'match_center' | 'tournaments' | 'history' | 'my_club' | 'profile'
       selectedMatchId: null,
@@ -287,6 +288,11 @@ class StateStore {
     this.notify();
   }
 
+  setSlipMode(mode) {
+    this.state.slipMode = mode === 'single' ? 'single' : 'express';
+    this.notify();
+  }
+
   setStakeAmount(amount) {
     this.state.stakeAmount = Math.max(10, parseInt(amount) || 0);
     this.notify();
@@ -300,8 +306,13 @@ class StateStore {
   }
 
   getPotentialWin() {
+    if (this.state.slip.length === 0) return 0;
+    if (this.state.slipMode === 'single') {
+      return this.state.slip.reduce((sum, item) => sum + Math.floor(this.state.stakeAmount * item.odd), 0);
+    }
     const totalOdd = this.getTotalOdd();
-    return Math.floor(this.state.stakeAmount * totalOdd);
+    const bonus = this.state.slip.length > 1 ? 1.05 : 1.0;
+    return Math.floor(this.state.stakeAmount * totalOdd * bonus);
   }
 
   isSelectionActive(matchId, outcome) {

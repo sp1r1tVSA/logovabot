@@ -741,7 +741,8 @@
   justify-content: center;
   padding: 20px;
 }
-.modal-overlay.open {
+.modal-overlay.open,
+.modal-overlay.active {
   display: flex;
 }
 

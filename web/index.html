@@ -305,6 +305,16 @@
 
     <!-- Expanded Slip Content -->
     <div class="slip-body">
+      <!-- Mode Toggle: Экспресс / Ординары (отображается при 2+ событиях) -->
+      <div class="slip-type-toggle" id="slip-type-toggle" style="display: none; gap: 8px; margin-bottom: 12px; background: var(--bg-tertiary); padding: 4px; border-radius: var(--radius-sm);">
+        <button class="slip-type-btn active" data-slip-mode="express" id="btn-slip-mode-express" style="flex: 1; padding: 7px 10px; border-radius: 6px; border: none; font-size: 0.82rem; font-weight: 800; cursor: pointer; background: var(--accent-gold); color: #000; transition: all 0.2s;">
+          ⚡ Экспресс
+        </button>
+        <button class="slip-type-btn" data-slip-mode="single" id="btn-slip-mode-single" style="flex: 1; padding: 7px 10px; border-radius: 6px; border: none; font-size: 0.82rem; font-weight: 800; cursor: pointer; background: transparent; color: var(--text-muted); transition: all 0.2s;">
+          🎯 Ординары
+        </button>
+      </div>
+
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
         <span style="font-size: 0.88rem; font-weight: 700; color: var(--text-secondary);">Выбранные исходы:</span>
         <div style="display: flex; gap: 10px;">

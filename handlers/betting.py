@@ -465,9 +465,9 @@ async def cb_bet_place_amount(update: Update, context: ContextTypes.DEFAULT_TYPE
                 if err_code == "INSUFFICIENT_FUNDS":
                     err_msg = "Недостаточно монет на балансе!"
                 elif err_code == "MAX_BET_EXCEEDED":
-                    err_msg = f"Превышена максимальная сумма ставки ({res.get('max_bet', 1000)} 🪙)!"
+                    err_msg = f"Превышена максимальная сумма ставки ({res.get('max_bet', 50000):,} 🪙)!"
                 elif err_code == "MAX_PAYOUT_EXCEEDED":
-                    err_msg = f"Превышена максимальная выплата ({res.get('max_payout', 10000)} 🪙)!"
+                    err_msg = f"Превышена максимальная выплата ({res.get('max_payout', 500000):,} 🪙)!"
                 else:
                     err_msg = res.get("message", err_code)
             await query.answer(f"❌ {err_msg}", show_alert=True)

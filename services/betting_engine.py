@@ -37,27 +37,59 @@ _GAP_PENALTY = 1.5
 _PLAYED_STATUSES = ("completed", "confirmed")
 
 
-def _get_team_strength_score(standings: list[dict], team_name: str) -> float:
-    """Calculate relative strength score based on tournament standings."""
+def _get_team_strength_score(
+    standings: list[dict],
+    team_name: str,
+    nickname: str | None = None
+) -> float:
+    """
+    Calculate relative strength score based on tournament standings and preseason player seed.
+    Blends preseason player seed rating with standings table performance via _table_weight.
+    """
     norm_team = database.normalize_team_name(team_name).lower()
+
+    # 1. Resolve player nickname if not provided directly
+    resolved_nick = nickname
+    if not resolved_nick:
+        for row in standings:
+            if database.normalize_team_name(row.get("team_name", "")).lower() == norm_team:
+                resolved_nick = row.get("username")
+                break
+    if not resolved_nick:
+        try:
+            u = database.find_user_by_team(team_name)
+            if u:
+                resolved_nick = u.get("username")
+        except Exception:
+            pass
+
+    # 2. Preseason seed strength (0.0 .. 1.0, 0.5 is neutral)
+    seed = preseason_seeds.get_seed_strength(resolved_nick, team_name)
+    if seed is None:
+        seed = NEUTRAL_STRENGTH
+    seed_score = max(1.0, 10.0 + (seed - 0.5) * 10.0)
+
+    # 3. Table weight and standings points/GD score
+    played_rounds = max((row.get("played") or 0) for row in standings) if standings else 0
+    table_w = _table_weight(played_rounds)
+
+    table_score = 10.0
     for row in standings:
         row_team = database.normalize_team_name(row.get("team_name", "")).lower()
         if row_team == norm_team:
             played = max(1, row.get("played", 0))
             pts = row.get("points", 0)
-            # `get_standings` отдаёт goals_scored/goals_conceded; ключи gd/gf
-            # поддержаны для вызовов с уже посчитанной разницей мячей.
             if "gd" in row:
                 gd = row.get("gd") or 0
             else:
                 gd = (row.get("goals_scored") or 0) - (row.get("goals_conceded") or 0)
-            # Strength formula: Points per game (70%) + Goal diff per game (30%)
             ppg = pts / played
             gd_pg = gd / played
-            return max(1.0, 10.0 + (ppg * 4.0) + (gd_pg * 1.5))
+            table_score = max(1.0, 10.0 + (ppg * 4.0) + (gd_pg * 1.5))
+            break
 
-    # Default base strength for unranked / new teams
-    return 10.0
+    # Blend seed rating and table performance smoothly
+    return (1.0 - table_w) * seed_score + table_w * table_score
 
 
 def _match_team_names(m: dict) -> tuple[str, str]:
@@ -174,7 +206,14 @@ def select_top_round_matches(
     return scored[:limit]
 
 
-def calculate_match_odds(team1: str, team2: str, division_id: int | None = None, season_id: int | None = None) -> dict:
+def calculate_match_odds(
+    team1: str,
+    team2: str,
+    division_id: int | None = None,
+    season_id: int | None = None,
+    p1_nick: str | None = None,
+    p2_nick: str | None = None
+) -> dict:
     """
     Calculate realistic European decimal odds for a fixture.
     Returns:
@@ -190,8 +229,8 @@ def calculate_match_odds(team1: str, team2: str, division_id: int | None = None,
     except Exception as e:
         logger.debug(f"Could not load standings for odds: {e}")
 
-    s1 = _get_team_strength_score(standings, team1)
-    s2 = _get_team_strength_score(standings, team2)
+    s1 = _get_team_strength_score(standings, team1, nickname=p1_nick)
+    s2 = _get_team_strength_score(standings, team2, nickname=p2_nick)
 
     # 1. Base win probabilities using logistic scale
     # Home advantage slight boost (1.05x)
@@ -274,8 +313,16 @@ def generate_round_markets(tour: int, division_id: int | None = None, season_id:
     for m in selected:
         m_id = m.get("id")
         t1, t2 = _match_team_names(m)
+        p1_nick = m.get("player1_nickname") or m.get("player1_username")
+        p2_nick = m.get("player2_nickname") or m.get("player2_username")
 
-        odds = calculate_match_odds(t1, t2, division_id=division_id, season_id=season_id)
+        odds = calculate_match_odds(
+            t1, t2,
+            division_id=division_id,
+            season_id=season_id,
+            p1_nick=p1_nick,
+            p2_nick=p2_nick
+        )
         database.save_bet_market(
             match_id=m_id,
             tour=tour,

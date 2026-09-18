@@ -333,9 +333,17 @@ def generate_match_markets(
     - Both Teams to Score (Yes/No)
     - Handicap (-1.5 / +1.5)
     """
+    m = None
+    try:
+        m = database.get_match(match_id)
+    except Exception as e:
+        logger.debug(f"Could not load match #{match_id}: {e}")
+
+    p1_nick = (m.get("player1_nickname") or m.get("player1_username")) if m else None
+    p2_nick = (m.get("player2_nickname") or m.get("player2_username")) if m else None
+
     if standings is None:
         try:
-            m = database.get_match(match_id)
             m_div = m.get("division_id") if m else None
             m_season = m.get("season_id") if m else None
             standings = database.get_standings(division_id=m_div, season_id=m_season)
@@ -345,8 +353,8 @@ def generate_match_markets(
 
     from services.betting_engine import _get_team_strength_score
 
-    s1 = _get_team_strength_score(standings, team1_name)
-    s2 = _get_team_strength_score(standings, team2_name)
+    s1 = _get_team_strength_score(standings, team1_name, nickname=p1_nick)
+    s2 = _get_team_strength_score(standings, team2_name, nickname=p2_nick)
 
     # 1. Base win probabilities
     s1_adj = s1 * 1.05

@@ -6250,11 +6250,14 @@ def get_club_schedule_and_results(team_name: str, limit: int = 25) -> dict:
                 u1.username AS p1_username, u2.username AS p2_username
             FROM matches m
             LEFT JOIN rounds r ON m.round_number = r.round_number
+                AND COALESCE(m.division_id, 1) = COALESCE(r.division_id, 1)
+                AND (m.season_id = r.season_id OR m.season_id IS NULL)
             LEFT JOIN users u1 ON LOWER(m.player1_team) = LOWER(u1.team_name)
             LEFT JOIN users u2 ON LOWER(m.player2_team) = LOWER(u2.team_name)
             WHERE (m.tournament_type IS NULL OR m.tournament_type = 'league' OR m.tournament_type = '')
               AND (m.round_number IS NOT NULL AND m.round_number > 0)
               AND (LOWER(m.player1_team) = LOWER(?) OR LOWER(m.player2_team) = LOWER(?))
+              AND (r.is_open = 1 OR m.status IN ('confirmed', 'completed'))
             ORDER BY m.round_number ASC, m.id ASC
         """, (canon, canon))
         league_rows = [dict(r) for r in cursor.fetchall()]
@@ -10726,10 +10729,14 @@ def get_cabinet_matches(telegram_id: int, limit: int = 20) -> list[dict]:
                 m.proposed_time, m.proposed_by, COALESCE(m.time_status, 'none') AS time_status,
                 u1.username AS player1_username, u2.username AS player2_username
             FROM matches m
+            JOIN rounds r ON m.round_number = r.round_number
+                AND COALESCE(m.division_id, 1) = COALESCE(r.division_id, 1)
+                AND (m.season_id = r.season_id OR m.season_id IS NULL)
             LEFT JOIN users u1 ON LOWER(m.player1_team) = LOWER(u1.team_name)
             LEFT JOIN users u2 ON LOWER(m.player2_team) = LOWER(u2.team_name)
             WHERE (LOWER(m.player1_team) = LOWER(?) OR LOWER(m.player2_team) = LOWER(?))
               AND m.status IN (?, ?, ?)
+              AND r.is_open = 1
             ORDER BY m.round_number ASC, m.id ASC
             LIMIT ?
             """,

@@ -1544,22 +1544,73 @@ export class UIRenderer {
     const oddEl = document.getElementById('slip-total-odd');
     const itemsEl = document.getElementById('slip-items-container');
     const forecastEl = document.getElementById('slip-forecast-val');
+    const modeToggleEl = document.getElementById('slip-type-toggle');
+    const btnExp = document.getElementById('btn-slip-mode-express');
+    const btnSgl = document.getElementById('btn-slip-mode-single');
+    const submitBtn = document.getElementById('btn-submit-prediction');
 
+    const mode = store.state.slipMode || 'express';
     const totalOdd = store.getTotalOdd();
     const potentialWin = store.getPotentialWin();
-    const isExpress = slip.length > 1;
+    const isExpress = mode === 'express' && slip.length > 1;
 
-    if (badgeEl) badgeEl.textContent = `Купон (${slip.length})`;
-    if (oddEl) {
-      oddEl.innerHTML = `Кэф: <b>${totalOdd.toFixed(2)}</b> ${isExpress ? '<span style="color: var(--accent-cyan); font-size: 0.75rem;">(⚡+5% Экспресс)</span>' : ''}`;
+    if (badgeEl) {
+      if (slip.length > 1) {
+        badgeEl.textContent = mode === 'express' ? `Экспресс (${slip.length})` : `Ординары (${slip.length})`;
+      } else {
+        badgeEl.textContent = `Купон (${slip.length})`;
+      }
     }
-    if (forecastEl) forecastEl.textContent = `${this.formatNumber(potentialWin)} 🪙`;
+
+    if (modeToggleEl) {
+      modeToggleEl.style.display = slip.length > 1 ? 'flex' : 'none';
+      if (btnExp) {
+        btnExp.classList.toggle('active', mode === 'express');
+        btnExp.style.background = mode === 'express' ? 'var(--accent-gold)' : 'transparent';
+        btnExp.style.color = mode === 'express' ? '#000' : 'var(--text-muted)';
+      }
+      if (btnSgl) {
+        btnSgl.classList.toggle('active', mode === 'single');
+        btnSgl.style.background = mode === 'single' ? 'var(--accent-gold)' : 'transparent';
+        btnSgl.style.color = mode === 'single' ? '#000' : 'var(--text-muted)';
+      }
+    }
+
+    if (oddEl) {
+      if (mode === 'single' && slip.length > 1) {
+        oddEl.innerHTML = `<span>${slip.length} ординар(а)</span>`;
+      } else {
+        oddEl.innerHTML = `Кэф: <b>${totalOdd.toFixed(2)}</b> ${isExpress ? '<span style="color: var(--accent-cyan); font-size: 0.75rem;">(⚡+5% Экспресс)</span>' : ''}`;
+      }
+    }
+
+    if (forecastEl) {
+      forecastEl.textContent = `${this.formatNumber(potentialWin)} 🪙`;
+    }
+
+    if (submitBtn) {
+      if (slip.length === 0) {
+        submitBtn.textContent = 'Сделать прогноз';
+      } else if (mode === 'single' && slip.length > 1) {
+        const totalStake = stakeAmount * slip.length;
+        submitBtn.textContent = `Поставить ${slip.length} ординара (Всего: ${totalStake} 🪙)`;
+      } else if (mode === 'express' && slip.length > 1) {
+        submitBtn.textContent = `Сделать экспресс (Кэф: ${(totalOdd * 1.05).toFixed(2)})`;
+      } else {
+        submitBtn.textContent = `Сделать ординар (${stakeAmount} 🪙)`;
+      }
+    }
 
     if (itemsEl) {
       if (slip.length === 0) {
         itemsEl.innerHTML = '<div style="text-align: center; padding: 20px; color: var(--text-muted); font-size: 0.85rem;">Выберите исходы матчей для добавления в купон</div>';
       } else {
-        itemsEl.innerHTML = slip.map(s => `
+        itemsEl.innerHTML = slip.map(s => {
+          const singlePayout = Math.floor(stakeAmount * s.odd);
+          const singleInfo = mode === 'single' && slip.length > 1
+            ? `<span style="color: var(--text-muted); font-size: 0.7rem; margin-left: 6px;">(Ставка: ${stakeAmount} 🪙 → Выигрыш: ${singlePayout} 🪙)</span>`
+            : '';
+          return `
           <div style="display: flex; justify-content: space-between; align-items: center; background: var(--bg-tertiary); padding: 8px 10px; border-radius: var(--radius-sm); margin-bottom: 6px;">
             <div>
               <div style="font-weight: 700; font-size: 0.82rem; color: #fff; display: flex; align-items: center; gap: 6px;">
@@ -1571,11 +1622,13 @@ export class UIRenderer {
               </div>
               <div style="font-size: 0.75rem; color: var(--accent-gold); font-weight: 800; margin-top: 2px;">
                 ${s.selection_name || OUTCOME_NAMES[s.outcome] || s.outcome} @ ${s.odd.toFixed(2)}
+                ${singleInfo}
               </div>
             </div>
             <button class="btn-remove-slip-item" data-match-id="${s.match_id}" style="background: transparent; border: none; color: var(--text-muted); font-size: 1.1rem; cursor: pointer;">✕</button>
           </div>
-        `).join('');
+        `;
+        }).join('');
       }
     }
   }
@@ -1588,32 +1641,61 @@ export class UIRenderer {
     if (!listEl) return;
 
     if (!markets || markets.length === 0) {
-      listEl.innerHTML = '<div style="text-align: center; padding: 30px; color: var(--text-muted);">Рынки загружаются...</div>';
+      listEl.innerHTML = '<div style="text-align: center; padding: 30px; color: var(--text-muted);">Котировки формируются...</div>';
       return;
     }
 
-    listEl.innerHTML = markets.map(m => `
+    const getMarketIcon = (key) => {
+      if (key === '1x2') return '⚡ ';
+      if (key === 'double_chance') return '🔄 ';
+      if (key === 'total_goals') return '⚽ ';
+      if (key === 'btts') return '🥅 ';
+      if (key === 'handicap') return '↔️ ';
+      if (key && key.startsWith('individual_total')) return '🎯 ';
+      return '📋 ';
+    };
+
+    const getCols = (m) => {
+      if (m.market_key === '1x2' || m.market_key === 'double_chance') return 3;
+      return 2;
+    };
+
+    const marketsHtml = markets.map(m => `
       <div style="background: var(--bg-tertiary); border-radius: var(--radius-sm); padding: 10px; margin-bottom: 10px;">
-        <div style="font-weight: 800; font-size: 0.85rem; color: #fff; margin-bottom: 8px;">${m.name}</div>
-        <div style="display: grid; grid-template-columns: repeat(${Math.min(3, m.selections?.length || 2)}, 1fr); gap: 6px;">
+        <div style="font-weight: 800; font-size: 0.85rem; color: #fff; margin-bottom: 8px;">
+          ${getMarketIcon(m.market_key)}${escapeHtml(m.market_name || m.name || 'Рынок')}
+        </div>
+        <div style="display: grid; grid-template-columns: repeat(${getCols(m)}, 1fr); gap: 6px;">
           ${(m.selections || []).map(sel => {
             const isSel = store.isSelectionActive(matchId, sel.selection_key);
+            const sName = sel.selection_name || sel.name || sel.selection_key;
+            const sOdd = sel.current_odd || sel.odds_value || 1.90;
             return `
               <div class="odd-btn ${isSel ? 'selected' : ''}" 
                    data-match-id="${matchId}" 
                    data-outcome="${sel.selection_key}" 
-                   data-odd="${sel.current_odd}"
+                   data-odd="${sOdd}"
                    data-market-id="${m.id}"
                    data-selection-id="${sel.id}"
-                   data-selection-name="${sel.name}">
-                <span class="odd-label">${sel.name}</span>
-                <span class="odd-val">${Number(sel.current_odd).toFixed(2)}</span>
+                   data-selection-name="${escapeHtml(sName)}">
+                <span class="odd-label">${escapeHtml(sName)}</span>
+                <span class="odd-val">${Number(sOdd).toFixed(2)}</span>
               </div>
             `;
           }).join('')}
         </div>
       </div>
     `).join('');
+
+    const actionHtml = `
+      <div style="margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--border-subtle);">
+        <button class="btn-match-action btn-open-match-center" data-match-id="${matchId}" style="width: 100%; padding: 10px; font-weight: 800; font-size: 0.82rem; background: var(--bg-card); border: 1px solid var(--border-subtle); color: var(--accent-gold); border-radius: var(--radius-sm); cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px;">
+          <span>📊</span> Открыть полную аналитику & H2H →
+        </button>
+      </div>
+    `;
+
+    listEl.innerHTML = marketsHtml + actionHtml;
   }
 
   static renderLeaderboardModal(leaderboard, myRank) {

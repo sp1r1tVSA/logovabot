@@ -42,6 +42,13 @@ class AppController {
         UIRenderer.renderMyClubSubTab(state.myClubSubTab);
       }
       UIRenderer.renderSlipDrawer(state.slip, state.stakeAmount);
+
+      // Keep modal markets selection highlights in sync
+      document.querySelectorAll('#modal-markets-list .odd-btn').forEach(b => {
+        const bMId = parseInt(b.dataset.matchId);
+        const bOutcome = b.dataset.outcome;
+        b.classList.toggle('selected', store.isSelectionActive(bMId, bOutcome));
+      });
     });
 
     // 2. Setup all DOM events
@@ -479,6 +486,14 @@ class AppController {
           selection_id: selId,
           selection_name: selName
         });
+
+        // Update selection highlight in open modal if any
+        document.querySelectorAll('#modal-markets-list .odd-btn').forEach(b => {
+          const bMId = parseInt(b.dataset.matchId);
+          const bOutcome = b.dataset.outcome;
+          b.classList.toggle('selected', store.isSelectionActive(bMId, bOutcome));
+        });
+
         tgBridge.hapticImpact('light');
       }
     });
@@ -497,6 +512,8 @@ class AppController {
       const btn = e.target.closest('.btn-open-match-center');
       if (btn && btn.dataset.matchId) {
         const mId = parseInt(btn.dataset.matchId);
+        const modal = document.getElementById('match-markets-modal');
+        if (modal) modal.classList.remove('active', 'open');
         this.loadMatchCenter(mId);
         this.switchView('match_center');
       }
@@ -510,13 +527,22 @@ class AppController {
         const modal = document.getElementById('match-markets-modal');
         if (modal) {
           modal.classList.add('active');
+          const titleEl = document.getElementById('modal-match-title');
+          const listEl = document.getElementById('modal-markets-list');
+          if (titleEl) titleEl.textContent = 'Все рынки матча';
+          if (listEl) {
+            listEl.innerHTML = '<div style="text-align: center; padding: 36px 16px; color: var(--text-muted);"><div style="font-size: 1.6rem; margin-bottom: 8px;">⏳</div>Загрузка доступных котировок...</div>';
+          }
           try {
             const data = await api.getMatchMarkets(mId);
             if (data.status === 'ok') {
               UIRenderer.renderMatchMarketsModal(mId, data.markets, `${data.team1_name} — ${data.team2_name}`);
+            } else {
+              if (listEl) listEl.innerHTML = `<div style="text-align: center; padding: 24px; color: var(--accent-red);">${data.message || 'Рынки временно недоступны'}</div>`;
             }
           } catch (err) {
             console.error("Could not load markets:", err);
+            if (listEl) listEl.innerHTML = '<div style="text-align: center; padding: 24px; color: var(--accent-red);">Ошибка связи с сервером</div>';
           }
         }
       }
@@ -666,6 +692,15 @@ class AppController {
       });
     }
 
+    // Slip mode toggle: Ординары / Экспресс
+    document.addEventListener('click', (e) => {
+      const modeBtn = e.target.closest('.slip-type-btn');
+      if (modeBtn && modeBtn.dataset.slipMode) {
+        store.setSlipMode(modeBtn.dataset.slipMode);
+        tgBridge.hapticImpact('light');
+      }
+    });
+
     document.addEventListener('click', (e) => {
       const rmBtn = e.target.closest('.btn-remove-slip-item');
       if (rmBtn && rmBtn.dataset.matchId) {
@@ -712,8 +747,11 @@ class AppController {
           return;
         }
 
-        if ((store.state.user?.balance || 0) < amt) {
-          tgBridge.showAlert("Недостаточно монет на балансе.");
+        const isSingleBatch = store.state.slipMode === 'single' && store.state.slip.length > 1;
+        const totalAmt = isSingleBatch ? amt * store.state.slip.length : amt;
+
+        if ((store.state.user?.balance || 0) < totalAmt) {
+          tgBridge.showAlert(`Недостаточно монет на балансе (необходимо ${totalAmt} 🪙).`);
           return;
         }
 
@@ -721,22 +759,50 @@ class AppController {
         submitBtn.textContent = '⏳ ОБРАБОТКА...';
 
         try {
-          const idempotencyKey = `slip-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
-          const res = await api.placePrediction(amt, store.state.slip, idempotencyKey);
-          if (res.status === 'ok') {
-            store.setUser({ ...store.state.user, balance: res.new_balance });
-            store.clearSlip();
-            this.toggleSlipDrawer(false);
-            ParticleEffects.confetti();
-            tgBridge.hapticNotification('success');
-            this.showSuccessModal('🎉 Прогноз принят!', `Сумма: ${amt} 🪙. Удачи в туре!`);
-            this.fetchUserExtras();
-            // Refresh predictions history immediately
-            try {
-              const myBetsRes = await api.getPredictions();
-              if (myBetsRes.status === 'ok') store.setMyBets(myBetsRes.predictions);
-            } catch (e) {
-              console.warn("Could not refresh predictions:", e);
+          if (isSingleBatch) {
+            let placedCount = 0;
+            let lastBalance = store.state.user?.balance;
+            for (const item of store.state.slip) {
+              const key = `slip-single-${Date.now()}-${item.match_id}-${Math.random().toString(36).substring(2, 6)}`;
+              const res = await api.placePrediction(amt, [item], key);
+              if (res.status === 'ok') {
+                placedCount++;
+                lastBalance = res.new_balance;
+              }
+            }
+            if (placedCount > 0) {
+              store.setUser({ ...store.state.user, balance: lastBalance });
+              store.clearSlip();
+              this.toggleSlipDrawer(false);
+              ParticleEffects.confetti();
+              tgBridge.hapticNotification('success');
+              this.showSuccessModal('🎉 Ординары приняты!', `Успешно сделано ${placedCount} одиночных ставок по ${amt} 🪙 (Всего: ${placedCount * amt} 🪙).`);
+              this.fetchUserExtras();
+              try {
+                const myBetsRes = await api.getPredictions();
+                if (myBetsRes.status === 'ok') store.setMyBets(myBetsRes.predictions);
+              } catch (e) {
+                console.warn("Could not refresh predictions:", e);
+              }
+            }
+          } else {
+            const idempotencyKey = `slip-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+            const res = await api.placePrediction(amt, store.state.slip, idempotencyKey);
+            if (res.status === 'ok') {
+              store.setUser({ ...store.state.user, balance: res.new_balance });
+              const isExp = store.state.slip.length > 1;
+              store.clearSlip();
+              this.toggleSlipDrawer(false);
+              ParticleEffects.confetti();
+              tgBridge.hapticNotification('success');
+              this.showSuccessModal(isExp ? '🎉 Экспресс принят!' : '🎉 Прогноз принят!', `Сумма: ${amt} 🪙. Удачи в туре!`);
+              this.fetchUserExtras();
+              try {
+                const myBetsRes = await api.getPredictions();
+                if (myBetsRes.status === 'ok') store.setMyBets(myBetsRes.predictions);
+              } catch (e) {
+                console.warn("Could not refresh predictions:", e);
+              }
             }
           }
         } catch (err) {
@@ -776,7 +842,7 @@ class AppController {
     document.querySelectorAll('.modal-overlay').forEach(modal => {
       modal.addEventListener('click', (e) => {
         if (e.target === modal || e.target.closest('.btn-modal-close')) {
-          modal.classList.remove('active');
+          modal.classList.remove('active', 'open');
         }
       });
     });
