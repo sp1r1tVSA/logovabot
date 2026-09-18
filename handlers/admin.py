@@ -202,6 +202,7 @@ def _build_super_admin_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("🏆 Дивизионы", callback_data="admin_divs_hub")],
         [InlineKeyboardButton("👔 Админы дивизионов", callback_data="admin_div_admins_hub")],
         [InlineKeyboardButton("👥 Управление игроками", callback_data="admin_manage_players")],
+        [InlineKeyboardButton("🔗 Привязка клубов", callback_data="admin_bind_hub")],
         [InlineKeyboardButton("🔄 Обновить таблицы и стату", callback_data="admin_force_update")],
         [InlineKeyboardButton(f"🎭 Режим общения: {mode_label}", callback_data="admin_toggle_chat_mode")],
         [InlineKeyboardButton(f"🤖 ИИ Темшик: {ai_label}", callback_data="admin_toggle_ai_chat")],
@@ -281,6 +282,7 @@ async def show_division_admin_panel(update: Update, context: ContextTypes.DEFAUL
 
     keyboard = [
         [InlineKeyboardButton("⚔️ Управление матчами", callback_data=f"admin_div_manage_matches:{div_id}")],
+        [InlineKeyboardButton("🔗 Привязка клубов", callback_data=f"admin_bind_div:{div_id}")],
         [InlineKeyboardButton("📢 Рассылка задолженностей", callback_data=f"admin_div_debts_menu:{div_id}")],
         [InlineKeyboardButton("👥 Выдача варнов", callback_data=f"admin_div_manage_players:{div_id}")],
     ]
@@ -1911,6 +1913,7 @@ async def admin_div_view(update: Update, context: ContextTypes.DEFAULT_TYPE, div
     keyboard = [
         [InlineKeyboardButton("⚔️ Управление матчами", callback_data=f"admin_div_manage_matches:{div_id}")],
         [InlineKeyboardButton("📋 Составы команд", callback_data=f"admin_roster_div:{div_id}")],
+        [InlineKeyboardButton("🔗 Привязка клубов", callback_data=f"admin_bind_div:{div_id}")],
         [InlineKeyboardButton("📢 Рассылка задолженностей", callback_data=f"admin_div_debts_menu:{div_id}")],
         [
             InlineKeyboardButton(toggle_btn_text, callback_data=f"admin_div_toggle_{div_id}"),
@@ -4537,6 +4540,339 @@ async def admin_edit_club_execute(update: Update, context: ContextTypes.DEFAULT_
     await query.answer(f"✅ {msg}" if success else f"❌ {msg}", show_alert=True)
 
     await admin_view_player(update, context, player_id=p_id)
+
+
+# ─── Привязка клубов: взгляд «от клуба», а не «от игрока» ────────────────────
+#
+# «Изменить клуб» в карточке игрока отвечает на вопрос «какой клуб дать этому
+# тренеру». Здесь обратный вопрос — «кто сидит в этих 16 клубах и какие ещё
+# свободны». Клуб едет в callback_data индексом в `get_division_teams`: список
+# отсортирован и детерминирован, а названия кириллицей (2 байта на символ) в
+# 64-байтный лимит Telegram не влезают. `user_data` в цепочке не участвует
+# вообще — кнопка со вчерашнего сообщения работает и после перезапуска бота.
+
+
+def _bind_parse(data: str) -> list[int]:
+    """Числовые части callback_data привязки: `admin_bind_*:{a}:{b}:…` → [a, b, …]."""
+    return [int(part) for part in data.split(":")[1:]]
+
+
+async def _bind_all_users() -> list[dict]:
+    """Вся лига словарями: `list_users` отдаёт `sqlite3.Row`, у которых нет `.get()`."""
+    return [dict(u) for u in await asyncio.to_thread(database.list_users)]
+
+
+def _bind_club_owner(users: list[dict], club: str) -> dict | None:
+    """Нынешний владелец клуба или None.
+
+    Сверка точная по lower/strip — ровно как в `_club_owner_labels`, иначе сетка
+    клубов и карточка клуба разошлись бы во мнении, занят ли клуб. Ищем по всей
+    лиге, а не по дивизиону: тренер мог остаться приписанным к чужому дивизиону,
+    и фильтр нарисовал бы занятый клуб свободным.
+    """
+    needle = club.strip().lower()
+    for u in users:
+        if (u.get("team_name") or "").strip().lower() == needle:
+            return u
+    return None
+
+
+async def _bind_candidates(div_id: int, exclude_id: int | None = None) -> list[dict]:
+    """Кого можно посадить в клуб дивизиона.
+
+    Сначала участники дивизиона без клуба — ради них экран и существует, затем
+    занятые (это и есть «замена»), в конце тренеры вообще без дивизиона:
+    `admin_bind_execute` проставит им `division_id` при привязке.
+    """
+    in_div = await asyncio.to_thread(database.get_division_users, div_id)
+    no_div = await asyncio.to_thread(database.get_division_users, None)
+    free = [u for u in in_div if not (u.get("team_name") or "").strip()]
+    busy = [u for u in in_div if (u.get("team_name") or "").strip()]
+    ordered = free + busy + no_div
+    return [u for u in ordered if u["telegram_id"] != exclude_id]
+
+
+def _bind_candidate_label(candidate: dict, div_id: int) -> str:
+    """Подпись кнопки участника: свободен / с чьим клубом / не из дивизиона."""
+    name = f"@{candidate['username']}" if candidate.get("username") else f"ID {candidate['telegram_id']}"
+    club = (candidate.get("team_name") or "").strip()
+    if candidate.get("division_id") != div_id:
+        return f"🆕 {name} (без дивизиона){f' — {club}' if club else ''}"
+    if club:
+        return f"🔁 {name} — {club}"
+    return f"🆓 {name}"
+
+
+async def _bind_render_division(update: Update, context: ContextTypes.DEFAULT_TYPE, div_id: int) -> None:
+    """Экран клубов дивизиона со статусами занятости."""
+    query = update.callback_query
+    division = await asyncio.to_thread(database.get_division, div_id)
+    div_name = division["name"] if division else f"#{div_id}"
+    teams = await asyncio.to_thread(database.get_division_teams, div_id)
+
+    home_cb = _div_home_cb(update, div_id)
+    back_row = [InlineKeyboardButton("« Назад", callback_data=home_cb)]
+    if not teams:
+        await query.edit_message_text(
+            f"⚠️ В дивизионе <b>{html.escape(str(div_name))}</b> нет клубов.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([back_row])
+        )
+        return
+
+    owners = _club_owner_labels(await _bind_all_users())
+
+    keyboard: list[list[InlineKeyboardButton]] = []
+    row: list[InlineKeyboardButton] = []
+    taken = 0
+    for club_idx, club in enumerate(teams):
+        owner = owners.get(club.lower())
+        if owner:
+            taken += 1
+            btn_text = f"🔴 {club} ({owner})"
+        else:
+            btn_text = f"🟢 {club} (свободен)"
+        row.append(InlineKeyboardButton(btn_text, callback_data=f"admin_bind_club:{div_id}:{club_idx}:0"))
+        if len(row) == 2:
+            keyboard.append(row)
+            row = []
+    if row:
+        keyboard.append(row)
+    keyboard.append(back_row)
+
+    text = (
+        f"🔗 <b>Привязка клубов — {html.escape(str(div_name))}</b>\n\n"
+        f"Занято: <b>{taken}/{len(teams)}</b>\n\n"
+        f"Выберите клуб, чтобы назначить или сменить его владельца:"
+    )
+    await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+@admin_only
+async def admin_bind_hub(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Супер-админ: выбор дивизиона для привязки клубов."""
+    query = update.callback_query
+    if not query or not await _ensure_super_admin(update):
+        return
+
+    owners = _club_owner_labels(await _bind_all_users())
+
+    divisions = await asyncio.to_thread(database.get_divisions)
+    keyboard = []
+    for d in divisions:
+        teams = await asyncio.to_thread(database.get_division_teams, d["id"])
+        taken = sum(1 for t in teams if t.lower() in owners)
+        status_icon = "🟢" if d.get("is_active") else "🔴"
+        label = f"{status_icon} {d['name']} ({taken}/{len(teams)})"
+        keyboard.append([InlineKeyboardButton(label, callback_data=f"admin_bind_div:{d['id']}")])
+    keyboard.append([InlineKeyboardButton("« Назад в админку", callback_data="admin_main_menu")])
+
+    text = (
+        "🔗 <b>Привязка клубов</b>\n\n"
+        "Клубы закреплены за дивизионом, участники — за клубами.\n"
+        "В скобках — сколько клубов дивизиона уже разобрано.\n\n"
+        "Выберите дивизион:"
+    )
+    await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+@admin_only
+async def admin_bind_division(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Клубы дивизиона со статусами занятости."""
+    query = update.callback_query
+    if not query or not is_admin(query.from_user.id):
+        return
+
+    div_id = _bind_parse(query.data)[0]
+    if not await _ensure_division_access(update, div_id):
+        return
+
+    await _bind_render_division(update, context, div_id)
+
+
+@admin_only
+async def admin_bind_club_card(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Карточка клуба: владелец и список кандидатов на привязку."""
+    query = update.callback_query
+    if not query or not is_admin(query.from_user.id):
+        return
+
+    div_id, club_idx, page = _bind_parse(query.data)
+    if not await _ensure_division_access(update, div_id):
+        return
+
+    teams = await asyncio.to_thread(database.get_division_teams, div_id)
+    if club_idx < 0 or club_idx >= len(teams):
+        await _bind_render_division(update, context, div_id)
+        return
+    club = teams[club_idx]
+
+    owner = _bind_club_owner(await _bind_all_users(), club)
+    owner_id = owner["telegram_id"] if owner else None
+    owner_label = None
+    if owner:
+        owner_label = f"@{owner['username']}" if owner.get("username") else f"ID {owner['telegram_id']}"
+
+    candidates = await _bind_candidates(div_id, exclude_id=owner_id)
+
+    per_page = 8
+    total_pages = max(1, (len(candidates) + per_page - 1) // per_page)
+    page = max(0, min(page, total_pages - 1))
+    page_candidates = candidates[page * per_page : page * per_page + per_page]
+
+    keyboard = []
+    for c in page_candidates:
+        label = _bind_candidate_label(c, div_id)
+        keyboard.append([InlineKeyboardButton(label, callback_data=f"admin_bind_set:{div_id}:{club_idx}:{c['telegram_id']}")])
+
+    if total_pages > 1:
+        nav_row = []
+        if page > 0:
+            nav_row.append(InlineKeyboardButton("⬅️", callback_data=f"admin_bind_club:{div_id}:{club_idx}:{page - 1}"))
+        nav_row.append(InlineKeyboardButton(f"{page + 1} / {total_pages}", callback_data="noop"))
+        if page < total_pages - 1:
+            nav_row.append(InlineKeyboardButton("➡️", callback_data=f"admin_bind_club:{div_id}:{club_idx}:{page + 1}"))
+        keyboard.append(nav_row)
+
+    if owner_id is not None:
+        keyboard.append([InlineKeyboardButton(
+            "🗑 Освободить клуб", callback_data=f"admin_bind_free:{div_id}:{club_idx}"
+        )])
+    keyboard.append([InlineKeyboardButton("« К клубам", callback_data=f"admin_bind_div:{div_id}")])
+
+    lines = [f"⚽ <b>{html.escape(club)}</b>\n"]
+    if owner_label:
+        lines.append(f"Сейчас клубом владеет <b>{html.escape(owner_label)}</b>.")
+        lines.append("Привязка другого участника отберёт клуб и обнулит варны прежнего владельца.\n")
+    else:
+        lines.append("Клуб <b>свободен</b>.\n")
+    if page_candidates:
+        lines.append("Выберите участника — клик сразу привяжет его к клубу:")
+    else:
+        lines.append("<i>Нет участников, которых можно привязать.</i>")
+
+    await query.edit_message_text(
+        "\n".join(lines), parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+async def admin_bind_execute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Привязать выбранного участника к клубу.
+
+    Без @admin_only намеренно: декоратор гасит callback пустым query.answer(),
+    а Telegram принимает ответ на запрос только один раз — итоговый алерт с
+    результатом привязки тогда не долетает. Права проверяются вручную.
+    """
+    query = update.callback_query
+    if not query:
+        return
+    user = update.effective_user
+    if not user or not is_admin(user.id):
+        await _deny_access(update)
+        return
+
+    div_id, club_idx, player_id = _bind_parse(query.data)
+    if not await _ensure_division_access(update, div_id):
+        return
+
+    teams = await asyncio.to_thread(database.get_division_teams, div_id)
+    if club_idx < 0 or club_idx >= len(teams):
+        await query.answer("❌ Клуб не найден.", show_alert=True)
+        return
+    club = teams[club_idx]
+
+    player = await asyncio.to_thread(database.get_user, player_id)
+    player_row = dict(player) if player else {}
+
+    success, msg = await asyncio.to_thread(database.set_player_club, str(player_id), club)
+    if success:
+        # Клуб принадлежит дивизиону, поэтому его владелец обязан в нём числиться:
+        # иначе тренер выпадет из таблицы, долгов и дайджестов — они считаются
+        # по division_id, а не по названию клуба.
+        if player_row.get("division_id") != div_id:
+            await asyncio.to_thread(database.assign_user_division, player_id, div_id)
+            msg += " Участник переведён в этот дивизион."
+        try:
+            await _post_or_update_debts_in_warns(context)
+        except Exception as e:
+            logger.warning(f"Failed to update debts in warns on club bind: {e}")
+
+    await query.answer(f"✅ {msg}" if success else f"❌ {msg}", show_alert=True)
+    await _bind_render_division(update, context, div_id)
+
+
+@admin_only
+async def admin_bind_free_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Подтверждение освобождения клуба."""
+    query = update.callback_query
+    if not query or not is_admin(query.from_user.id):
+        return
+
+    div_id, club_idx = _bind_parse(query.data)
+    if not await _ensure_division_access(update, div_id):
+        return
+
+    teams = await asyncio.to_thread(database.get_division_teams, div_id)
+    if club_idx < 0 or club_idx >= len(teams):
+        await _bind_render_division(update, context, div_id)
+        return
+    club = teams[club_idx]
+
+    owner = _bind_club_owner(await _bind_all_users(), club)
+    if not owner:
+        await _bind_render_division(update, context, div_id)
+        return
+    owner_label = f"@{owner['username']}" if owner.get("username") else f"ID {owner['telegram_id']}"
+
+    text = (
+        f"🗑 <b>Освободить клуб {html.escape(club)}?</b>\n\n"
+        f"Владелец <b>{html.escape(owner_label)}</b> останется в лиге и в дивизионе, "
+        f"но без клуба. Варны и их история будут сброшены.\n\n"
+        f"Матчи клуба останутся за клубом — их унаследует следующий владелец."
+    )
+    keyboard = [
+        [InlineKeyboardButton("✅ Да, освободить", callback_data=f"admin_bind_free_ok:{div_id}:{club_idx}")],
+        [InlineKeyboardButton("« Отмена", callback_data=f"admin_bind_club:{div_id}:{club_idx}:0")],
+    ]
+    await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+async def admin_bind_free_execute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Снять клуб с его нынешнего владельца. Без @admin_only — см. admin_bind_execute."""
+    query = update.callback_query
+    if not query:
+        return
+    user = update.effective_user
+    if not user or not is_admin(user.id):
+        await _deny_access(update)
+        return
+
+    div_id, club_idx = _bind_parse(query.data)
+    if not await _ensure_division_access(update, div_id):
+        return
+
+    teams = await asyncio.to_thread(database.get_division_teams, div_id)
+    if club_idx < 0 or club_idx >= len(teams):
+        await query.answer("❌ Клуб не найден.", show_alert=True)
+        return
+    club = teams[club_idx]
+
+    owner = _bind_club_owner(await _bind_all_users(), club)
+    if not owner:
+        await query.answer("❌ Клуб и так свободен.", show_alert=True)
+        await _bind_render_division(update, context, div_id)
+        return
+
+    success, msg = await asyncio.to_thread(database.clear_player_club, int(owner["telegram_id"]))
+    if success:
+        try:
+            await _post_or_update_debts_in_warns(context)
+        except Exception as e:
+            logger.warning(f"Failed to update debts in warns on club release: {e}")
+
+    await query.answer(f"✅ {msg}" if success else f"❌ {msg}", show_alert=True)
+    await _bind_render_division(update, context, div_id)
+
 
 @admin_only
 async def admin_edit_div_select(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

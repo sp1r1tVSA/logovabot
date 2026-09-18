@@ -180,6 +180,12 @@ from handlers.admin import (
     admin_manage_players_menu,
     admin_edit_club_select,
     admin_edit_club_execute,
+    admin_bind_hub,
+    admin_bind_division,
+    admin_bind_club_card,
+    admin_bind_execute,
+    admin_bind_free_confirm,
+    admin_bind_free_execute,
     admin_edit_div_select,
     admin_edit_div_execute,
     admin_div_players_menu,
@@ -742,6 +748,14 @@ def _register_admin_handlers(app: Application) -> None:
     app.add_handler(CallbackQueryHandler(admin_confirm_wipe_player, pattern="^admin_confirm_wipe_player_-?\\d+$"))
     app.add_handler(CallbackQueryHandler(admin_wipe_player_execute, pattern="^admin_wipe_player_execute_-?\\d+$"))
     app.add_handler(CallbackQueryHandler(admin_rosters_for_division, pattern=r"^admin_roster_div:(\d+)$"))
+    # Привязка клубов. Клуб едет индексом (кириллица не влезает в 64 байта callback_data),
+    # а telegram_id допускает минус — преднабранные игроки живут с отрицательными id.
+    app.add_handler(CallbackQueryHandler(admin_bind_hub, pattern=r"^admin_bind_hub$"))
+    app.add_handler(CallbackQueryHandler(admin_bind_division, pattern=r"^admin_bind_div:\d+$"))
+    app.add_handler(CallbackQueryHandler(admin_bind_club_card, pattern=r"^admin_bind_club:\d+:\d+:\d+$"))
+    app.add_handler(CallbackQueryHandler(admin_bind_execute, pattern=r"^admin_bind_set:\d+:\d+:-?\d+$"))
+    app.add_handler(CallbackQueryHandler(admin_bind_free_confirm, pattern=r"^admin_bind_free:\d+:\d+$"))
+    app.add_handler(CallbackQueryHandler(admin_bind_free_execute, pattern=r"^admin_bind_free_ok:\d+:\d+$"))
     app.add_handler(CallbackQueryHandler(admin_view_squad, pattern="^admin_squad_view_.*$"))
     app.add_handler(CallbackQueryHandler(admin_squad_rm_menu, pattern="^admin_squad_rm_menu_.*$"))
     app.add_handler(CallbackQueryHandler(admin_squad_del_player, pattern="^admin_squad_del_p_.*$"))

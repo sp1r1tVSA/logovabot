@@ -10,6 +10,9 @@ from handlers.cabinet import (
     show_clubs_catalog_for_division,
 )
 from handlers.admin import (
+    admin_bind_division,
+    admin_bind_execute,
+    admin_bind_free_execute,
     admin_edit_club_execute,
     admin_edit_club_select,
     admin_rosters_for_division,
@@ -421,6 +424,166 @@ class TestBindingACoachToAClub(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(database.get_user(self.coach_id)["team_name"], self.club)
         # Отъём клуба не должен быть молчаливым.
         self.assertIn("@rival_owner", alert)
+
+
+class TestClubBindingScreen(unittest.IsolatedAsyncioTestCase):
+    """Экран «🔗 Привязка клубов»: взгляд от клуба, а не от игрока."""
+
+    async def asyncSetUp(self):
+        database.init_db()
+        database.ensure_canonical_divisions()
+        self.admin_id = 999126
+        self.free_coach_id = 99931
+        self.owner_id = 99932
+        self.homeless_id = 99933
+        self.div_five_id = database.get_division_by_code("DIV_5")["id"]
+        self.div_four_id = database.get_division_by_code("DIV_4")["id"]
+        self.teams = database.get_division_teams(self.div_five_id)
+        self.taken_club = config.DIVISION_CLUBS["DIV_5"][0]
+        self.free_club = config.DIVISION_CLUBS["DIV_5"][1]
+
+        with database.transaction() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO users (telegram_id, username, team_name, role, division_id) "
+                "VALUES (?, 'free_coach', NULL, 'player', ?)",
+                (self.free_coach_id, self.div_five_id)
+            )
+            conn.execute(
+                "INSERT OR REPLACE INTO users (telegram_id, username, team_name, role, division_id, warn_count) "
+                "VALUES (?, 'club_owner', ?, 'player', ?, 2)",
+                (self.owner_id, self.taken_club, self.div_five_id)
+            )
+            conn.execute(
+                "INSERT INTO user_warns (user_id, admin_id, reason, type, created_at) "
+                "VALUES (?, ?, 'Неявка', 'WARN_ADD', '2026-09-01 12:00:00')",
+                (self.owner_id, self.admin_id)
+            )
+            conn.execute(
+                "INSERT OR REPLACE INTO users (telegram_id, username, team_name, role, division_id) "
+                "VALUES (?, 'homeless_coach', NULL, 'player', NULL)",
+                (self.homeless_id,)
+            )
+
+    async def asyncTearDown(self):
+        ids = (self.free_coach_id, self.owner_id, self.homeless_id)
+        with database.transaction() as conn:
+            c = conn.cursor()
+            c.execute("DELETE FROM user_warns WHERE user_id IN (?, ?, ?)", ids)
+            c.execute("DELETE FROM users WHERE telegram_id IN (?, ?, ?)", ids)
+
+    def _update(self, data: str, user_id: int | None = None):
+        query = MagicMock()
+        query.data = data
+        query.from_user.id = user_id or self.admin_id
+        query.answer = AsyncMock()
+        query.edit_message_text = AsyncMock()
+        update = MagicMock()
+        update.callback_query = query
+        update.effective_user.id = user_id or self.admin_id
+        return update, query
+
+    async def _run(self, handler, data: str, **patches):
+        """Прогнать хендлер привязки. `user_data` намеренно пуст — индекс клуба
+        обязан пересобираться из БД, а не доставаться из памяти процесса."""
+        update, query = self._update(data)
+        context = MagicMock()
+        context.user_data = {}
+        with patch("handlers.base.is_admin", return_value=True), \
+             patch("handlers.admin.is_admin", return_value=True), \
+             patch("handlers.admin.is_global_admin", return_value=True), \
+             patch("handlers.admin._post_or_update_debts_in_warns", new=AsyncMock()):
+            await handler(update, context)
+        return query
+
+    def _screen(self, query) -> tuple[str, list[str]]:
+        text = query.edit_message_text.call_args[0][0]
+        markup = query.edit_message_text.call_args[1]["reply_markup"]
+        buttons = [b.text for row in markup.inline_keyboard for b in row]
+        return text, buttons
+
+    async def test_division_screen_shows_every_club_with_its_status(self):
+        query = await self._run(admin_bind_division, f"admin_bind_div:{self.div_five_id}")
+
+        text, buttons = self._screen(query)
+        self.assertIn(f"Занято: <b>1/{len(self.teams)}</b>", text)
+        self.assertIn(f"🔴 {self.taken_club} (@club_owner)", buttons)
+        self.assertIn(f"🟢 {self.free_club} (свободен)", buttons)
+        # Каждый клуб дивизиона должен быть на экране, иначе свободный не найти.
+        self.assertEqual(sum(1 for b in buttons if b.startswith(("🔴 ", "🟢 "))), len(self.teams))
+
+    async def test_pressing_a_candidate_binds_them_to_the_club(self):
+        idx = self.teams.index(self.free_club)
+
+        query = await self._run(
+            admin_bind_execute, f"admin_bind_set:{self.div_five_id}:{idx}:{self.free_coach_id}"
+        )
+
+        self.assertEqual(database.get_user(self.free_coach_id)["team_name"], self.free_club)
+        alert = query.answer.call_args[0][0]
+        self.assertIn(self.free_club, alert)
+        # Алерт Telegram — обычный текст: разметка в нём показалась бы звёздочками.
+        self.assertNotIn("**", alert)
+        # После привязки админ возвращается на экран клубов с обновлённым статусом.
+        _, buttons = self._screen(query)
+        self.assertIn(f"🔴 {self.free_club} (@free_coach)", buttons)
+
+    async def test_binding_a_coach_without_a_division_moves_them_into_it(self):
+        """Клуб принадлежит дивизиону, значит и его владелец обязан в нём числиться —
+        иначе тренер выпадет из таблицы и долгов, которые считаются по division_id."""
+        idx = self.teams.index(self.free_club)
+
+        query = await self._run(
+            admin_bind_execute, f"admin_bind_set:{self.div_five_id}:{idx}:{self.homeless_id}"
+        )
+
+        bound = database.get_user(self.homeless_id)
+        self.assertEqual(bound["team_name"], self.free_club)
+        self.assertEqual(bound["division_id"], self.div_five_id)
+        self.assertIn("дивизион", query.answer.call_args[0][0])
+
+    async def test_taking_an_occupied_club_wipes_the_previous_owners_warns(self):
+        """Регрессия: счётчик и история варнов обязаны сниматься вместе с клубом."""
+        idx = self.teams.index(self.taken_club)
+
+        await self._run(
+            admin_bind_execute, f"admin_bind_set:{self.div_five_id}:{idx}:{self.free_coach_id}"
+        )
+
+        previous = database.get_user(self.owner_id)
+        self.assertIsNone(previous["team_name"])
+        self.assertEqual(previous["warn_count"], 0)
+        self.assertEqual(database.get_user_warns(self.owner_id), [])
+        self.assertEqual(database.get_user(self.free_coach_id)["team_name"], self.taken_club)
+
+    async def test_releasing_a_club_keeps_its_owner_in_the_league(self):
+        idx = self.teams.index(self.taken_club)
+
+        query = await self._run(
+            admin_bind_free_execute, f"admin_bind_free_ok:{self.div_five_id}:{idx}"
+        )
+
+        released = database.get_user(self.owner_id)
+        self.assertIsNotNone(released)
+        self.assertIsNone(released["team_name"])
+        self.assertEqual(released["division_id"], self.div_five_id)
+        self.assertEqual(released["warn_count"], 0)
+        self.assertEqual(database.get_user_warns(self.owner_id), [])
+        _, buttons = self._screen(query)
+        self.assertIn(f"🟢 {self.taken_club} (свободен)", buttons)
+
+    async def test_division_admin_cannot_open_a_foreign_division(self):
+        """callback_data подделывается руками, поэтому права проверяются на каждом шаге."""
+        update, query = self._update(f"admin_bind_div:{self.div_four_id}")
+        context = MagicMock()
+        context.user_data = {}
+        with patch("handlers.base.is_admin", return_value=True), \
+             patch("handlers.admin.is_admin", return_value=True), \
+             patch("handlers.admin.is_global_admin", return_value=False), \
+             patch("handlers.admin.database.get_admin_divisions",
+                   return_value=[{"id": self.div_five_id}]):
+            await admin_bind_division(update, context)
+
+        query.edit_message_text.assert_not_called()
 
 
 if __name__ == "__main__":

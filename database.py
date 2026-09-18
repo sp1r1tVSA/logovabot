@@ -3922,6 +3922,40 @@ def set_player_club(player_ref: str, new_club: str) -> tuple[bool, str]:
             message += f" Клуб отобран у {taken_from} — варны сброшены."
         return True, message
 
+
+def clear_player_club(telegram_id: int) -> tuple[bool, str]:
+    """Release a coach's club without removing them from the league.
+
+    Warns go with the club: they are accrued for unplayed matches of *that* club,
+    so the counter and the history are wiped together — exactly as `set_player_club`
+    does when it takes a club from its previous owner. Clearing one without the
+    other leaves a phantom history behind a zeroed counter.
+
+    Pending fixtures and cup series keep the club name: they are keyed by club, and
+    the next owner inherits them through `set_player_club`. Returns `(ok, message)`;
+    the message is **plain text** — it ends up in a Telegram alert.
+    """
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT username, team_name FROM users WHERE telegram_id = ?", (telegram_id,))
+        row = cursor.fetchone()
+        if not row:
+            return False, "Игрок не найден."
+
+        label = f"@{row['username']}" if row["username"] else f"ID {telegram_id}"
+        old_club = (row["team_name"] or "").strip()
+        if not old_club:
+            return False, f"У игрока {label} и так нет клуба."
+
+        cursor.execute(
+            "UPDATE users SET team_name = NULL, warn_count = 0 WHERE telegram_id = ?",
+            (telegram_id,)
+        )
+        cursor.execute("DELETE FROM user_warns WHERE user_id = ?", (telegram_id,))
+
+        return True, f"Клуб «{old_club}» освобождён — {label} остался в лиге без клуба."
+
+
 def update_player_username(telegram_id: int, username: str) -> tuple[bool, str]:
     """Update player's Telegram username."""
     username_clean = username.strip().lstrip("@")

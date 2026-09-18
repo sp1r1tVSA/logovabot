@@ -122,6 +122,7 @@ tests/test_divisions_catalog_and_rosters.py → обновить: admin_manage_s
 [ 🏆 Дивизионы ]                  → admin_divs_hub
 [ 👔 Админы дивизионов ]          → admin_div_admins_hub
 [ 👥 Управление игроками ]        → admin_manage_players
+[ 🔗 Привязка клубов ]            → admin_bind_hub
 [ 🔄 Обновить таблицы и стату ]   → admin_force_update
 [ 🎭 Режим общения: Темшик 🍺 ]   → admin_toggle_chat_mode
 [ « Назад в меню ]                → main_menu
@@ -157,6 +158,7 @@ tests/test_divisions_catalog_and_rosters.py → обновить: admin_manage_s
 
 [ ⚔️ Управление матчами ]         → admin_div_manage_matches:{div}
 [ 📋 Составы команд ]             → admin_roster_div:{div}
+[ 🔗 Привязка клубов ]            → admin_bind_div:{div}
 [ 📢 Рассылка задолженностей ]    → admin_div_debts_menu:{div}
 ────────────────────────────────
 [ 🔴 Отключить ] [ ✏️ Переименовать ]
@@ -174,6 +176,11 @@ tests/test_divisions_catalog_and_rosters.py → обновить: admin_manage_s
 (`admin_div_manage_matches:{div_id}`). Легаси-формат с подчёркиванием
 (`admin_div_view_{div_id}`) сохраняется там, где он уже используется, — переименование
 существующих паттернов в объём не входит.
+
+Клуб в `admin_bind_*` передаётся **индексом** (`{idx}`) в списке
+`database.get_division_teams(div_id)`, а не названием: лимит callback_data — 64 байта, а
+кириллица весит 2 байта на символ. Список отсортирован и детерминирован, поэтому индекс
+пересобирается на каждом шаге и кнопка со старого сообщения переживает перезапуск бота.
 
 | Callback | Статус | Экран |
 |---|---|---|
@@ -193,6 +200,12 @@ tests/test_divisions_catalog_and_rosters.py → обновить: admin_manage_s
 | `admin_div_debts_menu:{div}` | **новый** | меню рассылки долгов дивизиона |
 | `admin_div_debts_dm:{div}` | **новый** | ЛС должникам дивизиона |
 | `admin_div_debts_topic:{div}` | **новый** | сводка в топик ПРЕДЫ дивизиона |
+| `admin_bind_hub` | **новый** | супер-админ: выбор дивизиона для привязки клубов |
+| `admin_bind_div:{div}` | **новый** | клубы дивизиона со статусом занятости |
+| `admin_bind_club:{div}:{idx}:{page}` | **новый** | карточка клуба и кандидаты на привязку |
+| `admin_bind_set:{div}:{idx}:{user_id}` | **новый** | привязка участника к клубу |
+| `admin_bind_free:{div}:{idx}` | **новый** | подтверждение освобождения клуба |
+| `admin_bind_free_ok:{div}:{idx}` | **новый** | освобождение клуба |
 | `admin_manage_matches_info` | **удаляется** | — |
 | `admin_manage_squads` / `admin_manage_rosters` | **удаляется** | — |
 | `admin_broadcast_menu` | **удаляется** | — |
