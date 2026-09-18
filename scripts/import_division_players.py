@@ -76,7 +76,7 @@ PLAYERS_BY_DIVISION: dict[int, list[str]] = {
     2: [
         "Vladimir_5500",
         "govorigde",
-        "Davtyan",
+        "Davtyan_55",
         "sulassll",
         "Artem53824",
         "saymino1",

@@ -20,6 +20,7 @@ from scripts.bind_clubs_to_players import (
     find_user,
     resolve_club,
 )
+from scripts.import_division_players import PLAYERS_BY_DIVISION
 
 
 class TestTheBindingTable(unittest.TestCase):
@@ -41,6 +42,16 @@ class TestTheBindingTable(unittest.TestCase):
         usernames = [u.lower() for pairs in BINDINGS.values() for u in pairs.values()]
 
         self.assertEqual(len(usernames), len(set(usernames)))
+
+    def test_the_same_people_are_in_the_import_script(self):
+        """Два списка участников живут в разных файлах, и разъезжаются они молча:
+        опечатка в одном заводит второй аккаунт тому же человеку — так в дивизионе
+        2 появился призрак @Davtyan рядом с живым @Davtyan_55."""
+        for number, pairs in BINDINGS.items():
+            with self.subTest(division=number):
+                imported = {u.lower() for u in PLAYERS_BY_DIVISION[number]}
+                bound = {u.lower() for u in pairs.values()}
+                self.assertEqual(imported, bound)
 
 
 class TestResolvingAClub(unittest.TestCase):
