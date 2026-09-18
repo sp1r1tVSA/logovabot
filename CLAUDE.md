@@ -210,12 +210,22 @@ will not merge an OCR typo of it — a typo cannot be told apart from a genuinel
 without knowing the club list. Refusing to merge is recoverable; silently merging two
 coaches' clubs is not.
 
-Only seven clubs carried over from the КПЛ era, so `TEAM_ALIASES` covers just those
-(Бенфика, Аякс, ПСВ, Порту, Спортинг, Ривер Плейт, Будё Глимт). The other 73 resolve by
-exact name, prefix or fuzzy alone — short OCR forms like `Ман Сити`, `МЮ`, `Реал` or
-`Барса` do **not** resolve today, and ambiguous prefixes (`Реал` → Мадрид/Сосьедад,
-`Интер` → Милан/Майами, `Манчестер` → Сити/Юнайтед) correctly return no match rather than
-guessing. Add aliases as real OCR output shows what coaches actually type.
+`TEAM_ALIASES` covers all 80 clubs, grouped by division — ~260 keys carrying the short
+forms, nicknames and latin transliterations coaches and OCR actually produce (`Ман Сити`,
+`МЮ`, `Барса`, `Юве`, `Леверкузен`, `man utd`, `bayern`). Keys are compared *after*
+`normalize_team_name`, so write them already normalized: lowercase, `э`/`ё` folded to `е`,
+hyphens as spaces. An alias key that is the canonical name of a *different* club is
+reported by `get_dropped_aliases()` and ignored; one pointing outside the registry shows up
+in `get_orphan_aliases()`. Both must stay empty — there are tests for it.
+
+Forms that fit two live clubs are deliberately absent and must stay absent: `Реал`
+(Мадрид/Сосьедад), `Интер` (Милан/Майами), `Манчестер` (Сити/Юнайтед), `Мадрид`
+(Реал/Атлетико), `Юнайтед` (МЮ/Ньюкасл), `paris` (Париж/ПСЖ). They correctly return no
+match rather than guessing. Also absent on purpose: `байа` (shorter than `FUZZY_MIN_LEN`,
+and a test guards that), `фенер` (the PREFIX tier owns it) and `фенербахе` (FUZZY owns it)
+— an alias would take the work away from the tier the tests check. Note that the ALIAS tier
+runs before FUZZY, which is why `байерн` can safely alias to Бавария despite sitting one
+letter from the live club Байер.
 
 `normalize_team_name` folds `ё`, `э`, latin `ë`, `ø` and `ö`, so the variant transliterations
 Russian speakers actually type — `Фулхем`, `Вест Хем`, `Тоттенхем`, `Нешвилл`, `Евертон`,

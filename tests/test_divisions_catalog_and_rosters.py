@@ -39,15 +39,15 @@ class TestDivisionsCatalogAndRosters(unittest.IsolatedAsyncioTestCase):
             c = conn.cursor()
             c.execute("""
                 INSERT OR REPLACE INTO users (telegram_id, username, team_name, role, division_id)
-                VALUES (?, 'user_a1', 'Real Madrid', 'player', ?)
+                VALUES (?, 'user_a1', 'Реал Мадрид', 'player', ?)
             """, (self.user_a1_id, self.div_a_id))
             c.execute("""
                 INSERT OR REPLACE INTO users (telegram_id, username, team_name, role, division_id)
-                VALUES (?, 'user_a2', 'Barcelona', 'player', ?)
+                VALUES (?, 'user_a2', 'Барселона', 'player', ?)
             """, (self.user_a2_id, self.div_a_id))
             c.execute("""
                 INSERT OR REPLACE INTO users (telegram_id, username, team_name, role, division_id)
-                VALUES (?, 'user_b1', 'Arsenal', 'player', ?)
+                VALUES (?, 'user_b1', 'Арсенал', 'player', ?)
             """, (self.user_b1_id, self.div_b_id))
 
     async def asyncTearDown(self):
@@ -87,13 +87,13 @@ class TestDivisionsCatalogAndRosters(unittest.IsolatedAsyncioTestCase):
         teams_a = database.get_division_teams(self.div_a_id)
         teams_b = database.get_division_teams(self.div_b_id)
 
-        self.assertIn("Real Madrid", teams_a)
-        self.assertIn("Barcelona", teams_a)
-        self.assertNotIn("Arsenal", teams_a)
+        self.assertIn("Реал Мадрид", teams_a)
+        self.assertIn("Барселона", teams_a)
+        self.assertNotIn("Арсенал", teams_a)
 
-        self.assertIn("Arsenal", teams_b)
-        self.assertNotIn("Real Madrid", teams_b)
-        self.assertNotIn("Barcelona", teams_b)
+        self.assertIn("Арсенал", teams_b)
+        self.assertNotIn("Реал Мадрид", teams_b)
+        self.assertNotIn("Барселона", teams_b)
 
     async def test_get_clubs_summary_for_division(self):
         """Test database.get_clubs_summary_for_division returns clubs summary only for that division."""
@@ -103,12 +103,12 @@ class TestDivisionsCatalogAndRosters(unittest.IsolatedAsyncioTestCase):
         names_a = [c["team_name"] for c in summary_a]
         names_b = [c["team_name"] for c in summary_b]
 
-        self.assertIn("Real Madrid", names_a)
-        self.assertIn("Barcelona", names_a)
-        self.assertNotIn("Arsenal", names_a)
+        self.assertIn("Реал Мадрид", names_a)
+        self.assertIn("Барселона", names_a)
+        self.assertNotIn("Арсенал", names_a)
 
-        self.assertIn("Arsenal", names_b)
-        self.assertNotIn("Real Madrid", names_b)
+        self.assertIn("Арсенал", names_b)
+        self.assertNotIn("Реал Мадрид", names_b)
 
     async def test_show_clubs_catalog_divisions(self):
         """Test Step 1 of Clubs Catalog: lists active divisions."""
@@ -144,9 +144,9 @@ class TestDivisionsCatalogAndRosters(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("ПЕРВЫЙ ДИВИЗИОН", text.upper())
         buttons_cb = [b.callback_data for row in reply_markup.inline_keyboard for b in row]
-        self.assertIn("view_club_Real Madrid", buttons_cb)
-        self.assertIn("view_club_Barcelona", buttons_cb)
-        self.assertNotIn("view_club_Arsenal", buttons_cb)
+        self.assertIn("view_club_Реал Мадрид", buttons_cb)
+        self.assertIn("view_club_Барселона", buttons_cb)
+        self.assertNotIn("view_club_Арсенал", buttons_cb)
         self.assertIn("cb_clubs_catalog", buttons_cb)
 
     async def test_admin_rosters_for_division(self):
@@ -168,9 +168,9 @@ class TestDivisionsCatalogAndRosters(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("Первый Дивизион", text)
         buttons_cb = [b.callback_data for row in reply_markup.inline_keyboard for b in row]
-        self.assertIn("admin_squad_view_Real Madrid", buttons_cb)
-        self.assertIn("admin_squad_view_Barcelona", buttons_cb)
-        self.assertNotIn("admin_squad_view_Arsenal", buttons_cb)
+        self.assertIn("admin_squad_view_Реал Мадрид", buttons_cb)
+        self.assertIn("admin_squad_view_Барселона", buttons_cb)
+        self.assertNotIn("admin_squad_view_Арсенал", buttons_cb)
         # Возврат — в карточку своего дивизиона, а не в глобальный экран составов
         self.assertIn(f"admin_div_view_{self.div_a_id}", buttons_cb)
         self.assertNotIn("admin_manage_squads", buttons_cb)
@@ -188,7 +188,7 @@ class TestDivisionsCatalogAndRosters(unittest.IsolatedAsyncioTestCase):
             )
             conn.execute(
                 "INSERT INTO matches (round_number, player1_id, player2_id, player1_team, player2_team, status, division_id) "
-                "VALUES (1, ?, ?, 'Real Madrid', 'Barcelona', 'pending', ?)",
+                "VALUES (1, ?, ?, 'Реал Мадрид', 'Барселона', 'pending', ?)",
                 (self.user_a1_id, self.user_a2_id, self.div_a_id)
             )
 
@@ -197,8 +197,8 @@ class TestDivisionsCatalogAndRosters(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNotNone(summary_a)
         self.assertIn("ПЕРВЫЙ ДИВИЗИОН", summary_a)
-        self.assertIn("Real Madrid", summary_a)
-        self.assertIn("Barcelona", summary_a)
+        self.assertIn("Реал Мадрид", summary_a)
+        self.assertIn("Барселона", summary_a)
         self.assertGreater(count_a, 0)
 
         # Division B has no unplayed matches
@@ -216,7 +216,7 @@ class TestDivisionsCatalogAndRosters(unittest.IsolatedAsyncioTestCase):
             )
             conn.execute(
                 "INSERT INTO matches (round_number, player1_id, player2_id, player1_team, player2_team, status, division_id) "
-                "VALUES (1, ?, ?, 'Real Madrid', 'Barcelona', 'pending', ?)",
+                "VALUES (1, ?, ?, 'Реал Мадрид', 'Барселона', 'pending', ?)",
                 (self.user_a1_id, self.user_a2_id, self.div_a_id)
             )
 
