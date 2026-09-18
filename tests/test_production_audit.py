@@ -1,4 +1,5 @@
 import asyncio
+import itertools
 import os
 import re
 import ast
@@ -352,155 +353,407 @@ def test_admin_rbac_isolation_division_vs_global():
         cursor.execute("DELETE FROM division_admins WHERE user_id IN (?, ?)", (div_admin_id, global_admin_id))
 
 
-def test_all_inline_buttons_match_registered_handlers():
-    """Static AST verification that 100% of Telegram inline buttons resolve to an active handler."""
-    workspace = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    handlers_dir = os.path.join(workspace, "handlers")
+# ---------------------------------------------------------------------------
+# Аудит inline-кнопок
+#
+# Каждая кнопка в handlers/ обязана попадать в живой CallbackQueryHandler.
+# Разбор идёт по AST, а не построчно: построчный сканер спотыкается о
+# многострочный вызов InlineKeyboardButton и не умеет ходить за
+# `callback_data=помощник(...)`, из-за чего требует подгонять форматирование
+# кода под парсер и держать список хардкоженных «образцов».
+#
+# Идея: каждое выражение callback_data сворачивается в список вариантов —
+# кусочков строк вперемешку с «дырками» (_Hole) там, где значение известно
+# только в рантайме. Дырка заполняется заглушками, и получившаяся проба
+# проверяется против скомпилированных паттернов ровно так, как это делает
+# python-telegram-bot: `pattern.match(callback_data)`.
+# ---------------------------------------------------------------------------
 
-    # Load constants
-    constants = {}
+_AUDIT_MAX_VARIANTS = 12   # сколько веток одного выражения разворачиваем
+_AUDIT_MAX_PROBES = 5000   # потолок перебора заглушек на одну кнопку
+_AUDIT_MAX_DEPTH = 8       # глубина раскрутки имён и вызовов
+_AUDIT_FILLERS = ("1", "-1", "x")
+
+# Кнопки, чей callback_data физически не виден в AST: значение кладут в
+# user_data на одном экране, а рисуют на другом. Они проверяются по месту
+# производства, а здесь список держится закрытым — чтобы новая такая кнопка
+# требовала осознанного решения, а не проскакивала молча.
+_AUDIT_OPAQUE_ALLOWLIST = {
+    ("admin", "back_cb"),     # context.user_data["admin_player_back_cb"]
+    ("squad_ai", "back_cb"),  # pending["back_cb"] из ожидающего разбора состава
+}
+
+_AUDIT_ALT_TOKEN = re.compile(r"[\w/-]{1,16}")
+
+
+class _Hole:
+    """Рантайм-значение внутри callback_data: `{div_id}` в f-строке."""
+
+    __slots__ = ("hint",)
+
+    def __init__(self, hint):
+        self.hint = hint
+
+    def __repr__(self):
+        return "{" + self.hint + "}"
+
+
+class _AuditIndex:
+    """Всё, что нужно для резолва: константы, функции и их вызовы."""
+
+    def __init__(self):
+        self.trees = {}          # module -> ast.Module
+        self.consts = {}         # NAME -> [выражения] для module-level присваиваний
+        self.functions = {}      # (module, func) -> def
+        self.callsite_args = {}  # (func, param) -> [выражения из вызовов]
+        self.owner = {}          # id(node) -> (module, ближайший FunctionDef)
+        self._scopes = {}
+
+    def load_path(self, path):
+        with open(path, "r", encoding="utf-8") as f:
+            self.load_source(os.path.splitext(os.path.basename(path))[0], f.read())
+
+    def load_source(self, module, source):
+        tree = ast.parse(source)
+        self.trees[module] = tree
+
+        for node in tree.body:
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        self.consts.setdefault(target.id, []).append(node.value)
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                self.functions[(module, node.name)] = node
+
+        self.owner[id(tree)] = (module, None)
+        self._index_owners(tree, module, None)
+
+        # Параметр функции-рендерера резолвится через то, что в него передают на
+        # вызовах: `_render(update, back_cb="admin_divs_hub")`.
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            name = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
+            if not name:
+                continue
+            for kw in node.keywords:
+                if kw.arg:
+                    self.callsite_args.setdefault((name, kw.arg), []).append(kw.value)
+
+    def _index_owners(self, node, module, func):
+        for child in ast.iter_child_nodes(node):
+            nxt = child if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) else func
+            self.owner[id(child)] = (module, nxt)
+            self._index_owners(child, module, nxt)
+
+    def func_of(self, node, module):
+        return self.owner.get(id(node), (module, None))[1]
+
+    def scope(self, func):
+        """Локальные привязки функции: значения по умолчанию и все присваивания."""
+        if func is None:
+            return {}
+        cached = self._scopes.get(id(func))
+        if cached is not None:
+            return cached
+
+        scope = {}
+        args = func.args
+        for arg, default in zip(reversed(args.posonlyargs + args.args), reversed(args.defaults)):
+            scope.setdefault(arg.arg, []).append(default)
+        for arg, default in zip(args.kwonlyargs, args.kw_defaults):
+            if default is not None:
+                scope.setdefault(arg.arg, []).append(default)
+        for node in ast.walk(func):
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        scope.setdefault(target.id, []).append(node.value)
+            elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.value:
+                scope.setdefault(node.target.id, []).append(node.value)
+
+        self._scopes[id(func)] = scope
+        return scope
+
+
+def _audit_union(left, right):
+    if left is None:
+        return right
+    if right is None:
+        return left
+    return (left + [v for v in right if v not in left])[:_AUDIT_MAX_VARIANTS]
+
+
+def _audit_resolve(node, index, func, depth=0):
+    """Выражение → список вариантов callback_data (строки вперемешку с дырками).
+
+    None означает «непрозрачно»: значение приходит извне AST.
+    """
+    if depth > _AUDIT_MAX_DEPTH:
+        return None
+
+    if isinstance(node, ast.Constant):
+        return [[node.value]] if isinstance(node.value, str) else None
+
+    if isinstance(node, ast.JoinedStr):
+        variants = [[]]
+        for part in node.values:
+            if isinstance(part, ast.Constant) and isinstance(part.value, str):
+                variants = [v + [part.value] for v in variants]
+            elif isinstance(part, ast.FormattedValue):
+                inner = _audit_resolve(part.value, index, func, depth + 1)
+                if inner is None:
+                    hole = _Hole(ast.unparse(part.value))
+                    variants = [v + [hole] for v in variants]
+                else:
+                    variants = [v + iv for v in variants for iv in inner][:_AUDIT_MAX_VARIANTS]
+            else:
+                return None
+        return variants
+
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left = _audit_resolve(node.left, index, func, depth + 1)
+        right = _audit_resolve(node.right, index, func, depth + 1)
+        if left is None or right is None:
+            return None
+        return [a + b for a in left for b in right][:_AUDIT_MAX_VARIANTS]
+
+    # `x if cond else y` и `a or b` дают обе ветки — кнопка обязана быть живой
+    # в каждой из них.
+    if isinstance(node, ast.IfExp):
+        return _audit_union(
+            _audit_resolve(node.body, index, func, depth + 1),
+            _audit_resolve(node.orelse, index, func, depth + 1),
+        )
+
+    if isinstance(node, ast.BoolOp):
+        out = None
+        for value in node.values:
+            out = _audit_union(out, _audit_resolve(value, index, func, depth + 1))
+        return out
+
+    if isinstance(node, ast.Name):
+        bindings = index.scope(func).get(node.id) or index.consts.get(node.id)
+        if bindings is None and func is not None:
+            params = {a.arg for a in func.args.posonlyargs + func.args.args + func.args.kwonlyargs}
+            if node.id in params:
+                bindings = index.callsite_args.get((func.name, node.id))
+        if not bindings:
+            return None
+        out = None
+        for binding in bindings:
+            if binding is node:
+                continue
+            out = _audit_union(out, _audit_resolve(binding, index, func, depth + 1))
+        return out
+
+    # `callback_data=_div_home_cb(update, div_id)` — объединение всех return'ов.
+    if isinstance(node, ast.Call):
+        name = getattr(node.func, "id", None)
+        if name:
+            for (_, fname), fn in index.functions.items():
+                if fname != name:
+                    continue
+                out = None
+                for inner in ast.walk(fn):
+                    if isinstance(inner, ast.Return) and inner.value is not None:
+                        out = _audit_union(out, _audit_resolve(inner.value, index, fn, depth + 1))
+                if out:
+                    return out
+        return None
+
+    return None
+
+
+def _audit_harvest_tokens(patterns):
+    """Словарь литералов, которые хендлеры реально принимают.
+
+    Дырка вроде `{short_code}` не обязана быть числом: паттерн
+    `^reassign_top:\\d+:(d|p|r|rep|l|a)$` перечисляет допустимые значения сам.
+    Собираем их из альтернатив в группах — это избавляет от угадывания
+    заглушек по имени переменной.
+    """
+    tokens = set()
+    for pattern in patterns:
+        for group in re.findall(r"\(([^()]*)\)", pattern.pattern):
+            group = group.lstrip("?:").lstrip("?")
+            if "|" not in group:
+                continue
+            for alt in group.split("|"):
+                if _AUDIT_ALT_TOKEN.fullmatch(alt):
+                    tokens.add(alt)
+    return tuple(sorted(tokens))
+
+
+def _audit_probes(variant, tokens):
+    """Вариант с дырками → конкретные строки-пробы.
+
+    Сначала дешёвый прогон на числовых заглушках — он закрывает подавляющее
+    большинство callback_data. Второй проход подставляет словарь, собранный из
+    самих паттернов, и нужен считанным кнопкам.
+    """
+    if all(isinstance(segment, str) for segment in variant):
+        yield "".join(variant)
+        return
+    for fillers in (_AUDIT_FILLERS, _AUDIT_FILLERS + tokens):
+        choices = [[s] if isinstance(s, str) else list(fillers) for s in variant]
+        for combo in itertools.islice(itertools.product(*choices), _AUDIT_MAX_PROBES):
+            yield "".join(combo)
+
+
+def _audit_patterns(index):
+    """Скомпилированные паттерны всех зарегистрированных CallbackQueryHandler."""
+    patterns = []
+    for module, tree in index.trees.items():
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            if getattr(node.func, "id", None) != "CallbackQueryHandler":
+                continue
+            source = next((kw.value for kw in node.keywords if kw.arg == "pattern"), None)
+            if source is None and len(node.args) >= 2:
+                source = node.args[1]
+            if source is None:
+                continue
+            variants = _audit_resolve(source, index, index.func_of(source, module)) or []
+            for variant in variants:
+                if any(isinstance(s, _Hole) for s in variant):
+                    continue
+                pattern = "".join(variant)
+                # Catch-all намеренно не считается регистрацией: он ловит всё
+                # подряд и сделал бы аудит бессмысленным.
+                if pattern in (".*", "^.*$"):
+                    continue
+                try:
+                    patterns.append(re.compile(pattern))
+                except re.error:
+                    pass
+    return patterns
+
+
+def _audit_literal_dispatch(index):
+    """callback_data, разбираемые сравнением `query.data == "literal"`.
+
+    Catch-all хендлер за регистрацию не считается, но внутри него конкретные
+    значения перечислены явно — они и есть настоящий контракт (так живёт
+    `noop` в handle_placeholders).
+    """
+    handled = set()
+    for module, tree in index.trees.items():
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            if getattr(node.func, "id", None) != "CallbackQueryHandler":
+                continue
+            target = node.args[0] if node.args else None
+            fn = index.functions.get((module, getattr(target, "id", "")))
+            if fn is None:
+                continue
+            for cmp_node in ast.walk(fn):
+                if not isinstance(cmp_node, ast.Compare):
+                    continue
+                if not (isinstance(cmp_node.left, ast.Attribute) and cmp_node.left.attr == "data"):
+                    continue
+                for op, other in zip(cmp_node.ops, cmp_node.comparators):
+                    if isinstance(op, ast.Eq):
+                        other = [other]
+                    elif isinstance(op, ast.In) and isinstance(other, (ast.Tuple, ast.List, ast.Set)):
+                        other = other.elts
+                    else:
+                        continue
+                    for elt in other:
+                        if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
+                            handled.add(elt.value)
+    return handled
+
+
+def _audit_buttons(index):
+    """Все InlineKeyboardButton, кроме url/web_app — у тех callback_data нет."""
+    for module, tree in index.trees.items():
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            if getattr(node.func, "id", None) != "InlineKeyboardButton":
+                continue
+            keywords = {kw.arg: kw.value for kw in node.keywords}
+            if "url" in keywords or "web_app" in keywords:
+                continue
+            callback = keywords.get("callback_data")
+            if callback is None and len(node.args) >= 2:
+                callback = node.args[1]
+            yield module, node, callback
+
+
+def _audit_run(index):
+    """→ (осиротевшие кнопки, непрозрачные кнопки)."""
+    patterns = _audit_patterns(index)
+    literals = _audit_literal_dispatch(index)
+    tokens = _audit_harvest_tokens(patterns)
+
+    unmatched, opaque = [], []
+    for module, node, callback in _audit_buttons(index):
+        where = f"{module}.py:{node.lineno}"
+        if callback is None:
+            unmatched.append((where, "callback_data отсутствует"))
+            continue
+
+        variants = _audit_resolve(callback, index, index.func_of(callback, module))
+        if not variants:
+            opaque.append((module, ast.unparse(callback)))
+            continue
+
+        for variant in variants:
+            first = None
+            for probe in _audit_probes(variant, tokens):
+                first = probe if first is None else first
+                if probe in literals or any(r.match(probe) for r in patterns):
+                    break
+            else:
+                unmatched.append((where, first))
+
+    return unmatched, opaque
+
+
+def _audit_index_of_handlers():
+    workspace = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    index = _AuditIndex()
     const_path = os.path.join(workspace, "constants.py")
     if os.path.exists(const_path):
-        with open(const_path, "r", encoding="utf-8") as f:
-            for line in f:
-                m = re.match(r'^([A-Z0-9_]+)\s*=\s*["\']([^"\']+)["\']', line.strip())
-                if m:
-                    constants[m.group(1)] = m.group(2)
-
-    # Module-level string constants that hold callback patterns, e.g.
-    # LEGACY_BET_CALLBACK_PATTERN in handlers/betting.py. Without these, a handler
-    # registered as pattern=SOME_CONSTANT is invisible to this audit and every button
-    # it serves is reported as orphaned.
-    pattern_consts = {}
-    for fname in os.listdir(handlers_dir):
-        if not fname.endswith(".py"):
-            continue
-        fpath = os.path.join(handlers_dir, fname)
-        with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
-            try:
-                tree = ast.parse(f.read())
-            except SyntaxError:
-                continue
-        for node in tree.body:
-            if not isinstance(node, ast.Assign):
-                continue
-            # Implicit concatenation across lines is folded into one Constant by the parser.
-            if not isinstance(node.value, ast.Constant) or not isinstance(node.value.value, str):
-                continue
-            for target in node.targets:
-                if isinstance(target, ast.Name):
-                    pattern_consts[target.id] = node.value.value
-
-    # Extract all CallbackQueryHandler patterns
-    handlers_list = []
-    for fname in os.listdir(handlers_dir):
-        if not fname.endswith(".py"):
-            continue
-        fpath = os.path.join(handlers_dir, fname)
-        with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
-            content = f.read()
-
-        matches = re.finditer(
-            r'CallbackQueryHandler\s*\(\s*([a-zA-Z0-9_]+)\s*,\s*pattern\s*=\s*'
-            r'([rR]?["\'].*?["\']|[A-Za-z_][A-Za-z0-9_]*)\s*\)',
-            content,
-        )
-        for m in matches:
-            func = m.group(1)
-            pat_str = m.group(2)
-            if re.match(r'^[rR]?["\']', pat_str):
-                try:
-                    pat = ast.literal_eval(pat_str.lstrip("rR"))
-                except Exception:
-                    pat = pat_str.strip('rR"\'')
-            elif pat_str in pattern_consts:
-                pat = pattern_consts[pat_str]
-            else:
-                # A name we cannot resolve statically — skip rather than compile the
-                # identifier itself as a regex, which would match by accident.
-                continue
-            if pat in (".*", "^.*$"):
-                continue
-            handlers_list.append({"func": func, "regex": re.compile(pat)})
-
-    # Extract buttons
-    unmatched = []
+        index.load_path(const_path)
+    handlers_dir = os.path.join(workspace, "handlers")
     for fname in sorted(os.listdir(handlers_dir)):
-        if not fname.endswith(".py"):
-            continue
-        fpath = os.path.join(handlers_dir, fname)
-        with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
-            lines = f.readlines()
+        if fname.endswith(".py"):
+            index.load_path(os.path.join(handlers_dir, fname))
+    return index
 
-        for idx, line in enumerate(lines, 1):
-            if "InlineKeyboardButton(" in line:
-                call_str = line
-                curr_idx = idx
-                while ")" not in call_str and curr_idx < len(lines):
-                    call_str += lines[curr_idx]
-                    curr_idx += 1
 
-                url_m = re.search(r'url\s*=\s*([^,\)\n]+)', call_str)
-                web_m = re.search(r'web_app\s*=\s*([^,\)\n]+)', call_str)
-                if url_m or web_m:
-                    continue
+def test_all_inline_buttons_match_registered_handlers():
+    """Каждая inline-кнопка в handlers/ ведёт к зарегистрированному хендлеру."""
+    unmatched, opaque = _audit_run(_audit_index_of_handlers())
 
-                cb_m = re.search(r'callback_data\s*=\s*([^,\)\n]+)', call_str)
-                cb = cb_m.group(1).strip() if cb_m else None
-                if not cb:
-                    unmatched.append((fname, idx, "Missing callback_data"))
-                    continue
+    assert unmatched == [], f"Кнопки без хендлера: {unmatched}"
 
-                sample = cb
-                if cb in constants:
-                    sample = constants[cb]
-                elif cb.startswith(('"', "'")):
-                    sample = cb.strip('"\'')
-                elif sample.startswith(("f'", 'f"')):
-                    s = sample[2:-1]
-                    s = re.sub(r'\{[^}]*id[^}]*\}', '1', s)
-                    s = re.sub(r'\{[^}]*num[^}]*\}', '1', s)
-                    s = re.sub(r'\{[^}]*round[^}]*\}', '1', s)
-                    s = re.sub(r'\{[^}]*stage[^}]*\}', '1/8', s)
-                    s = re.sub(r'\{[^}]*topic[^}]*\}', 'drafts', s)
-                    s = re.sub(r'\{[^}]*action[^}]*\}', 'player', s)
-                    s = re.sub(r'\{[^}]*role[^}]*\}', 'd', s)
-                    s = re.sub(r'\{[^}]*amount[^}]*\}', '100', s)
-                    s = re.sub(r'\{[^}]*bal[^}]*\}', '100', s)
-                    s = re.sub(r'\{[^}]*short_code[^}]*\}', 'd', s)
-                    s = re.sub(r'\{[^}]*thread_id[^}]*\}', '100', s)
-                    s = re.sub(r'\{[^}]*i[^}]*\}', '1', s)
-                    s = re.sub(r'\{[^}]*idx[^}]*\}', '1', s)
-                    s = re.sub(r'\{[^}]*n_photos[^}]*\}', '2', s)
-                    s = re.sub(r'\{[^}]*club[^}]*\}', 'Arsenal', s)
-                    s = re.sub(r'\{[^}]*canon[^}]*\}', 'Arsenal', s)
-                    s = re.sub(r'\{[^}]*\}', '1', s)
-                    sample = s
+    # Непрозрачных кнопок ровно столько, сколько задокументировано выше.
+    assert set(opaque) == _AUDIT_OPAQUE_ALLOWLIST, (
+        f"Изменился набор кнопок с непрозрачным callback_data: {sorted(set(opaque))}"
+    )
 
-                if sample == "back_data":
-                    sample = "admin_squad_view_Arsenal"
-                elif sample == "refresh_cb":
-                    sample = "refresh_div_table_1"
-                elif sample.startswith("division_view:"):
-                    sample = "division_view:1:1"
-                elif sample == "cb":
-                    sample = "pcard_1"
-                elif sample == "back_cb":
-                    sample = "cb_clubs_catalog"
-                elif sample == "home_cb":
-                    # _div_home_cb: карточка дивизиона супер-админу, своя панель — дивадмину
-                    sample = "admin_div_view_1"
-                elif sample in ("cancel_cb", "manual_cb"):
-                    sample = "cabinet_view_match_1"
 
-                matched = False
-                for h in handlers_list:
-                    if h["regex"].search(sample) or h["regex"].search(sample.replace('"', '').replace("'", "")):
-                        matched = True
-                        break
+def test_button_audit_detects_an_orphan_button():
+    """Аудит обязан падать на осиротевшей кнопке — иначе он ничего не стоит."""
+    index = _AuditIndex()
+    index.load_source("fake", (
+        "def register(app):\n"
+        "    app.add_handler(CallbackQueryHandler(live, pattern=r'^live:\\d+$'))\n"
+        "\n"
+        "def screen(div_id):\n"
+        "    return [\n"
+        "        InlineKeyboardButton('живая', callback_data=f'live:{div_id}'),\n"
+        "        InlineKeyboardButton('мёртвая', callback_data=f'dead:{div_id}'),\n"
+        "    ]\n"
+    ))
 
-                if not matched and sample not in ("noop",) and not sample.startswith(("player:", "admin:", "reassign_top:", "unbind_confirm:")):
-                    unmatched.append((fname, idx, sample))
+    unmatched, opaque = _audit_run(index)
 
-    assert len(unmatched) == 0, f"Unmatched buttons found: {unmatched}"
-
+    assert opaque == []
+    assert [probe for _, probe in unmatched] == ["dead:1"]
