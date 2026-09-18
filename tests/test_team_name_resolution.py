@@ -193,6 +193,23 @@ class TestNormalizationPreserved(unittest.TestCase):
         self.assertEqual(normalize_team_name("Будë-Глимт"), "буде глимт")
         self.assertEqual(normalize_team_name("Bodø/Glimt"), "bodo glimt")
 
+    def test_e_variants_collapse(self):
+        # Транслит из английского пишут и через 'э', и через 'е'. Fuzzy вытягивает
+        # только длинные имена ('вулверхемптон'), короткие до порога не дотягивают,
+        # поэтому свёртка живёт в нормализации, а не в словаре алиасов.
+        self.assertEqual(normalize_team_name("Фулхэм"), "фулхем")
+        self.assertEqual(normalize_team_name("Вест Хэм"), "вест хем")
+        for variant, canonical in (
+            ("фулхем", "Фулхэм"),
+            ("Вест Хем", "Вест Хэм"),
+            ("тоттенхем", "Тоттенхэм"),
+            ("нешвилл", "Нэшвилл"),
+            ("евертон", "Эвертон"),
+            ("кристал пелас", "Кристал Пэлас"),
+        ):
+            with self.subTest(variant=variant):
+                self.assertEqual(resolve_team_name(variant), canonical)
+
     def test_separators_and_spacing_collapse(self):
         self.assertEqual(normalize_team_name("  Ривер   Плейт  "), "ривер плейт")
         self.assertEqual(normalize_team_name("Бока-Хуниорс"), "бока хуниорс")

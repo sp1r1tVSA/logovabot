@@ -212,11 +212,11 @@ exact name, prefix or fuzzy alone — short OCR forms like `Ман Сити`, `�
 `Интер` → Милан/Майами, `Манчестер` → Сити/Юнайтед) correctly return no match rather than
 guessing. Add aliases as real OCR output shows what coaches actually type.
 
-One known gap: `normalize_team_name` folds `ё`/`ë`/`ø`/`ö` but **not** `э`→`е`, so the
-common Russian variant spellings `Фулхем`, `Вест Хем`, `Тоттенхем`, `Нэшвилл`→`Нешвилл`
-and `Эвертон`→`Евертон` miss their club (the longer ones survive on fuzzy, the short ones
-do not). Folding `э` was checked against the 80-club roster and produces no collisions, so
-it is a safe change if these forms start showing up in OCR.
+`normalize_team_name` folds `ё`, `э`, latin `ë`, `ø` and `ö`, so the variant transliterations
+Russian speakers actually type — `Фулхем`, `Вест Хем`, `Тоттенхем`, `Нешвилл`, `Евертон`,
+`Кристал Пелас` — hit their club on the EXACT tier instead of missing it (fuzzy only ever
+rescued the long ones). The `э` fold is safe because no two clubs in the roster collapse
+into one canon under it; `TestTotalityInvariant` is what keeps that true as clubs change.
 
 **Adding a club to the tournament means adding its name to the right division in
 `DIVISION_CLUBS`.** `python scripts/audit_team_resolution.py` reports

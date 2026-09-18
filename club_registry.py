@@ -57,10 +57,16 @@ TEAM_ALIASES = {
 }
 
 def normalize_team_name(name: str | None) -> str:
-    """Normalize team name for fuzzy matching (handles ё/е, latin ë, hyphens, slashes, extra spaces)."""
+    """Normalize team name for fuzzy matching (handles ё/э/е, latin ë, hyphens, slashes, extra spaces)."""
     if not name:
         return ""
     s = str(name).lower()
+    # 'э' сворачивается в 'е' наравне с 'ё': транслит из английского пишут и так
+    # и так ('Фулхэм'/'Фулхем', 'Вест Хэм'/'Вест Хем', 'Эвертон'/'Евертон'), а
+    # fuzzy вытягивает только длинные имена — 'фулхем' до порога не дотягивает.
+    # Свёртка проверена на всём ростере: двух клубов с одним каноном она не даёт,
+    # и это стережёт TestTotalityInvariant.
+    s = s.replace("э", "е")
     # Replace variants of 'ё', latin 'ë' (\u00eb), 'ø', 'ö'
     s = s.replace("ё", "е").replace("\u00eb", "е").replace("ø", "o").replace("ö", "o")
     # Replace punctuation and separators
