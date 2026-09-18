@@ -221,6 +221,133 @@ class TestSquadReservesFlow(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(context.user_data.get("admin_squad_club"), self.club)
         self.assertTrue(context.user_data.get("admin_squad_is_reserves"))
 
+    async def test_offer_recognized_squad_filters_out_starters_from_reserves(self):
+        """When user uploads bench, any players already in starting XI must be filtered out."""
+        database.add_squad(self.club, [
+            "EZZALZOULI", "ANTONY", "PARROTT", "ISCO", "LO CELSO",
+            "DANI CEBALLOS", "GOMEZ", "MARCH", "BELLERIN", "BARTRA", "ADRIAN"
+        ])
+
+        # OCR saw 8 starters from background pitch + 1 real reserve from bottom drawer
+        raw_ocr_players = [
+            {"player_name": "EZZALZOULI", "position": "ФРВ"},
+            {"player_name": "ANTONY", "position": "ФРВ"},
+            {"player_name": "PARROTT", "position": "ЛП"},
+            {"player_name": "ISCO", "position": "ЦАП"},
+            {"player_name": "LO CELSO", "position": "ПП"},
+            {"player_name": "DANI CEBALLOS", "position": "ЦОП"},
+            {"player_name": "GOMEZ", "position": "ЦЗ"},
+            {"player_name": "MARCH", "position": "ЦЗ"},
+            {"player_name": "RIQUELME", "position": "ЛП"},
+        ]
+
+        update = MagicMock()
+        status_msg = MagicMock()
+        status_msg.edit_text = AsyncMock()
+        update.effective_message.reply_text = AsyncMock(return_value=status_msg)
+        context = MagicMock()
+        context.user_data = {}
+
+        with patch("handlers.squad_ai.recognize_squad_photo", new=AsyncMock(return_value=raw_ocr_players)) as mock_ocr:
+            await squad_ai.offer_recognized_squad(
+                update, context,
+                club=self.club,
+                file_id="photo_reserves",
+                back_cb="cabinet_my_squad",
+                is_reserves=True,
+            )
+            mock_ocr.assert_called_once_with(context, "photo_reserves", is_reserves=True)
+
+        self.assertIn(squad_ai.PENDING_KEY, context.user_data)
+        offered = context.user_data[squad_ai.PENDING_KEY]["players"]
+        # Only RIQUELME should survive the filter!
+        self.assertEqual(len(offered), 1)
+        self.assertEqual(offered[0]["player_name"], "RIQUELME")
+        self.assertEqual(offered[0]["position"], "ЛП")
+
+        # Review message confirms only 1 reserve player found
+        status_msg.edit_text.assert_called_once()
+        text_arg = status_msg.edit_text.call_args[0][0]
+        self.assertIn("Найдено резервистов: <b>1</b>", text_arg)
+        self.assertIn("Сейчас в составе: <b>11</b>", text_arg)
+        self.assertIn("RIQUELME", text_arg)
+        self.assertNotIn("EZZALZOULI", text_arg)
+
+    async def test_offer_recognized_squad_all_starters_filtered_shows_helpful_message(self):
+        """If OCR only detected starters on the pitch and no new bench players, notify user."""
+        database.add_squad(self.club, ["ISCO", "ANTONY", "LO CELSO"])
+
+        raw_ocr_players = [
+            {"player_name": "ISCO", "position": "ЦАП"},
+            {"player_name": "ANTONY", "position": "ФРВ"},
+        ]
+
+        update = MagicMock()
+        status_msg = MagicMock()
+        status_msg.edit_text = AsyncMock()
+        update.effective_message.reply_text = AsyncMock(return_value=status_msg)
+        context = MagicMock()
+        context.user_data = {}
+
+        with patch("handlers.squad_ai.recognize_squad_photo", new=AsyncMock(return_value=raw_ocr_players)):
+            await squad_ai.offer_recognized_squad(
+                update, context,
+                club=self.club,
+                file_id="photo_reserves",
+                back_cb="cabinet_my_squad",
+                is_reserves=True,
+            )
+
+        self.assertNotIn(squad_ai.PENDING_KEY, context.user_data)
+        status_msg.edit_text.assert_called_once()
+        text_arg = status_msg.edit_text.call_args[0][0]
+        self.assertIn("В резерве не найдено новых футболистов", text_arg)
+
+    async def test_recognize_squad_photo_passes_is_reserves(self):
+        context = MagicMock()
+        file_obj = MagicMock()
+        file_obj.download_as_bytearray = AsyncMock(return_value=bytearray(b"dummy_bytes"))
+        context.bot.get_file = AsyncMock(return_value=file_obj)
+
+        with patch("handlers.squad_ai.recognize_squad_screenshot_bytes", return_value=[]) as mock_bytes_ocr:
+            await squad_ai.recognize_squad_photo(context, "file_xyz", is_reserves=True)
+            mock_bytes_ocr.assert_called_once_with(b"dummy_bytes", is_reserves=True)
+
+    def test_recognize_squad_screenshot_bytes_selects_correct_prompt(self):
+        from services.ai.squad_recognizer import (
+            PROMPT_MAIN_TEXT,
+            PROMPT_RESERVES_TEXT,
+            recognize_squad_screenshot_bytes,
+        )
+        import json
+        import io
+
+        mock_response = MagicMock()
+        mock_response.read.return_value = json.dumps({
+            "candidates": [{"content": {"parts": [{"text": '{"players": []}'}]}}]
+        }).encode("utf-8")
+
+        mock_opener = MagicMock()
+        mock_opener.open.return_value.__enter__.return_value = mock_response
+
+        # Test with is_reserves=True
+        with patch("services.ai.squad_recognizer._get_gemini_opener", return_value=mock_opener), \
+             patch("services.ai.squad_recognizer.get_ordered_ocr_keys", return_value=["test_key"]):
+            recognize_squad_screenshot_bytes(b"image_content", is_reserves=True)
+            req_arg = mock_opener.open.call_args[0][0]
+            body_dict = json.loads(req_arg.data.decode("utf-8"))
+            prompt_used = body_dict["contents"][0]["parts"][0]["text"]
+            self.assertEqual(prompt_used, PROMPT_RESERVES_TEXT)
+
+        # Test with is_reserves=False
+        with patch("services.ai.squad_recognizer._get_gemini_opener", return_value=mock_opener), \
+             patch("services.ai.squad_recognizer.get_ordered_ocr_keys", return_value=["test_key"]):
+            recognize_squad_screenshot_bytes(b"image_content", is_reserves=False)
+            req_arg = mock_opener.open.call_args[0][0]
+            body_dict = json.loads(req_arg.data.decode("utf-8"))
+            prompt_used = body_dict["contents"][0]["parts"][0]["text"]
+            self.assertEqual(prompt_used, PROMPT_MAIN_TEXT)
+
 
 if __name__ == "__main__":
     unittest.main()

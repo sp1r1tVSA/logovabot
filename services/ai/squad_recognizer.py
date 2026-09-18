@@ -30,9 +30,9 @@ logger = logging.getLogger(__name__)
 
 MAX_SQUAD_PLAYERS = 40
 
-PROMPT_TEXT = """
+PROMPT_MAIN_TEXT = """
 You are an expert OCR system for football / soccer squad and lineup screens (EA Sports FC, FIFA Mobile, eFootball).
-Extract player names and their positions shown on the screenshot.
+Extract the STARTING 11 LINEUP shown on the pitch.
 
 Return JSON strictly matching this schema:
 {
@@ -42,15 +42,39 @@ Return JSON strictly matching this schema:
 }
 
 Strict Rules:
-1. ONLY extract players whose name is CLEARLY and FULLY printed in text on their card or in the list.
+1. ONLY extract players whose name is CLEARLY and FULLY printed in text on their card on the pitch.
 2. CRITICAL - CUT-OFF CARDS: On formation pitch screens, cards at the bottom edge (substitutes/bench) are often cut off horizontally by the screen edge, showing only ratings or headshots while their name banner is invisible below the viewport. DO NOT extract or guess cut-off cards! Never guess or hallucinate player names from faces, hair, ratings, or club rosters when their text name is not visibly printed.
 3. NO DUPLICATES: Never output the same player twice (e.g., both as short and full name like 'VINI JR.' and 'VINÍCIUS JÚNIOR'). Each footballer must appear at most once.
 4. Drop kit numbers, ratings (e.g. 112, 107, 84), chemistry values, club badges, and emojis.
 5. 'position' must be the 2-4 letter abbreviation printed near the player (e.g. ST, CF, LW, RW, CAM, CM, CDM, LM, RM, CB, LB, RB, LWB, RWB, GK, or Russian equivalents: ВР, ЦЗ, ПЗ, ЛЗ, ЦОП, ЦП, ЦАП, ЛП, ПП, ЛВ, ПВ, НАП, ФРВ). If no position is printed, use null.
-6. The screenshot may be a pitch formation (starting XI), a bench/reserves screen ("Резервисты" / "Substitutes"), or a squad list table. Extract all legibly printed players.
-7. If the image contains no readable players, return {"players": []}.
-8. Return ONLY valid JSON without code fences or extra text.
+6. Return ONLY valid JSON without code fences or extra text.
 """
+
+PROMPT_RESERVES_TEXT = """
+You are an expert OCR system for football / soccer squad and lineup screens (EA Sports FC, FIFA Mobile, eFootball).
+The user is uploading their BENCH / RESERVES (резервисты / скамейка запасных).
+
+In EA Sports FC Mobile, when the "РЕЗЕРВИСТЫ" (Reserves) menu is open, a horizontal tray of up to 7 substitute slots appears at the bottom of the screen (empty slots have a '+' sign), while the starting 11 players are visible in the background on the grass pitch.
+
+CRITICAL RULES:
+1. Extract ONLY players from the bottom RESERVES TRAY / DRAWER (the substitute slots row at the bottom edge of the screen).
+2. DO NOT extract players from the main grass pitch (starting XI). COMPLETELY IGNORE all players on the pitch!
+3. Any cards placed on the football field / green grass are STARTING PLAYERS and MUST BE IGNORED 100%.
+4. Empty slots in the reserves tray showing '+' must be skipped.
+5. Read only visibly printed names in the reserves tray. Drop kit numbers, ratings, badges.
+6. 'position' must be the 2-4 letter abbreviation printed near the reserve player (e.g. ST, LW, RW, CAM, CM, CDM, CB, LB, RB, GK, or Russian equivalents: ФРВ, ЛП, ПП, ЦАП, ЦП, ЦОП, ЛЗ, ПЗ, ЦЗ, ВР).
+7. If no players are placed in the reserves tray (only '+' slots), return {"players": []}.
+8. Return JSON strictly matching this schema:
+{
+  "players": [
+    {"name": "SURNAME or FULL NAME", "position": "ST"}
+  ]
+}
+9. Return ONLY valid JSON without code fences or extra text.
+"""
+
+# Backward compatibility alias
+PROMPT_TEXT = PROMPT_MAIN_TEXT
 
 
 MAX_PLAYER_NAME_LEN = 50
@@ -176,6 +200,7 @@ def recognize_squad_screenshot_bytes(
     image_bytes: bytes,
     mime_type: str = "image/jpeg",
     api_key: str | None = None,
+    is_reserves: bool = False,
 ) -> list[dict] | None:
     """
     Read player names and printed positions off a squad screenshot.
@@ -193,10 +218,12 @@ def recognize_squad_screenshot_bytes(
     opener = _get_gemini_opener()
     base_url = os.environ.get("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com").rstrip("/")
 
+    prompt = PROMPT_RESERVES_TEXT if is_reserves else PROMPT_MAIN_TEXT
+
     payload = {
         "contents": [{
             "parts": [
-                {"text": PROMPT_TEXT},
+                {"text": prompt},
                 {"inline_data": {
                     "mime_type": mime_type,
                     "data": base64.b64encode(image_bytes).decode("utf-8"),

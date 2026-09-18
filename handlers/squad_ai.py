@@ -13,14 +13,18 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 import database
-from services.ai.squad_recognizer import recognize_squad_screenshot_bytes
+from services.ai.squad_recognizer import is_same_footballer, recognize_squad_screenshot_bytes
 
 logger = logging.getLogger(__name__)
 
 PENDING_KEY = "squad_ai_pending"
 
 
-async def recognize_squad_photo(context: ContextTypes.DEFAULT_TYPE, file_id: str) -> list[dict] | None:
+async def recognize_squad_photo(
+    context: ContextTypes.DEFAULT_TYPE,
+    file_id: str,
+    is_reserves: bool = False,
+) -> list[dict] | None:
     """Download a Telegram photo and read its squad off the screen. None on failure."""
     try:
         f_obj = await context.bot.get_file(file_id)
@@ -29,7 +33,7 @@ async def recognize_squad_photo(context: ContextTypes.DEFAULT_TYPE, file_id: str
         logger.exception(f"Failed to download squad photo {file_id}: {e}")
         return None
 
-    return await asyncio.to_thread(recognize_squad_screenshot_bytes, img_bytes)
+    return await asyncio.to_thread(recognize_squad_screenshot_bytes, img_bytes, is_reserves=is_reserves)
 
 
 def build_review_message(
@@ -77,7 +81,7 @@ async def offer_recognized_squad(
     message = update.effective_message
     status = await message.reply_text("🤖 Распознаю состав, подождите…")
 
-    players = await recognize_squad_photo(context, file_id)
+    players = await recognize_squad_photo(context, file_id, is_reserves=is_reserves)
 
     if players is None:
         await status.edit_text(
@@ -94,6 +98,23 @@ async def offer_recognized_squad(
         return
 
     current = await asyncio.to_thread(database.get_squad, club)
+
+    if is_reserves and current and players:
+        filtered = []
+        for p in players:
+            p_name = p.get("player_name") or ""
+            if any(is_same_footballer(p_name, cur) for cur in current):
+                logger.info("Filtered starter '%s' out of reserves for '%s'", p_name, club)
+                continue
+            filtered.append(p)
+        players = filtered
+
+        if not players:
+            await status.edit_text(
+                "🤷 В резерве не найдено новых футболистов (все распознанные игроки уже есть в основе клуба).",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Назад", callback_data=back_cb)]]),
+            )
+            return
 
     if not is_reserves and not current and len(players) >= 11:
         deleted, added = await asyncio.to_thread(database.replace_squad, club, players)
