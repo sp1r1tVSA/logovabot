@@ -179,8 +179,8 @@ class TestClubCard(unittest.TestCase):
         logo_lower = get_team_logo_filename("бенфика")
         self.assertEqual(logo_lower, "benfica.png")
 
-        # Клуб не из карты логотипов рисуется пустым бейджем, а не падает.
-        self.assertIsNone(get_team_logo_filename("Ювентус"))
+        # Клуб вне лиги в карте не значится: пустой бейдж, а не падение.
+        self.assertIsNone(get_team_logo_filename("Расинг"))
 
         card_data = {
             "team_name": "Бенфика",
@@ -344,6 +344,43 @@ class TestClubCard(unittest.TestCase):
         self.assertIsNone(path4)
         self.assertNotIn(user_id, cabinet._user_avatar_file_ids)
         self.assertFalse(os.path.exists(path1))
+
+
+class TestLogoMapCoversTheRoster(unittest.TestCase):
+    """Карта логотипов обязана идти нога в ногу с составом дивизионов.
+
+    Клуб без записи в TEAM_LOGO_MAP молча рисуется пустым бейджем — ошибки не будет,
+    просто у одного клуба в таблице не окажется герба, и заметят это уже в чате.
+    Дешевле поймать расхождение здесь.
+    """
+
+    def setUp(self):
+        from services.graphics.table_generator import TEAM_LOGO_MAP
+        self.logo_map = TEAM_LOGO_MAP
+        self.roster = [club for clubs in config.DIVISION_CLUBS.values() for club in clubs]
+
+    def test_every_club_of_every_division_has_a_logo_filename(self):
+        missing = [club for club in self.roster if club not in self.logo_map]
+        self.assertEqual(missing, [], f"Клубы без логотипа: {missing}")
+
+    def test_filenames_are_unique_per_club(self):
+        """Один PNG на два клуба — это чужой герб в таблице, а не экономия."""
+        files = [self.logo_map[club] for club in self.roster]
+        duplicates = {f for f in files if files.count(f) > 1}
+        self.assertEqual(duplicates, set(), f"Один файл на несколько клубов: {duplicates}")
+
+    def test_map_holds_nothing_outside_the_roster(self):
+        """Клуб, выбывший из лиги, обязан уходить и отсюда — иначе карта копит мусор."""
+        roster_lower = {club.lower() for club in self.roster}
+        extra = [k for k in self.logo_map if k.lower() not in roster_lower]
+        self.assertEqual(extra, [], f"Лишние клубы в карте: {extra}")
+
+    def test_lookup_resolves_every_club_to_its_own_file(self):
+        from services.graphics.table_generator import get_team_logo_filename
+        for club in self.roster:
+            with self.subTest(club=club):
+                self.assertEqual(get_team_logo_filename(club), self.logo_map[club])
+                self.assertEqual(get_team_logo_filename(club.lower()), self.logo_map[club])
 
 
 if __name__ == "__main__":

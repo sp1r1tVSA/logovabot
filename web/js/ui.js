@@ -6,41 +6,128 @@
 import { store } from './store.js';
 import { tgBridge } from './tg.js';
 
-// Только клубы текущего сезона — те семь, что перешли из КПЛ и остались в
-// config.DIVISION_CLUBS. Это независимая копия TEAM_LOGO_MAP из
-// services/graphics/table_generator.py: Mini App отдаёт логотипы сам, мимо Pillow.
-// Обе карты надо править вместе.
+// Все 80 клубов сезона, порядок как в config.DIVISION_CLUBS. Это независимая копия
+// TEAM_LOGO_MAP из services/graphics/table_generator.py: Mini App отдаёт логотипы сам,
+// мимо Pillow. Обе карты надо править вместе — имена файлов обязаны совпадать.
 export const TEAM_LOGO_MAP = {
+  // DIV_1
+  'лидс': 'leeds.png',
+  'ренн': 'rennes.png',
+  'ницца': 'nice.png',
+  'нэшвилл': 'nashville.png',
   'порту': 'porto.png',
-  'porto': 'porto.png',
-  'бенфика': 'benfica.png',
-  'benfica': 'benfica.png',
-  'спортинг': 'sporting.png',
-  'sporting': 'sporting.png',
-  'аякс': 'ajax.png',
-  'ajax': 'ajax.png',
-  'псв': 'psv.png',
-  'psv': 'psv.png',
-  'ривер плейт': 'river_plate.png',
-  'river plate': 'river_plate.png',
-  'ривер': 'river_plate.png',
+  'вест хэм': 'west_ham.png',
+  'вольфсбург': 'wolfsburg.png',
+  'фиорентина': 'fiorentina.png',
+  'лацио': 'lazio.png',
+  'марсель': 'marseille.png',
+  'лилль': 'lille.png',
+  'айнтрахт': 'eintracht.png',
+  'майнц': 'mainz.png',
+  'бернли': 'burnley.png',
   'будё глимт': 'bodo_glimt.png',
-  'будë глимт': 'bodo_glimt.png',
-  'буде глимт': 'bodo_glimt.png',
-  'bodo glimt': 'bodo_glimt.png',
-  'bodo_glimt': 'bodo_glimt.png'
+  'кельн': 'koln.png',
+  // DIV_2
+  'вулверхэмптон': 'wolverhampton.png',
+  'бурирам': 'buriram.png',
+  'валенсия': 'valencia.png',
+  'сельта': 'celta.png',
+  'ривер плейт': 'river_plate.png',
+  'аякс': 'ajax.png',
+  'спортинг': 'sporting.png',
+  'монако': 'monaco.png',
+  'бенфика': 'benfica.png',
+  'фулхэм': 'fulham.png',
+  'хоффенхайм': 'hoffenheim.png',
+  'ланс': 'lens.png',
+  'аль-кадисия': 'al_qadsiah.png',
+  'торино': 'torino.png',
+  'лос анджелес': 'los_angeles.png',
+  'псв': 'psv.png',
+  // DIV_3
+  'сандерленд': 'sunderland.png',
+  'ноттингем форест': 'nottingham_forest.png',
+  'реал сосьедад': 'real_sociedad.png',
+  'париж': 'paris_fc.png',
+  'фенербахче': 'fenerbahce.png',
+  'комо': 'como.png',
+  'брентфорд': 'brentford.png',
+  'кристал пэлас': 'crystal_palace.png',
+  'аль-ахли': 'al_ahli.png',
+  'лион': 'lyon.png',
+  'борнмут': 'bournemouth.png',
+  'аль-иттихад': 'al_ittihad.png',
+  'трабзонспор': 'trabzonspor.png',
+  'вильярреал': 'villarreal.png',
+  'штутгарт': 'stuttgart.png',
+  'болонья': 'bologna.png',
+  // DIV_4
+  'байя': 'bahia.png',
+  'милан': 'milan.png',
+  'боруссия дортмунд': 'borussia_dortmund.png',
+  'интер милан': 'inter_milan.png',
+  'брайтон': 'brighton.png',
+  'байер': 'bayer_leverkusen.png',
+  'лейпциг': 'leipzig.png',
+  'эвертон': 'everton.png',
+  'аталанта': 'atalanta.png',
+  'астон вилла': 'aston_villa.png',
+  'бешикташ': 'besiktas.png',
+  'интер майами': 'inter_miami.png',
+  'бетис': 'betis.png',
+  'аль-хиляль': 'al_hilal.png',
+  'ньюкасл': 'newcastle.png',
+  'атлетик бильбао': 'athletic_bilbao.png',
+  // DIV_5
+  'арсенал': 'arsenal.png',
+  'манчестер сити': 'manchester_city.png',
+  'манчестер юнайтед': 'manchester_united.png',
+  'тоттенхэм': 'tottenham.png',
+  'атлетико мадрид': 'atletico_madrid.png',
+  'барселона': 'barcelona.png',
+  'реал мадрид': 'real_madrid.png',
+  'бавария': 'bayern.png',
+  'ливерпуль': 'liverpool.png',
+  'челси': 'chelsea.png',
+  'наполи': 'napoli.png',
+  'ювентус': 'juventus.png',
+  'рома': 'roma.png',
+  'псж': 'psg.png',
+  'галатасарай': 'galatasaray.png',
+  'аль-наср': 'al_nassr.png'
 };
+
+// Латинские формы не перечисляем руками: имя файла и есть транслитерация клуба.
+for (const file of new Set(Object.values(TEAM_LOGO_MAP))) {
+  TEAM_LOGO_MAP[file.replace(/\.png$/, '').replace(/_/g, ' ')] = file;
+}
+
+// Как normalize_team_name на бэке: ё/э сворачиваются в е, разделители — в пробел.
+// «Фулхем» и «Фулхэм» — одно и то же имя, а по ростеру эта свёртка не склеивает
+// два разных клуба (проверено там же, где и для резолвера).
+function normalizeLogoKey(s) {
+  return s.trim().toLowerCase()
+    .replace(/[ёэë]/g, 'е')
+    .replace(/[-_./\\,]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
 
 export function getTeamLogoUrl(teamName) {
   if (!teamName) return null;
-  const t = teamName.trim().toLowerCase().replace(/[-_.]/g, ' ');
-  for (const [k, file] of Object.entries(TEAM_LOGO_MAP)) {
-    const kNorm = k.toLowerCase().replace(/[-_.]/g, ' ');
-    if (t === kNorm || t.includes(kNorm) || kNorm.includes(t)) {
-      return `/assets/logos/${file}`;
-    }
-  }
-  return null;
+  const t = normalizeLogoKey(teamName);
+  if (!t) return null;
+  const entries = Object.entries(TEAM_LOGO_MAP).map(([k, file]) => [normalizeLogoKey(k), file]);
+
+  const exact = entries.find(([k]) => k === t);
+  if (exact) return `/assets/logos/${exact[1]}`;
+
+  // Нестрогий проход — только когда победитель единственный. «Милан» это подстрока
+  // «Интер Милан», и показать пустой бейдж честнее, чем чужой герб.
+  const hits = [...new Set(
+    entries.filter(([k]) => t.includes(k) || k.includes(t)).map(([, file]) => file)
+  )];
+  return hits.length === 1 ? `/assets/logos/${hits[0]}` : null;
 }
 
 export function renderTeamLogoWrapperHtml(teamName, extraClass = '') {

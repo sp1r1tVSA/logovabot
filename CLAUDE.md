@@ -229,20 +229,25 @@ registry↔`users.team_name` drift, name collisions and clubs that sit too close
 threshold; it is read-only (the connection is closed by a SQLite authorizer) and
 `--emit-config` prints a ready block.
 
-**Club logos** are a second, independent step. `assets/logos/` was emptied with the КПЛ
-season and is not in git, so every club currently renders with the blank-badge fallback.
-Restoring one takes two edits: drop the PNG into `assets/logos/`, then map the Russian club
-name to that filename in `TEAM_LOGO_MAP` (`services/graphics/table_generator.py:16`), which
-the other Pillow renderers consume via `get_team_logo_filename`. That function falls back to
-a short substring chain for forms `resolve_team_name` misses; the chain is order-sensitive
-(`Спортинг` contains `порт`, so it is tested before `Порту`). Every load site is guarded by
+**Club logos** are a second, independent step. `TEAM_LOGO_MAP`
+(`services/graphics/table_generator.py:16`) maps each club name to a PNG filename and covers
+all 80 clubs, grouped division by division; the Pillow renderers read it via
+`get_team_logo_filename`. That function falls back to a short substring chain for forms
+`resolve_team_name` misses; the chain is order-sensitive (`Спортинг` contains `порт`, so it
+is tested before `Порту`).
+
+`assets/logos/` itself was emptied with the КПЛ season and is not in git, so **no file
+exists yet** — the map records the agreed filename, and every club still renders with the
+blank-badge fallback until the PNGs are dropped in. Every load site is guarded by
 `os.path.exists`, so a missing or unmapped logo degrades to an empty badge and never raises.
 
-The map now covers only the seven clubs that carried over from КПЛ; the other 73 are
-unmapped and render blank. The Mini App keeps its **own** copy — `TEAM_LOGO_MAP` /
-`getTeamLogoUrl` in `web/js/ui.js:9`, which serves `/assets/logos/…` directly without
-touching Pillow, and matches by two-way substring rather than through the resolver. Adding a
-logo means editing both maps.
+The Mini App keeps its **own** copy — `TEAM_LOGO_MAP` / `getTeamLogoUrl` in
+`web/js/ui.js:9` — because it serves `/assets/logos/…` directly without touching Pillow.
+Same 80 filenames; latin keys are derived from the filenames at load, and lookup is exact
+first, then a substring pass that gives up unless exactly one club matches (`Милан` is a
+substring of `Интер Милан`). `TestLogoMapCoversTheRoster` in `tests/test_club_card.py`
+keeps the Python map in step with `DIVISION_CLUBS`; the JS copy has no such guard, so a
+roster change means editing both by hand.
 
 **Discipline:** unplayed matches accrue debts, tracked from `DEBT_TRACKING_START_DATETIME`.
 Three job-queue tasks drive it — deadline reminders and the debt lifecycle tracker every

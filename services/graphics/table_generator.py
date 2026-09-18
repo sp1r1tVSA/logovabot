@@ -13,20 +13,98 @@ BASE_DIR = str(PROJECT_ROOT)
 LOGOS_DIR = str(PROJECT_ROOT / "assets" / "logos")
 
 # Map of Russian club names to PNG logo filenames.
-# Здесь только клубы текущего сезона — те семь, что перешли из КПЛ и остались
-# в config.DIVISION_CLUBS. Остальные 73 клуба пока не размечены, а assets/logos/
-# вычищена вместе с сезоном, так что файлов нет и у этих семи: имя файла тут —
-# договорённость о том, как PNG будет называться, когда его положат обратно.
-# Непопадание в карту не ошибка — каждая загрузка обёрнута в os.path.exists
-# и деградирует в пустой бейдж.
+# Все 80 клубов сезона, сгруппированы как в config.DIVISION_CLUBS — так видно,
+# что карта покрывает ростер целиком (это стережёт TestLogoMapCoversTheRoster).
+# assets/logos/ вычищена вместе с сезоном и не лежит в git, поэтому самих PNG
+# сейчас нет ни у одного клуба: имя файла здесь — договорённость о том, как он
+# будет называться, когда его положат обратно. Промах не ошибка — каждая загрузка
+# обёрнута в os.path.exists и деградирует в пустой бейдж.
 TEAM_LOGO_MAP = {
+    # DIV_1
+    "Лидс": "leeds.png",
+    "Ренн": "rennes.png",
+    "Ницца": "nice.png",
+    "Нэшвилл": "nashville.png",
     "Порту": "porto.png",
-    "Бенфика": "benfica.png",
-    "Спортинг": "sporting.png",
-    "Аякс": "ajax.png",
-    "ПСВ": "psv.png",
-    "Ривер Плейт": "river_plate.png",
+    "Вест Хэм": "west_ham.png",
+    "Вольфсбург": "wolfsburg.png",
+    "Фиорентина": "fiorentina.png",
+    "Лацио": "lazio.png",
+    "Марсель": "marseille.png",
+    "Лилль": "lille.png",
+    "Айнтрахт": "eintracht.png",
+    "Майнц": "mainz.png",
+    "Бернли": "burnley.png",
     "Будё Глимт": "bodo_glimt.png",
+    "Кельн": "koln.png",
+    # DIV_2
+    "Вулверхэмптон": "wolverhampton.png",
+    "Бурирам": "buriram.png",
+    "Валенсия": "valencia.png",
+    "Сельта": "celta.png",
+    "Ривер Плейт": "river_plate.png",
+    "Аякс": "ajax.png",
+    "Спортинг": "sporting.png",
+    "Монако": "monaco.png",
+    "Бенфика": "benfica.png",
+    "Фулхэм": "fulham.png",
+    "Хоффенхайм": "hoffenheim.png",
+    "Ланс": "lens.png",
+    "Аль-Кадисия": "al_qadsiah.png",
+    "Торино": "torino.png",
+    "Лос Анджелес": "los_angeles.png",
+    "ПСВ": "psv.png",
+    # DIV_3
+    "Сандерленд": "sunderland.png",
+    "Ноттингем Форест": "nottingham_forest.png",
+    "Реал Сосьедад": "real_sociedad.png",
+    "Париж": "paris_fc.png",
+    "Фенербахче": "fenerbahce.png",
+    "Комо": "como.png",
+    "Брентфорд": "brentford.png",
+    "Кристал Пэлас": "crystal_palace.png",
+    "Аль-Ахли": "al_ahli.png",
+    "Лион": "lyon.png",
+    "Борнмут": "bournemouth.png",
+    "Аль-Иттихад": "al_ittihad.png",
+    "Трабзонспор": "trabzonspor.png",
+    "Вильярреал": "villarreal.png",
+    "Штутгарт": "stuttgart.png",
+    "Болонья": "bologna.png",
+    # DIV_4
+    "Байя": "bahia.png",
+    "Милан": "milan.png",
+    "Боруссия Дортмунд": "borussia_dortmund.png",
+    "Интер Милан": "inter_milan.png",
+    "Брайтон": "brighton.png",
+    "Байер": "bayer_leverkusen.png",
+    "Лейпциг": "leipzig.png",
+    "Эвертон": "everton.png",
+    "Аталанта": "atalanta.png",
+    "Астон Вилла": "aston_villa.png",
+    "Бешикташ": "besiktas.png",
+    "Интер Майами": "inter_miami.png",
+    "Бетис": "betis.png",
+    "Аль-Хиляль": "al_hilal.png",
+    "Ньюкасл": "newcastle.png",
+    "Атлетик Бильбао": "athletic_bilbao.png",
+    # DIV_5
+    "Арсенал": "arsenal.png",
+    "Манчестер Сити": "manchester_city.png",
+    "Манчестер Юнайтед": "manchester_united.png",
+    "Тоттенхэм": "tottenham.png",
+    "Атлетико Мадрид": "atletico_madrid.png",
+    "Барселона": "barcelona.png",
+    "Реал Мадрид": "real_madrid.png",
+    "Бавария": "bayern.png",
+    "Ливерпуль": "liverpool.png",
+    "Челси": "chelsea.png",
+    "Наполи": "napoli.png",
+    "Ювентус": "juventus.png",
+    "Рома": "roma.png",
+    "ПСЖ": "psg.png",
+    "Галатасарай": "galatasaray.png",
+    "Аль-Наср": "al_nassr.png",
 }
 
 # Also ensure lowercase keys are directly present
