@@ -1095,6 +1095,8 @@ export class UIRenderer {
     if (filter !== 'all') {
       if (filter === 'cancelled') {
         filtered = filtered.filter(b => ['cancelled', 'voided', 'void', 'refunded'].includes(b.status));
+      } else if (filter === 'refunded') {
+        filtered = filtered.filter(b => b.status === 'refunded');
       } else {
         filtered = filtered.filter(b => b.status === filter);
       }
@@ -1226,6 +1228,10 @@ export class UIRenderer {
               <span class="coupon-id" style="font-family: \'Outfit\', sans-serif; font-size: 0.78rem; font-weight: 800; color: #fff;">#${b.id}</span>
               <span class="coupon-meta-dot" style="color: var(--text-muted); font-size: 0.68rem;">•</span>
               <span class="coupon-date" style="font-size: 0.74rem; color: var(--text-muted); font-weight: 500;">${formatDate(b.created_at)}</span>
+              ${b.settled_at ? `
+                <span class="coupon-meta-dot" style="color: var(--text-muted); font-size: 0.68rem;">•</span>
+                <span class="coupon-settled-date" title="Рассчитано" style="font-size: 0.72rem; color: rgba(255, 255, 255, 0.45); font-weight: 500;">🏁 ${formatDate(b.settled_at)}</span>
+              ` : ''}
             </div>
             <div class="coupon-header-right" style="display: flex; align-items: center;">
               <span class="coupon-status-badge badge-${statusKey}" style="display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px; border-radius: 6px; font-family: \'Outfit\', sans-serif; font-size: 0.72rem; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase; ${badgeStyles[statusKey] || ''}">

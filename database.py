@@ -7693,6 +7693,80 @@ MAX_EXPRESS_EVENTS: int = 5
 _MAX_EXPRESS_EVENTS: int = MAX_EXPRESS_EVENTS
 _bet_placement_lock = threading.RLock()
 
+# Canonical Outcome Aliases & Cross-Schema Mapping
+OUTCOME_KEY_ALIASES: dict[str, str] = {
+    # Totals 2.5
+    "tb25": "over_2.5",
+    "over_2.5": "over_2.5",
+    "tm25": "under_2.5",
+    "under_2.5": "under_2.5",
+    # BTTS
+    "btts_yes": "btts_yes",
+    "yes": "btts_yes",
+    "btts_no": "btts_no",
+    "no": "btts_no",
+    # 1X2
+    "p1": "p1",
+    "1": "p1",
+    "x": "x",
+    "draw": "x",
+    "p2": "p2",
+    "2": "p2",
+}
+
+LEGACY_BET_MARKET_COLUMNS: dict[str, str] = {
+    "p1": "odd_p1",
+    "1": "odd_p1",
+    "x": "odd_x",
+    "draw": "odd_x",
+    "p2": "odd_p2",
+    "2": "odd_p2",
+    "tb25": "odd_tb25",
+    "over_2.5": "odd_tb25",
+    "tm25": "odd_tm25",
+    "under_2.5": "odd_tm25",
+    "btts_yes": "odd_btts_yes",
+    "yes": "odd_btts_yes",
+    "btts_no": "odd_btts_no",
+    "no": "odd_btts_no",
+}
+
+
+def normalize_outcome_key(out_type: str) -> str:
+    """Normalize outcome alias to canonical key (e.g. 'tb25' -> 'over_2.5')."""
+    if not out_type:
+        return ""
+    clean = str(out_type).strip().lower()
+    return OUTCOME_KEY_ALIASES.get(clean, clean)
+
+
+def get_possible_outcome_keys(out_type: str) -> list[str]:
+    """Return all equivalent keys for SQL lookup (e.g. ['over_2.5', 'tb25'])."""
+    clean = str(out_type).strip().lower()
+    canonical = OUTCOME_KEY_ALIASES.get(clean, clean)
+    keys = [clean, canonical]
+    if canonical == "over_2.5":
+        keys.extend(["tb25", "over_2.5"])
+    elif canonical == "under_2.5":
+        keys.extend(["tm25", "under_2.5"])
+    elif canonical == "btts_yes":
+        keys.extend(["yes", "btts_yes"])
+    elif canonical == "btts_no":
+        keys.extend(["no", "btts_no"])
+    elif canonical == "p1":
+        keys.extend(["1", "p1"])
+    elif canonical == "p2":
+        keys.extend(["2", "p2"])
+    elif canonical == "x":
+        keys.extend(["draw", "x"])
+    seen = set()
+    result = []
+    for k in keys:
+        if k not in seen:
+            seen.add(k)
+            result.append(k)
+    return result
+
 
 def place_user_bet(
     user_id: int,
@@ -7888,6 +7962,16 @@ def place_user_bet(
                 return False, f"Недостаточно монет на балансе (Баланс: {wallet['balance']} 🪙)."
             if risk_decision.reason in ("MARKET_SUSPENDED", "INVALID_MARKET"):
                 return False, risk_decision.message or "Рынок на данный исход временно приостановлен или закрыт."
+            if risk_decision.reason == "ODDS_CHANGED":
+                details = risk_decision.details or {}
+                return False, {
+                    "error": "ODDS_CHANGED",
+                    "match_id": details.get("match_id"),
+                    "outcome": details.get("outcome"),
+                    "old_odd": details.get("old_odd"),
+                    "new_odd": details.get("new_odd"),
+                    "message": risk_decision.message or f"Коэффициент изменился: {details.get('old_odd')} → {details.get('new_odd')}"
+                }
 
             err_dict = {
                 "error": risk_decision.reason,
@@ -7961,12 +8045,14 @@ def place_user_bet(
                         odd_val = float(ms_row["odds_value"])
             
             if odd_val is None:
-                cursor.execute("""
+                possible_keys = get_possible_outcome_keys(out_type)
+                placeholders = ', '.join(['?'] * len(possible_keys))
+                cursor.execute(f"""
                     SELECT ms.id as sel_id, ms.market_id, ms.odds_value, ms.status as sel_status, m.status as mkt_status
                     FROM market_selections ms
                     JOIN markets m ON ms.market_id = m.id
-                    WHERE m.match_id = ? AND ms.selection_key = ?
-                """, (m_id, out_type))
+                    WHERE m.match_id = ? AND ms.selection_key IN ({placeholders})
+                """, [m_id, *possible_keys])
                 ms_match = cursor.fetchone()
                 if ms_match:
                     if ms_match["mkt_status"] in ("suspended", "closed", "settled") or ms_match["sel_status"] in ("locked", "suspended", "settled"):
@@ -7980,20 +8066,9 @@ def place_user_bet(
                 cursor.execute("SELECT * FROM bet_markets WHERE match_id = ? AND is_active = 1", (m_id,))
                 bm_row = cursor.fetchone()
                 if bm_row:
-                    if out_type == "p1":
-                        odd_val = bm_row["odd_p1"]
-                    elif out_type == "x":
-                        odd_val = bm_row["odd_x"]
-                    elif out_type == "p2":
-                        odd_val = bm_row["odd_p2"]
-                    elif out_type in ("tb25", "over_2.5"):
-                        odd_val = bm_row["odd_tb25"]
-                    elif out_type in ("tm25", "under_2.5"):
-                        odd_val = bm_row["odd_tm25"]
-                    elif out_type in ("btts_yes", "yes"):
-                        odd_val = bm_row["odd_btts_yes"]
-                    elif out_type in ("btts_no", "no"):
-                        odd_val = bm_row["odd_btts_no"]
+                    col = LEGACY_BET_MARKET_COLUMNS.get(str(out_type).lower())
+                    if col and col in bm_row.keys():
+                        odd_val = bm_row[col]
 
             if odd_val is None:
                 return False, f"Исход '{out_type}' на матч #{m_id} недоступен или заблокирован."
@@ -8001,11 +8076,9 @@ def place_user_bet(
             odd_val = round(float(odd_val), 2)
 
             # Phase 5: ODDS_CHANGED detection — client odd vs server odd
-            # Only trigger ODDS_CHANGED if client explicitly references a specific market selection
-            # (relational betting via selection_id or market_id). Legacy bets without selection_id
-            # have client odds safely ignored and overridden by server odds.
+            # Server-authoritative: validated across all bets when client provides an expected odd.
             client_odd = s.get("odd")
-            if (s.get("selection_id") is not None or s.get("market_id") is not None) and client_odd is not None:
+            if client_odd is not None:
                 client_odd_rounded = round(float(client_odd), 2)
                 if abs(client_odd_rounded - odd_val) > 0.001:
                     return False, {

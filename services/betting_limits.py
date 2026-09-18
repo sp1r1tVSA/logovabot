@@ -90,6 +90,12 @@ class BettingLimitsService:
         user_daily_stake = cls.get_limit("user", user_id, "max_daily_stake", base["max_daily_stake"])
         base["max_daily_stake"] = min(base["max_daily_stake"], user_daily_stake)
 
+        user_daily_loss = cls.get_limit("user", user_id, "max_daily_loss", base["max_daily_loss"])
+        base["max_daily_loss"] = min(base["max_daily_loss"], user_daily_loss)
+
+        user_open_exposure = cls.get_limit("user", user_id, "max_open_exposure", base["max_open_exposure"])
+        base["max_open_exposure"] = min(base["max_open_exposure"], user_open_exposure)
+
         user_max_payout = cls.get_limit("user", user_id, "max_payout", base["max_payout"])
         base["max_payout"] = min(base["max_payout"], user_max_payout)
 
@@ -108,8 +114,8 @@ class BettingLimitsService:
                 row = cursor.fetchone()
                 if row and row["limit_value"] is not None:
                     return int(row["limit_value"])
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Error fetching risk limit ({scope_type}:{scope_id}:{limit_key}): {e}")
         return default_value
 
     @classmethod

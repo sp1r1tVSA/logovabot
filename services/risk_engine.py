@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 import database
 from services.betting_limits import BettingLimitsService
-from services.exposure_service import get_market_exposure
+from services.exposure_service import get_market_exposure, get_division_exposure, get_global_exposure
 from services.risk_alerts import create_risk_alert
 
 logger = logging.getLogger(__name__)
@@ -165,8 +165,46 @@ class RiskEngine:
                     details={"max_daily_stake": limits["max_daily_stake"], "today_staked": today_staked, "remaining": remaining_daily}
                 )
 
+            # 6b. User Daily Loss Limit Check (LB-03)
+            cursor.execute("""
+                SELECT 
+                    COALESCE(SUM(CASE WHEN status = 'lost' THEN amount ELSE 0 END), 0) -
+                    COALESCE(SUM(CASE WHEN status = 'won' THEN (actual_payout - amount) ELSE 0 END), 0) as today_net_loss
+                FROM user_bets
+                WHERE user_id = ? AND date(created_at) = date('now') AND status IN ('won', 'lost')
+            """, (user_id,))
+            loss_row = cursor.fetchone()
+            today_net_loss = max(0, int(loss_row["today_net_loss"] if loss_row else 0))
+            if today_net_loss >= limits["max_daily_loss"]:
+                return RiskDecision(
+                    decision="REJECT",
+                    allowed=False,
+                    reason="DAILY_LOSS_LIMIT",
+                    message=f"Превышен дневной лимит потерь ({limits['max_daily_loss']:,} 🪙). Ставки временно приостановлены.",
+                    details={"max_daily_loss": limits["max_daily_loss"], "today_lost": today_net_loss}
+                )
+            if today_net_loss + amount > limits["max_daily_loss"]:
+                remaining_loss = max(0, limits["max_daily_loss"] - today_net_loss)
+                if remaining_loss < limits["min_bet"]:
+                    return RiskDecision(
+                        decision="REJECT",
+                        allowed=False,
+                        reason="DAILY_LOSS_LIMIT",
+                        message=f"Превышен дневной лимит потерь ({limits['max_daily_loss']:,} 🪙).",
+                        details={"max_daily_loss": limits["max_daily_loss"], "today_lost": today_net_loss}
+                    )
+                return RiskDecision(
+                    decision="LIMITED",
+                    allowed=False,
+                    reason="DAILY_LOSS_LIMIT",
+                    message=f"Сумма превышает остаток дневного лимита потерь ({remaining_loss:,} 🪙).",
+                    max_allowed_stake=remaining_loss,
+                    details={"max_daily_loss": limits["max_daily_loss"], "today_lost": today_net_loss, "remaining": remaining_loss}
+                )
+
             # 7. Selections Validation (Market State, Selection State, Odds Validity & Freshness)
             total_odd = 1.0
+            resolved_selections = []
             for s in selections:
                 m_id = s.get("match_id")
                 out_type = s.get("outcome") or s.get("selection_key")
@@ -237,13 +275,15 @@ class RiskEngine:
                         odds_updated_at = row["updated_at"]
 
                 if odd_val is None:
-                    cursor.execute("""
+                    possible_keys = database.get_possible_outcome_keys(out_type)
+                    placeholders = ', '.join(['?'] * len(possible_keys))
+                    cursor.execute(f"""
                         SELECT ms.id as sel_id, ms.market_id, ms.odds_value, ms.status as sel_status, 
                                m.status as mkt_status, ms.updated_at
                         FROM market_selections ms
                         JOIN markets m ON ms.market_id = m.id
-                        WHERE m.match_id = ? AND ms.selection_key = ?
-                    """, (m_id, out_type))
+                        WHERE m.match_id = ? AND ms.selection_key IN ({placeholders})
+                    """, [m_id, *possible_keys])
                     row = cursor.fetchone()
                     if row:
                         odd_val = row["odds_value"]
@@ -251,6 +291,7 @@ class RiskEngine:
                         sel_status = row["sel_status"]
                         odds_updated_at = row["updated_at"]
                         mkt_id = row["market_id"]
+                        sel_id = row["sel_id"]
 
                 # Check suspension states
                 if mkt_status in ("suspended", "closed", "settled") or sel_status in ("locked", "suspended", "settled"):
@@ -267,13 +308,8 @@ class RiskEngine:
                     cursor.execute("SELECT * FROM bet_markets WHERE match_id = ? AND is_active = 1", (m_id,))
                     bm_row = cursor.fetchone()
                     if bm_row:
-                        key_map = {
-                            "p1": "odd_p1", "x": "odd_x", "p2": "odd_p2",
-                            "tb25": "odd_tb25", "tm25": "odd_tm25",
-                            "btts_yes": "odd_btts_yes", "btts_no": "odd_btts_no"
-                        }
-                        col = key_map.get(out_type)
-                        if col:
+                        col = database.LEGACY_BET_MARKET_COLUMNS.get(str(out_type).lower())
+                        if col and col in bm_row.keys():
                             odd_val = bm_row[col]
 
                 if odd_val is None:
@@ -319,6 +355,37 @@ class RiskEngine:
                             details={"age_seconds": age_sec, "match_id": m_id}
                         )
 
+                # Odds Drift Validation (LB-06)
+                client_odd = s.get("odd")
+                if client_odd is not None:
+                    try:
+                        client_odd_f = round(float(client_odd), 2)
+                        server_odd_f = round(odd_float, 2)
+                        if abs(client_odd_f - server_odd_f) > 0.001:
+                            return RiskDecision(
+                                decision="REJECT",
+                                allowed=False,
+                                reason="ODDS_CHANGED",
+                                message=f"Коэффициент изменился: {client_odd_f} → {server_odd_f}",
+                                details={
+                                    "error": "ODDS_CHANGED",
+                                    "match_id": m_id,
+                                    "outcome": out_type,
+                                    "old_odd": client_odd_f,
+                                    "new_odd": server_odd_f
+                                }
+                            )
+                    except (ValueError, TypeError):
+                        pass
+
+                resolved_selections.append({
+                    "match_id": m_id,
+                    "market_id": mkt_id,
+                    "selection_id": sel_id,
+                    "odd": odd_float,
+                    "outcome": out_type
+                })
+
                 total_odd *= max(1.01, odd_float)
 
             # 8. Maximum Payout Cap Check
@@ -342,10 +409,62 @@ class RiskEngine:
                     details={"potential_win": potential_win, "max_payout": limits["max_payout"], "max_allowed_stake": max_allowed}
                 )
 
-            # 9. Market Net Exposure Limit Check
-            for s in selections:
-                mkt_id = s.get("market_id")
-                odd_float = float(s.get("odd") or 2.0)
+            # 8b. User Open Exposure Limit Check (LB-03)
+            cursor.execute("""
+                SELECT COALESCE(SUM(potential_win), 0) as user_open_exposure
+                FROM user_bets
+                WHERE user_id = ? AND status = 'pending'
+            """, (user_id,))
+            user_open_expo = int(cursor.fetchone()["user_open_exposure"])
+            if user_open_expo + potential_win > limits["max_open_exposure"]:
+                remaining_expo = max(0, limits["max_open_exposure"] - user_open_expo)
+                max_allowed_stake = int(remaining_expo / max(1.01, total_odd))
+                if max_allowed_stake < limits["min_bet"]:
+                    return RiskDecision(
+                        decision="REJECT",
+                        allowed=False,
+                        reason="EXPOSURE_LIMIT",
+                        message=f"Превышен лимит открытой ответственности игрока ({limits['max_open_exposure']:,} 🪙).",
+                        details={"max_open_exposure": limits["max_open_exposure"], "current_exposure": user_open_expo}
+                    )
+                return RiskDecision(
+                    decision="LIMITED",
+                    allowed=False,
+                    reason="EXPOSURE_LIMIT",
+                    message=f"Ставка превышает остаток открытой ответственности ({remaining_expo:,} 🪙). Максимальная ставка: {max_allowed_stake:,} 🪙.",
+                    max_allowed_stake=max_allowed_stake,
+                    details={"max_open_exposure": limits["max_open_exposure"], "current_exposure": user_open_expo, "remaining": remaining_expo}
+                )
+
+            # 8c. Division Exposure Limit Check (LB-03)
+            if division_id:
+                div_expo = get_division_exposure(division_id, season_id)
+                cur_div_expo = div_expo.get("net_exposure", 0)
+                if cur_div_expo + potential_win > limits["division_exposure_limit"]:
+                    return RiskDecision(
+                        decision="REJECT",
+                        allowed=False,
+                        reason="DIVISION_EXPOSURE_LIMIT",
+                        message="Превышен лимит ответственности дивизиона.",
+                        details={"division_id": division_id, "current_exposure": cur_div_expo, "limit": limits["division_exposure_limit"]}
+                    )
+
+            # 8d. Global Exposure Limit Check (LB-03)
+            glob_expo = get_global_exposure()
+            cur_glob_expo = glob_expo.get("net_exposure", 0)
+            if cur_glob_expo + potential_win > limits["global_exposure_limit"]:
+                return RiskDecision(
+                    decision="REJECT",
+                    allowed=False,
+                    reason="GLOBAL_EXPOSURE_LIMIT",
+                    message="Превышен глобальный лимит ответственности платформы.",
+                    details={"current_exposure": cur_glob_expo, "limit": limits["global_exposure_limit"]}
+                )
+
+            # 9. Market Net Exposure Limit Check (Server-authoritative market_id & odds) (LB-05)
+            for res_sel in resolved_selections:
+                mkt_id = res_sel.get("market_id")
+                odd_float = res_sel.get("odd", 2.0)
                 if mkt_id:
                     expo = get_market_exposure(mkt_id)
                     cur_net_expo = expo.get("max_net_exposure", 0)
@@ -356,7 +475,7 @@ class RiskEngine:
                             severity="high",
                             message=f"Превышение лимита ответственности рынка #{mkt_id} ({cur_net_expo + added_potential} > {limits['market_exposure_limit']})",
                             division_id=division_id,
-                            match_id=s.get("match_id"),
+                            match_id=res_sel.get("match_id"),
                             market_id=mkt_id,
                             details={"exposure": cur_net_expo + added_potential, "limit": limits["market_exposure_limit"]}
                         )

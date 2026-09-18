@@ -714,8 +714,11 @@ class AppController {
         document.querySelectorAll('.stake-chip').forEach(c => c.classList.remove('active'));
         chip.classList.add('active');
         const val = chip.dataset.amount;
-        if (val === 'all') {
-          store.setStakeAmount(store.state.user?.balance || 100);
+        if (val === 'all' || val === 'max') {
+          const bal = store.state.user?.balance || 0;
+          const numBets = (store.state.slipMode === 'single' && store.state.slip.length > 1) ? store.state.slip.length : 1;
+          const maxBetPerEvent = Math.min(Math.floor(bal / Math.max(1, numBets)), 50000);
+          store.setStakeAmount(Math.max(0, maxBetPerEvent));
         } else {
           store.setStakeAmount(parseInt(val));
         }
@@ -761,22 +764,32 @@ class AppController {
         try {
           if (isSingleBatch) {
             let placedCount = 0;
-            let lastBalance = store.state.user?.balance;
-            for (const item of store.state.slip) {
+            const failedItems = [];
+            const itemsToProcess = [...store.state.slip];
+
+            for (const item of itemsToProcess) {
               const key = `slip-single-${Date.now()}-${item.match_id}-${Math.random().toString(36).substring(2, 6)}`;
-              const res = await api.placePrediction(amt, [item], key);
-              if (res.status === 'ok') {
-                placedCount++;
-                lastBalance = res.new_balance;
+              try {
+                const res = await api.placePrediction(amt, [item], key);
+                if (res.status === 'ok') {
+                  placedCount++;
+                  if (res.new_balance !== undefined) {
+                    store.setUser({ ...store.state.user, balance: res.new_balance });
+                  }
+                  // Immediately remove placed bet from slip
+                  store.removeSelection(item.match_id);
+                } else {
+                  failedItems.push({ item, error: res.message || 'Ошибка размещения ставки' });
+                }
+              } catch (err) {
+                const msg = err.data?.message || err.message || 'Не удалось разместить ставку';
+                failedItems.push({ item, error: msg });
               }
             }
+
             if (placedCount > 0) {
-              store.setUser({ ...store.state.user, balance: lastBalance });
-              store.clearSlip();
-              this.toggleSlipDrawer(false);
               ParticleEffects.confetti();
               tgBridge.hapticNotification('success');
-              this.showSuccessModal('🎉 Ординары приняты!', `Успешно сделано ${placedCount} одиночных ставок по ${amt} 🪙 (Всего: ${placedCount * amt} 🪙).`);
               this.fetchUserExtras();
               try {
                 const myBetsRes = await api.getPredictions();
@@ -784,6 +797,17 @@ class AppController {
               } catch (e) {
                 console.warn("Could not refresh predictions:", e);
               }
+            }
+
+            if (failedItems.length === 0) {
+              this.toggleSlipDrawer(false);
+              this.showSuccessModal('🎉 Ординары приняты!', `Успешно сделано ${placedCount} одиночных ставок по ${amt} 🪙 (Всего: ${placedCount * amt} 🪙).`);
+            } else if (placedCount > 0) {
+              const errDetails = failedItems.map(f => `• ${f.item.home_team || 'Матч'} vs ${f.item.away_team || ''}: ${f.error}`).join('\n');
+              tgBridge.showAlert(`Принято ставок: ${placedCount}. Не удалось принять (${failedItems.length}):\n${errDetails}`);
+            } else {
+              const errDetails = failedItems.map(f => `• ${f.item.home_team || 'Матч'} vs ${f.item.away_team || ''}: ${f.error}`).join('\n');
+              tgBridge.showAlert(`Не удалось разместить ставки:\n${errDetails}`);
             }
           } else {
             const idempotencyKey = `slip-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
