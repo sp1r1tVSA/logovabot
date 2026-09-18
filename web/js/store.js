@@ -343,9 +343,10 @@ class StateStore {
     if (this.state.slip.length === 0) return 0;
     if (this.isBatchSingles()) {
       return this.state.slip.reduce(
-        (sum, item) => sum + Math.floor(this.getSingleStake(item.match_id) * item.odd), 0);
+        (sum, item) => sum + Math.round(this.getSingleStake(item.match_id) * item.odd), 0);
     }
-    return Math.floor(this.state.stakeAmount * this.getTotalOdd());
+    // Same rounding as the server (database.place_user_bet, settlement_engine).
+    return Math.round(this.state.stakeAmount * this.getTotalOdd());
   }
 
   getBetLimits() {

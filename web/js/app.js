@@ -813,7 +813,7 @@ class AppController {
               try {
                 const res = await api.placePrediction(amt, [item], key);
                 if (res.status === 'ok') {
-                  placed.push({ id: res.bet_id, amt, win: Math.floor(amt * item.odd) });
+                  placed.push({ id: res.bet_id, amt, win: Math.round(amt * item.odd) });
                   if (res.new_balance !== undefined) {
                     store.setUser({ ...store.state.user, balance: res.new_balance });
                   }
@@ -858,7 +858,7 @@ class AppController {
                 stake: amt,
                 oddLabel: isExp ? 'Общий кэф' : 'Коэффициент',
                 oddValue: totalOdd.toFixed(2),
-                win: Math.floor(amt * totalOdd)
+                win: Math.round(amt * totalOdd)
               });
             }
           }

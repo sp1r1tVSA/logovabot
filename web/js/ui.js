@@ -1647,7 +1647,7 @@ export class UIRenderer {
             input.value = String(stake);
           }
           const payoutEl = itemsEl.querySelector(`[data-payout-for="${s.match_id}"]`);
-          if (payoutEl) payoutEl.textContent = `${fmt(Math.floor(stake * s.odd))} 🪙`;
+          if (payoutEl) payoutEl.textContent = `${fmt(Math.round(stake * s.odd))} 🪙`;
         });
       }
     }
