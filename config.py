@@ -120,6 +120,51 @@ DIVISION_CLUBS: dict[str, list[str]] = {
     ],
 }
 
+# Предсезонный рейтинг участников сезона 2026/27 — от самого слабого к самому сильному.
+# Ключ — divisions.code, как в DIVISION_CLUBS; позиция в списке и есть ранг: первый
+# элемент — 1 (слабейший), последний — 16 (сильнейший).
+#
+# Запись «@login» — телеграм-логин тренера, сверяется с users.username без учёта регистра
+# и без «@». Запись без «@» — имя клуба из DIVISION_CLUBS: так заводятся участники без
+# тега, которых можно опознать только по клубу.
+#
+# Это сид, а не таблица: рейтинг задаёт стартовую статусность пары, дальше её перебивают
+# сыгранные туры (см. services/betting_engine.select_top_round_matches).
+DIVISION_PLAYER_SEEDS: dict[str, list[str]] = {
+    "DIV_1": [
+        "@Saharokk8830", "@curseedoeleo", "@TheFlakeSo", "@typeuw",
+        "@ArtemPalagin", "@Snikers2121", "@Nukolaich", "@Rostyslav07",
+        "@Maximilian4", "@Doakkk", "@qweasdzxc22819", "@brando055",
+        # Двое участников без тега опознаются только по клубу: убиватор и Мандарин.
+        "@Serghe1KO", "Марсель", "Кельн", "@ch1lyx",
+    ],
+    "DIV_2": [
+        "@Vladimir_5500", "@govorigde", "@Davtyan", "@sulassll",
+        "@Artem53824", "@saymino1", "@mitixfc", "@lvckri",
+        "@Turolen", "@Tonyloki57", "@umbra_mind", "@Forzainternationale",
+        "@GeorgiyKostenko", "@virkilainen", "@Prizrakks", "@vtrrgyg",
+    ],
+    "DIV_3": [
+        "@XTrent20", "@TarEgiazaryan", "@AShotik_UA", "@perdun_1337",
+        "@sergeynobody1", "@Artilawyer", "@kirillchuk_927", "@azs5652",
+        "@Rodza20", "@Ghoust_tag", "@Daimond_Highlight", "@Acidonchik_95",
+        "@sayvvel", "@Dr_Wh11te", "@aidarreezz", "@LazyMaxxA",
+    ],
+    "DIV_4": [
+        "@Nixan23", "@Flasin5", "@epl_l", "@k1nkyua",
+        # В «falIingapart» заглавная I, а не строчная l — записано дословно, как прислано.
+        "@MemoryYouSs", "@Komarik97", "@kostya94petrik", "@falIingapart",
+        "@Leon_2515", "@Lyubimov_Aleksandr", "@ARTIKggvp", "@t3miy",
+        "@sp1r1tVSA", "@pdsnvk", "@tshmrrr", "@ReiZekk",
+    ],
+    "DIV_5": [
+        "@Fede_15r", "@tornike07", "@Kurilril5", "@MAGMDV_77",
+        "@Rusasf", "@joraknaz", "@ArsenalSte", "@Daot1",
+        "@agosv", "@Diktator_new", "@ilia575", "@zazz_33117",
+        "@vitasmachiha", "@maksimmmn", "@mms_op", "@Kadyr_42",
+    ],
+}
+
 # Канонические имена всех клубов лиги — источник истины для club_registry.resolve_team_name.
 # Плоский срез DIVISION_CLUBS: резолверу дивизион не важен, имена уникальны глобально
 # (idx_users_team_name_unique). Клуб, которого здесь нет, резолвится сам в себя —

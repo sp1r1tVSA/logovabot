@@ -12,6 +12,8 @@ Calculates realistic sportsbook odds based on:
 import math
 import logging
 import database
+from services import preseason_seeds
+from services.preseason_seeds import NEUTRAL_STRENGTH
 
 logger = logging.getLogger(__name__)
 
@@ -21,13 +23,15 @@ BOOKMAKER_MARGIN = 1.055
 # Ровно столько центральных матчей тура попадает в линию БК.
 CENTRAL_MATCHES_PER_ROUND = 4
 
-# Пока сыграно меньше этого числа туров, таблицы фактически нет — статусность
-# пары считается по базовой силе клубов, а не по очкам и местам.
-TABLE_MODE_MIN_PLAYED_ROUNDS = 2
+# Сколько сыгранных туров нужно, чтобы таблица набрала максимальный вес в отборе.
+TABLE_FULL_WEIGHT_ROUNDS = 6
 
-# Вес разрыва в местах в формуле привлекательности: чем дальше команды друг от
-# друга в таблице, тем менее интересен матч.
-_PLACE_GAP_PENALTY = 1.5
+# Потолок веса таблицы: предсезонный рейтинг остаётся базой до конца сезона.
+MAX_TABLE_WEIGHT = 0.8
+
+# Вес разрыва в силе в формуле привлекательности: чем дальше команды друг от
+# друга, тем менее интересен матч.
+_GAP_PENALTY = 1.5
 
 # Статусы матча, при которых ставить уже не на что.
 _PLAYED_STATUSES = ("completed", "confirmed")
@@ -63,17 +67,43 @@ def _match_team_names(m: dict) -> tuple[str, str]:
     return t1, t2
 
 
-def _build_table_index(standings: list[dict]) -> dict[str, dict]:
-    """Индекс «нормализованное имя клуба → {place, points}» по таблице.
+def _table_weight(played_rounds: int) -> float:
+    """Насколько таблица перевешивает предсезонный рейтинг при данном числе туров.
 
-    `get_standings` возвращает строки, уже отсортированные по месту, поэтому
-    место — это позиция в списке + 1; отдельной колонки `place` в строках нет.
+    0.0 до первого сыгранного тура, дальше линейный разгон до `MAX_TABLE_WEIGHT`.
+    Потолок ниже единицы намеренно: рейтинг участников остаётся базой весь сезон,
+    поэтому оторвавшаяся серия результатов не стирает статусность имени целиком.
     """
-    index: dict[str, dict] = {}
+    if played_rounds <= 0:
+        return 0.0
+    return min(MAX_TABLE_WEIGHT, played_rounds / TABLE_FULL_WEIGHT_ROUNDS)
+
+
+def _build_strength_index(standings: list[dict], table_weight: float) -> dict[str, float]:
+    """Индекс «нормализованное имя клуба → сила 0.0..1.0» для отбора матчей.
+
+    Сила — смесь двух источников в одной шкале:
+      * предсезонный рейтинг участника (`services/preseason_seeds.py`), вес `1 − w`;
+      * место в таблице, вес `w` (см. `_table_weight`).
+
+    Место берётся позицией в списке: `get_standings` возвращает строки, уже
+    отсортированные, и отдельной колонки `place` в них нет. Оно нормируется в
+    0.0..1.0 (первое место — 1.0), потому что очки растут весь сезон и в смеси с
+    фиксированной шкалой рейтинга быстро перестали бы с ней соотноситься.
+
+    Участник вне рейтинга получает `NEUTRAL_STRENGTH` — не поднимается и не тонет.
+    """
+    total = len(standings)
+    index: dict[str, float] = {}
     for position, row in enumerate(standings, start=1):
         key = database.normalize_team_name(row.get("team_name", "")).lower()
-        if key:
-            index[key] = {"place": position, "points": row.get("points") or 0}
+        if not key:
+            continue
+        table_strength = (total - position) / (total - 1) if total > 1 else NEUTRAL_STRENGTH
+        seed = preseason_seeds.get_seed_strength(row.get("username"), row.get("team_name"))
+        if seed is None:
+            seed = NEUTRAL_STRENGTH
+        index[key] = (1.0 - table_weight) * seed + table_weight * table_strength
     return index
 
 
@@ -85,11 +115,15 @@ def select_top_round_matches(
 ) -> list[dict]:
     """Отбирает ровно 4 самых статусных матча тура для выставления в линию БК.
 
-    Правила ранжирования:
-      * сыграно меньше двух туров (таблицы ещё нет) — статусность пары считается
-        как сумма базовой силы клубов `S₁ + S₂`;
-      * начиная с третьего тура — по привлекательности вершины таблицы:
-        `Score = (Pts₁ + Pts₂) − |Place₁ − Place₂| × 1.5`.
+    Статусность пары — `Score = (S₁ + S₂) − |S₁ − S₂| × 1.5`, где `S` — сила
+    участника в 0.0..1.0. Топ-матч по этой формуле это пара сильных И близких по
+    силе соперников: разгром лидером аутсайдера в линию не идёт.
+
+    Сила смешивает предсезонный рейтинг участника с местом в таблице, и вес
+    таблицы растёт по мере сыгранных туров (см. `_build_strength_index`). До
+    первого тура таблицы нет вовсе, и четвёрку целиком определяет рейтинг — без
+    него все пары получали одинаковый Score, а отбор вырождался в «первые четыре
+    матча по id».
 
     Уже сыгранные матчи в линию не попадают. При равенстве Score порядок
     определяется id матча, чтобы повторный вызов давал тот же набор.
@@ -109,22 +143,28 @@ def select_top_round_matches(
         logger.debug(f"Could not load standings for round selection: {e}")
 
     played_rounds = max((row.get("played") or 0) for row in standings) if standings else 0
-    use_table = played_rounds >= TABLE_MODE_MIN_PLAYED_ROUNDS
-    table = _build_table_index(standings) if use_table else {}
-    # Клуб без строки в таблице ставится за последнее место с нулём очков.
-    fallback_place = len(standings) + 1
+    table_weight = _table_weight(played_rounds)
+    strength = _build_strength_index(standings, table_weight)
+
+    def team_strength(team_name: str, nickname: str | None) -> float:
+        """Сила клуба: из таблицы, иначе из рейтинга, иначе нейтральная.
+
+        Клуба может не быть в таблице — например, тренер ещё не привязан к нему.
+        Тогда остаётся только рейтинг, и он ищется по логину из строки матча:
+        `get_matches_by_round` отдаёт его в `playerN_nickname`.
+        """
+        key = database.normalize_team_name(team_name).lower()
+        if key in strength:
+            return strength[key]
+        seed = preseason_seeds.get_seed_strength(nickname, team_name)
+        return seed if seed is not None else NEUTRAL_STRENGTH
 
     scored: list[dict] = []
     for m in matches:
         t1, t2 = _match_team_names(m)
-        if use_table:
-            k1 = database.normalize_team_name(t1).lower()
-            k2 = database.normalize_team_name(t2).lower()
-            r1 = table.get(k1, {"place": fallback_place, "points": 0})
-            r2 = table.get(k2, {"place": fallback_place, "points": 0})
-            score = (r1["points"] + r2["points"]) - abs(r1["place"] - r2["place"]) * _PLACE_GAP_PENALTY
-        else:
-            score = _get_team_strength_score(standings, t1) + _get_team_strength_score(standings, t2)
+        s1 = team_strength(t1, m.get("player1_nickname"))
+        s2 = team_strength(t2, m.get("player2_nickname"))
+        score = (s1 + s2) - abs(s1 - s2) * _GAP_PENALTY
 
         row = dict(m)
         row["line_score"] = round(float(score), 3)

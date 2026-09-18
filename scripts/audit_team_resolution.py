@@ -2,7 +2,7 @@
 
 Локальная league.db пустая, реальный ростер живёт только на VPS, поэтому проверить
 реестр клубов тестами нельзя — нужен прогон по настоящим данным. Скрипт отвечает на
-три вопроса:
+четыре вопроса:
 
   1. Есть ли клубы, которые резолвер сводит в одно имя? Это прямая потеря данных:
      `get_standings` индексирует таблицу каноническим именем, и второй клуб
@@ -11,6 +11,9 @@
      `teams_match` для них намеренно строже и не склеивает опечатки OCR.
   3. Выдерживает ли порог фаззи-сравнения реальный ростер? Если два настоящих клуба
      похожи сильнее порога, порог придётся поднимать, а не подгонять данные.
+  4. Сходится ли предсезонный рейтинг (`config.DIVISION_PLAYER_SEEDS`) с ростером?
+     Логин с опечаткой, незаведённый тренер или запись не в том дивизионе тихо
+     дают участнику нейтральную силу, и отбор центральных матчей его не видит.
 
 Использование:
 
@@ -42,8 +45,10 @@ from club_registry import (  # noqa: E402
     FUZZY_THRESHOLD,
     ResolveMethod,
     normalize_team_name,
+    resolve_team_name,
     resolve_team_name_ex,
 )
+from services import preseason_seeds  # noqa: E402
 
 # Авторизатор пускает только чтение. Всё, чего нет в списке — DENY, включая
 # INSERT/UPDATE/DELETE, DDL и ATTACH.
@@ -115,6 +120,15 @@ def fetch_division_count(conn: sqlite3.Connection) -> int | None:
         return conn.execute("SELECT COUNT(*) FROM divisions").fetchone()[0]
     except sqlite3.OperationalError:
         return None
+
+
+def fetch_division_codes(conn: sqlite3.Connection) -> dict[int, str]:
+    """`divisions.id -> code` — рейтинг разложен по кодам, а ростер знает только id."""
+    try:
+        rows = conn.execute("SELECT id, code FROM divisions").fetchall()
+    except sqlite3.OperationalError:
+        return {}
+    return {row["id"]: (row["code"] or "").strip().upper() for row in rows}
 
 
 def fetch_other_names(conn: sqlite3.Connection) -> dict[str, set[str]]:
@@ -267,6 +281,86 @@ def check_registry_drift(roster: list[sqlite3.Row], other: dict[str, set[str]]) 
     )
 
 
+def check_seed_rating(
+    roster: list[sqlite3.Row],
+    division_codes: dict[int, str],
+) -> list[Finding]:
+    """Сверка `config.DIVISION_PLAYER_SEEDS` с живым ростером.
+
+    Рейтинг — сид, набранный руками, и разойтись с базой он может четырьмя
+    способами: опечатка в логине, незаведённый в рейтинге тренер, тренер не в
+    том дивизионе и битая запись самого рейтинга. Каждый случай тихо кладёт
+    участника в `NEUTRAL_STRENGTH`, и отбор четвёрки перестаёт его замечать.
+    """
+    findings: list[Finding] = []
+
+    # Битые записи видно и без базы: их ловит сам загрузчик рейтинга.
+    broken = [f"  не клуб своего дивизиона: {e}" for e in preseason_seeds.get_unknown_seed_clubs()]
+    broken += [f"  повтор: {e}" for e in preseason_seeds.get_duplicate_seed_keys()]
+    if broken:
+        findings.append(Finding(
+            "SEED_BROKEN",
+            "Записи рейтинга, которые загрузчик отбросил — участник остаётся без силы",
+            broken,
+        ))
+
+    if not roster:
+        return findings
+
+    by_login = {
+        preseason_seeds.normalize_username(row["username"]): row
+        for row in roster if row["username"]
+    }
+    by_club = {
+        normalize_team_name(resolve_team_name(row["team_name"])): row
+        for row in roster
+    }
+
+    absent: list[str] = []
+    wrong_division: list[str] = []
+    for code, entries in preseason_seeds.get_seed_division_index().items():
+        for position, entry in enumerate(entries, start=1):
+            if entry.startswith("@"):
+                row = by_login.get(preseason_seeds.normalize_username(entry))
+            else:
+                row = by_club.get(normalize_team_name(resolve_team_name(entry)))
+            if row is None:
+                absent.append(f"  {code} #{position}: {entry}")
+                continue
+            actual = division_codes.get(row["division_id"])
+            if actual and actual != code:
+                wrong_division.append(
+                    f"  {entry}: рейтинг {code}, в базе {actual} ({row['team_name']})"
+                )
+
+    if absent:
+        findings.append(Finding(
+            "SEED_NO_USER",
+            f"Записей рейтинга без тренера в базе: {len(absent)} — опечатка в логине или он ещё не регистрировался",
+            absent,
+        ))
+    if wrong_division:
+        findings.append(Finding(
+            "SEED_DIVISION",
+            "Тренер стоит в рейтинге не своего дивизиона — сила считается по чужой шкале",
+            wrong_division,
+        ))
+
+    unrated = [
+        f"  {row['team_name']} (@{row['username'] or '—'}, дивизион {row['division_id']})"
+        for row in roster
+        if preseason_seeds.get_seed_strength(row["username"], row["team_name"]) is None
+    ]
+    if unrated:
+        findings.append(Finding(
+            "SEED_UNRATED",
+            f"Тренеров вне рейтинга: {len(unrated)} — в отборе матчей они получают нейтральную силу",
+            unrated,
+        ))
+
+    return findings
+
+
 def emit_config(roster: list[sqlite3.Row]) -> str:
     """Готовый блок CLUB_REGISTRY: по одному имени на клуб, дубли по нормализации сняты."""
     seen: dict[str, str] = {}
@@ -299,6 +393,7 @@ def main() -> int:
     try:
         roster = fetch_roster(conn)
         division_count = fetch_division_count(conn)
+        division_codes = fetch_division_codes(conn)
         other = fetch_other_names(conn)
     finally:
         conn.close()
@@ -324,6 +419,8 @@ def main() -> int:
     else:
         print(f"Дивизионов заведено: {division_count}, из них с клубами: {divisions_with_clubs}", file=out)
     print(f"Клубов в ростере: {len(roster)}", file=out)
+    seed_entries = sum(len(e) for e in preseason_seeds.get_seed_division_index().values())
+    print(f"Записей в предсезонном рейтинге: {seed_entries}", file=out)
     print(f"Имён клубов в остальных таблицах: {len(other)}", file=out)
 
     if not roster:
@@ -347,6 +444,7 @@ def main() -> int:
             fuzzy_finding,
         ) if f is not None
     ]
+    findings.extend(check_seed_rating(roster, division_codes))
 
     if fuzzy_report:
         print("\nСамые похожие пары клубов (порог фаззи "
