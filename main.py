@@ -46,6 +46,15 @@ async def post_init(application: Application) -> None:
     except Exception as e:
         logger.warning(f"Could not set WebApp menu button: {e}")
 
+    # 🔄 Auto-recalculate line markets on startup with calibrated Poisson engine
+    try:
+        import asyncio
+        from services.betting_engine import regenerate_all_active_markets
+        count = await asyncio.to_thread(regenerate_all_active_markets)
+        logger.info(f"🎰 Regenerated betting markets for {count} active matches on startup")
+    except Exception as e:
+        logger.warning(f"Failed to auto-regenerate markets on startup: {e}")
+
 def register_jobs(application: Application) -> None:
     """Register periodic background jobs."""
     # Check round deadlines & send reminders every 30 minutes

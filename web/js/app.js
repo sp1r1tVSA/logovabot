@@ -513,7 +513,10 @@ class AppController {
       if (btn && btn.dataset.matchId) {
         const mId = parseInt(btn.dataset.matchId);
         const modal = document.getElementById('match-markets-modal');
-        if (modal) modal.classList.remove('active', 'open');
+        if (modal) {
+          modal.classList.remove('active', 'open');
+          modal.style.display = 'none';
+        }
         this.loadMatchCenter(mId);
         this.switchView('match_center');
       }
@@ -526,7 +529,8 @@ class AppController {
         const mId = parseInt(btn.dataset.matchId);
         const modal = document.getElementById('match-markets-modal');
         if (modal) {
-          modal.classList.add('active');
+          modal.classList.add('active', 'open');
+          modal.style.display = 'flex';
           const titleEl = document.getElementById('modal-match-title');
           const listEl = document.getElementById('modal-markets-list');
           if (titleEl) titleEl.textContent = 'Все рынки матча';
@@ -867,6 +871,7 @@ class AppController {
       modal.addEventListener('click', (e) => {
         if (e.target === modal || e.target.closest('.btn-modal-close')) {
           modal.classList.remove('active', 'open');
+          modal.style.display = 'none';
         }
       });
     });

@@ -34,10 +34,18 @@ def calculate_match_lambdas(
     """
     Calculate expected goals (lambda1, lambda2) from team strength scores.
     Strength score neutral point is 10.0, typical range [2.0, 25.0].
+    Incorporates both goal superiority (delta) and fixture caliber (total_strength).
     """
     delta = (s1 - s2) / 10.0
-    l1 = BASE_GOALS_PER_TEAM * math.exp(0.32 * delta + home_advantage)
-    l2 = BASE_GOALS_PER_TEAM * math.exp(-0.32 * delta)
+    total_strength = (s1 + s2) / 2.0
+
+    # Modulate base match pace by overall fixture caliber:
+    # High-tier fixtures (or stronger teams) produce higher goal expectations and pace.
+    pace_factor = 1.0 + 0.035 * (total_strength - 10.0)
+    mu = max(1.15, min(2.20, BASE_GOALS_PER_TEAM * pace_factor))
+
+    l1 = mu * math.exp(0.32 * delta + home_advantage)
+    l2 = mu * math.exp(-0.32 * delta)
     # Bound to realistic FIFA match bounds
     return max(0.40, min(4.50, l1)), max(0.35, min(4.50, l2))
 

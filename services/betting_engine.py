@@ -298,6 +298,12 @@ def generate_round_markets(tour: int, division_id: int | None = None, season_id:
             odd_btts_yes=odds["odd_btts_yes"],
             odd_btts_no=odds["odd_btts_no"]
         )
+        try:
+            from services.odds_engine import generate_match_markets
+            generate_match_markets(m_id, t1, t2)
+        except Exception as e:
+            logger.debug(f"Could not generate relational markets for match #{m_id}: {e}")
+
         markets.append({
             "match_id": m_id,
             "tour": tour,
@@ -308,3 +314,66 @@ def generate_round_markets(tour: int, division_id: int | None = None, season_id:
 
     logger.info(f"✅ Generated Logovo.bet markets for {len(markets)} central matches in Tour #{tour} (division={division_id}, season={season_id})")
     return markets
+
+
+def regenerate_all_active_markets() -> int:
+    """
+    Recalculate and refresh odds for all pending/unplayed matches in bet_markets and match_markets.
+    Ensures that existing fixtures reflect the current calibrated Poisson engine without stale odds.
+    """
+    with database.transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT
+                m.id, m.round_number, m.division_id, m.season_id,
+                COALESCE(m.player1_team, u1.team_name) AS player1_team,
+                COALESCE(m.player2_team, u2.team_name) AS player2_team,
+                u1.username AS player1_nickname,
+                u2.username AS player2_nickname,
+                m.status
+            FROM matches m
+            LEFT JOIN users u1 ON LOWER(m.player1_team) = LOWER(u1.team_name)
+            LEFT JOIN users u2 ON LOWER(m.player2_team) = LOWER(u2.team_name)
+            WHERE m.status NOT IN ('completed', 'confirmed', 'cancelled')
+        """)
+        matches = [dict(r) for r in cursor.fetchall()]
+
+    updated_count = 0
+    for m in matches:
+        m_id = m.get("id")
+        t1, t2 = _match_team_names(m)
+        if not t1 or not t2 or t1 in ("Команда 1", "") or t2 in ("Команда 2", ""):
+            continue
+        p1_nick = m.get("player1_nickname")
+        p2_nick = m.get("player2_nickname")
+
+        odds = calculate_match_odds(
+            t1, t2,
+            division_id=m.get("division_id"),
+            season_id=m.get("season_id"),
+            p1_nick=p1_nick,
+            p2_nick=p2_nick
+        )
+        database.save_bet_market(
+            match_id=m_id,
+            tour=m.get("round_number") or 1,
+            team1_name=t1,
+            team2_name=t2,
+            odd_p1=odds["odd_p1"],
+            odd_x=odds["odd_x"],
+            odd_p2=odds["odd_p2"],
+            odd_tb25=odds["odd_tb25"],
+            odd_tm25=odds["odd_tm25"],
+            odd_btts_yes=odds["odd_btts_yes"],
+            odd_btts_no=odds["odd_btts_no"]
+        )
+        try:
+            from services.odds_engine import generate_match_markets
+            generate_match_markets(m_id, t1, t2)
+        except Exception as e:
+            logger.debug(f"Could not update relational markets for match #{m_id}: {e}")
+        updated_count += 1
+
+    logger.info(f"🔄 Recalculated Poisson betting markets for {updated_count} active matches.")
+    return updated_count
+

@@ -743,7 +743,7 @@
 }
 .modal-overlay.open,
 .modal-overlay.active {
-  display: flex;
+  display: flex !important;
 }
 
 .modal-content {
