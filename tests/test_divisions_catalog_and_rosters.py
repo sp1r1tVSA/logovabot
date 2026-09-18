@@ -10,6 +10,7 @@ from handlers.cabinet import (
     show_clubs_catalog_for_division,
 )
 from handlers.admin import (
+    admin_edit_club_execute,
     admin_edit_club_select,
     admin_rosters_for_division,
     _build_debts_summary,
@@ -329,6 +330,97 @@ class TestSeededDivisionRoster(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(labels.get("челси"), f"ID {self.coach_id}")
+
+
+class TestBindingACoachToAClub(unittest.IsolatedAsyncioTestCase):
+    """Нажатие на клуб в «Изменить клуб» и его последствия для прежнего владельца."""
+
+    async def asyncSetUp(self):
+        database.init_db()
+        database.ensure_canonical_divisions()
+        self.admin_id = 999125
+        self.coach_id = 99921
+        self.rival_id = 99922
+        self.club = config.DIVISION_CLUBS["DIV_5"][0]
+        self.div_five_id = database.get_division_by_code("DIV_5")["id"]
+
+        with database.transaction() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO users (telegram_id, username, team_name, role, division_id) "
+                "VALUES (?, 'coach_to_bind', NULL, 'player', ?)",
+                (self.coach_id, self.div_five_id)
+            )
+            conn.execute(
+                "INSERT OR REPLACE INTO users (telegram_id, username, team_name, role, division_id, warn_count) "
+                "VALUES (?, 'rival_owner', ?, 'player', ?, 2)",
+                (self.rival_id, self.club, self.div_five_id)
+            )
+            conn.execute(
+                "INSERT INTO user_warns (user_id, admin_id, reason, type, created_at) "
+                "VALUES (?, ?, 'Неявка', 'WARN_ADD', '2026-09-01 12:00:00')",
+                (self.rival_id, self.admin_id)
+            )
+
+    async def asyncTearDown(self):
+        with database.transaction() as conn:
+            c = conn.cursor()
+            c.execute("DELETE FROM user_warns WHERE user_id IN (?, ?)", (self.coach_id, self.rival_id))
+            c.execute("DELETE FROM users WHERE telegram_id IN (?, ?)", (self.coach_id, self.rival_id))
+
+    async def _press_club(self, player_id: int, club: str):
+        """Нажать кнопку клуба с пустым `user_data`.
+
+        Это не упрощение, а рабочий случай: список клубов живёт в памяти процесса,
+        и после перезапуска бота нажатие на уже нарисованную кнопку приходит
+        именно так — обработчик обязан пересобрать тот же список сам.
+        """
+        clubs = await asyncio.to_thread(database.get_division_teams, self.div_five_id)
+        query = MagicMock()
+        query.data = f"admin_eclub_{player_id}_{clubs.index(club)}"
+        query.from_user.id = self.admin_id
+        query.answer = AsyncMock()
+        query.edit_message_text = AsyncMock()
+        update = MagicMock()
+        update.callback_query = query
+        update.effective_user.id = self.admin_id
+        context = MagicMock()
+        context.user_data = {}
+
+        with patch("handlers.base.is_admin", return_value=True), \
+             patch("handlers.admin.is_admin", return_value=True), \
+             patch("handlers.admin._post_or_update_debts_in_warns", new=AsyncMock()), \
+             patch("handlers.admin.admin_view_player", new=AsyncMock()):
+            await admin_edit_club_execute(update, context)
+
+        return query.answer.call_args[0][0]
+
+    async def test_pressing_a_free_club_binds_the_coach(self):
+        free_club = config.DIVISION_CLUBS["DIV_5"][1]
+
+        alert = await self._press_club(self.coach_id, free_club)
+
+        self.assertEqual(database.get_user(self.coach_id)["team_name"], free_club)
+        self.assertIn(free_club, alert)
+        self.assertIn("@coach_to_bind", alert)
+        # Алерт Telegram — обычный текст: разметка в нём показалась бы звёздочками.
+        self.assertNotIn("**", alert)
+
+    async def test_taking_an_occupied_club_wipes_the_previous_owner_completely(self):
+        """Прежний владелец теряет клуб, счётчик варнов и их историю.
+
+        Историю раньше чистил подзапрос по `team_name`, который выполнялся уже
+        после обнуления этого поля и не находил никого: счётчик показывал 0, а
+        варны оставались висеть на бывшем владельце.
+        """
+        alert = await self._press_club(self.coach_id, self.club)
+
+        rival = database.get_user(self.rival_id)
+        self.assertIsNone(rival["team_name"])
+        self.assertEqual(rival["warn_count"], 0)
+        self.assertEqual(database.get_user_warns(self.rival_id), [])
+        self.assertEqual(database.get_user(self.coach_id)["team_name"], self.club)
+        # Отъём клуба не должен быть молчаливым.
+        self.assertIn("@rival_owner", alert)
 
 
 if __name__ == "__main__":

@@ -3656,16 +3656,21 @@ def pre_register_player(username: str, team_name: str) -> int:
     with transaction() as conn:
         cursor = conn.cursor()
         
-        # Unassign previous owner of this team if any
+        # Previous owners are read first: the UPDATE clears team_name, after which
+        # a subquery keyed on it matches nobody and their warns would outlive the
+        # warn_count reset. Same ordering rule as in `set_player_club`.
+        cursor.execute(
+            "SELECT telegram_id FROM users WHERE LOWER(team_name) = LOWER(?) AND LOWER(username) != LOWER(?)",
+            (team_name_clean, username_clean)
+        )
+        previous_owner_ids = [r["telegram_id"] for r in cursor.fetchall()]
         cursor.execute(
             "UPDATE users SET team_name = NULL, warn_count = 0 WHERE LOWER(team_name) = LOWER(?) AND LOWER(username) != LOWER(?)",
             (team_name_clean, username_clean)
         )
-        cursor.execute(
-            "DELETE FROM user_warns WHERE user_id IN (SELECT telegram_id FROM users WHERE LOWER(team_name) = LOWER(?) AND LOWER(username) != LOWER(?))",
-            (team_name_clean, username_clean)
-        )
-        
+        for owner_id in previous_owner_ids:
+            cursor.execute("DELETE FROM user_warns WHERE user_id = ?", (owner_id,))
+
         # Check if username already exists in users table
         cursor.execute("SELECT telegram_id FROM users WHERE LOWER(username) = LOWER(?)", (username_clean,))
         row = cursor.fetchone()
@@ -3838,30 +3843,46 @@ def remove_player(player_ref: str) -> tuple[bool, str]:
         return True, f"Игрок **{display_name}** ({team or 'без названия'}) успешно удален из лиги."
 
 def set_player_club(player_ref: str, new_club: str) -> tuple[bool, str]:
-    """Change player's club/team."""
+    """Bind a coach to a club, taking it away from its previous owner if it has one.
+
+    `player_ref` is a @username or a telegram_id. Returns `(ok, message)`; the
+    message is **plain text** — it ends up in a Telegram alert or in an HTML
+    message, and neither renders Markdown.
+    """
     player_ref_clean = player_ref.strip().lstrip("@")
     new_club_clean = new_club.strip()
     with transaction() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT telegram_id FROM users WHERE telegram_id = ? OR LOWER(username) = LOWER(?)", (player_ref_clean, player_ref_clean))
+        cursor.execute(
+            "SELECT telegram_id, username FROM users WHERE telegram_id = ? OR LOWER(username) = LOWER(?)",
+            (player_ref_clean, player_ref_clean)
+        )
         row = cursor.fetchone()
         if not row:
             return False, "Игрок не найден."
-        p_id = row[0]
+        p_id = row["telegram_id"]
+        p_label = f"@{row['username']}" if row["username"] else f"ID {p_id}"
 
         cursor.execute("SELECT team_name FROM users WHERE telegram_id = ?", (p_id,))
         old_club_row = cursor.fetchone()
         old_club = (old_club_row[0] or "").strip() if old_club_row else ""
 
-        # Unassign previous owner of new_club if any
+        # Previous owners are read before the UPDATE below clears their team_name:
+        # afterwards a `WHERE LOWER(team_name) = …` subquery matches nobody, so their
+        # warn history would outlive the warn_count that was just zeroed. Their names
+        # also go into the reply — the admin should see whom the club was taken from.
+        cursor.execute(
+            "SELECT telegram_id, username FROM users WHERE LOWER(team_name) = LOWER(?) AND telegram_id != ?",
+            (new_club_clean, p_id)
+        )
+        previous_owners = cursor.fetchall()
+
         cursor.execute(
             "UPDATE users SET team_name = NULL, warn_count = 0 WHERE LOWER(team_name) = LOWER(?) AND telegram_id != ?",
             (new_club_clean, p_id)
         )
-        cursor.execute(
-            "DELETE FROM user_warns WHERE user_id IN (SELECT telegram_id FROM users WHERE LOWER(team_name) = LOWER(?) AND telegram_id != ?)",
-            (new_club_clean, p_id)
-        )
+        for owner in previous_owners:
+            cursor.execute("DELETE FROM user_warns WHERE user_id = ?", (owner["telegram_id"],))
 
         cursor.execute("UPDATE users SET team_name = ?, role = 'player', warn_count = 0 WHERE telegram_id = ?", (new_club_clean, p_id))
         cursor.execute("DELETE FROM user_warns WHERE user_id = ?", (p_id,))
@@ -3892,7 +3913,14 @@ def set_player_club(player_ref: str, new_club: str) -> tuple[bool, str]:
                 (new_club.strip(), new_club.strip())
             )
 
-        return True, f"Клуб игрока **@{player_ref_clean}** изменен на **{new_club.strip()}**."
+        message = f"Клуб игрока {p_label} изменён на «{new_club_clean}»."
+        if previous_owners:
+            taken_from = ", ".join(
+                f"@{o['username']}" if o["username"] else f"ID {o['telegram_id']}"
+                for o in previous_owners
+            )
+            message += f" Клуб отобран у {taken_from} — варны сброшены."
+        return True, message
 
 def update_player_username(telegram_id: int, username: str) -> tuple[bool, str]:
     """Update player's Telegram username."""

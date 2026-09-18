@@ -795,7 +795,8 @@ async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_T
                 await _post_or_update_debts_in_warns(context)
             except Exception as e:
                 logger.warning(f"Failed to update debts in warns: {e}")
-        await msg.reply_text(f"{'✅' if ok else '❌'} {res_text}", parse_mode="HTML")
+        # Название клуба пришло из чата — в HTML-режиме его экранируем.
+        await msg.reply_text(f"{'✅' if ok else '❌'} {html.escape(res_text)}", parse_mode="HTML")
         return True
 
     # Not a specific tournament command -> return False to allow conversational AI chat to handle it

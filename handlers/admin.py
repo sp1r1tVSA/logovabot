@@ -3775,7 +3775,7 @@ async def admin_edit_club_text(update: Update, context: ContextTypes.DEFAULT_TYP
         
     success, msg = await asyncio.to_thread(database.set_player_club, str(player_id), new_club)
     await update.message.reply_text(
-            "✅ {msg}",
+        f"{'✅' if success else '❌'} {msg}",
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« К карточке игрока", callback_data=f"admin_view_player_{player_id}")]])
     )
     return ConversationHandler.END
@@ -4434,6 +4434,23 @@ def _club_owner_labels(users: list[dict], division_id: int | None = None) -> dic
     return labels
 
 
+async def _club_choices_for_player(player) -> list[str]:
+    """Клубы, предлагаемые одному игроку, в устойчивом порядке.
+
+    Telegram возвращает из кнопки только индекс, поэтому `admin_edit_club_execute`
+    вынуждена собрать ровно тот же список, который пронумеровала `admin_edit_club_select`
+    (после перезапуска бота `user_data` пуст). Отсюда один общий помощник и
+    `sorted` на запасном пути: `get_all_teams` порядок не гарантирует, а сдвиг на
+    одну позицию привязал бы тренера к соседнему клубу.
+    """
+    row = dict(player) if player is not None else {}
+    div_id = row.get("division_id") or 1
+    choices = await asyncio.to_thread(database.get_division_teams, div_id)
+    if not choices:
+        choices = sorted(await asyncio.to_thread(database.get_all_teams))
+    return choices
+
+
 @admin_only
 async def admin_edit_club_select(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show grid of inline buttons for clubs in the division to edit player's club."""
@@ -4454,12 +4471,7 @@ async def admin_edit_club_select(update: Update, context: ContextTypes.DEFAULT_T
     users = [dict(u) if not isinstance(u, dict) else u for u in raw_users]
     club_to_player = _club_owner_labels(users)
 
-    div_id = player.get("division_id") if isinstance(player, dict) else (player["division_id"] if player else 1) or 1
-    division_teams = await asyncio.to_thread(database.get_division_teams, div_id)
-    if not division_teams:
-        division_teams = await asyncio.to_thread(database.get_all_teams)
-    if not division_teams:
-        division_teams = sorted(list({u["team_name"] for u in users if u.get("team_name")}))
+    division_teams = await _club_choices_for_player(player)
 
     context.user_data[f"admin_edit_clubs_{p_id}"] = division_teams
 
@@ -4508,10 +4520,7 @@ async def admin_edit_club_execute(update: Update, context: ContextTypes.DEFAULT_
     clubs_list = context.user_data.get(f"admin_edit_clubs_{p_id}")
     if not clubs_list:
         player = await asyncio.to_thread(database.get_user, p_id)
-        div_id = player.get("division_id") or 1 if player else 1
-        clubs_list = await asyncio.to_thread(database.get_division_teams, div_id)
-        if not clubs_list:
-            clubs_list = await asyncio.to_thread(database.get_all_teams)
+        clubs_list = await _club_choices_for_player(player)
 
     if not clubs_list or club_idx < 0 or club_idx >= len(clubs_list):
         await query.answer("❌ Неверный индекс клуба.", show_alert=True)
