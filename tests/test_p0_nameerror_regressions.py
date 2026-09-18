@@ -284,6 +284,10 @@ class TestClubSchedulePendingSort(unittest.TestCase):
                     "UPDATE matches SET player1_team = ?, player2_team = ? WHERE id = ?",
                     (self.team1, self.team2, match_id),
                 )
+                conn.execute(
+                    "UPDATE rounds SET is_open = 1 WHERE round_number = ? AND division_id = ?",
+                    (rn, self.div_id),
+                )
 
     def test_club_schedule_sorts_pending_fixtures(self):
         # Before the fix this raised NameError as soon as pending fixtures existed.

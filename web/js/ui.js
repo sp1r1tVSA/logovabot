@@ -365,6 +365,8 @@ const OUTCOME_NAMES = {
   'under_3.5': 'ТМ 3.5',
   'h1_minus_1.5': 'Фора 1 (-1.5)',
   'h2_plus_1.5': 'Фора 2 (+1.5)',
+  'h1_plus_1.5': 'Фора 1 (+1.5)',
+  'h2_minus_1.5': 'Фора 2 (-1.5)',
   'it1_over_1.5': 'ИТБ1 (1.5)',
   'it1_under_1.5': 'ИТМ1 (1.5)',
   'it2_over_1.5': 'ИТБ2 (1.5)',
@@ -770,8 +772,13 @@ export class UIRenderer {
               <div class="market-group-card">
                 <div class="market-group-title">↔️ Фора (±1.5)</div>
                 <div class="odds-grid-2col">
-                  ${renderSelBtn(mktHcp, 'h1_minus_1.5', 'Фора 1 (-1.5)', 2.20)}
-                  ${renderSelBtn(mktHcp, 'h2_plus_1.5', 'Фора 2 (+1.5)', 1.60)}
+                  ${(mktHcp.selections && mktHcp.selections.length > 0)
+                    ? mktHcp.selections.map(s => renderSelBtn(mktHcp, s.selection_key, s.selection_name, s.current_odd || s.odds_value || 1.85)).join('')
+                    : `
+                      ${renderSelBtn(mktHcp, 'h1_minus_1.5', 'Фора 1 (-1.5)', 2.20)}
+                      ${renderSelBtn(mktHcp, 'h2_plus_1.5', 'Фора 2 (+1.5)', 1.60)}
+                    `
+                  }
                 </div>
               </div>` : ''}
 
@@ -1580,7 +1587,7 @@ export class UIRenderer {
       if (mode === 'single' && slip.length > 1) {
         oddEl.innerHTML = `<span>${slip.length} ординар(а)</span>`;
       } else {
-        oddEl.innerHTML = `Кэф: <b>${totalOdd.toFixed(2)}</b> ${isExpress ? '<span style="color: var(--accent-cyan); font-size: 0.75rem;">(⚡+5% Экспресс)</span>' : ''}`;
+        oddEl.innerHTML = `Кэф: <b>${totalOdd.toFixed(2)}</b>`;
       }
     }
 
@@ -1595,7 +1602,7 @@ export class UIRenderer {
         const totalStake = stakeAmount * slip.length;
         submitBtn.textContent = `Поставить ${slip.length} ординара (Всего: ${totalStake} 🪙)`;
       } else if (mode === 'express' && slip.length > 1) {
-        submitBtn.textContent = `Сделать экспресс (Кэф: ${(totalOdd * 1.05).toFixed(2)})`;
+        submitBtn.textContent = `Сделать экспресс (Кэф: ${totalOdd.toFixed(2)})`;
       } else {
         submitBtn.textContent = `Сделать ординар (${stakeAmount} 🪙)`;
       }

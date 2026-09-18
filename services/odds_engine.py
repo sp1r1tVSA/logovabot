@@ -50,7 +50,8 @@ def get_or_create_selection(
     market_id: int,
     selection_key: str,
     selection_name: str,
-    initial_odds: float
+    initial_odds: float,
+    update_odds: bool = False
 ) -> dict:
     """Ensure a selection exists within a market and return its record."""
     initial_odds = round(float(initial_odds), 2)
@@ -62,6 +63,14 @@ def get_or_create_selection(
         )
         row = cursor.fetchone()
         if row:
+            if update_odds and (row["odds_value"] != initial_odds or row["selection_name"] != selection_name):
+                cursor.execute("""
+                    UPDATE market_selections
+                    SET odds_value = ?, selection_name = ?
+                    WHERE id = ?
+                """, (initial_odds, selection_name, row["id"]))
+                cursor.execute("SELECT * FROM market_selections WHERE id = ?", (row["id"],))
+                return dict(cursor.fetchone())
             return dict(row)
 
         cursor.execute("""
@@ -404,13 +413,22 @@ def generate_match_markets(
     ind2_over = round(max(1.20, min(4.50, 1.85 / (p2 / max(0.1, p1)))), 2)
     ind2_under = round(max(1.20, min(4.50, 1.85 * (p2 / max(0.1, p1)))), 2)
 
-    # 5. Handicap (-1.5 on stronger team)
-    if p1 >= p2:
-        h1_minus = round(max(1.40, min(8.0, odd_p1 * 1.8)), 2)
-        h2_plus = round(max(1.15, min(4.0, 1.0 / (0.85 * BOOKMAKER_MARGIN))), 2)
-    else:
-        h1_minus = round(max(1.15, min(4.0, 1.0 / (0.85 * BOOKMAKER_MARGIN))), 2)
-        h2_plus = round(max(1.40, min(8.0, odd_p2 * 1.8)), 2)
+    # 5. Handicap (±1.5)
+    # Complementary probabilities with built-in vigorish:
+    # Pair A: h1_minus_1.5 (T1 wins by 2+) <-> h2_plus_1.5 (T2 doesn't lose by 2+)
+    frac1 = 0.25 + 0.35 * (p1 / max(0.01, p1 + p2))
+    p_h1_minus = max(0.04, min(0.85, p1 * frac1))
+    p_h2_plus = 1.0 - p_h1_minus
+
+    # Pair B: h2_minus_1.5 (T2 wins by 2+) <-> h1_plus_1.5 (T1 doesn't lose by 2+)
+    frac2 = 0.25 + 0.35 * (p2 / max(0.01, p1 + p2))
+    p_h2_minus = max(0.04, min(0.85, p2 * frac2))
+    p_h1_plus = 1.0 - p_h2_minus
+
+    odd_h1_minus = round(max(1.10, min(12.0, 1.0 / (p_h1_minus * BOOKMAKER_MARGIN))), 2)
+    odd_h2_plus = round(max(1.05, min(12.0, 1.0 / (p_h2_plus * BOOKMAKER_MARGIN))), 2)
+    odd_h2_minus = round(max(1.10, min(12.0, 1.0 / (p_h2_minus * BOOKMAKER_MARGIN))), 2)
+    odd_h1_plus = round(max(1.05, min(12.0, 1.0 / (p_h1_plus * BOOKMAKER_MARGIN))), 2)
 
     # Create / Update Markets
     created_markets = []
@@ -459,8 +477,10 @@ def generate_match_markets(
 
     # Market 7: Handicap
     m_handicap = get_or_create_market(match_id, "handicap", "Фора (1.5)", category="main", sort_order=7)
-    get_or_create_selection(m_handicap["id"], "h1_minus_1.5", f"Фора 1 (-1.5)", h1_minus)
-    get_or_create_selection(m_handicap["id"], "h2_plus_1.5", f"Фора 2 (+1.5)", h2_plus)
+    get_or_create_selection(m_handicap["id"], "h1_minus_1.5", "Фора 1 (-1.5)", odd_h1_minus, update_odds=True)
+    get_or_create_selection(m_handicap["id"], "h2_plus_1.5", "Фора 2 (+1.5)", odd_h2_plus, update_odds=True)
+    get_or_create_selection(m_handicap["id"], "h1_plus_1.5", "Фора 1 (+1.5)", odd_h1_plus, update_odds=True)
+    get_or_create_selection(m_handicap["id"], "h2_minus_1.5", "Фора 2 (-1.5)", odd_h2_minus, update_odds=True)
     created_markets.append(m_handicap)
 
     return get_match_markets(match_id)

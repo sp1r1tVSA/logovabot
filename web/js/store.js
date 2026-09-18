@@ -311,8 +311,7 @@ class StateStore {
       return this.state.slip.reduce((sum, item) => sum + Math.floor(this.state.stakeAmount * item.odd), 0);
     }
     const totalOdd = this.getTotalOdd();
-    const bonus = this.state.slip.length > 1 ? 1.05 : 1.0;
-    return Math.floor(this.state.stakeAmount * totalOdd * bonus);
+    return Math.floor(this.state.stakeAmount * totalOdd);
   }
 
   isSelectionActive(matchId, outcome) {

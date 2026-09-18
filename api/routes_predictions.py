@@ -47,7 +47,22 @@ async def handle_place_prediction(request: web.Request) -> web.Response:
     except Exception:
         return web.json_response({"status": "error", "message": "Некорректный JSON тела запроса."}, status=400)
 
-    amount = int(data.get("amount", 0))
+    try:
+        raw_amount = data.get("amount", 0)
+        if isinstance(raw_amount, float) and not raw_amount.is_integer():
+            return web.json_response({"status": "error", "message": "Сумма ставки должна быть целым числом."}, status=400)
+        if isinstance(raw_amount, str):
+            raw_amount_clean = raw_amount.strip()
+            if "." in raw_amount_clean:
+                return web.json_response({"status": "error", "message": "Сумма ставки должна быть целым числом."}, status=400)
+            amount = int(raw_amount_clean)
+        elif isinstance(raw_amount, (int, float)):
+            amount = int(raw_amount)
+        else:
+            return web.json_response({"status": "error", "message": "Некорректная сумма ставки."}, status=400)
+    except (ValueError, TypeError):
+        return web.json_response({"status": "error", "message": "Некорректная сумма ставки."}, status=400)
+
     selections = data.get("selections", [])
     idempotency_key = data.get("idempotency_key")
 
@@ -57,10 +72,49 @@ async def handle_place_prediction(request: web.Request) -> web.Response:
     if not selections or not isinstance(selections, list):
         return web.json_response({"status": "error", "message": "Купон не содержит выбранных исходов."}, status=400)
 
+    normalized_selections = []
+    seen_matches = set()
+    for s in selections:
+        if not isinstance(s, dict):
+            return web.json_response({"status": "error", "message": "Некорректная структура исхода в купоне."}, status=400)
+        raw_mid = s.get("match_id")
+        try:
+            if isinstance(raw_mid, float) and not raw_mid.is_integer():
+                return web.json_response({"status": "error", "message": f"Некорректный ID матча: {raw_mid}"}, status=400)
+            if isinstance(raw_mid, str):
+                raw_mid_clean = raw_mid.strip()
+                if "." in raw_mid_clean:
+                    return web.json_response({"status": "error", "message": f"Некорректный ID матча: {raw_mid}"}, status=400)
+                m_id = int(raw_mid_clean)
+            elif isinstance(raw_mid, int):
+                m_id = raw_mid
+            else:
+                return web.json_response({"status": "error", "message": f"Некорректный ID матча: {raw_mid}"}, status=400)
+            if m_id <= 0:
+                return web.json_response({"status": "error", "message": f"Некорректный ID матча: {raw_mid}"}, status=400)
+        except (ValueError, TypeError):
+            return web.json_response({"status": "error", "message": f"Некорректный ID матча: {raw_mid}"}, status=400)
+
+        out_type = s.get("outcome") or s.get("selection_key")
+        if not out_type:
+            return web.json_response({"status": "error", "message": "Некорректный исход в купоне."}, status=400)
+
+        if len(selections) > 1 and m_id in seen_matches:
+            return web.json_response({
+                "status": "error",
+                "message": f"Нельзя добавлять несколько исходов из одного матча #{m_id} в стандартный экспресс."
+            }, status=400)
+        seen_matches.add(m_id)
+
+        s_copy = dict(s)
+        s_copy["match_id"] = m_id
+        s_copy["outcome"] = str(out_type)
+        normalized_selections.append(s_copy)
+
     success, result = await asyncio.to_thread(database.place_user_bet, 
         user_id=user_id,
         amount=amount,
-        selections=selections,
+        selections=normalized_selections,
         idempotency_key=idempotency_key
     )
 

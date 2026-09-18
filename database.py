@@ -633,6 +633,7 @@ def init_db() -> None:
         """)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_bet_items_bet ON bet_items(bet_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_bet_items_match ON bet_items(match_id, status)")
+        cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_bet_items_bet_match ON bet_items(bet_id, match_id)")
 
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS coin_transactions (
@@ -7714,6 +7715,13 @@ def place_user_bet(
     import hashlib as _hashlib
     import json as _json
 
+    try:
+        if isinstance(amount, float) and not amount.is_integer():
+            return False, "Сумма ставки должна быть целым числом."
+        amount = int(amount)
+    except (ValueError, TypeError):
+        return False, "Некорректная сумма ставки."
+
     if amount < 10:
         return False, "Минимальная сумма прогноза — 10 🪙."
 
@@ -7724,6 +7732,46 @@ def place_user_bet(
     if not selections or not isinstance(selections, list):
         return False, "Купон пуст."
 
+    # Validate each selection structure and strictly normalize match_id to positive int
+    normalized_selections = []
+    pre_seen_matches = set()
+    for s in selections:
+        if not isinstance(s, dict):
+            return False, "Некорректная структура исхода в купоне."
+        raw_mid = s.get("match_id")
+        try:
+            if isinstance(raw_mid, float) and not raw_mid.is_integer():
+                return False, f"Некорректный ID матча: {raw_mid}"
+            if isinstance(raw_mid, str):
+                raw_mid_clean = raw_mid.strip()
+                if "." in raw_mid_clean:
+                    return False, f"Некорректный ID матча: {raw_mid}"
+                m_id = int(raw_mid_clean)
+            elif isinstance(raw_mid, int):
+                m_id = raw_mid
+            else:
+                return False, f"Некорректный ID матча: {raw_mid}"
+            if m_id <= 0:
+                return False, f"Некорректный ID матча: {raw_mid}"
+        except (ValueError, TypeError):
+            return False, f"Некорректный ID матча: {raw_mid}"
+
+        out_type = s.get("outcome") or s.get("selection_key")
+        if not out_type:
+            return False, "Некорректная структура исхода в купоне."
+
+        # SGP check: cannot add multiple outcomes from the same match to an express coupon
+        if len(selections) > 1 and m_id in pre_seen_matches:
+            return False, f"Нельзя добавлять несколько исходов из одного матча #{m_id} в стандартный экспресс."
+        pre_seen_matches.add(m_id)
+
+        s_copy = dict(s)
+        s_copy["match_id"] = m_id
+        s_copy["outcome"] = str(out_type)
+        normalized_selections.append(s_copy)
+
+    selections = normalized_selections
+
     # Один исход — ординар; от двух до пяти — экспресс. Шестое событие
     # в купон не принимается ни из Telegram, ни из Mini App, ни из REST API.
     if len(selections) > _MAX_EXPRESS_EVENTS:
@@ -7733,10 +7781,10 @@ def place_user_bet(
             "message": f"⚠️ В экспрессе может быть максимум {_MAX_EXPRESS_EVENTS} событий!"
         }
 
-    # Compute idempotency payload hash (Phase 5)
+    # Compute idempotency payload hash (Phase 5: strictly typed tuple (int, str) to avoid TypeError in sorted)
     _payload_for_hash = _json.dumps(
         {"amount": amount, "sel": sorted(
-            [(s.get("match_id"), s.get("outcome") or s.get("selection_key")) for s in selections]
+            [(int(s["match_id"]), str(s.get("outcome") or s.get("selection_key") or "")) for s in selections]
         )},
         sort_keys=True, separators=(',', ':')
     )
@@ -7878,7 +7926,7 @@ def place_user_bet(
             if not match_row:
                 return False, f"Матч #{m_id} не найден."
             if match_row["status"] not in ("scheduled", "pending", "live", "open"):
-                return False, f"Матч #{m_id} уже сыгран или завершен."
+                return False, f"Матч #{m_id} уже сыгран или завершен (статус: {match_row['status']})."
 
             # Единое серверное правило приёма ставок на тур: is_open = 0 AND bets_open = 1.
             # То же самое правило применяет RiskEngine — Telegram, Mini App и REST API
@@ -7928,7 +7976,7 @@ def place_user_bet(
                         resolved_market_id = ms_match["market_id"]
                         resolved_sel_id = ms_match["sel_id"]
 
-            if odd_val is None:
+            if odd_val is None and match_row["status"] != "live":
                 cursor.execute("SELECT * FROM bet_markets WHERE match_id = ? AND is_active = 1", (m_id,))
                 bm_row = cursor.fetchone()
                 if bm_row:
