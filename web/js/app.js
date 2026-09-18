@@ -1175,8 +1175,9 @@ class AppController {
 
     modal.style.display = '';
     modal.classList.add('active');
-    ParticleEffects.confetti();
     tgBridge.hapticNotification('success');
+    // Cosmetic only: a failing effect must not surface as a bet error in the caller's catch.
+    try { ParticleEffects.burstConfetti(); } catch (e) { console.warn('confetti failed', e); }
   }
 
   switchView(viewName) {
