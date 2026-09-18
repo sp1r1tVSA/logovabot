@@ -136,6 +136,21 @@ class TestAsymmetricSchedule(unittest.TestCase):
         rounds = set(f[0] for f in fixtures)
         self.assertEqual(len(rounds), 6)
 
+    def test_07_all_permutations_and_random_shuffles_pass(self):
+        """Verify that 50 random seeds with shuffle_teams=True all pass validation without any streak violations."""
+        for s in range(50):
+            fixtures = generate_asymmetric_round_robin_fixtures(self.teams, shuffle_teams=True, seed=s)
+            is_valid, errors = RoundRobinValidator.validate_fixtures(
+                fixtures,
+                expected_teams=16,
+                expected_rounds=30,
+                expected_matches=240,
+                check_asymmetric=True,
+                min_rematch_gap=5,
+                max_streak=2,
+            )
+            self.assertTrue(is_valid, f"Seed {s} failed validation: {errors}")
+
 
 if __name__ == "__main__":
     unittest.main()

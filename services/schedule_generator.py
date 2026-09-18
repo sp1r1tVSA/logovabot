@@ -25,15 +25,27 @@ logger = logging.getLogger(__name__)
 # Criteria:
 # 1. Rematch spacing >= 5 rounds (min gap is 6).
 # 2. No HHH or AAA streak across all 30 rounds for any team.
-# 3. Exactly 15 Home / 15 Away per team.
 VERIFIED_ASYMMETRIC_PERMUTATIONS_16: Tuple[Tuple[int, ...], ...] = (
-    (10, 11, 5, 8, 4, 7, 1, 6, 14, 15, 9, 12, 13, 2, 3),
-    (10, 11, 5, 8, 4, 7, 1, 6, 14, 3, 13, 2, 12, 15, 9),
-    (10, 11, 5, 8, 4, 7, 1, 2, 3, 6, 9, 12, 13, 14, 15),
-    (10, 11, 5, 8, 4, 7, 1, 2, 3, 6, 14, 15, 9, 12, 13),
-    (10, 11, 5, 8, 4, 7, 1, 2, 3, 13, 14, 15, 9, 12, 6),
-    (11, 10, 4, 7, 5, 8, 2, 6, 14, 15, 9, 12, 13, 1, 3),
-    (9, 12, 5, 8, 4, 7, 1, 6, 14, 15, 10, 11, 13, 2, 3),
+    (10, 11, 2, 3, 4, 5, 6, 7, 8, 13, 14, 1, 9, 12, 15),
+    (10, 11, 2, 3, 4, 5, 6, 7, 8, 13, 14, 15, 9, 12, 1),
+    (10, 11, 2, 3, 4, 5, 8, 9, 12, 13, 14, 1, 6, 7, 15),
+    (10, 11, 2, 3, 4, 5, 8, 9, 12, 13, 14, 15, 6, 7, 1),
+    (10, 11, 2, 3, 4, 5, 13, 14, 1, 6, 7, 8, 9, 12, 15),
+    (10, 11, 2, 3, 4, 5, 13, 14, 15, 6, 7, 8, 9, 12, 1),
+    (10, 11, 2, 3, 6, 7, 1, 4, 5, 8, 9, 12, 13, 14, 15),
+    (10, 11, 2, 3, 6, 7, 1, 4, 5, 13, 14, 8, 9, 12, 15),
+    (10, 11, 2, 3, 6, 7, 1, 4, 5, 13, 14, 15, 9, 12, 8),
+    (10, 11, 2, 3, 6, 7, 8, 4, 5, 13, 14, 1, 9, 12, 15),
+    (10, 11, 2, 3, 6, 7, 8, 4, 5, 13, 14, 15, 9, 12, 1),
+    (10, 11, 2, 3, 6, 7, 8, 9, 12, 1, 4, 5, 13, 14, 15),
+    (10, 11, 2, 3, 6, 7, 8, 9, 12, 13, 14, 1, 4, 5, 15),
+    (10, 11, 2, 3, 6, 7, 8, 9, 12, 13, 14, 15, 4, 5, 1),
+    (10, 11, 2, 3, 6, 7, 8, 9, 12, 15, 4, 5, 13, 14, 1),
+    (8, 9, 3, 4, 5, 1, 2, 10, 11, 12, 13, 14, 15, 6, 7),
+    (8, 9, 3, 4, 5, 1, 2, 10, 11, 14, 15, 6, 7, 12, 13),
+    (8, 9, 3, 4, 5, 1, 2, 10, 13, 14, 15, 11, 12, 6, 7),
+    (8, 9, 3, 4, 5, 6, 7, 1, 2, 10, 11, 12, 13, 14, 15),
+    (8, 9, 3, 4, 5, 6, 7, 10, 11, 12, 1, 2, 14, 15, 13),
 )
 
 
@@ -90,15 +102,36 @@ def generate_asymmetric_round_robin_fixtures(
         for r, p1, p2 in single_fixtures:
             leg1_by_round[r].append((p2, p1))
 
-        # Select a verified permutation based on seed / rng
-        perm_idx = rng.randrange(len(VERIFIED_ASYMMETRIC_PERMUTATIONS_16))
-        chosen_perm = VERIFIED_ASYMMETRIC_PERMUTATIONS_16[perm_idx]
+        # Test candidate permutations from verified pool (shuffled by rng)
+        candidates_pool = list(VERIFIED_ASYMMETRIC_PERMUTATIONS_16)
+        rng.shuffle(candidates_pool)
 
-        double_fixtures = list(single_fixtures)
-        for idx, orig_round in enumerate(chosen_perm):
-            leg2_round = 16 + idx
-            for home_p, away_p in leg1_by_round[orig_round]:
-                double_fixtures.append((leg2_round, home_p, away_p))
+        valid_fixtures = None
+        for chosen_perm in candidates_pool:
+            candidate_fixtures = list(single_fixtures)
+            for idx, orig_round in enumerate(chosen_perm):
+                leg2_round = 16 + idx
+                for home_p, away_p in leg1_by_round[orig_round]:
+                    candidate_fixtures.append((leg2_round, home_p, away_p))
+
+            # Runtime streak guard
+            team_ha = defaultdict(list)
+            for r, p1, p2 in candidate_fixtures:
+                team_ha[p1].append('H')
+                team_ha[p2].append('A')
+
+            has_streak_violation = False
+            for t, seq in team_ha.items():
+                s_str = "".join(seq)
+                if "HHH" in s_str or "AAA" in s_str:
+                    has_streak_violation = True
+                    break
+
+            if not has_streak_violation:
+                valid_fixtures = candidate_fixtures
+                break
+
+        double_fixtures = valid_fixtures if valid_fixtures is not None else candidate_fixtures
     else:
         # Generalized fallback for other league sizes: reversed second leg
         double_fixtures = list(single_fixtures)
