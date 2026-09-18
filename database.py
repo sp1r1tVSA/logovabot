@@ -5025,6 +5025,39 @@ def prune_round_markets(
         return pruned
 
 
+def reopen_match_markets(match_id: int) -> int:
+    """Вернуть в продажу рынки матча, снова попавшего в линию тура.
+
+    `prune_round_markets` закрывает рынки выпавшего из центральных матча, а
+    `save_bet_market` при его возвращении включает только legacy-строку линии:
+    реляционные рынки так и остаются `closed`, и ставку на видимый в линии
+    коэффициент отклоняет `place_user_bet`. Открываем их обратно — но только
+    пока матч не сыгран, чтобы не воскресить рынок, закрытый расчётом.
+
+    Возвращает число переоткрытых рынков.
+    """
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT 1 FROM matches WHERE id = ? "
+            "AND COALESCE(status, '') NOT IN ('completed', 'confirmed')",
+            (match_id,)
+        )
+        if cursor.fetchone() is None:
+            return 0
+        cursor.execute(
+            "UPDATE markets SET status = 'open' WHERE match_id = ? AND status = 'closed'",
+            (match_id,)
+        )
+        reopened = cursor.rowcount
+        cursor.execute(
+            "UPDATE market_selections SET status = 'active' WHERE status = 'locked' "
+            "AND market_id IN (SELECT id FROM markets WHERE match_id = ? AND status = 'open')",
+            (match_id,)
+        )
+        return reopened
+
+
 def evaluate_round_betting_gate(
     cursor,
     round_number: int | None,
@@ -7381,8 +7414,9 @@ def get_or_create_wallet(user_id: int) -> dict:
             (user_id, INITIAL_WALLET_BALANCE)
         )
         cursor.execute(
-            "INSERT INTO coin_transactions (user_id, amount, transaction_type) VALUES (?, ?, 'welcome_bonus')",
-            (user_id, INITIAL_WALLET_BALANCE)
+            "INSERT INTO coin_transactions (user_id, amount, transaction_type, balance_after)"
+            " VALUES (?, ?, 'welcome_bonus', ?)",
+            (user_id, INITIAL_WALLET_BALANCE, INITIAL_WALLET_BALANCE)
         )
         cursor.execute("SELECT * FROM user_wallets WHERE user_id = ?", (user_id,))
         new_row = cursor.fetchone()
@@ -7408,8 +7442,9 @@ def add_coins(user_id: int, amount: int, tx_type: str = "deposit", ref_id: int |
             (amount, user_id)
         )
         cursor.execute(
-            "INSERT INTO coin_transactions (user_id, amount, transaction_type, reference_id) VALUES (?, ?, ?, ?)",
-            (user_id, amount, tx_type, ref_id)
+            "INSERT INTO coin_transactions (user_id, amount, transaction_type, reference_id, balance_after)"
+            " VALUES (?, ?, ?, ?, (SELECT balance FROM user_wallets WHERE user_id = ?))",
+            (user_id, amount, tx_type, ref_id, user_id)
         )
         cursor.execute("SELECT balance FROM user_wallets WHERE user_id = ?", (user_id,))
         row = cursor.fetchone()
@@ -7438,8 +7473,9 @@ def deduct_coins(user_id: int, amount: int, tx_type: str = "bet_placed", ref_id:
             (amount, amount, user_id)
         )
         cursor.execute(
-            "INSERT INTO coin_transactions (user_id, amount, transaction_type, reference_id) VALUES (?, ?, ?, ?)",
-            (user_id, -amount, tx_type, ref_id)
+            "INSERT INTO coin_transactions (user_id, amount, transaction_type, reference_id, balance_after)"
+            " VALUES (?, ?, ?, ?, (SELECT balance FROM user_wallets WHERE user_id = ?))",
+            (user_id, -amount, tx_type, ref_id, user_id)
         )
         return True
 
@@ -7483,8 +7519,9 @@ def claim_daily_bonus(user_id: int, bonus_amount: int = 250) -> tuple[bool, int,
             (bonus_amount, now_str, user_id)
         )
         cursor.execute(
-            "INSERT INTO coin_transactions (user_id, amount, transaction_type) VALUES (?, ?, 'daily_bonus')",
-            (user_id, bonus_amount)
+            "INSERT INTO coin_transactions (user_id, amount, transaction_type, balance_after)"
+            " VALUES (?, ?, 'daily_bonus', (SELECT balance FROM user_wallets WHERE user_id = ?))",
+            (user_id, bonus_amount, user_id)
         )
         cursor.execute("SELECT balance FROM user_wallets WHERE user_id = ?", (user_id,))
         row = cursor.fetchone()
@@ -8920,9 +8957,9 @@ def add_user_xp(user_id: int, xp_amount: int) -> dict:
                 WHERE user_id = ?
             """, (reward_coins, user_id))
             cursor.execute("""
-                INSERT INTO coin_transactions (user_id, amount, transaction_type, reference_id)
-                VALUES (?, ?, 'level_up_reward', ?)
-            """, (user_id, reward_coins, calculated_level))
+                INSERT INTO coin_transactions (user_id, amount, transaction_type, reference_id, balance_after)
+                VALUES (?, ?, 'level_up_reward', ?, (SELECT balance FROM user_wallets WHERE user_id = ?))
+            """, (user_id, reward_coins, calculated_level, user_id))
 
         # XP required for next level
         xp_for_current_lvl = int(((calculated_level - 1) ** 2) * 150)

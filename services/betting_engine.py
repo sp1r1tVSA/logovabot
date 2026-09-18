@@ -300,6 +300,8 @@ def generate_round_markets(tour: int, division_id: int | None = None, season_id:
             odd_btts_no=odds["odd_btts_no"]
         )
         try:
+            # Матч мог быть погашен раньше, когда не входил в центральные.
+            database.reopen_match_markets(m_id)
             from services.odds_engine import generate_match_markets
             generate_match_markets(m_id, t1, t2)
         except Exception as e:
@@ -319,8 +321,12 @@ def generate_round_markets(tour: int, division_id: int | None = None, season_id:
 
 def regenerate_all_active_markets() -> int:
     """
-    Recalculate and refresh odds for all pending/unplayed matches in bet_markets and match_markets.
+    Recalculate and refresh odds for the unplayed matches already in the line.
     Ensures that existing fixtures reflect the current calibrated Poisson engine without stale odds.
+
+    Only matches with an active bet_markets row are repriced: save_bet_market
+    reactivates a row, so touching every unplayed match would put back the
+    non-central pairs generate_round_markets pruned from the line.
     """
     with database.transaction() as conn:
         cursor = conn.cursor()
@@ -336,6 +342,7 @@ def regenerate_all_active_markets() -> int:
             LEFT JOIN users u1 ON LOWER(m.player1_team) = LOWER(u1.team_name)
             LEFT JOIN users u2 ON LOWER(m.player2_team) = LOWER(u2.team_name)
             WHERE m.status NOT IN ('completed', 'confirmed', 'cancelled')
+              AND EXISTS (SELECT 1 FROM bet_markets bm WHERE bm.match_id = m.id AND bm.is_active = 1)
         """)
         matches = [dict(r) for r in cursor.fetchall()]
 

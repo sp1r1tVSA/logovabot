@@ -186,6 +186,8 @@ class TestAuditSprint3(unittest.TestCase):
         Placement prices a pick without market/selection ids from market_selections,
         so any gap between the two tables rejected every line bet with ODDS_CHANGED.
         """
+        # A line row priced by an older engine; startup repricing must refresh it.
+        database.save_bet_market(self.match_id, 1, "Спортинг", "Бенфика", 9.9, 9.9, 9.9, 9.9, 9.9, 9.9, 9.9)
         betting_engine.regenerate_all_active_markets()
         line = database.get_active_bet_markets()
         line = next(m for m in line if m["match_id"] == self.match_id)
@@ -203,6 +205,53 @@ class TestAuditSprint3(unittest.TestCase):
             selections=[{"match_id": self.match_id, "outcome": "p1", "odd": line["odd_p1"]}]
         )
         self.assertTrue(ok, f"Line pick rejected: {result}")
+
+    def test_startup_repricing_keeps_pruned_matches_out_of_the_line(self):
+        """Repricing refreshes the line; it must not re-open markets the round pruned."""
+        database.save_bet_market(self.match_id, 1, "Спортинг", "Бенфика", 9.9, 9.9, 9.9, 9.9, 9.9, 9.9, 9.9)
+        with database.transaction() as conn:
+            conn.execute("UPDATE bet_markets SET is_active = 0 WHERE match_id = ?", (self.match_id,))
+
+        betting_engine.regenerate_all_active_markets()
+
+        self.assertNotIn(self.match_id, [m["match_id"] for m in database.get_active_bet_markets()])
+
+    def test_match_back_among_the_central_ones_takes_bets_again(self):
+        """A pruned match re-selected for the line must reopen its markets, not just its tile."""
+        betting_engine.generate_round_markets(1)
+        database.prune_round_markets(1, [])  # the match drops out of the central four
+        betting_engine.generate_round_markets(1)  # ...and comes back once others are played
+
+        line = next(m for m in database.get_active_bet_markets() if m["match_id"] == self.match_id)
+        ok, result = database.place_user_bet(
+            user_id=self.user_id,
+            amount=100,
+            selections=[{"match_id": self.match_id, "outcome": "p1", "odd": line["odd_p1"]}]
+        )
+        self.assertTrue(ok, f"Re-selected match rejected: {result}")
+
+    def test_played_match_markets_are_not_reopened(self):
+        odds_engine.generate_match_markets(self.match_id, "Спортинг", "Бенфика")
+        database.prune_round_markets(1, [])
+        with database.transaction() as conn:
+            conn.execute("UPDATE matches SET status = 'confirmed' WHERE id = ?", (self.match_id,))
+
+        self.assertEqual(database.reopen_match_markets(self.match_id), 0)
+
+    def test_wallet_ledger_records_balance_after_for_every_credit(self):
+        """Welcome, daily and level-up credits carry the balance they left, like bets do."""
+        database.claim_daily_bonus(self.user_id, bonus_amount=250)
+        database.add_coins(self.user_id, 70, tx_type="admin_grant")
+        with database.transaction() as conn:
+            rows = conn.execute(
+                "SELECT transaction_type, balance_after FROM coin_transactions WHERE user_id = ? ORDER BY id",
+                (self.user_id,),
+            ).fetchall()
+        start = database.INITIAL_WALLET_BALANCE
+        self.assertEqual(
+            [(r["transaction_type"], r["balance_after"]) for r in rows],
+            [("welcome_bonus", start), ("daily_bonus", start + 250), ("admin_grant", start + 320)],
+        )
 
     # ──────────────────────────────────────────────────────────────────────────
     # LB-14: Resettle Routine for Disputed Matches
