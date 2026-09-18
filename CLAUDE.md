@@ -165,6 +165,16 @@ optional `group_chat_id` + `topic_id`, binding it to one forum topic in one Tele
 group. `services/topic_cache.py` caches this routing and is reloaded during handler
 registration — call `topic_cache.reload_cache()` after mutating division topic bindings.
 
+`code` is a lookup key, not a label: `config.DIVISION_CLUBS` and
+`services/graphics/division_theme.THEMES` are both keyed by it, so divisions **1–5 must
+carry `DIV_1`…`DIV_5`** — otherwise they render with no clubs and the default palette.
+`ensure_canonical_divisions()` seeds those rows with `INSERT OR IGNORE`, which cannot
+repair a row that already exists, so `repair_canonical_division_codes()` (migration
+`012_canonical_division_codes`) rewrites a code only when the current one finds no roster
+and the canonical one is free. Codes for new divisions come from
+`handlers/admin._division_code_from_name`, which transliterates Cyrillic — dropping it
+left «Дивизион 6» with an empty string and a random `DIV_XXXX` that matched nothing.
+
 **League play** runs through `rounds` / `rounds_v` and `matches`. **Cup play** uses
 `cup_series` (stage, series number, per-side win counts, winner, status).
 

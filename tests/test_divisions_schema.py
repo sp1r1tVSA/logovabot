@@ -17,6 +17,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import config
 import database
 
 
@@ -232,6 +233,95 @@ class TestDivisionsSchema(unittest.TestCase):
         # Div 2 match and Legacy match MUST STILL EXIST!
         self.assertIsNotNone(database.get_match(m_div2_id), "Division 2 match must NOT be deleted.")
         self.assertIsNotNone(database.get_match(m_legacy_id), "Legacy match (division_id = NULL) must NOT be deleted.")
+
+
+class TestCanonicalDivisionCodes(unittest.TestCase):
+    """Дивизионы 1–5 обязаны носить коды DIV_1…DIV_5.
+
+    По коду ищется сезонный состав клубов (`config.DIVISION_CLUBS`) и палитра
+    инфографики. `ensure_canonical_divisions()` объявляет эти коды, но вставляет
+    через INSERT OR IGNORE — дивизион, заведённый руками раньше неё, оставался
+    со случайным кодом и выглядел как дивизион без единого клуба.
+    """
+
+    def setUp(self):
+        database.init_db()
+
+    def tearDown(self):
+        # Через временные значения: колонка UNIQUE, прямой обмен кодами упал бы.
+        with database.transaction() as conn:
+            conn.execute("UPDATE divisions SET code = 'TMP_' || id WHERE id BETWEEN 1 AND 5")
+            conn.execute("UPDATE divisions SET code = 'DIV_' || id WHERE id BETWEEN 1 AND 5")
+
+    @staticmethod
+    def _codes() -> dict[int, str]:
+        with database.transaction() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT id, code FROM divisions WHERE id BETWEEN 1 AND 5")
+            return {r["id"]: r["code"] for r in cursor.fetchall()}
+
+    @staticmethod
+    def _set_code(division_id: int, code: str) -> None:
+        with database.transaction() as conn:
+            conn.execute("UPDATE divisions SET code = ? WHERE id = ?", (code, division_id))
+
+    def test_repair_restores_the_roster(self):
+        """Ровно тот случай, что нашёлся в бою: пять случайных кодов, ноль клубов."""
+        for div_id in range(1, 6):
+            self._set_code(div_id, f"DIV_{div_id:04X}")
+        self.assertEqual(database.get_division_teams(1), [], "Случайный код не должен находить состав.")
+
+        repaired = database.repair_canonical_division_codes()
+
+        self.assertEqual({r[0] for r in repaired}, {1, 2, 3, 4, 5})
+        self.assertEqual(self._codes(), {i: f"DIV_{i}" for i in range(1, 6)})
+        self.assertTrue(
+            set(config.DIVISION_CLUBS["DIV_1"]).issubset(set(database.get_division_teams(1)))
+        )
+
+    def test_repair_changes_nothing_on_a_healthy_database(self):
+        """Вызывается на каждой миграции — обязан быть идемпотентным."""
+        before = self._codes()
+
+        self.assertEqual(database.repair_canonical_division_codes(), [])
+        self.assertEqual(self._codes(), before)
+
+    def test_repair_keeps_a_code_that_already_finds_a_roster(self):
+        """Рабочий код не трогаем: смена вырвала бы у дивизиона живой состав."""
+        self._set_code(3, "DIV_LEGACY3")
+        self._set_code(1, "DIV_3")
+
+        database.repair_canonical_division_codes()
+
+        codes = self._codes()
+        self.assertEqual(codes[1], "DIV_3", "У дивизиона 1 состав DIV_3 — отбирать его нельзя.")
+        self.assertEqual(codes[3], "DIV_LEGACY3", "DIV_3 занят, дивизиону 3 его выдавать некуда.")
+
+    def test_repair_never_duplicates_a_code(self):
+        """Колонка UNIQUE: слепой UPDATE уронил бы init_db целиком."""
+        self._set_code(1, "DIV_ORPHAN")
+        self._set_code(4, "DIV_1")
+
+        database.repair_canonical_division_codes()
+
+        codes = self._codes()
+        self.assertEqual(codes[1], "DIV_ORPHAN")
+        self.assertEqual(codes[4], "DIV_1")
+
+    def test_init_db_repairs_a_legacy_database(self):
+        """Починка обязана доехать до сервера сама, без ручного скрипта."""
+        for div_id in range(1, 6):
+            self._set_code(div_id, f"DIV_{div_id:04X}")
+        with database.transaction() as conn:
+            conn.execute("DELETE FROM schema_migrations WHERE version = '012_canonical_division_codes'")
+
+        database.init_db()
+
+        self.assertEqual(self._codes(), {i: f"DIV_{i}" for i in range(1, 6)})
+        with database.transaction() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT 1 FROM schema_migrations WHERE version = '012_canonical_division_codes'")
+            self.assertIsNotNone(cursor.fetchone(), "Миграция обязана отметиться, чтобы не бегать каждый запуск.")
 
 
 if __name__ == "__main__":

@@ -720,6 +720,17 @@ def init_db() -> None:
                 (5, 1, 'Дивизион 5', 'DIV_5', 1, 5)
         """)
 
+        # INSERT OR IGNORE выше молча пропускает уже существующие строки, поэтому
+        # дивизион, заведённый руками раньше сида, живёт со своим кодом — а по коду
+        # ищется сезонный состав клубов. Разовая починка для таких баз.
+        cursor.execute("SELECT 1 FROM schema_migrations WHERE version = '012_canonical_division_codes'")
+        if not cursor.fetchone():
+            repair_canonical_division_codes()
+            cursor.execute("""
+                INSERT OR IGNORE INTO schema_migrations (version, description)
+                VALUES ('012_canonical_division_codes', 'Divisions 1-5 carry the canonical DIV_1..DIV_5 codes')
+            """)
+
         cursor.execute("""
             INSERT OR IGNORE INTO schema_migrations (version, description)
             VALUES ('003_p2_seasons_and_isolation', 'Phase 2: Season entity, lifecycle, and strict isolation')
@@ -9168,6 +9179,49 @@ def ensure_canonical_divisions() -> None:
                 (4, 1, 'Дивизион 4', 'DIV_4', 1, 4),
                 (5, 1, 'Дивизион 5', 'DIV_5', 1, 5)
         """)
+
+
+def repair_canonical_division_codes() -> list[tuple[int, str, str]]:
+    """Вернуть дивизионам 1–5 канонические коды DIV_1…DIV_5.
+
+    `ensure_canonical_divisions()` объявляет эти коды, но вставляет их через
+    INSERT OR IGNORE — строку, созданную раньше неё, она не трогает. А код при
+    ручном создании собирался только из латиницы в названии: у «Дивизион 1»
+    латиницы нет, и код выходил случайным (`DIV_DCC7`). По коду ищется сезонный
+    состав `config.DIVISION_CLUBS`, поэтому случайный код означает дивизион без
+    единого клуба — плюс промах мимо палитры `graphics.division_theme.THEMES`.
+
+    Чиним только сломанное: строку трогаем, если её текущий код не находит
+    состав, канонический находит, и его не занял другой дивизион. На здоровой
+    базе не меняет ничего, так что вызывать можно повторно.
+
+    Возвращает список `(division_id, старый код, новый код)`.
+    """
+    from config import DIVISION_CLUBS
+
+    repaired: list[tuple[int, str, str]] = []
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, code FROM divisions")
+        codes = {int(r["id"]): (r["code"] or "").strip().upper() for r in cursor.fetchall()}
+
+        for div_id in range(1, 6):
+            if div_id not in codes:
+                continue
+            current, target = codes[div_id], f"DIV_{div_id}"
+            if current == target or DIVISION_CLUBS.get(current):
+                continue
+            if not DIVISION_CLUBS.get(target):
+                continue
+            if any(code == target for other, code in codes.items() if other != div_id):
+                continue
+            cursor.execute("UPDATE divisions SET code = ? WHERE id = ?", (target, div_id))
+            codes[div_id] = target
+            repaired.append((div_id, current, target))
+
+    if repaired:
+        logger.info(f"Canonical division codes repaired: {repaired}")
+    return repaired
 
 
 def get_divisions(is_active: bool | None = None, only_active: bool | None = None) -> list[dict]:

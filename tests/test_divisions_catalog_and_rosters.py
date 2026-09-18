@@ -13,6 +13,8 @@ from handlers.admin import (
     admin_bind_division,
     admin_bind_execute,
     admin_bind_free_execute,
+    admin_bind_hub,
+    _division_code_from_name,
     admin_edit_club_execute,
     admin_edit_club_select,
     admin_rosters_for_division,
@@ -584,6 +586,98 @@ class TestClubBindingScreen(unittest.IsolatedAsyncioTestCase):
             await admin_bind_division(update, context)
 
         query.edit_message_text.assert_not_called()
+
+
+class TestDivisionCodeDrivesTheRoster(unittest.IsolatedAsyncioTestCase):
+    """Код дивизиона — ключ к сезонному составу клубов, а не косметика.
+
+    Промах по коду обнулял экран привязки: 16 клубов превращались в «(0/0)»,
+    и понять, что сломалось, было нельзя.
+    """
+
+    async def asyncSetUp(self):
+        database.init_db()
+        database.ensure_canonical_divisions()
+        self.admin_id = 999127
+        self.orphan_code = f"DIV_{uuid.uuid4().hex[:4].upper()}"
+        self.orphan_id = database.create_division(
+            name=f"Сирота {uuid.uuid4().hex[:4]}", code=self.orphan_code
+        )
+
+    async def asyncTearDown(self):
+        with database.transaction() as conn:
+            conn.execute("DELETE FROM divisions WHERE id = ?", (self.orphan_id,))
+
+    # --- генератор кода ---
+
+    def test_code_transliterates_cyrillic_instead_of_dropping_it(self):
+        """Выбрасывание кириллицы оставляло от названия пустоту и случайный код."""
+        self.assertEqual(_division_code_from_name("Дивизион 6"), "DIVIZION6")
+        self.assertEqual(_division_code_from_name("Премьер-Лига"), "PREMERLIGA")
+        self.assertEqual(_division_code_from_name("Кубок Надежды"), "KUBOKNADEZHDY")
+
+    def test_code_is_stable_and_bounded(self):
+        """Один и тот же ввод даёт один и тот же код, длиной не больше колонки."""
+        name = "Первый Дивизион Логова Фифарей"
+        self.assertEqual(_division_code_from_name(name), _division_code_from_name(name))
+        self.assertLessEqual(len(_division_code_from_name(name)), 16)
+        self.assertEqual(_division_code_from_name("Division 1"), "DIVISION1")
+
+    def test_a_nameless_code_still_falls_back_to_random(self):
+        """Из «⚽⚽» транслитерировать нечего — код обязан остаться уникальным."""
+        code = _division_code_from_name("⚽⚽")
+        self.assertTrue(code.startswith("DIV_"))
+        self.assertNotEqual(code, _division_code_from_name("⚽⚽"))
+
+    # --- экран привязки без состава ---
+
+    async def test_empty_binding_screen_names_the_code_that_missed(self):
+        query = MagicMock()
+        query.data = f"admin_bind_div:{self.orphan_id}"
+        query.from_user.id = self.admin_id
+        query.answer = AsyncMock()
+        query.edit_message_text = AsyncMock()
+        update = MagicMock()
+        update.callback_query = query
+        update.effective_user.id = self.admin_id
+        context = MagicMock()
+        context.user_data = {}
+
+        with patch("handlers.base.is_admin", return_value=True), \
+             patch("handlers.admin.is_admin", return_value=True), \
+             patch("handlers.admin.is_global_admin", return_value=True):
+            await admin_bind_division(update, context)
+
+        text = query.edit_message_text.call_args[0][0]
+        # Админ должен увидеть, по какому именно коду состав не нашёлся.
+        self.assertIn(self.orphan_code, text)
+        self.assertIn("не привязан состав клубов", text)
+
+    async def test_hub_flags_a_division_without_clubs(self):
+        query = MagicMock()
+        query.data = "admin_bind_hub"
+        query.from_user.id = self.admin_id
+        query.answer = AsyncMock()
+        query.edit_message_text = AsyncMock()
+        update = MagicMock()
+        update.callback_query = query
+        update.effective_user.id = self.admin_id
+        context = MagicMock()
+        context.user_data = {}
+
+        with patch("handlers.base.is_admin", return_value=True), \
+             patch("handlers.admin.is_admin", return_value=True), \
+             patch("handlers.admin.is_global_admin", return_value=True):
+            await admin_bind_hub(update, context)
+
+        markup = query.edit_message_text.call_args[1]["reply_markup"]
+        labels = {
+            b.callback_data: b.text for row in markup.inline_keyboard for b in row
+        }
+        # «(0/0)» читалось как «клубы ещё не разобрали», а не как поломка.
+        self.assertIn("⚠️ нет клубов", labels[f"admin_bind_div:{self.orphan_id}"])
+        div_one_id = database.get_division_by_code("DIV_1")["id"]
+        self.assertIn(f"/{len(config.DIVISION_CLUBS['DIV_1'])})", labels[f"admin_bind_div:{div_one_id}"])
 
 
 if __name__ == "__main__":

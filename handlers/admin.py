@@ -1,11 +1,13 @@
 import os
 import io
 import json
+import re
 import urllib.request
 import urllib.error
 import asyncio
 import datetime
 import sqlite3
+import uuid
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.error import BadRequest, TelegramError, Forbidden
 from telegram.ext import ContextTypes, ConversationHandler
@@ -2000,6 +2002,34 @@ async def admin_div_create_start(update: Update, context: ContextTypes.DEFAULT_T
     return ADMIN_EXPECT_DIV_NAME
 
 
+# Транслитерация для кода дивизиона. Практическая, не ГОСТ: код читает человек
+# и набирает его в /set_div_topic, так что важнее короткое и узнаваемое.
+_CYRILLIC_TO_LATIN = {
+    "а": "A", "б": "B", "в": "V", "г": "G", "д": "D", "е": "E", "ё": "E",
+    "ж": "ZH", "з": "Z", "и": "I", "й": "Y", "к": "K", "л": "L", "м": "M",
+    "н": "N", "о": "O", "п": "P", "р": "R", "с": "S", "т": "T", "у": "U",
+    "ф": "F", "х": "KH", "ц": "TS", "ч": "CH", "ш": "SH", "щ": "SCH",
+    "ъ": "", "ы": "Y", "ь": "", "э": "E", "ю": "YU", "я": "YA",
+}
+
+
+def _division_code_from_name(name: str) -> str:
+    """Код дивизиона из названия: «Дивизион 6» → `DIVIZION6`.
+
+    Кириллицу транслитерируем, а не выбрасываем. Отбрасывание оставляло от
+    сплошь кириллического названия пустую строку, и код становился случайным
+    (`DIV_7F3A`) — а по коду дивизиона ищется и сезонный состав клубов
+    (`config.DIVISION_CLUBS`), и палитра инфографики, так что случайный код
+    означал дивизион без клубов и с дефолтными цветами.
+    """
+    latin = "".join(_CYRILLIC_TO_LATIN.get(char, char) for char in name.lower())
+    cleaned = re.sub(r"[^a-zA-Z0-9]", "", latin).upper()
+    if len(cleaned) < 3:
+        # Название без букв и цифр вообще (одни эмодзи) — занумеровать нечем.
+        cleaned = f"DIV_{uuid.uuid4().hex[:4].upper()}"
+    return cleaned[:16]
+
+
 @admin_only
 async def admin_div_create_receive(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Receive new division name, generate code, and insert into DB."""
@@ -2012,12 +2042,7 @@ async def admin_div_create_receive(update: Update, context: ContextTypes.DEFAULT
         await update.message.reply_text("❌ Название слишком короткое (минимум 2 символа). Попробуйте еще раз:")
         return ADMIN_EXPECT_DIV_NAME
 
-    import re
-    cleaned = re.sub(r'[^a-zA-Z0-9]', '', name).upper()
-    if len(cleaned) < 3:
-        import uuid
-        cleaned = f"DIV_{uuid.uuid4().hex[:4].upper()}"
-    base_code = cleaned[:16]
+    base_code = _division_code_from_name(name)
     code = base_code
     counter = 1
     while database.get_division_by_code(code) is not None:
@@ -4613,8 +4638,17 @@ async def _bind_render_division(update: Update, context: ContextTypes.DEFAULT_TY
     home_cb = _div_home_cb(update, div_id)
     back_row = [InlineKeyboardButton("« Назад", callback_data=home_cb)]
     if not teams:
+        # Немое «(0/0)» выглядело как «клубы ещё не завели». На деле состав
+        # ищется по коду дивизиона, и пустой экран значит, что код не совпал
+        # с ключом сезонного ростера — это видно только если код показать.
+        div_code = (division or {}).get("code") or "—"
         await query.edit_message_text(
-            f"⚠️ В дивизионе <b>{html.escape(str(div_name))}</b> нет клубов.",
+            f"⚠️ К дивизиону <b>{html.escape(str(div_name))}</b> не привязан состав клубов.\n\n"
+            f"Клубы сезона берутся по коду дивизиона, а код <code>{html.escape(str(div_code))}</code> "
+            f"в ростере не значится — поэтому привязывать нечего.\n\n"
+            f"Клубы появятся, когда код совпадёт с ключом ростера "
+            f"(<code>DIV_1</code>…<code>DIV_5</code>) или когда в дивизионе "
+            f"зарегистрируется первый участник со своим клубом.",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup([back_row])
         )
@@ -4663,7 +4697,10 @@ async def admin_bind_hub(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         teams = await asyncio.to_thread(database.get_division_teams, d["id"])
         taken = sum(1 for t in teams if t.lower() in owners)
         status_icon = "🟢" if d.get("is_active") else "🔴"
-        label = f"{status_icon} {d['name']} ({taken}/{len(teams)})"
+        # Дивизион без клубов — не «пока никто не занял», а сломанная привязка
+        # ростера; счётчик «0/0» это скрывал.
+        counter = f"({taken}/{len(teams)})" if teams else "⚠️ нет клубов"
+        label = f"{status_icon} {d['name']} {counter}"
         keyboard.append([InlineKeyboardButton(label, callback_data=f"admin_bind_div:{d['id']}")])
     keyboard.append([InlineKeyboardButton("« Назад в админку", callback_data="admin_main_menu")])
 
