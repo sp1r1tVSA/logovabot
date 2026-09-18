@@ -246,6 +246,10 @@ from handlers.admin import (
     admin_unwarn_command,
     admin_round_preview_command,
     admin_round_digest_command,
+    admin_squads_status_command,
+    admin_squads_view_cb,
+    admin_squads_all_cb,
+    admin_squads_remind_cb,
 )
 
 from handlers.topic_management import (
@@ -784,6 +788,13 @@ def _register_admin_handlers(app: Application) -> None:
     # Ручной прогон автопостинга в топик АНАЛИТИКА (обычно этим занимаются джобы)
     app.add_handler(CommandHandler("round_preview", admin_round_preview_command))
     app.add_handler(CommandHandler("round_digest", admin_round_digest_command))
+
+    # Squads status
+    app.add_handler(CommandHandler(["squads_status", "squads", "sostavy"], admin_squads_status_command))
+    app.add_handler(MessageHandler(filters.Regex(r"^/(составы|состав)(?:@\w+)?(?:\s+.*)?$"), admin_squads_status_command))
+    app.add_handler(CallbackQueryHandler(admin_squads_view_cb, pattern=r"^admin_squads_view:\d+$"))
+    app.add_handler(CallbackQueryHandler(admin_squads_all_cb, pattern=r"^admin_squads_all$"))
+    app.add_handler(CallbackQueryHandler(admin_squads_remind_cb, pattern=r"^admin_squads_remind:\d+$"))
 
 def register_all_handlers(application: Application) -> None:
     """Register all command, message, and callback handlers to the application."""

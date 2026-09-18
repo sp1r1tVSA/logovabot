@@ -6419,6 +6419,136 @@ def get_division_teams(division_id: int, season_id: int | None = None) -> list[s
     return sorted(result)
 
 
+def get_division_squads_status(division_id: int) -> dict:
+    """
+    Calculate squad upload status for all clubs in a division.
+    Returns status for each club (ready, partial, empty, vacant) and aggregate metrics.
+    """
+    division = get_division(division_id)
+    div_name = division.get("name") if division else f"Дивизион #{division_id}"
+    div_code = (division.get("code") or "").strip().upper() if division else ""
+
+    clubs = get_division_teams(division_id)
+    if not clubs and div_code:
+        from config import DIVISION_CLUBS
+        clubs = sorted(list(DIVISION_CLUBS.get(div_code, [])))
+
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT telegram_id, username, team_name FROM users WHERE division_id = ?",
+            (division_id,)
+        )
+        users = [dict(r) for r in cursor.fetchall()]
+
+        club_to_user: dict[str, dict] = {}
+        for u in users:
+            u_team = u.get("team_name")
+            if not u_team:
+                continue
+            resolved = resolve_team_name(u_team) or u_team.strip()
+            club_to_user[resolved.lower()] = u
+            for c in clubs:
+                if teams_match(u_team, c):
+                    club_to_user[c.lower()] = u
+
+        cursor.execute("SELECT team_name, COUNT(*) as cnt FROM squad_players GROUP BY team_name")
+        squad_counts_raw = {r["team_name"]: r["cnt"] for r in cursor.fetchall()}
+
+        def _get_player_count(club_name: str) -> int:
+            if club_name in squad_counts_raw:
+                return squad_counts_raw[club_name]
+            club_low = club_name.lower()
+            for t_name, cnt in squad_counts_raw.items():
+                if t_name.lower() == club_low or teams_match(t_name, club_name):
+                    return cnt
+            return 0
+
+        club_details = []
+        ready_count = 0
+        partial_count = 0
+        empty_count = 0
+        vacant_count = 0
+
+        for club in clubs:
+            user = club_to_user.get(club.lower())
+            player_count = _get_player_count(club)
+
+            if not user or not user.get("telegram_id"):
+                status = "vacant"
+                vacant_count += 1
+                user_id = None
+                username = None
+            elif player_count >= 11:
+                status = "ready"
+                ready_count += 1
+                user_id = user["telegram_id"]
+                username = user.get("username")
+            elif player_count > 0:
+                status = "partial"
+                partial_count += 1
+                user_id = user["telegram_id"]
+                username = user.get("username")
+            else:
+                status = "empty"
+                empty_count += 1
+                user_id = user["telegram_id"]
+                username = user.get("username")
+
+            club_details.append({
+                "club": club,
+                "user_id": user_id,
+                "username": username,
+                "player_count": player_count,
+                "status": status,
+            })
+
+    total = len(clubs)
+    return {
+        "division_id": division_id,
+        "division_name": div_name,
+        "division_code": div_code,
+        "total_clubs": total,
+        "ready_count": ready_count,
+        "partial_count": partial_count,
+        "empty_count": empty_count,
+        "vacant_count": vacant_count,
+        "uploaded_count": ready_count,
+        "clubs": club_details,
+    }
+
+
+def get_all_divisions_squads_summary() -> dict:
+    """
+    Calculate squad upload status across all active divisions.
+    """
+    divisions = get_divisions(is_active=True)
+    summaries = []
+    total_clubs = 0
+    total_ready = 0
+    total_partial = 0
+    total_empty = 0
+    total_vacant = 0
+
+    for div in divisions:
+        div_stat = get_division_squads_status(div["id"])
+        summaries.append(div_stat)
+        total_clubs += div_stat["total_clubs"]
+        total_ready += div_stat["ready_count"]
+        total_partial += div_stat["partial_count"]
+        total_empty += div_stat["empty_count"]
+        total_vacant += div_stat["vacant_count"]
+
+    return {
+        "total_clubs": total_clubs,
+        "total_ready": total_ready,
+        "total_partial": total_partial,
+        "total_empty": total_empty,
+        "total_vacant": total_vacant,
+        "divisions": summaries,
+    }
+
+
 def get_team_division_id(team_name: str, season_id: int | None = None) -> int | None:
     """
     Determine which division a club currently plays in.

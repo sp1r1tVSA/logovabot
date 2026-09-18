@@ -1914,7 +1914,10 @@ async def admin_div_view(update: Update, context: ContextTypes.DEFAULT_TYPE, div
     # точка входа в матчи и составы, технические настройки ниже.
     keyboard = [
         [InlineKeyboardButton("⚔️ Управление матчами", callback_data=f"admin_div_manage_matches:{div_id}")],
-        [InlineKeyboardButton("📋 Составы команд", callback_data=f"admin_roster_div:{div_id}")],
+        [
+            InlineKeyboardButton("📋 Составы команд", callback_data=f"admin_roster_div:{div_id}"),
+            InlineKeyboardButton("📊 Статус составов", callback_data=f"admin_squads_view:{div_id}"),
+        ],
         [InlineKeyboardButton("🔗 Привязка клубов", callback_data=f"admin_bind_div:{div_id}")],
         [InlineKeyboardButton("📢 Рассылка задолженностей", callback_data=f"admin_div_debts_menu:{div_id}")],
         [
@@ -5164,6 +5167,7 @@ async def admin_rosters_for_division(update: Update, context: ContextTypes.DEFAU
         return
 
     keyboard.append([
+        InlineKeyboardButton("📊 Статус составов", callback_data=f"admin_squads_view:{div_id}"),
         InlineKeyboardButton("➕ Добавить игроков из матчей", callback_data=f"admin_squad_add_missing_div:{div_id}")
     ])
     # Кэш портретов общий для всей лиги (get_all_unique_players), дивизионного
@@ -5513,6 +5517,310 @@ async def admin_squad_add_missing(update: Update, context: ContextTypes.DEFAULT_
 
     keyboard = [[InlineKeyboardButton("« Назад", callback_data=back_data)]]
     await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+
+# ── Squad Upload Status for Divisions ────────────────────────────────────────
+
+def _format_division_squads_status_html(status_data: dict) -> str:
+    div_name = status_data["division_name"]
+    total = status_data["total_clubs"]
+    ready = status_data["ready_count"]
+    partial = status_data["partial_count"]
+    empty = status_data["empty_count"]
+    vacant = status_data["vacant_count"]
+
+    pct = int((ready / total * 100)) if total > 0 else 0
+
+    lines = [
+        f"📋 <b>Статус составов — {html.escape(div_name)}</b>\n",
+        f"📊 Готовность: <b>{ready}/{total} ({pct}%)</b>",
+        f"🟢 Готовы: <b>{ready}</b>  •  🟡 Неполные: <b>{partial}</b>",
+        f"🔴 Без состава: <b>{empty}</b>  •  ⚪ Свободны: <b>{vacant}</b>\n",
+    ]
+
+    for item in status_data["clubs"]:
+        club = html.escape(item["club"])
+        status = item["status"]
+        count = item["player_count"]
+        user_id = item["user_id"]
+        username = item["username"]
+
+        if status == "ready":
+            coach_str = f"@{html.escape(username)}" if username else f"id:{user_id}"
+            lines.append(f"🟢 <b>{club}</b> — {coach_str} ({count} игр.)")
+        elif status == "partial":
+            coach_str = f"@{html.escape(username)}" if username else f"id:{user_id}"
+            lines.append(f"🟡 <b>{club}</b> — {coach_str} (<i>{count} игр.</i>)")
+        elif status == "empty":
+            coach_str = f"@{html.escape(username)}" if username else f"id:{user_id}"
+            lines.append(f"🔴 <b>{club}</b> — {coach_str} <i>(состав не загружен!)</i>")
+        else:
+            lines.append(f"⚪ <b>{club}</b> — <i>клуб свободен</i>")
+
+    return "\n".join(lines)
+
+
+def _build_division_squads_keyboard(div_id: int, all_div_ids: list[int], has_debtors: bool = True) -> InlineKeyboardMarkup:
+    keyboard = []
+
+    action_row = []
+    if has_debtors:
+        action_row.append(InlineKeyboardButton("📢 Напомнить должникам", callback_data=f"admin_squads_remind:{div_id}"))
+    action_row.append(InlineKeyboardButton("🔄 Обновить", callback_data=f"admin_squads_view:{div_id}"))
+    keyboard.append(action_row)
+
+    if all_div_ids and len(all_div_ids) > 1:
+        nav_row = []
+        curr_idx = all_div_ids.index(div_id) if div_id in all_div_ids else 0
+        prev_id = all_div_ids[(curr_idx - 1) % len(all_div_ids)]
+        next_id = all_div_ids[(curr_idx + 1) % len(all_div_ids)]
+        nav_row.append(InlineKeyboardButton(f"« Див. {prev_id}", callback_data=f"admin_squads_view:{prev_id}"))
+        nav_row.append(InlineKeyboardButton("📊 Вся лига", callback_data="admin_squads_all"))
+        nav_row.append(InlineKeyboardButton(f"Див. {next_id} »", callback_data=f"admin_squads_view:{next_id}"))
+        keyboard.append(nav_row)
+
+    keyboard.append([InlineKeyboardButton("« К дивизиону", callback_data=f"admin_div_view_{div_id}")])
+    return InlineKeyboardMarkup(keyboard)
+
+
+def _format_all_divisions_squads_summary_html(summary_data: dict) -> str:
+    total_clubs = summary_data["total_clubs"]
+    total_ready = summary_data["total_ready"]
+    total_partial = summary_data["total_partial"]
+    total_empty = summary_data["total_empty"]
+    total_vacant = summary_data["total_vacant"]
+    pct = int((total_ready / total_clubs * 100)) if total_clubs > 0 else 0
+
+    lines = [
+        "📋 <b>Статус составов — Вся лига</b>\n",
+        f"📊 Общая готовность: <b>{total_ready}/{total_clubs} ({pct}%)</b>",
+        f"🟢 Готовы: <b>{total_ready}</b>  •  🟡 Неполные: <b>{total_partial}</b>",
+        f"🔴 Без состава: <b>{total_empty}</b>  •  ⚪ Свободны: <b>{total_vacant}</b>\n",
+    ]
+
+    for d in summary_data["divisions"]:
+        d_name = html.escape(d["division_name"])
+        d_ready = d["ready_count"]
+        d_total = d["total_clubs"]
+        d_empty = d["empty_count"]
+        d_partial = d["partial_count"]
+        d_pct = int((d_ready / d_total * 100)) if d_total > 0 else 0
+        lines.append(
+            f"🏆 <b>{d_name}</b>: 🟢 {d_ready}/{d_total} ({d_pct}%) | 🟡 {d_partial} | 🔴 {d_empty}"
+        )
+
+    return "\n".join(lines)
+
+
+def _build_all_divisions_squads_keyboard(divisions: list[dict]) -> InlineKeyboardMarkup:
+    keyboard = []
+    row = []
+    for d in divisions:
+        did = d["id"]
+        row.append(InlineKeyboardButton(f"Див. {did}", callback_data=f"admin_squads_view:{did}"))
+        if len(row) == 3:
+            keyboard.append(row)
+            row = []
+    if row:
+        keyboard.append(row)
+    keyboard.append([
+        InlineKeyboardButton("🔄 Обновить", callback_data="admin_squads_all"),
+        InlineKeyboardButton("« В админку", callback_data="admin_main_menu")
+    ])
+    return InlineKeyboardMarkup(keyboard)
+
+
+async def _parse_target_division_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int | None:
+    """Extract requested division id from context.args, text message, or chat context."""
+    if context.args:
+        raw = context.args[0].strip()
+        m = re.search(r"\d+", raw)
+        if m:
+            return int(m.group())
+
+    if update.message and update.message.text:
+        text = update.message.text.strip()
+        m = re.search(r"^/(?:squads_status|squads|sostavy|составы|состав)(?:@\w+)?(?:\s+(?:div_?|див_?)?(\d+))?", text, re.IGNORECASE)
+        if m and m.group(1):
+            return int(m.group(1))
+
+    chat = update.effective_chat
+    thread_id = update.message.message_thread_id if update.message else None
+    if chat and chat.type in ("group", "supergroup"):
+        if thread_id:
+            div_topic = await asyncio.to_thread(database.get_division_by_topic, thread_id, "drafts", chat.id)
+            if not div_topic:
+                div_topic = await asyncio.to_thread(database.get_division_by_topic, thread_id, group_chat_id=chat.id)
+            if div_topic:
+                return div_topic["id"]
+        div_grp = await asyncio.to_thread(database.get_division_by_group, chat.id)
+        if div_grp:
+            return div_grp["id"]
+
+    return None
+
+
+async def admin_squads_status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Command /squads_status, /squads, /составы: display squad upload progress."""
+    user = update.effective_user
+    if not user:
+        return
+
+    is_admin = is_global_admin(user.id)
+    admin_divs = await asyncio.to_thread(database.get_admin_divisions, user.id)
+    admin_div_ids = [d["id"] for d in admin_divs]
+
+    if not is_admin and not admin_div_ids:
+        await _deny_access(update, "⛔ Эта команда доступна только администраторам.")
+        return
+
+    div_id = await _parse_target_division_id(update, context)
+
+    # If user is division admin of exactly one division and no div_id specified:
+    if div_id is None and not is_admin and len(admin_div_ids) == 1:
+        div_id = admin_div_ids[0]
+
+    all_divs = await asyncio.to_thread(database.get_divisions, True)
+    all_div_ids = [d["id"] for d in all_divs]
+
+    if div_id is not None:
+        if not is_admin and div_id not in admin_div_ids:
+            await _deny_access(update, "⛔ У вас нет прав на этот дивизион.")
+            return
+
+        status_data = await asyncio.to_thread(database.get_division_squads_status, div_id)
+        has_debtors = any(c["status"] in ("empty", "partial") for c in status_data["clubs"])
+        text = _format_division_squads_status_html(status_data)
+        markup = _build_division_squads_keyboard(div_id, all_div_ids, has_debtors=has_debtors)
+        if update.message:
+            await update.message.reply_text(text, parse_mode="HTML", reply_markup=markup)
+        elif update.callback_query:
+            await update.callback_query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
+        return
+
+    # No div_id: show selector
+    if is_admin:
+        selectable_divs = all_divs
+    else:
+        selectable_divs = [d for d in all_divs if d["id"] in admin_div_ids]
+
+    keyboard = []
+    row = []
+    for d in selectable_divs:
+        row.append(InlineKeyboardButton(d["name"], callback_data=f"admin_squads_view:{d['id']}"))
+        if len(row) == 2:
+            keyboard.append(row)
+            row = []
+    if row:
+        keyboard.append(row)
+
+    if is_admin:
+        keyboard.append([InlineKeyboardButton("📊 Сводка по всей лиге", callback_data="admin_squads_all")])
+    keyboard.append([InlineKeyboardButton("« В админку", callback_data="admin_main_menu")])
+
+    text = "📋 <b>Статус загрузки составов</b>\n\nВыберите дивизион для просмотра отчёта:"
+    if update.message:
+        await update.message.reply_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+    elif update.callback_query:
+        await update.callback_query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+@admin_only
+async def admin_squads_view_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Callback query handler: view squads status for a division."""
+    query = update.callback_query
+    if not query:
+        return
+
+    div_id = int(query.data.split(":", 1)[1])
+    if not await _ensure_division_access(update, div_id):
+        return
+
+    all_divs = await asyncio.to_thread(database.get_divisions, True)
+    all_div_ids = [d["id"] for d in all_divs]
+
+    status_data = await asyncio.to_thread(database.get_division_squads_status, div_id)
+    has_debtors = any(c["status"] in ("empty", "partial") for c in status_data["clubs"])
+    text = _format_division_squads_status_html(status_data)
+    markup = _build_division_squads_keyboard(div_id, all_div_ids, has_debtors=has_debtors)
+
+    await safe_edit_or_reply(query, context, text, reply_markup=markup, parse_mode="HTML")
+
+
+@admin_only
+async def admin_squads_all_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Callback query handler: view summary across all divisions."""
+    query = update.callback_query
+    if not query:
+        return
+
+    if not is_global_admin(query.from_user.id):
+        await _deny_access(update, "⛔ Сводка по всей лиге доступна только главным администраторам.")
+        return
+
+    all_divs = await asyncio.to_thread(database.get_divisions, True)
+    summary_data = await asyncio.to_thread(database.get_all_divisions_squads_summary)
+    text = _format_all_divisions_squads_summary_html(summary_data)
+    markup = _build_all_divisions_squads_keyboard(all_divs)
+
+    await safe_edit_or_reply(query, context, text, reply_markup=markup, parse_mode="HTML")
+
+
+@admin_only
+async def admin_squads_remind_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Send reminder in DM to all coaches with empty/partial squads."""
+    query = update.callback_query
+    if not query:
+        return
+
+    div_id = int(query.data.split(":", 1)[1])
+    if not await _ensure_division_access(update, div_id):
+        return
+
+    status_data = await asyncio.to_thread(database.get_division_squads_status, div_id)
+    debtors = [c for c in status_data["clubs"] if c["status"] in ("empty", "partial") and c.get("user_id")]
+
+    if not debtors:
+        await query.answer("✅ В этом дивизионе у всех тренеров составы уже загружены!", show_alert=True)
+        return
+
+    div_name = status_data["division_name"]
+    sent_count = 0
+    failed_count = 0
+
+    cabinet_kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📸 Загрузить состав", callback_data="cabinet_upload_squad")]
+    ])
+
+    for d in debtors:
+        uid = d["user_id"]
+        club = d["club"]
+        msg_text = (
+            f"⚠️ <b>Напоминание о загрузке состава</b>\n\n"
+            f"Тренер, состав вашего клуба <b>{html.escape(club)}</b> "
+            f"в дивизионе <b>{html.escape(div_name)}</b> ещё не загружен "
+            f"(или заполнен не полностью)!\n\n"
+            f"Пожалуйста, загрузите скриншот состава команды в личном кабинете бота "
+            f"(/cabinet) перед стартом туров."
+        )
+        try:
+            await context.bot.send_message(
+                chat_id=uid,
+                text=msg_text,
+                parse_mode="HTML",
+                reply_markup=cabinet_kb
+            )
+            sent_count += 1
+            await asyncio.sleep(0.05)
+        except (Forbidden, TelegramError) as e:
+            logger.warning(f"Failed to send squad reminder to user {uid}: {e}")
+            failed_count += 1
+
+    alert_msg = f"📢 Напоминания отправлены: {sent_count} из {len(debtors)} тренеров."
+    if failed_count > 0:
+        alert_msg += f" (Не доставлено: {failed_count})"
+    await query.answer(alert_msg, show_alert=True)
 
 
 @admin_only
