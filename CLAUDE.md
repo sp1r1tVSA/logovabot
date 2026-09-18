@@ -251,13 +251,21 @@ exists yet** — the map records the agreed filename, and every club still rende
 blank-badge fallback until the PNGs are dropped in. Every load site is guarded by
 `os.path.exists`, so a missing or unmapped logo degrades to an empty badge and never raises.
 
-The Mini App keeps its **own** copy — `TEAM_LOGO_MAP` / `getTeamLogoUrl` in
-`web/js/ui.js:9` — because it serves `/assets/logos/…` directly without touching Pillow.
-Same 80 filenames; latin keys are derived from the filenames at load, and lookup is exact
-first, then a substring pass that gives up unless exactly one club matches (`Милан` is a
-substring of `Интер Милан`). `TestLogoMapCoversTheRoster` in `tests/test_club_card.py`
-keeps the Python map in step with `DIVISION_CLUBS`; the JS copy has no such guard, so a
-roster change means editing both by hand.
+The Mini App keeps its **own** copy — `TEAM_LOGO_MAP`, `TEAM_LOGO_ALIASES` and
+`getTeamLogoUrl` in `web/js/ui.js:9` — because it serves `/assets/logos/…` directly without
+touching Pillow. Same 80 filenames, and `TEAM_LOGO_ALIASES` mirrors `club_registry`'s
+`TEAM_ALIASES` key for key (alias → canonical club, not → filename, so renaming a logo is
+still one edit). Latin keys are derived from the filenames at load. Lookup runs exact →
+alias → a substring pass that gives up unless exactly one club matches (`Милан` is a
+substring of `Интер Милан`). Aliases are deliberately kept **out** of that substring pass
+and match whole-string only, exactly like the backend's ALIAS tier — let `порт` in and it
+starts claiming `Спортинг`.
+
+`TestLogoMapCoversTheRoster` in `tests/test_club_card.py` keeps the Python map in step with
+`DIVISION_CLUBS`; the JS copy has no such guard, so a roster or alias change means editing
+both by hand. Known wart in the JS substring pass, inherited and not yet fixed: `Юнайтед`,
+`united` and `paris` each land on a single canonical key and so return a crest, where the
+backend resolver correctly returns nothing.
 
 **Discipline:** unplayed matches accrue debts, tracked from `DEBT_TRACKING_START_DATETIME`.
 Three job-queue tasks drive it — deadline reminders and the debt lifecycle tracker every
