@@ -5220,7 +5220,10 @@ async def admin_view_squad(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     keyboard = [
         [InlineKeyboardButton("🏛 Карточка клуба", callback_data=f"view_club_{club}")],
-        [InlineKeyboardButton("📊 Загрузить состав", callback_data=f"admin_squad_upload_{club}")],
+        [
+            InlineKeyboardButton("👥 Загрузить основу", callback_data=f"admin_squad_upload_{club}"),
+            InlineKeyboardButton("👥 Загрузить резерв / скамейку", callback_data=f"admin_squad_upload_reserves_{club}"),
+        ],
         [InlineKeyboardButton("➕ Добавить игрока", callback_data=f"admin_squad_add_player_{club}")],
         [InlineKeyboardButton("➖ Удалить игрока", callback_data=f"admin_squad_rm_menu_{club}")],
         [InlineKeyboardButton("➕ Добавить игроков из матчей", callback_data=f"admin_squad_add_missing_{club}")],
@@ -5241,17 +5244,34 @@ async def admin_squad_upload_start(update: Update, context: ContextTypes.DEFAULT
         await query.answer("⛔ Доступ запрещён", show_alert=True)
         return ConversationHandler.END
 
-    club = query.data.replace("admin_squad_upload_", "")
-    context.user_data["admin_squad_club"] = club
+    if query.data.startswith("admin_squad_upload_reserves_"):
+        club = query.data.replace("admin_squad_upload_reserves_", "")
+        is_reserves = True
+    else:
+        club = query.data.replace("admin_squad_upload_", "")
+        is_reserves = False
 
-    text = (
-        f"📊 <b>Загрузка состава для {html.escape(club)}</b>\n\n"
-        "📸 Пришлите <b>скриншот состава</b> — игроки будут распознаны ИИ.\n\n"
-        "Либо отправьте список футболистов текстом, каждый с новой строки:\n"
-        "<code>Viktor Gyökeres\n"
-        "Francisco Trincão\n"
-        "Pedro Gonçalves</code>"
-    )
+    context.user_data["admin_squad_club"] = club
+    context.user_data["admin_squad_is_reserves"] = is_reserves
+
+    if is_reserves:
+        text = (
+            f"👥 <b>Загрузка резерва (скамейки) для {html.escape(club)}</b>\n\n"
+            "📸 Пришлите <b>скриншот экрана «Резервисты»</b> или списка запасных — игроки будут распознаны ИИ и добавлены к текущему составу.\n\n"
+            "Либо отправьте список футболистов текстом, каждый с новой строки:\n"
+            "<code>Rodrygo\n"
+            "Ferland Mendy\n"
+            "William Saliba</code>"
+        )
+    else:
+        text = (
+            f"📊 <b>Загрузка основы для {html.escape(club)}</b>\n\n"
+            "📸 Пришлите <b>скриншот состава</b> — игроки будут распознаны ИИ.\n\n"
+            "Либо отправьте список футболистов текстом, каждый с новой строки:\n"
+            "<code>Viktor Gyökeres\n"
+            "Francisco Trincão\n"
+            "Pedro Gonçalves</code>"
+        )
     keyboard = [[InlineKeyboardButton("❌ Отмена", callback_data=f"admin_squad_view_{club}")]]
     await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
     return ADMIN_EXPECT_SQUAD_TEXT
@@ -5261,6 +5281,7 @@ async def admin_squad_upload_start(update: Update, context: ContextTypes.DEFAULT
 async def admin_squad_upload_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Recognize a squad screenshot and offer to apply it to the club's roster."""
     club = context.user_data.pop("admin_squad_club", None)
+    is_reserves = context.user_data.pop("admin_squad_is_reserves", False)
     if not club:
         await update.message.reply_text("❌ Ошибка: не найден клуб. Попробуйте снова.")
         return ConversationHandler.END
@@ -5270,6 +5291,7 @@ async def admin_squad_upload_photo(update: Update, context: ContextTypes.DEFAULT
         club=club,
         file_id=update.message.photo[-1].file_id,
         back_cb=f"admin_squad_view_{club}",
+        is_reserves=is_reserves,
     )
     return ConversationHandler.END
 
@@ -5278,6 +5300,7 @@ async def admin_squad_upload_photo(update: Update, context: ContextTypes.DEFAULT
 async def admin_squad_upload_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Receive player names and add them to the squad."""
     club = context.user_data.pop("admin_squad_club", None)
+    is_reserves = context.user_data.pop("admin_squad_is_reserves", False)
     if not club:
         await update.message.reply_text("❌ Ошибка: не найден клуб. Попробуйте снова.")
         return ConversationHandler.END
@@ -5291,7 +5314,8 @@ async def admin_squad_upload_text(update: Update, context: ContextTypes.DEFAULT_
 
     added = await asyncio.to_thread(database.add_squad, club, [line.strip() for line in lines if line.strip()])
 
-    text = f"✅ Добавлено <b>{added}</b> футболистов в состав команды <b>{html.escape(club)}</b>."
+    label = "резервистов" if is_reserves else "футболистов"
+    text = f"✅ Добавлено <b>{added}</b> {label} в состав команды <b>{html.escape(club)}</b>."
     keyboard = [[InlineKeyboardButton("👥 Просмотреть состав", callback_data=f"admin_squad_view_{club}")]]
     await update.message.reply_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
     return ConversationHandler.END

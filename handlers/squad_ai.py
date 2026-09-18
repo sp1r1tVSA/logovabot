@@ -32,23 +32,36 @@ async def recognize_squad_photo(context: ContextTypes.DEFAULT_TYPE, file_id: str
     return await asyncio.to_thread(recognize_squad_screenshot_bytes, img_bytes)
 
 
-def build_review_message(club: str, players: list[dict], current_count: int) -> tuple[str, InlineKeyboardMarkup]:
+def build_review_message(
+    club: str,
+    players: list[dict],
+    current_count: int,
+    is_reserves: bool = False,
+) -> tuple[str, InlineKeyboardMarkup]:
     """Render the recognized roster with apply/replace/cancel controls."""
-    lines = [f"🤖 <b>Распознан состав клуба {html.escape(club)}</b>", ""]
+    title = f"🤖 <b>Распознан {'резерв (скамейка)' if is_reserves else 'состав'} клуба {html.escape(club)}</b>"
+    lines = [title, ""]
     for idx, p in enumerate(players, 1):
         pos = p.get("position")
         suffix = f" — <i>{html.escape(pos)}</i>" if pos else ""
         lines.append(f"{idx}. {html.escape(p['player_name'])}{suffix}")
     lines.append("")
-    lines.append(f"Найдено футболистов: <b>{len(players)}</b>. Сейчас в составе: <b>{current_count}</b>.")
+    label = "резервистов" if is_reserves else "футболистов"
+    lines.append(f"Найдено {label}: <b>{len(players)}</b>. Сейчас в составе: <b>{current_count}</b>.")
     lines.append("")
     lines.append("Проверьте список и выберите действие:")
 
-    keyboard = [
-        [InlineKeyboardButton("➕ Добавить к составу", callback_data="squadai_add")],
-        [InlineKeyboardButton("🔄 Заменить состав", callback_data="squadai_replace")],
-        [InlineKeyboardButton("❌ Отмена", callback_data="squadai_cancel")],
-    ]
+    if is_reserves:
+        keyboard = [
+            [InlineKeyboardButton("➕ Добавить к составу", callback_data="squadai_add")],
+            [InlineKeyboardButton("❌ Отмена", callback_data="squadai_cancel")],
+        ]
+    else:
+        keyboard = [
+            [InlineKeyboardButton("➕ Добавить к составу", callback_data="squadai_add")],
+            [InlineKeyboardButton("🔄 Заменить состав", callback_data="squadai_replace")],
+            [InlineKeyboardButton("❌ Отмена", callback_data="squadai_cancel")],
+        ]
     return "\n".join(lines), InlineKeyboardMarkup(keyboard)
 
 
@@ -58,6 +71,7 @@ async def offer_recognized_squad(
     club: str,
     file_id: str,
     back_cb: str,
+    is_reserves: bool = False,
 ) -> None:
     """Run recognition on `file_id` and reply with the review keyboard."""
     message = update.effective_message
@@ -80,9 +94,35 @@ async def offer_recognized_squad(
         return
 
     current = await asyncio.to_thread(database.get_squad, club)
-    context.user_data[PENDING_KEY] = {"club": club, "players": players, "back_cb": back_cb}
 
-    text, markup = build_review_message(club, players, len(current))
+    if not is_reserves and not current and len(players) >= 11:
+        deleted, added = await asyncio.to_thread(database.replace_squad, club, players)
+        asyncio.create_task(_prefetch_squad_photos(players, club))
+        context.user_data.pop(PENDING_KEY, None)
+
+        lines = [
+            f"✅ <b>ИИ распознал и добавил {added} игроков в состав клуба {html.escape(club)}!</b>",
+            "",
+        ]
+        for idx, p in enumerate(players, 1):
+            pos = p.get("position")
+            suffix = f" — <i>{html.escape(pos)}</i>" if pos else ""
+            lines.append(f"{idx}. {html.escape(p['player_name'])}{suffix}")
+        lines.append("")
+        lines.append("Если нужно отредактировать — нажмите [Изменить].")
+
+        keyboard = [[InlineKeyboardButton("✏️ Изменить", callback_data=back_cb)]]
+        await status.edit_text("\n".join(lines), parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+
+    context.user_data[PENDING_KEY] = {
+        "club": club,
+        "players": players,
+        "back_cb": back_cb,
+        "is_reserves": is_reserves,
+    }
+
+    text, markup = build_review_message(club, players, len(current), is_reserves=is_reserves)
     await status.edit_text(text, parse_mode="HTML", reply_markup=markup)
 
 
@@ -114,11 +154,13 @@ async def squad_ai_apply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     club, players, back_cb = pending["club"], pending["players"], pending["back_cb"]
+    is_reserves = pending.get("is_reserves", False)
     back_kb = InlineKeyboardMarkup([[InlineKeyboardButton("👥 Просмотреть состав", callback_data=back_cb)]])
 
     if query.data == "squadai_cancel":
+        label = "резерв клуба" if is_reserves else "состав клуба"
         await query.edit_message_text(
-            f"❌ Распознанный состав клуба <b>{html.escape(club)}</b> не сохранён.",
+            f"❌ Распознанный {label} <b>{html.escape(club)}</b> не сохранён.",
             parse_mode="HTML",
             reply_markup=back_kb,
         )
@@ -132,8 +174,10 @@ async def squad_ai_apply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
     else:
         added = await asyncio.to_thread(database.add_squad, club, players)
-        text = f"✅ В состав клуба <b>{html.escape(club)}</b> добавлено футболистов: <b>{added}</b>."
+        label = "резервистов" if is_reserves else "футболистов"
+        text = f"✅ В состав клуба <b>{html.escape(club)}</b> добавлено {label}: <b>{added}</b>."
 
     asyncio.create_task(_prefetch_squad_photos(players, club))
 
     await query.edit_message_text(text, parse_mode="HTML", reply_markup=back_kb)
+

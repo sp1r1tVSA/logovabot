@@ -3474,7 +3474,8 @@ async def show_my_squad(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
     photo_id = db_user['squad_photo_id']
     keyboard = [
-        [InlineKeyboardButton("🔄 Обновить состав", callback_data="cabinet_upload_squad")],
+        [InlineKeyboardButton("👥 Загрузить основу", callback_data="cabinet_upload_squad")],
+        [InlineKeyboardButton("👥 Загрузить резерв / скамейку", callback_data="cabinet_upload_reserves")],
         [InlineKeyboardButton("« Назад в кабинет", callback_data="menu_cabinet")]
     ]
     markup = InlineKeyboardMarkup(keyboard)
@@ -3500,8 +3501,13 @@ async def start_upload_squad(update: Update, context: ContextTypes.DEFAULT_TYPE)
     query = update.callback_query
     if query:
         await query.answer()
-        
-    text = "📤 **Загрузка состава**\n\nПожалуйста, отправьте скриншот вашего состава *одним фото*."
+
+    context.user_data["squad_upload_mode"] = "main"
+    text = (
+        "📤 <b>Загрузка основы</b>\n\n"
+        "Пожалуйста, отправьте скриншот стартового состава (11 игроков) <i>одним фото</i>.\n"
+        "ИИ распознает футболистов и предложит сохранить их в состав."
+    )
     keyboard = [[InlineKeyboardButton("Отмена", callback_data="cabinet_my_squad")]]
     
     target_chat_id = query.message.chat_id if query and query.message else (update.effective_chat.id if update.effective_chat else update.effective_user.id)
@@ -3509,16 +3515,48 @@ async def start_upload_squad(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     if query:
         try:
-            await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+            await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
         except Exception:
             try:
                 await query.message.delete()
             except Exception:
                 pass
-            await context.bot.send_message(chat_id=target_chat_id, message_thread_id=thread_id, text=text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+            await context.bot.send_message(chat_id=target_chat_id, message_thread_id=thread_id, text=text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
     else:
-        await update.message.reply_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+        await update.message.reply_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
         
+    return SQUAD_PHOTO
+
+
+async def start_upload_reserves(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Prompt the user to upload a screenshot of their reserve/bench players."""
+    query = update.callback_query
+    if query:
+        await query.answer()
+
+    context.user_data["squad_upload_mode"] = "reserves"
+    text = (
+        "👥 <b>Загрузка резерва / скамейки</b>\n\n"
+        "Пожалуйста, отправьте скриншот экрана <b>«Резервисты»</b> или списка запасных <i>одним фото</i>.\n"
+        "ИИ распознает футболистов и добавит их к вашему составу, сохранив основу!"
+    )
+    keyboard = [[InlineKeyboardButton("Отмена", callback_data="cabinet_my_squad")]]
+
+    target_chat_id = query.message.chat_id if query and query.message else (update.effective_chat.id if update.effective_chat else update.effective_user.id)
+    thread_id = query.message.message_thread_id if query and query.message and query.message.is_topic_message else None
+
+    if query:
+        try:
+            await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+        except Exception:
+            try:
+                await query.message.delete()
+            except Exception:
+                pass
+            await context.bot.send_message(chat_id=target_chat_id, message_thread_id=thread_id, text=text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+    else:
+        await update.message.reply_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+
     return SQUAD_PHOTO
 
 async def save_squad_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -3528,57 +3566,62 @@ async def save_squad_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     # Get the best quality photo
     photo_id = update.message.photo[-1].file_id
     user_id = update.effective_user.id
-    
-    await asyncio.to_thread(database.update_single_field, user_id, "squad_photo_id", photo_id)
-    
-    await update.message.reply_text("✅ Состав успешно сохранен!")
-    await show_my_squad(update, context)
+    mode = context.user_data.pop("squad_upload_mode", "main")
+    is_reserves = (mode == "reserves")
 
-    # database.get_user отдаёт sqlite3.Row — у него нет .get(), поэтому обращение
-    # к division_id роняло весь блок публикации состава в топик СОСТАВЫ.
     db_user_row = await asyncio.to_thread(database.get_user, user_id)
     db_user = dict(db_user_row) if db_user_row else None
-    u_div_id = db_user.get("division_id") if db_user else None
-    target_chat_id = None
-    target_topic_id = None
-
-    if u_div_id:
-        from services.topic_cache import topic_cache
-        squad_entry = topic_cache.get_by_division(u_div_id, "lineups")
-        if squad_entry:
-            target_chat_id = squad_entry.get("group_chat_id")
-            target_topic_id = squad_entry.get("message_thread_id")
-        else:
-            topics_map = await asyncio.to_thread(database.get_division_topics_map, u_div_id)
-            if "lineups" in topics_map:
-                target_chat_id = topics_map["lineups"].get("group_chat_id")
-                target_topic_id = topics_map["lineups"].get("message_thread_id")
-
-    if not target_chat_id and not u_div_id:
-        group_id = await asyncio.to_thread(database.get_group_id)
-        squad_topic_id = await asyncio.to_thread(database.get_config, "squad_topic_id")
-        if group_id and squad_topic_id:
-            target_chat_id = group_id
-            target_topic_id = int(squad_topic_id)
-
-    if target_chat_id and target_topic_id:
-        try:
-            team_name = db_user['team_name'] if db_user and db_user['team_name'] else "Неизвестный клуб"
-            username = update.effective_user.username
-            username_str = f"@{username}" if username else update.effective_user.first_name
-            caption = f"📸 <b>Обновление состава!</b>\n\n<b>Игрок:</b> {html.escape(username_str)}\n<b>Клуб:</b> {html.escape(team_name)}"
-            
-            await context.bot.send_photo(
-                chat_id=target_chat_id,
-                message_thread_id=int(target_topic_id),
-                photo=photo_id,
-                caption=caption,
-                parse_mode="HTML"
-            )
-        except Exception as e:
-            logger.exception(f"Error sending squad photo to topic: {e}")
-
     team_name = db_user.get("team_name") if db_user else None
+
+    if not is_reserves:
+        await asyncio.to_thread(database.update_single_field, user_id, "squad_photo_id", photo_id)
+        await update.message.reply_text("✅ Основа состава успешно сохранена!")
+        await show_my_squad(update, context)
+
+        # database.get_user отдаёт sqlite3.Row — у него нет .get(), поэтому обращение
+        # к division_id роняло весь блок публикации состава в топик СОСТАВЫ.
+        u_div_id = db_user.get("division_id") if db_user else None
+        target_chat_id = None
+        target_topic_id = None
+
+        if u_div_id:
+            from services.topic_cache import topic_cache
+            squad_entry = topic_cache.get_by_division(u_div_id, "lineups")
+            if squad_entry:
+                target_chat_id = squad_entry.get("group_chat_id")
+                target_topic_id = squad_entry.get("message_thread_id")
+            else:
+                topics_map = await asyncio.to_thread(database.get_division_topics_map, u_div_id)
+                if "lineups" in topics_map:
+                    target_chat_id = topics_map["lineups"].get("group_chat_id")
+                    target_topic_id = topics_map["lineups"].get("message_thread_id")
+
+        if not target_chat_id and not u_div_id:
+            group_id = await asyncio.to_thread(database.get_group_id)
+            squad_topic_id = await asyncio.to_thread(database.get_config, "squad_topic_id")
+            if group_id and squad_topic_id:
+                target_chat_id = group_id
+                target_topic_id = int(squad_topic_id)
+
+        if target_chat_id and target_topic_id:
+            try:
+                t_name = db_user['team_name'] if db_user and db_user.get('team_name') else "Неизвестный клуб"
+                username = update.effective_user.username
+                username_str = f"@{username}" if username else update.effective_user.first_name
+                caption = f"📸 <b>Обновление состава!</b>\n\n<b>Игрок:</b> {html.escape(username_str)}\n<b>Клуб:</b> {html.escape(t_name)}"
+                
+                await context.bot.send_photo(
+                    chat_id=target_chat_id,
+                    message_thread_id=int(target_topic_id),
+                    photo=photo_id,
+                    caption=caption,
+                    parse_mode="HTML"
+                )
+            except Exception as e:
+                logger.exception(f"Error sending squad photo to topic: {e}")
+    else:
+        await update.message.reply_text("✅ Скриншот резерва принят в обработку!")
+
     if team_name:
         from handlers.squad_ai import offer_recognized_squad
         try:
@@ -3587,6 +3630,7 @@ async def save_squad_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 club=team_name,
                 file_id=photo_id,
                 back_cb="cabinet_my_squad",
+                is_reserves=is_reserves,
             )
         except Exception as e:
             logger.exception(f"Squad recognition failed for {team_name}: {e}")

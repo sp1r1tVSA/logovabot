@@ -74,6 +74,7 @@ from handlers.cabinet import (
     SQUAD_PHOTO,
     MATCH_CUSTOM_TIME,
     start_upload_squad,
+    start_upload_reserves,
     save_squad_photo,
     cancel_upload_squad,
     start_custom_time_prompt,
@@ -444,7 +445,8 @@ def _register_cabinet_handlers(app: Application) -> None:
 
     squad_conv = ConversationHandler(
         entry_points=[
-            CallbackQueryHandler(start_upload_squad, pattern="^cabinet_upload_squad$")
+            CallbackQueryHandler(start_upload_squad, pattern="^cabinet_upload_squad$"),
+            CallbackQueryHandler(start_upload_reserves, pattern="^cabinet_upload_reserves$"),
         ],
         states={
             SQUAD_PHOTO: [MessageHandler(filters.PHOTO, save_squad_photo)]

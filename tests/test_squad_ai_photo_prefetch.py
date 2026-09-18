@@ -89,5 +89,118 @@ class TestSquadAiPhotoPrefetch(unittest.IsolatedAsyncioTestCase):
         mock_fetch.assert_not_called()
 
 
+    async def test_offer_recognized_squad_auto_saves_when_squad_empty(self):
+        """When a club has 0 players and AI recognizes >= 11 players, auto-save triggers immediately."""
+        eleven_players = [
+            {"player_name": f"P_{i}", "position": "CM"} for i in range(11)
+        ]
+
+        update = MagicMock()
+        status_msg = MagicMock()
+        status_msg.edit_text = AsyncMock()
+        update.effective_message.reply_text = AsyncMock(return_value=status_msg)
+
+        context = MagicMock()
+        context.user_data = {}
+
+        with patch("handlers.squad_ai.recognize_squad_photo", new=AsyncMock(return_value=eleven_players)), \
+             patch("services.graphics.player_photos.fetch_all_players", new=MagicMock(return_value={})) as mock_fetch:
+            await squad_ai.offer_recognized_squad(
+                update, context,
+                club=self.club,
+                file_id="photo_file_123",
+                back_cb="cabinet_my_squad",
+            )
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+
+        # Database must now contain the 11 players
+        saved_squad = database.get_squad(self.club)
+        self.assertEqual(len(saved_squad), 11)
+
+        # Photo prefetch scheduled
+        mock_fetch.assert_called_once()
+
+        # Status message edited with success confirmation and [✏️ Изменить] button
+        status_msg.edit_text.assert_called_once()
+        text_arg = status_msg.edit_text.call_args[0][0]
+        self.assertIn("ИИ распознал и добавил 11 игроков", text_arg)
+        self.assertIn("Если нужно отредактировать", text_arg)
+
+        reply_markup = status_msg.edit_text.call_args[1]["reply_markup"]
+        btn = reply_markup.inline_keyboard[0][0]
+        self.assertEqual(btn.text, "✏️ Изменить")
+        self.assertEqual(btn.callback_data, "cabinet_my_squad")
+
+        # No pending review state left
+        self.assertNotIn(squad_ai.PENDING_KEY, context.user_data)
+
+    async def test_offer_recognized_squad_does_not_auto_save_when_squad_already_populated(self):
+        """When a club already has players in DB, do not auto-save; show review buttons."""
+        database.add_squad(self.club, [{"player_name": "Existing Star", "position": "ST"}])
+
+        eleven_players = [
+            {"player_name": f"New_P_{i}", "position": "CM"} for i in range(11)
+        ]
+
+        update = MagicMock()
+        status_msg = MagicMock()
+        status_msg.edit_text = AsyncMock()
+        update.effective_message.reply_text = AsyncMock(return_value=status_msg)
+
+        context = MagicMock()
+        context.user_data = {}
+
+        with patch("handlers.squad_ai.recognize_squad_photo", new=AsyncMock(return_value=eleven_players)):
+            await squad_ai.offer_recognized_squad(
+                update, context,
+                club=self.club,
+                file_id="photo_file_123",
+                back_cb="cabinet_my_squad",
+            )
+
+        # Should NOT overwrite database yet
+        saved_squad = database.get_squad(self.club)
+        self.assertEqual(len(saved_squad), 1)
+        self.assertEqual(saved_squad[0], "Existing Star")
+
+        # Pending key must be set for manual confirmation
+        self.assertIn(squad_ai.PENDING_KEY, context.user_data)
+
+        # Status text must ask to choose action
+        text_arg = status_msg.edit_text.call_args[0][0]
+        self.assertIn("Проверьте список и выберите действие", text_arg)
+
+    async def test_offer_recognized_squad_does_not_auto_save_when_fewer_than_11_players(self):
+        """When AI recognizes fewer than 11 players for an empty club, do not auto-save."""
+        five_players = [
+            {"player_name": f"P_{i}", "position": "CM"} for i in range(5)
+        ]
+
+        update = MagicMock()
+        status_msg = MagicMock()
+        status_msg.edit_text = AsyncMock()
+        update.effective_message.reply_text = AsyncMock(return_value=status_msg)
+
+        context = MagicMock()
+        context.user_data = {}
+
+        with patch("handlers.squad_ai.recognize_squad_photo", new=AsyncMock(return_value=five_players)):
+            await squad_ai.offer_recognized_squad(
+                update, context,
+                club=self.club,
+                file_id="photo_file_123",
+                back_cb="cabinet_my_squad",
+            )
+
+        # Database must still be empty
+        saved_squad = database.get_squad(self.club)
+        self.assertEqual(len(saved_squad), 0)
+
+        # Pending key must be set for review
+        self.assertIn(squad_ai.PENDING_KEY, context.user_data)
+
+
 if __name__ == "__main__":
     unittest.main()
+
