@@ -844,11 +844,15 @@ body.coupon-open {
   gap: 8px;
 }
 .bet-accepted-btn {
-  padding: 13px 14px;
+  min-width: 0;
+  padding: 13px 10px;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   border-radius: 14px;
   font-family: 'Outfit', sans-serif;
-  font-size: 0.9rem;
+  /* Scales with the viewport so both labels fit on one line down to 320px. */
+  font-size: clamp(0.72rem, 3.6vw, 0.88rem);
   font-weight: 800;
   cursor: pointer;
 }
@@ -869,7 +873,8 @@ body.coupon-open {
   .betbar-mode { display: none; }
   .coupon-seg-btn { font-size: 0.8rem; }
   .coupon-chips .stake-chip { font-size: 0.74rem; }
-  .bet-accepted-btn { padding: 13px 10px; font-size: 0.82rem; }
+  .bet-accepted-actions { gap: 6px; }
+  .bet-accepted-btn { padding: 12px 6px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
