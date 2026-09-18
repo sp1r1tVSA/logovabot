@@ -5,7 +5,7 @@ from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, Callbac
 from telegram.ext import ContextTypes, ConversationHandler
 import html
 import database
-from handlers.base import is_admin
+from handlers.base import is_admin, resolve_division_target
 
 import logging
 logger = logging.getLogger(__name__)
@@ -2787,36 +2787,13 @@ async def cb_confirm_ai_final(update: Update, context: ContextTypes.DEFAULT_TYPE
         await safe_send_notification(context.bot, p_id, opp_text)
 
     # 3. Post to Group
-    from services.topic_cache import topic_cache
     div_id = match.get("division_id")
-    target_chat_id = None
-    target_topic_id = None
-
-    if div_id:
-        res_topic = topic_cache.get_by_division(div_id, "results")
-        if not res_topic:
-            res_topic = topic_cache.get_by_division(div_id, "reports")
-        if res_topic:
-            target_chat_id = res_topic.get("group_chat_id")
-            target_topic_id = res_topic.get("message_thread_id")
-        else:
-            topics_map = await asyncio.to_thread(database.get_division_topics_map, div_id)
-            if "results" in topics_map:
-                target_chat_id = topics_map["results"].get("group_chat_id")
-                target_topic_id = topics_map["results"].get("message_thread_id")
-            elif "reports" in topics_map:
-                target_chat_id = topics_map["reports"].get("group_chat_id")
-                target_topic_id = topics_map["reports"].get("message_thread_id")
-
+    target_chat_id, target_topic_id = await resolve_division_target(
+        div_id, "results", "reports",
+        legacy_topic_keys=("results_topic_id", "reports_topic_id"),
+    )
     if not target_chat_id:
-        if not div_id:
-            main_group_id = await asyncio.to_thread(database.get_group_id)
-            results_topic_id = (await asyncio.to_thread(database.get_config, "results_topic_id")) or (await asyncio.to_thread(database.get_config, "reports_topic_id"))
-            if main_group_id:
-                target_chat_id = main_group_id
-                target_topic_id = int(results_topic_id) if results_topic_id else None
-        else:
-            logger.warning(f"No results/reports topic configured for division {div_id}; skipping group result announcement.")
+        logger.warning(f"No results/reports topic configured for division {div_id}; skipping group result announcement.")
 
     if target_chat_id:
         group_text = build_formatted_match_post(
@@ -3333,7 +3310,7 @@ async def handle_debt_played_rewards(
                 lines.append(f"• {u_tag}{t_tag} — <b>{r['new_warns']}/{MAX_WARNS_LIMIT}</b> {badge}")
 
             lines.append("\n<i>Результат матча внесён в таблицу лиги.</i>")
-            await _send_to_warns_thread(context, "\n".join(lines))
+            await _send_to_warns_thread(context, "\n".join(lines), (match or {}).get("division_id"))
         except Exception as e:
             logger.warning(f"Failed to send unwarn summary to warns thread: {e}")
 
@@ -3390,36 +3367,13 @@ async def notify_match_confirmed(context: ContextTypes.DEFAULT_TYPE, match_id: i
         p2_id=match['player2_id']
     )
 
-    from services.topic_cache import topic_cache
     div_id = match.get("division_id")
-    target_chat_id = None
-    target_topic_id = None
-
-    if div_id:
-        res_topic = topic_cache.get_by_division(div_id, "results")
-        if not res_topic:
-            res_topic = topic_cache.get_by_division(div_id, "reports")
-        if res_topic:
-            target_chat_id = res_topic.get("group_chat_id")
-            target_topic_id = res_topic.get("message_thread_id")
-        else:
-            topics_map = await asyncio.to_thread(database.get_division_topics_map, div_id)
-            if "results" in topics_map:
-                target_chat_id = topics_map["results"].get("group_chat_id")
-                target_topic_id = topics_map["results"].get("message_thread_id")
-            elif "reports" in topics_map:
-                target_chat_id = topics_map["reports"].get("group_chat_id")
-                target_topic_id = topics_map["reports"].get("message_thread_id")
-
+    target_chat_id, target_topic_id = await resolve_division_target(
+        div_id, "results", "reports",
+        legacy_topic_keys=("results_topic_id", "reports_topic_id"),
+    )
     if not target_chat_id:
-        if not div_id:
-            main_group_id = await asyncio.to_thread(database.get_group_id)
-            results_topic_id = (await asyncio.to_thread(database.get_config, "results_topic_id")) or (await asyncio.to_thread(database.get_config, "reports_topic_id"))
-            if main_group_id:
-                target_chat_id = main_group_id
-                target_topic_id = int(results_topic_id) if results_topic_id else None
-        else:
-            logger.warning(f"No results/reports topic configured for division {div_id}; skipping admin-approved group result announcement.")
+        logger.warning(f"No results/reports topic configured for division {div_id}; skipping admin-approved group result announcement.")
 
     if target_chat_id:
         group_text = build_formatted_match_post(
@@ -3581,27 +3535,9 @@ async def save_squad_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         # database.get_user отдаёт sqlite3.Row — у него нет .get(), поэтому обращение
         # к division_id роняло весь блок публикации состава в топик СОСТАВЫ.
         u_div_id = db_user.get("division_id") if db_user else None
-        target_chat_id = None
-        target_topic_id = None
-
-        if u_div_id:
-            from services.topic_cache import topic_cache
-            squad_entry = topic_cache.get_by_division(u_div_id, "lineups")
-            if squad_entry:
-                target_chat_id = squad_entry.get("group_chat_id")
-                target_topic_id = squad_entry.get("message_thread_id")
-            else:
-                topics_map = await asyncio.to_thread(database.get_division_topics_map, u_div_id)
-                if "lineups" in topics_map:
-                    target_chat_id = topics_map["lineups"].get("group_chat_id")
-                    target_topic_id = topics_map["lineups"].get("message_thread_id")
-
-        if not target_chat_id and not u_div_id:
-            group_id = await asyncio.to_thread(database.get_group_id)
-            squad_topic_id = await asyncio.to_thread(database.get_config, "squad_topic_id")
-            if group_id and squad_topic_id:
-                target_chat_id = group_id
-                target_topic_id = int(squad_topic_id)
+        target_chat_id, target_topic_id = await resolve_division_target(
+            u_div_id, "lineups", legacy_topic_keys=("squad_topic_id",)
+        )
 
         if target_chat_id and target_topic_id:
             try:

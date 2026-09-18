@@ -18,6 +18,7 @@ from handlers.base import (
     is_global_admin,
     admin_only,
     post_league_table_to_reports,
+    resolve_division_target,
     round_schedule_missing_message,
     max_active_rounds_message,
 )
@@ -656,15 +657,11 @@ async def _post_or_update_debts_for_division(context: ContextTypes.DEFAULT_TYPE,
     Returns (success, debts_count).
     """
     text, total_debts = await _build_debts_summary(division_id=division_id, division_name=division_name)
-    group_id = GROUP_ID or await asyncio.to_thread(database.get_group_id)
+    group_id, topic_id = await resolve_division_target(
+        division_id, "previews", "warns", legacy_topic_keys=("warns_topic_id",)
+    )
     if not group_id:
         return False, 0
-
-    topic_id = (
-        await asyncio.to_thread(database.get_division_topic, division_id, "previews", group_id)
-        or await asyncio.to_thread(database.get_division_topic, division_id, "warns", group_id)
-        or await asyncio.to_thread(database.get_config, "warns_topic_id")
-    )
     if not topic_id:
         return False, total_debts
 
@@ -957,10 +954,8 @@ async def admin_generate_matches_execute(update: Update, context: ContextTypes.D
     )
 
     # Notify division topic or main group
-    group_id = await asyncio.to_thread(database.get_group_id)
+    group_id, topic_id = await resolve_division_target(div_id, "drafts")
     if group_id:
-        topic_id = await asyncio.to_thread(database.get_division_topic, div_id, "drafts")
-
         group_text = (
             f"📅 <b>Старт сезона в дивизионе {html.escape(div_title)}!</b>\n\n"
             f"Администратор сгенерировал расписание матчей.\n"
@@ -3167,12 +3162,9 @@ async def admin_report_score_auto(update: Update, context: ContextTypes.DEFAULT_
 
 async def _notify_group_about_tp(context: ContextTypes.DEFAULT_TYPE, match_id: int, tp_type: str):
     match = await asyncio.to_thread(database.get_match, match_id)
-    group_id = await asyncio.to_thread(database.get_group_id)
-    if not match or not group_id:
+    if not match:
         return
-        
-    reports_topic_id = await asyncio.to_thread(database.get_config, "reports_topic_id")
-    
+
     p1 = match.get("player1_nickname") or match.get("direct_p1_team") or "Хозяева"
     p2 = match.get("player2_nickname") or match.get("direct_p2_team") or "Гости"
     rnd = match.get("round_number", "?")
@@ -3197,35 +3189,12 @@ async def _notify_group_about_tp(context: ContextTypes.DEFAULT_TYPE, match_id: i
         logger.warning(f"Failed to build debt footer for TP #{match_id}: {e}")
 
     # Determine target chat and topic strictly by division
-    div_id = match.get("division_id")
-    target_chat_id = None
-    target_topic_id = None
-
-    if div_id:
-        from services.topic_cache import topic_cache
-        rep_topic = topic_cache.get_by_division(div_id, "reports")
-        if not rep_topic:
-            rep_topic = topic_cache.get_by_division(div_id, "results")
-        if rep_topic:
-            target_chat_id = rep_topic.get("group_chat_id")
-            target_topic_id = rep_topic.get("message_thread_id")
-        else:
-            topics_map = await asyncio.to_thread(database.get_division_topics_map, div_id)
-            if "reports" in topics_map:
-                target_chat_id = topics_map["reports"].get("group_chat_id")
-                target_topic_id = topics_map["reports"].get("message_thread_id")
-            elif "results" in topics_map:
-                target_chat_id = topics_map["results"].get("group_chat_id")
-                target_topic_id = topics_map["results"].get("message_thread_id")
-
+    target_chat_id, target_topic_id = await resolve_division_target(
+        match.get("division_id"), "reports", "results",
+        legacy_topic_keys=("reports_topic_id",),
+    )
     if not target_chat_id:
-        if not div_id and group_id:
-            reports_topic_id = await asyncio.to_thread(database.get_config, "reports_topic_id")
-            target_chat_id = group_id
-            target_topic_id = int(reports_topic_id) if reports_topic_id else None
-        else:
-            logger.warning(f"No reports/results topic configured for division {div_id}; skipping TP notification.")
-            return
+        return
 
     kwargs = {"chat_id": target_chat_id, "text": text, "parse_mode": "HTML"}
     if target_topic_id:
@@ -3362,7 +3331,7 @@ async def _process_technical_verdict(
             lines.append(f"🎁 {who}: <b>−1 варн</b> за закрытие долга → <b>{cnt}/{MAX_WARNS_LIMIT}</b>")
         lines.append("")
         lines.append("💰 <i>Все ставки на этот матч возвращены игрокам (Refund, кэф 1.00).</i>")
-        await _send_to_warns_thread(context, "\n".join(lines))
+        await _send_to_warns_thread(context, "\n".join(lines), m.get("division_id"))
 
         # Auto-kick only after the report, so the ПРЕДЫ thread reads in order.
         for p_id in kick_queue:
@@ -3893,7 +3862,10 @@ async def admin_set_score_text(update: Update, context: ContextTypes.DEFAULT_TYP
             logger.exception(f"Не удалось отправить уведомление игроку {p_id}")
 
     # Notify Telegram Group (scoped to division topic)
-    group_id = await asyncio.to_thread(database.get_group_id)
+    group_id, target_topic = await resolve_division_target(
+        match.get("division_id"), "results", "reports",
+        legacy_topic_keys=("results_topic_id",),
+    )
     if group_id:
         group_text = (
             f"⚙️ **Результат матча изменен администратором!**\n"
@@ -3902,13 +3874,6 @@ async def admin_set_score_text(update: Update, context: ContextTypes.DEFAULT_TYP
             f"**{s1} : {s2}** "
             f"**{match['player2_nickname']}** ({match['player2_team'] or 'нет'})"
         ) + debt_note.replace("<b>", "**").replace("</b>", "**")
-        
-        target_topic = None
-        div_id = match.get("division_id")
-        if div_id:
-            target_topic = await asyncio.to_thread(database.get_division_topic, div_id, "results")
-        if not target_topic:
-            target_topic = await asyncio.to_thread(database.get_config, "results_topic_id")
 
         kwargs = {"chat_id": group_id, "text": group_text, "parse_mode": "Markdown"}
         if target_topic:
@@ -6042,12 +6007,10 @@ async def send_round_reminders(
                 pm_sent += 1
 
     # 2. Public summary to Reports Topic (scoped by division)
-    main_group_id = await asyncio.to_thread(database.get_group_id)
-    reports_topic_id = None
-    if division_id:
-        reports_topic_id = await asyncio.to_thread(database.get_division_topic, division_id, "reports")
-    if not reports_topic_id:
-        reports_topic_id = await asyncio.to_thread(database.get_config, "reports_topic_id")
+    main_group_id, reports_topic_id = await resolve_division_target(
+        division_id, "reports", "previews",
+        legacy_topic_keys=("reports_topic_id",),
+    )
 
     if main_group_id:
         lines = [
@@ -7129,15 +7092,26 @@ async def admin_fetch_photos(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 # ===================== WARNS SYSTEM =====================
 
-async def _send_to_warns_thread(context: ContextTypes.DEFAULT_TYPE, text: str) -> None:
-    """Send a message to the ПРЕДЫ thread in the group. Falls back silently."""
-    group_id = GROUP_ID or await asyncio.to_thread(database.get_group_id)
+async def _send_to_warns_thread(
+    context: ContextTypes.DEFAULT_TYPE,
+    text: str,
+    division_id: int | None = None,
+) -> None:
+    """
+    Send a message to the ПРЕДЫ thread of the division. Falls back silently.
+
+    `division_id` обязателен по смыслу: у каждого дивизиона своя группа и свой
+    тред ПРЕДЫ. Без него сообщение уйдёт в легаси-группу — это верно только для
+    одногрупповых инсталляций.
+    """
+    group_id, topic_id = await resolve_division_target(
+        division_id, "warns", "previews", legacy_topic_keys=("warns_topic_id",)
+    )
     if not group_id:
         return
-    warns_topic_id = await asyncio.to_thread(database.get_config, "warns_topic_id")
     kwargs = {"chat_id": group_id, "text": text, "parse_mode": "HTML"}
-    if warns_topic_id:
-        kwargs["message_thread_id"] = int(warns_topic_id)
+    if topic_id:
+        kwargs["message_thread_id"] = int(topic_id)
     try:
         await context.bot.send_message(**kwargs)
     except Exception:
@@ -7146,11 +7120,16 @@ async def _send_to_warns_thread(context: ContextTypes.DEFAULT_TYPE, text: str) -
 
 async def _auto_kick_player(context: ContextTypes.DEFAULT_TYPE, user_id: int, username: str | None, team_name: str | None) -> None:
     """Ban player from league and soft-kick from group when warn limit exceeded."""
+    # Дивизион снимаем ДО ban_and_remove_from_league: он обнуляет привязку игрока,
+    # и после него кикать было бы уже неоткуда.
+    kicked = await asyncio.to_thread(database.get_user, user_id)
+    division_id = dict(kicked).get("division_id") if kicked else None
+
     await asyncio.to_thread(database.ban_and_remove_from_league, user_id)
 
     # Soft kick from Telegram group: ban and unban are handled separately so a
     # failed unban (which would leave a permanent ban instead of a kick) is logged.
-    group_id = GROUP_ID or await asyncio.to_thread(database.get_group_id)
+    group_id, _ = await resolve_division_target(division_id)
     if group_id:
         try:
             await context.bot.ban_chat_member(chat_id=group_id, user_id=user_id)
@@ -7185,17 +7164,19 @@ async def _auto_kick_player(context: ContextTypes.DEFAULT_TYPE, user_id: int, us
         f"Причина: Превышен лимит варнов ({MAX_WARNS_LIMIT}/{MAX_WARNS_LIMIT}) из-за несыгранных долгов.\n\n"
         f"📢 Клуб <b>{team_display}</b> свободен и открыт для замены!"
     )
-    await _send_to_warns_thread(context, thread_text)
+    await _send_to_warns_thread(context, thread_text, division_id)
 
-    # Also post to reports topic if configured
-    reports_topic_id = await asyncio.to_thread(database.get_config, "reports_topic_id")
-    if group_id and reports_topic_id:
+    # Also post to the division's reports topic if it has one
+    rep_chat_id, rep_topic_id = await resolve_division_target(
+        division_id, "reports", legacy_topic_keys=("reports_topic_id",)
+    )
+    if rep_chat_id and rep_topic_id:
         try:
             await context.bot.send_message(
-                chat_id=group_id,
+                chat_id=rep_chat_id,
                 text=thread_text,
                 parse_mode="HTML",
-                message_thread_id=int(reports_topic_id)
+                message_thread_id=int(rep_topic_id)
             )
         except Exception:
             pass
@@ -7271,6 +7252,8 @@ async def admin_warn_execute(update: Update, context: ContextTypes.DEFAULT_TYPE)
         if not player:
             await query.edit_message_text("❌ Игрок не найден.")
             return
+        # get_user отдаёт sqlite3.Row — у него нет .get().
+        player = dict(player)
 
         reason = WARN_REASONS[reason_idx] if 0 <= reason_idx < len(WARN_REASONS) else WARN_REASONS[0]
         admin_id = query.from_user.id
@@ -7318,7 +7301,7 @@ async def admin_warn_execute(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 f"Причина: {html.escape(reason)}\n"
                 f"Администратор: @{html.escape(admin_username)}"
             )
-            await _send_to_warns_thread(context, thread_text)
+            await _send_to_warns_thread(context, thread_text, player.get("division_id"))
 
             result_text = (
                 f"✅ Варн выдан игроку <b>{html.escape(username_str)}</b>.\n"
@@ -7357,6 +7340,7 @@ async def admin_warn_remove_execute(update: Update, context: ContextTypes.DEFAUL
         if not player:
             await query.edit_message_text("❌ Игрок не найден.")
             return
+        player = dict(player)
 
         warn_count = player['warn_count'] or 0
         if warn_count <= 0:
@@ -7395,7 +7379,7 @@ async def admin_warn_remove_execute(update: Update, context: ContextTypes.DEFAUL
             f"снят варн (<b>{new_count}/{MAX_WARNS_LIMIT}</b>).\n"
             f"Администратор: @{html.escape(admin_username)}"
         )
-        await _send_to_warns_thread(context, thread_text)
+        await _send_to_warns_thread(context, thread_text, player.get("division_id"))
 
         result_text = f"✅ Варн снят. Счётчик: <b>{new_count} / {MAX_WARNS_LIMIT}</b>"
         keyboard = [[InlineKeyboardButton("« К карточке игрока", callback_data=f"admin_view_player_{p_id}")]]
@@ -7471,6 +7455,7 @@ async def admin_amnesty_execute(update: Update, context: ContextTypes.DEFAULT_TY
     if not player:
         await query.edit_message_text("❌ Игрок не найден.")
         return
+    player = dict(player)
 
     admin_id = query.from_user.id
     await asyncio.to_thread(database.amnesty_player, p_id, admin_id)
@@ -7494,7 +7479,7 @@ async def admin_amnesty_execute(update: Update, context: ContextTypes.DEFAULT_TY
         f"применена амнистия. Счётчик варнов сброшен до 0.\n"
         f"Администратор: @{html.escape(query.from_user.username or str(admin_id))}"
     )
-    await _send_to_warns_thread(context, thread_text)
+    await _send_to_warns_thread(context, thread_text, player.get("division_id"))
 
     result_text = f"✅ Амнистия применена к <b>{html.escape(username_str)}</b>. Счётчик: <b>0 / {MAX_WARNS_LIMIT}</b>"
     keyboard = [[InlineKeyboardButton("« К карточке игрока", callback_data=f"admin_view_player_{p_id}")]]

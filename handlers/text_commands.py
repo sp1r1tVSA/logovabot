@@ -10,6 +10,7 @@ from handlers.base import (
     is_admin,
     generate_league_table_image,
     resolve_division_id,
+    resolve_division_target,
 )
 
 logger = logging.getLogger(__name__)
@@ -693,9 +694,11 @@ async def handle_temshik_command(update: Update, context: ContextTypes.DEFAULT_T
 
         await msg.reply_text(warn_msg, parse_mode="HTML")
 
-        # Also forward to warns topic if configured
-        group_id = await asyncio.to_thread(database.get_group_id)
-        warns_topic_id = await asyncio.to_thread(database.get_config, "warns_topic_id")
+        # Also forward to the ПРЕДЫ topic of the player's own division
+        group_id, warns_topic_id = await resolve_division_target(
+            target_user.get("division_id"), "warns", "previews",
+            legacy_topic_keys=("warns_topic_id",),
+        )
         if group_id and warns_topic_id and msg.chat_id != group_id:
             try:
                 await context.bot.send_message(

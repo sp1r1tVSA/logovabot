@@ -441,7 +441,7 @@ async def _process_draft_group_delayed(buffer_key: str, update: Update, context:
 
 from telegram.ext import CallbackQueryHandler
 from handlers.admin import is_admin
-from handlers.base import is_global_admin
+from handlers.base import is_global_admin, resolve_division_target
 
 
 def _draft_division_ids(draft: dict) -> set[int]:
@@ -492,8 +492,6 @@ async def cb_draft_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     games = draft.get("games", [draft])
     # Снимаем до цикла: при частичном провале draft["games"] переписывается.
     draft_division_ids = _draft_division_ids(draft)
-    main_group_id = await asyncio.to_thread(database.get_group_id)
-    results_topic_id = (await asyncio.to_thread(database.get_config, "results_topic_id")) or (await asyncio.to_thread(database.get_config, "reports_topic_id"))
 
     failed_games = []
 
@@ -586,18 +584,17 @@ async def cb_draft_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         except Exception as e:
             logger.warning(f"Failed to build debt footer for match {m_id}: {e}")
 
-        if main_group_id:
+        div_id = g.get("division_id")
+        if not div_id and _m_row:
+            div_id = _m_row.get("division_id")
+        target_chat_id, target_topic = await resolve_division_target(
+            div_id, "results", "reports",
+            legacy_topic_keys=("results_topic_id", "reports_topic_id"),
+        )
+
+        if target_chat_id:
             try:
-                kwargs = {"chat_id": main_group_id, "parse_mode": "HTML"}
-                target_topic = None
-                div_id = g.get("division_id")
-                if not div_id and _m_row:
-                    div_id = _m_row.get("division_id")
-                if div_id:
-                    target_topic = (await asyncio.to_thread(database.get_division_topic, div_id, "results")) or \
-                                   (await asyncio.to_thread(database.get_division_topic, div_id, "reports"))
-                if not target_topic and results_topic_id:
-                    target_topic = results_topic_id
+                kwargs = {"chat_id": target_chat_id, "parse_mode": "HTML"}
                 if target_topic:
                     kwargs["message_thread_id"] = int(target_topic)
 

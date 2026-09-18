@@ -72,6 +72,94 @@ async def resolve_division_id(update: Update, user_data=None) -> int | None:
     return None
 
 
+async def resolve_division_target(
+    division_id: int | None,
+    *topic_types: str,
+    legacy_topic_keys: tuple[str, ...] = (),
+) -> tuple[int | None, int | None]:
+    """
+    Пара (chat_id, message_thread_id), куда публиковать сообщение дивизиона.
+
+    Чат и тред всегда берутся из одной привязки, поэтому тред не может оказаться
+    склеен с чужим чатом. Дивизионы живут в отдельных супергруппах, а глобальный
+    `system_config.group_id` хранит ровно одну из них: пара «глобальный чат +
+    тред дивизиона» уводила анонс в чужую группу или роняла отправку с
+    "message thread not found".
+
+    Порядок: привязанный топик дивизиона (первый найденный из `topic_types`) →
+    тот же топик без chat_id, склеенный с легаси-группой (одногрупповые
+    инсталляции) → группа дивизиона, тема General. Если у дивизиона не привязано
+    ничего — возвращается (None, None): молча пропустить сообщение безопаснее,
+    чем отправить его не тому дивизиону.
+
+    Вызов с `division_id=None` — легаси-путь без дивизионов: глобальная группа
+    плюс первый непустой ключ из `legacy_topic_keys` (`results_topic_id` и т.п.).
+    """
+    async def _legacy_chat() -> int | None:
+        chat = config.GROUP_ID or await asyncio.to_thread(database.get_group_id)
+        return int(chat) if chat else None
+
+    if division_id:
+        try:
+            from services.topic_cache import topic_cache
+            for t_type in topic_types:
+                entry = topic_cache.get_by_division(division_id, t_type)
+                if entry and entry.get("group_chat_id") and entry.get("message_thread_id"):
+                    return int(entry["group_chat_id"]), int(entry["message_thread_id"])
+        except Exception:
+            logger.warning("resolve_division_target: topic_cache lookup failed", exc_info=True)
+
+        try:
+            topics_map = await asyncio.to_thread(database.get_division_topics_map, division_id)
+        except Exception:
+            logger.warning("resolve_division_target: topics map lookup failed", exc_info=True)
+            topics_map = {}
+
+        entries = [
+            topics_map.get(database.normalize_topic_type(t_type))
+            for t_type in topic_types
+        ]
+        for entry in entries:
+            if entry and entry.get("group_chat_id") and entry.get("message_thread_id"):
+                return int(entry["group_chat_id"]), int(entry["message_thread_id"])
+
+        # Тред без chat_id — привязка одногрупповой инсталляции: тут глобальная
+        # группа и есть та самая, в которой этот тред живёт.
+        for entry in entries:
+            if entry and entry.get("message_thread_id") and not entry.get("group_chat_id"):
+                legacy = await _legacy_chat()
+                if legacy:
+                    return legacy, int(entry["message_thread_id"])
+                break
+
+        chat_id = await asyncio.to_thread(database.get_division_group_chat_id, division_id)
+        if chat_id:
+            # Глобальный topic_id — идентификатор треда внутри глобальной группы,
+            # и осмыслен он только если дивизион живёт в ней же. В чужой группе
+            # тот же номер указывает на чужую тему либо не существует вовсе.
+            if legacy_topic_keys and int(chat_id) == (await _legacy_chat()):
+                for key in legacy_topic_keys:
+                    raw = await asyncio.to_thread(database.get_config, key)
+                    if raw and str(raw).strip().isdigit():
+                        return int(chat_id), int(str(raw).strip())
+            return int(chat_id), None
+
+        logger.warning(
+            f"resolve_division_target: division {division_id} has no binding for "
+            f"{topic_types or ('<any>',)}; message skipped."
+        )
+        return None, None
+
+    legacy = await _legacy_chat()
+    if not legacy:
+        return None, None
+    for key in legacy_topic_keys:
+        raw = await asyncio.to_thread(database.get_config, key)
+        if raw and str(raw).strip().isdigit():
+            return legacy, int(str(raw).strip())
+    return legacy, None
+
+
 def is_admin(telegram_id: int) -> bool:
     """Check if the user is in configured Admin IDs, has admin role, or is assigned as a division admin."""
     if not telegram_id:
