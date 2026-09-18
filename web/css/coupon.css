@@ -839,11 +839,13 @@ body.coupon-open {
 }
 .bet-accepted-actions {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  /* The secondary label is the longer one: size it to fit, give the rest to the CTA. */
+  grid-template-columns: auto 1fr;
   gap: 8px;
 }
 .bet-accepted-btn {
-  padding: 13px 8px;
+  padding: 13px 14px;
+  white-space: nowrap;
   border-radius: 14px;
   font-family: 'Outfit', sans-serif;
   font-size: 0.9rem;
@@ -867,6 +869,7 @@ body.coupon-open {
   .betbar-mode { display: none; }
   .coupon-seg-btn { font-size: 0.8rem; }
   .coupon-chips .stake-chip { font-size: 0.74rem; }
+  .bet-accepted-btn { padding: 13px 10px; font-size: 0.82rem; }
 }
 
 @media (prefers-reduced-motion: reduce) {
