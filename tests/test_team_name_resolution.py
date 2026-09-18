@@ -123,7 +123,8 @@ class TestTeamsMatchContract(unittest.TestCase):
         for a, b in (
             ("Порту", "фк порту"),
             ("Фенербахче", "Фенербахе"),
-            ("Буде-Глимпт", "Будё Глимт"),
+            ("Будё Глимт", "Буде-Глимт"),
+            ("Будё Глимт", "bodo/glimt"),
             ("Спортинг", "Спортинг Лиссабон"),
         ):
             with self.subTest(pair=(a, b)):
@@ -277,7 +278,7 @@ class TestResolveTiers(unittest.TestCase):
         self.assertEqual(res.method, club_registry.ResolveMethod.ALIAS)
 
     def test_joined_tier_glues_tokens(self):
-        self.assertEqual(self._method("Буде-Глимпт"), club_registry.ResolveMethod.EXACT)
+        self.assertEqual(self._method("Буде-Глимт"), club_registry.ResolveMethod.EXACT)
         res = club_registry.resolve_team_name_ex("Ривер  П лейт")
         self.assertEqual(res.canonical, "Ривер Плейт")
         self.assertEqual(res.method, club_registry.ResolveMethod.JOINED)
@@ -438,11 +439,11 @@ class TestClubRegistry(unittest.TestCase):
 
     def test_index_maps_normalized_name_to_canonical(self):
         index = club_registry.get_registry_index()
-        self.assertEqual(index.get("буде глимпт"), "Буде-Глимпт")
+        self.assertEqual(index.get("буде глимт"), "Будё Глимт")
         self.assertEqual(index.get("ривер плейт"), "Ривер Плейт")
 
     def test_is_registered_ignores_case_and_separators(self):
-        self.assertTrue(club_registry.is_registered("будё-глимпт"))
+        self.assertTrue(club_registry.is_registered("будё-глимт"))
         self.assertTrue(club_registry.is_registered("  РИВЕР ПЛЕЙТ  "))
         self.assertFalse(club_registry.is_registered("Расинг Сантандер"))
 

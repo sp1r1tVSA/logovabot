@@ -205,12 +205,18 @@ will not merge an OCR typo of it — a typo cannot be told apart from a genuinel
 without knowing the club list. Refusing to merge is recoverable; silently merging two
 coaches' clubs is not.
 
-Only six clubs carried over from the КПЛ era, so `TEAM_ALIASES` covers just those
-(Бенфика, Аякс, ПСВ, Порту, Спортинг, Ривер Плейт). The other 74 resolve by exact name,
-prefix or fuzzy alone — short OCR forms like `Ман Сити`, `МЮ`, `Реал` or `Барса` do **not**
-resolve today, and ambiguous prefixes (`Реал` → Мадрид/Сосьедад, `Интер` → Милан/Майми,
-`Манчестер` → Сити/Юнайтед) correctly return no match rather than guessing. Add aliases as
-real OCR output shows what coaches actually type.
+Only seven clubs carried over from the КПЛ era, so `TEAM_ALIASES` covers just those
+(Бенфика, Аякс, ПСВ, Порту, Спортинг, Ривер Плейт, Будё Глимт). The other 73 resolve by
+exact name, prefix or fuzzy alone — short OCR forms like `Ман Сити`, `МЮ`, `Реал` or
+`Барса` do **not** resolve today, and ambiguous prefixes (`Реал` → Мадрид/Сосьедад,
+`Интер` → Милан/Майами, `Манчестер` → Сити/Юнайтед) correctly return no match rather than
+guessing. Add aliases as real OCR output shows what coaches actually type.
+
+One known gap: `normalize_team_name` folds `ё`/`ë`/`ø`/`ö` but **not** `э`→`е`, so the
+common Russian variant spellings `Фулхем`, `Вест Хем`, `Тоттенхем`, `Нэшвилл`→`Нешвилл`
+and `Эвертон`→`Евертон` miss their club (the longer ones survive on fuzzy, the short ones
+do not). Folding `э` was checked against the 80-club roster and produces no collisions, so
+it is a safe change if these forms start showing up in OCR.
 
 **Adding a club to the tournament means adding its name to the right division in
 `DIVISION_CLUBS`.** `python scripts/audit_team_resolution.py` reports
