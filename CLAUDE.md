@@ -175,9 +175,14 @@ so a name identifies a club on its own and name-keyed lookups are safe.
 `config.DIVISION_CLUBS` holds the season's roster: a `{division code: [16 club names]}` map
 over `DIV_1`…`DIV_5`, 80 clubs in total. It is **seed data, not the participant list** — an
 actual participant exists only once a coach registers and lands in `users.team_name`.
-Anything that needs the real roster queries `users` scoped by `division_id`; the map
-supplies the canonical spelling of a name and nothing more. The КПЛ-era `config.CLUBS` /
-`config.KPL_TEAMS` lists are gone.
+Anything that counts or ranks real participants (standings, debts, digests) queries `users`
+scoped by `division_id` and must keep doing so. The one place the map is authoritative is
+`database.get_division_teams(division_id)`: it unions the seeded roster (keyed by
+`divisions.code`) with the division's registered coaches and its scheduled match clubs, and
+every admin screen that offers *a club to pick* — «Составы команд», «Изменить клуб», add-player —
+goes through it. Without the seed those pickers were circular: a club only appeared once
+somebody already owned it, so the first coach of a fresh season could never be bound to one.
+The КПЛ-era `config.CLUBS` / `config.KPL_TEAMS` lists are gone.
 
 Team-name resolution from OCR output goes through `resolve_team_name` and
 `detect_teams_from_players`, both backed by **`club_registry.py`** — a pure-CPU module at

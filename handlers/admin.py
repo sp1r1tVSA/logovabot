@@ -3539,18 +3539,14 @@ async def admin_add_player_div_callback(update: Update, context: ContextTypes.DE
     teams = await asyncio.to_thread(database.get_division_teams, division_id)
     raw_users = await asyncio.to_thread(database.list_users)
     users = [dict(u) if not isinstance(u, dict) else u for u in raw_users]
-    club_to_player = {
-        u["team_name"].lower(): u["username"]
-        for u in users
-        if u.get("team_name") and u.get("division_id") == division_id
-    }
+    club_to_player = _club_owner_labels(users, division_id)
 
     keyboard = []
     row = []
     for club in teams:
         occupied_by = club_to_player.get(club.lower())
         if occupied_by:
-            btn_text = f"🔴 {club} (@{occupied_by})"
+            btn_text = f"🔴 {club} ({occupied_by})"
         else:
             btn_text = f"🟢 {club} (свободен)"
 
@@ -4419,6 +4415,25 @@ async def admin_view_player(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         keyboard.append([InlineKeyboardButton("« К списку участников", callback_data="admin_list_players_page_0")])
     await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
 
+def _club_owner_labels(users: list[dict], division_id: int | None = None) -> dict[str, str]:
+    """Клуб (lowercase) → как обратиться к его нынешнему владельцу.
+
+    Тренер без @username всё равно владеет клубом, поэтому подписываемся его ID:
+    ключ по одному `username` выбрасывал бы такого из карты, клуб рисовался бы
+    «свободен», и админ переназначил бы его, не зная, что отбирает — set_player_club
+    снимает прежнего владельца молча.
+    """
+    labels: dict[str, str] = {}
+    for u in users:
+        club = (u.get("team_name") or "").strip()
+        if not club:
+            continue
+        if division_id is not None and u.get("division_id") != division_id:
+            continue
+        labels[club.lower()] = f"@{u['username']}" if u.get("username") else f"ID {u.get('telegram_id')}"
+    return labels
+
+
 @admin_only
 async def admin_edit_club_select(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show grid of inline buttons for clubs in the division to edit player's club."""
@@ -4437,7 +4452,7 @@ async def admin_edit_club_select(update: Update, context: ContextTypes.DEFAULT_T
 
     raw_users = await asyncio.to_thread(database.list_users)
     users = [dict(u) if not isinstance(u, dict) else u for u in raw_users]
-    club_to_player = {u["team_name"].lower(): u["username"] for u in users if u.get("team_name")}
+    club_to_player = _club_owner_labels(users)
 
     div_id = player.get("division_id") if isinstance(player, dict) else (player["division_id"] if player else 1) or 1
     division_teams = await asyncio.to_thread(database.get_division_teams, div_id)
@@ -4456,7 +4471,7 @@ async def admin_edit_club_select(update: Update, context: ContextTypes.DEFAULT_T
         if player['team_name'] and player['team_name'].lower() == club.lower():
             btn_text = f"⭐ {club} (текущий)"
         elif occupied_by:
-            btn_text = f"🔴 {club} (@{occupied_by})"
+            btn_text = f"🔴 {club} ({occupied_by})"
         else:
             btn_text = f"🟢 {club} (свободен)"
 

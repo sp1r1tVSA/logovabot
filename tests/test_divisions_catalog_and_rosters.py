@@ -3,14 +3,17 @@ import unittest
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import config
 import database
 from handlers.cabinet import (
     show_clubs_catalog_divisions,
     show_clubs_catalog_for_division,
 )
 from handlers.admin import (
+    admin_edit_club_select,
     admin_rosters_for_division,
     _build_debts_summary,
+    _club_owner_labels,
     _post_or_update_debts_for_division,
 )
 
@@ -238,6 +241,94 @@ class TestDivisionsCatalogAndRosters(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(call_kwargs.get("chat_id"), -100123)
         self.assertEqual(call_kwargs.get("message_thread_id"), 555)
         self.assertIn("ПЕРВЫЙ ДИВИЗИОН", call_kwargs.get("text"))
+
+
+class TestSeededDivisionRoster(unittest.IsolatedAsyncioTestCase):
+    """Сид-состав дивизиона виден до того, как в нём кто-то зарегистрировался.
+
+    Иначе получается замкнутый круг: клуб появляется в списке, только когда его
+    уже кто-то занял, а занять его админу не из чего — пустой сезон невозможно
+    расписать по тренерам.
+    """
+
+    async def asyncSetUp(self):
+        database.init_db()
+        database.ensure_canonical_divisions()
+        self.admin_id = 999124
+        self.coach_id = 99911
+        div_five = database.get_division_by_code("DIV_5")
+        self.div_five_id = div_five["id"]
+
+        with database.transaction() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO users (telegram_id, username, team_name, role, division_id) "
+                "VALUES (?, 'coach_no_club', NULL, 'player', ?)",
+                (self.coach_id, self.div_five_id)
+            )
+
+    async def asyncTearDown(self):
+        with database.transaction() as conn:
+            conn.execute("DELETE FROM users WHERE telegram_id = ?", (self.coach_id,))
+
+    async def test_division_teams_come_from_the_seeded_roster(self):
+        teams = database.get_division_teams(self.div_five_id)
+
+        for club in config.DIVISION_CLUBS["DIV_5"]:
+            self.assertIn(club, teams)
+
+    async def test_seeded_roster_is_scoped_to_its_own_division(self):
+        teams = database.get_division_teams(self.div_five_id)
+
+        for club in config.DIVISION_CLUBS["DIV_1"]:
+            self.assertNotIn(club, teams)
+
+    async def test_admin_club_picker_offers_the_seeded_roster(self):
+        """«Изменить клуб» для тренера без клуба предлагает все 16 клубов его дивизиона."""
+        update = MagicMock()
+        update.effective_user = MagicMock()
+        update.effective_user.id = self.admin_id
+        query = MagicMock()
+        query.from_user.id = self.admin_id
+        query.data = f"admin_edit_club_select_{self.coach_id}"
+        query.answer = AsyncMock()
+        query.edit_message_text = AsyncMock()
+        update.callback_query = query
+        context = MagicMock()
+        context.user_data = {}
+
+        with patch("handlers.base.is_admin", return_value=True), \
+             patch("handlers.admin.is_admin", return_value=True):
+            await admin_edit_club_select(update, context)
+
+        query.edit_message_text.assert_called_once()
+        _, kwargs = query.edit_message_text.call_args
+        labels = [b.text for row in kwargs["reply_markup"].inline_keyboard for b in row]
+
+        offered = context.user_data[f"admin_edit_clubs_{self.coach_id}"]
+        for club in config.DIVISION_CLUBS["DIV_5"]:
+            self.assertIn(club, offered)
+        # Клубов никто не занял — ни один не должен быть помечен красным.
+        self.assertTrue(any("Реал Мадрид (свободен)" in label for label in labels))
+        self.assertFalse(any(label.startswith("🔴") for label in labels))
+
+    async def test_club_owner_without_username_still_marks_the_club_occupied(self):
+        """Владелец без @username не превращает свой клуб в «свободен».
+
+        set_player_club снимает прежнего владельца молча, поэтому неверная
+        подпись стоила бы тренеру клуба.
+        """
+        with database.transaction() as conn:
+            conn.execute(
+                "UPDATE users SET username = NULL, team_name = 'Челси' WHERE telegram_id = ?",
+                (self.coach_id,)
+            )
+
+        labels = _club_owner_labels(
+            [dict(u) for u in database.list_users()],
+            division_id=self.div_five_id,
+        )
+
+        self.assertEqual(labels.get("челси"), f"ID {self.coach_id}")
 
 
 if __name__ == "__main__":

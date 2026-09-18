@@ -6203,8 +6203,15 @@ def get_all_clubs_summary() -> list[dict]:
 def get_division_teams(division_id: int, season_id: int | None = None) -> list[str]:
     """
     Retrieve unique canonical team names belonging to a specific division.
-    Checks registered users in the division as well as matches scheduled in this division.
+
+    Three sources: the division's seeded roster in config.DIVISION_CLUBS (keyed
+    by divisions.code), the coaches registered in the division, and the clubs of
+    matches scheduled in it. The seed is what makes a club selectable *before*
+    anyone owns it — without it a fresh season has no clubs at all, so an admin
+    could never bind the first participant to one.
     """
+    from config import DIVISION_CLUBS
+
     target_season_id = season_id
     if target_season_id is None:
         act = get_active_season()
@@ -6212,6 +6219,11 @@ def get_division_teams(division_id: int, season_id: int | None = None) -> list[s
 
     with transaction() as conn:
         cursor = conn.cursor()
+        cursor.execute("SELECT code FROM divisions WHERE id = ?", (division_id,))
+        div_row = cursor.fetchone()
+        div_code = (div_row["code"] or "").strip().upper() if div_row else ""
+        seeded_teams = list(DIVISION_CLUBS.get(div_code, []))
+
         cursor.execute(
             "SELECT DISTINCT team_name FROM users WHERE division_id = ? AND team_name IS NOT NULL AND team_name != ''",
             (division_id,)
@@ -6227,7 +6239,7 @@ def get_division_teams(division_id: int, season_id: int | None = None) -> list[s
 
     seen = set()
     result = []
-    for t in user_teams + match_teams:
+    for t in seeded_teams + user_teams + match_teams:
         if t:
             t_low = t.lower()
             if t_low not in seen:
