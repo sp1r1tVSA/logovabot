@@ -1419,6 +1419,33 @@ def init_db() -> None:
             VALUES ('010_phase10_economy_and_progression', 'Phase 10: Logovo Economy, Ranking & Seasonal Progression')
         """)
 
+        # Расписание, сгенерированное до фикса, легло с пустыми player1_team /
+        # player2_team — матч читается по имени клуба, и без него он безымянный.
+        # Проставляем клуб по player1_id один раз; строки с уже заполненной
+        # колонкой не трогаем, свободные матчи (player_id IS NULL) — тоже.
+        cursor.execute("SELECT 1 FROM schema_migrations WHERE version = '013_backfill_match_team_names'")
+        if not cursor.fetchone():
+            for side in ("player1", "player2"):
+                # Имена колонок подставляются из литералов цикла, не из данных.
+                cursor.execute(f"""
+                    UPDATE matches SET {side}_team = (
+                        SELECT u.team_name FROM users u WHERE u.telegram_id = matches.{side}_id
+                    )
+                    WHERE ({side}_team IS NULL OR TRIM({side}_team) = '')
+                      AND {side}_id IS NOT NULL
+                      AND EXISTS (
+                          SELECT 1 FROM users u
+                          WHERE u.telegram_id = matches.{side}_id
+                            AND u.team_name IS NOT NULL AND TRIM(u.team_name) != ''
+                      )
+                """)
+                if cursor.rowcount:
+                    logger.info(f"Backfilled {cursor.rowcount} matches.{side}_team from {side}_id.")
+            cursor.execute("""
+                INSERT OR IGNORE INTO schema_migrations (version, description)
+                VALUES ('013_backfill_match_team_names', 'Fill matches.playerN_team from playerN_id for schedules generated without it')
+            """)
+
         # Standardize and migrate canonical team names across all tables
         migrate_team_names_canonical(cursor)
 
@@ -3016,21 +3043,40 @@ def create_round(round_number: int, deadline: str = None, division_id: int | Non
             (div_id, round_number, deadline)
         )
 
+def _team_names_by_telegram_id(cursor, player_ids: "set[int] | list[int]") -> dict[int, str]:
+    """Клубы участников по их telegram_id; коучи без клуба в словарь не попадают.
+
+    Матч связан с users через имя клуба, поэтому при создании матча его нужно
+    зафиксировать в самой строке — см. комментарий в `batch_insert_matches`.
+    """
+    ids = [int(p) for p in player_ids if p]
+    if not ids:
+        return {}
+    placeholders = ",".join("?" * len(ids))
+    cursor.execute(
+        f"SELECT telegram_id, team_name FROM users WHERE telegram_id IN ({placeholders})",
+        ids
+    )
+    return {r["telegram_id"]: r["team_name"] for r in cursor.fetchall() if r["team_name"]}
+
+
 def create_match(round_number: int, player1_id: int, player2_id: int, division_id: int | None = None) -> int:
     """Create a new pending match between two players in a round."""
     if player1_id == player2_id:
         raise ValueError("Игрок не может играть сам с собой (player1_id == player2_id).")
-        
+
     with transaction() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT team_name FROM users WHERE telegram_id IN (?, ?)", (player1_id, player2_id))
-        teams = [r[0] for r in cursor.fetchall() if r[0]]
+        team_by_id = _team_names_by_telegram_id(cursor, (player1_id, player2_id))
+        teams = list(team_by_id.values())
         if len(teams) == 2 and teams[0].lower() == teams[1].lower():
             raise ValueError(f"Команды участников совпадают: {teams[0]}")
 
         cursor.execute(
-            "INSERT INTO matches (round_number, player1_id, player2_id, status, division_id) VALUES (?, ?, ?, 'pending', ?)",
-            (round_number, player1_id, player2_id, division_id)
+            "INSERT INTO matches (round_number, player1_id, player2_id, player1_team, player2_team, status, division_id)"
+            " VALUES (?, ?, ?, ?, ?, 'pending', ?)",
+            (round_number, player1_id, player2_id,
+             team_by_id.get(player1_id), team_by_id.get(player2_id), division_id)
         )
         return cursor.lastrowid
 
@@ -4694,11 +4740,23 @@ def batch_insert_matches(fixtures: list[tuple[int, int, int]], division_id: int 
     div_id = division_id if division_id is not None else 1
     with transaction() as conn:
         cursor = conn.cursor()
+        # Клуб пишем сразу вместе с id. Читатели матчей (`get_match`,
+        # `get_matches_by_round`, `get_standings`) связывают матч с users по
+        # `LOWER(player1_team) = LOWER(team_name)`, а не по player1_id, поэтому их
+        # COALESCE(...,'Команда 1') сам себя не спасает: пустая колонка клуба ломает
+        # JOIN, и матч остаётся безымянным — без таблицы, без линии, без ников.
+        team_by_id = _team_names_by_telegram_id(
+            cursor, {pid for f in valid_fixtures for pid in (f[1], f[2])}
+        )
         cursor.executemany(
-            "INSERT INTO matches (round_number, player1_id, player2_id, status, division_id, season_id) VALUES (?, ?, ?, 'pending', ?, ?)",
+            "INSERT INTO matches (round_number, player1_id, player2_id, player1_team, player2_team, status, division_id, season_id)"
+            " VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)",
             # div_id, а не division_id: иначе при вызове без дивизиона матчи легли бы
             # с NULL, а туры ниже — в дивизион 1, и сетка туров их уже не нашла бы.
-            [(f[0], f[1], f[2], div_id, s_id) for f in valid_fixtures]
+            [
+                (f[0], f[1], f[2], team_by_id.get(f[1]), team_by_id.get(f[2]), div_id, s_id)
+                for f in valid_fixtures
+            ]
         )
         rounds = set([f[0] for f in valid_fixtures])
         cursor.executemany(
