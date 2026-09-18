@@ -21,18 +21,15 @@ class TestDebtLifecycle(unittest.TestCase):
 
         self.orig_config_path = config.DB_PATH
         self.orig_database_path = database.DB_PATH
-        self.orig_start_dt = config.DEBT_TRACKING_START_DATETIME
 
         config.DB_PATH = self.temp_db_path
         database.DB_PATH = self.temp_db_path
-        config.DEBT_TRACKING_START_DATETIME = "20.08.2026 12:00"
         database.init_db()
 
     def tearDown(self):
         """Restore original paths and cleanup temp db."""
         config.DB_PATH = self.orig_config_path
         database.DB_PATH = self.orig_database_path
-        config.DEBT_TRACKING_START_DATETIME = self.orig_start_dt
         try:
             os.remove(self.temp_db_path)
         except Exception:
@@ -95,11 +92,8 @@ class TestDebtLifecycle(unittest.TestCase):
         self.assertFalse(unwarned)
         self.assertEqual(database.get_user_warn_count(user_id), 0)
 
-    def test_start_datetime_clamping(self):
-        """Test that past deadlines are clamped to DEBT_TRACKING_START_DATETIME (21.08.2026 12:00)."""
-        # When start datetime is in the future relative to now:
-        config.DEBT_TRACKING_START_DATETIME = (datetime.datetime.now() + datetime.timedelta(days=2)).strftime("%d.%m.%Y %H:%M")
-        
+    def test_overdue_is_measured_from_the_round_deadline(self):
+        """There is no global start gate: the round's own deadline is the whole clock."""
         past_dl = (datetime.datetime.now() - datetime.timedelta(hours=50)).strftime("%d.%m.%Y %H:%M")
 
         with database.transaction() as conn:
@@ -108,13 +102,11 @@ class TestDebtLifecycle(unittest.TestCase):
             conn.execute("INSERT INTO rounds (round_number, is_open, deadline) VALUES (1, 1, ?)", (past_dl,))
             conn.execute("INSERT INTO matches (id, round_number, player1_id, player2_id, player1_team, player2_team, status) VALUES (10, 1, 111, 222, 'Real Madrid', 'Barcelona', 'pending')")
 
-        # Since start datetime is in the future, is_match_overdue should be False
-        self.assertFalse(database.is_match_overdue(10))
+        self.assertTrue(database.is_match_overdue(10))
 
-        # Overdue matches should report 0.0 hours_overdue
         overdue = database.get_detailed_overdue_matches()
         self.assertEqual(len(overdue), 1)
-        self.assertEqual(overdue[0]["hours_overdue"], 0.0)
+        self.assertAlmostEqual(overdue[0]["hours_overdue"], 50.0, delta=1.0)
 
     def test_recent_warn_rate_limit(self):
         """Test has_user_been_warned_recently helper."""
@@ -145,8 +137,6 @@ class TestDebtLifecycle(unittest.TestCase):
 
     def test_closed_rounds_and_flexible_dates(self):
         """Test overdue detection for closed rounds, flexible date formats, and future unopened rounds."""
-        config.DEBT_TRACKING_START_DATETIME = (datetime.datetime.now() - datetime.timedelta(hours=30)).strftime("%d.%m.%Y %H:%M")
-        
         with database.transaction() as conn:
             # User 1 and User 2
             conn.execute("INSERT INTO users (telegram_id, username, team_name, warn_count) VALUES (301, 'user301', 'Ливерпуль', 0)")
@@ -156,7 +146,7 @@ class TestDebtLifecycle(unittest.TestCase):
             conn.execute("INSERT INTO rounds (round_number, is_open, deadline) VALUES (1, 0, '15.08.2026 12:00')")
             conn.execute("INSERT INTO matches (id, round_number, player1_id, player2_id, player1_team, player2_team, status) VALUES (501, 1, 301, 302, 'Ливерпуль', 'Манчестер Сити', 'pending')")
 
-            # Open round 2 without deadline but older start datetime
+            # Open round 2 without a deadline — a debt, but with a zero clock
             conn.execute("INSERT INTO rounds (round_number, is_open, deadline) VALUES (2, 1, NULL)")
             conn.execute("INSERT INTO matches (id, round_number, player1_id, player2_id, player1_team, player2_team, status) VALUES (502, 2, 301, 302, 'Ливерпуль', 'Манчестер Сити', 'pending')")
 
@@ -171,9 +161,9 @@ class TestDebtLifecycle(unittest.TestCase):
         self.assertIn(502, match_ids)
         self.assertNotIn(525, match_ids)
 
-        # Verify hours_overdue is calculated correctly (> 24h)
-        for m in overdue:
-            self.assertGreater(m["hours_overdue"], 24.0)
+        by_id = {m["id"]: m for m in overdue}
+        self.assertGreater(by_id[501]["hours_overdue"], 24.0)
+        self.assertEqual(by_id[502]["hours_overdue"], 0.0)
 
         # Test find_user_by_team
         u = database.find_user_by_team("ливерпуль")

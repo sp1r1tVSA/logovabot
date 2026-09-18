@@ -74,14 +74,9 @@ class TestFreezeAccounting(unittest.TestCase):
 
         self.orig_config_path = config.DB_PATH
         self.orig_database_path = database.DB_PATH
-        self.orig_start_dt = config.DEBT_TRACKING_START_DATETIME
 
         config.DB_PATH = self.temp_db_path
         database.DB_PATH = self.temp_db_path
-        # Tracking started long ago so it never gates overdue detection here
-        config.DEBT_TRACKING_START_DATETIME = (
-            datetime.datetime.now() - datetime.timedelta(days=30)
-        ).strftime("%d.%m.%Y %H:%M")
         database.init_db()
 
         past_dl = (datetime.datetime.now() - datetime.timedelta(hours=100)).strftime("%d.%m.%Y %H:%M")
@@ -97,7 +92,6 @@ class TestFreezeAccounting(unittest.TestCase):
     def tearDown(self):
         config.DB_PATH = self.orig_config_path
         database.DB_PATH = self.orig_database_path
-        config.DEBT_TRACKING_START_DATETIME = self.orig_start_dt
         try:
             os.remove(self.temp_db_path)
         except Exception:

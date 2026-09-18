@@ -6285,7 +6285,6 @@ async def job_debt_lifecycle_tracker(context: ContextTypes.DEFAULT_TYPE) -> None
       cost a player at most ONE warn. On 4/4 warns the player is auto-kicked.
     - If is_extended == 1: the debt clock is frozen and nothing escalates. An
       expired extension (`extended_until`) is resumed automatically here.
-    - No reminders or escalations before DEBT_TRACKING_START_DATETIME.
     """
     if _debt_tracker_lock.locked():
         logger.info("Debt tracker run skipped: another run is already in progress.")
@@ -6300,15 +6299,10 @@ async def _run_debt_lifecycle_tracker(context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     now = datetime.datetime.now()
-    start_dt = await asyncio.to_thread(database.get_debt_tracking_start_datetime)
-    auto_warns_active = (start_dt is None or now >= start_dt)
 
     warns_updated = False
 
-    logger.info(
-        f"Checking debt tracker: {len(overdue_matches)} overdue matches found "
-        f"(start_dt={start_dt}, auto_warns_active={auto_warns_active})"
-    )
+    logger.info(f"Checking debt tracker: {len(overdue_matches)} overdue matches found")
 
     for m in overdue_matches:
         m_id = m["id"]
@@ -6351,9 +6345,8 @@ async def _run_debt_lifecycle_tracker(context: ContextTypes.DEFAULT_TYPE) -> Non
                 is_extended = False
 
         # 1. Initial Notification: Moment deadline passed (0h)
-        # Gated on auto_warns_active (no "deadline passed" claims before tracking starts)
-        # and skipped for extended matches.
-        if not is_extended and auto_warns_active and not (
+        # Skipped for extended matches.
+        if not is_extended and not (
             await asyncio.to_thread(database.has_debt_stage, m_id, "deadline_passed")
         ):
             dm_initial_text = (
@@ -6384,11 +6377,11 @@ async def _run_debt_lifecycle_tracker(context: ContextTypes.DEFAULT_TYPE) -> Non
                 await asyncio.to_thread(database.record_debt_stage, m_id, "deadline_passed")
                 await asyncio.to_thread(database.record_debt_12h_reminder, m_id)
 
-        # Skip reminders AND warns for extended matches, before tracking start,
-        # or when either participant cannot be resolved to an active player
-        # (e.g. opponent was kicked / club vacant) — an unplayable match must
-        # never generate warnings or reminder spam for the remaining player.
-        if is_extended or not auto_warns_active or not (p1_valid and p2_valid):
+        # Skip reminders AND warns for extended matches, or when either participant
+        # cannot be resolved to an active player (e.g. opponent was kicked / club
+        # vacant) — an unplayable match must never generate warnings or reminder
+        # spam for the remaining player.
+        if is_extended or not (p1_valid and p2_valid):
             continue
 
         # 2. Cycle Reminders in DM (every 12 hours)
@@ -6504,17 +6497,13 @@ async def admin_check_debts_command(update: Update, context: ContextTypes.DEFAUL
         return
 
     overdue_matches = await asyncio.to_thread(database.get_detailed_overdue_matches)
-    start_dt = await asyncio.to_thread(database.get_debt_tracking_start_datetime)
-    start_str = start_dt.strftime("%d.%m.%Y %H:%M") if start_dt else "Не задано"
 
     now = datetime.datetime.now()
-    auto_warns_active = (start_dt is None or now >= start_dt)
 
     lines = [
         f"🔍 <b>Диагностика системы долгов</b>\n",
         f"📅 Текущее время сервера: <b>{now.strftime('%d.%m.%Y %H:%M:%S')}</b>",
-        f"⏳ Старт начисления авто-варнов: <b>{start_str}</b>",
-        f"⚙️ Статус авто-варнов: <b>{'🟢 АКТИВНЫ' if auto_warns_active else '🟡 ОЖИДАЮТ СТАРТА'}</b>",
+        f"⚙️ Статус авто-варнов: <b>🟢 АКТИВНЫ</b>",
         f"📊 Найдено матчей-долгов: <b>{len(overdue_matches)}</b>\n",
     ]
 
@@ -7209,15 +7198,13 @@ async def admin_reset_debts_command(update: Update, context: ContextTypes.DEFAUL
         return
 
     count = await asyncio.to_thread(database.admin_reset_all_warns_and_debts)
-    start_dt = await asyncio.to_thread(database.get_debt_tracking_start_datetime)
-    start_str = start_dt.strftime("%d.%m.%Y в %H:%M") if start_dt else "не задано"
 
     text = (
         f"🧹 <b>Система долгов и варнов успешно сброшена!</b>\n\n"
         f"• Сброшено варнов у игроков: <b>{count}</b>\n"
-        f"• Все таймеры и стадии долгов очищены.\n"
-        f"• 📅 Дата старта начисления авто-варнов: <b>{start_str}</b>\n\n"
-        f"<i>До {start_str} бот не будет выписывать авто-варны и исключать участников.</i>"
+        f"• Все таймеры и стадии долгов очищены.\n\n"
+        f"<i>Отсчёт долгов идёт от дедлайна тура: пока дедлайн не истёк, "
+        f"авто-варны не выписываются.</i>"
     )
     await update.message.reply_text(text, parse_mode="HTML")
     await _post_or_update_debts_in_warns(context)

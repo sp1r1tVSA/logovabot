@@ -78,11 +78,6 @@ MAX_OPEN_ROUNDS_PER_DIVISION: int = 2
 # coin_transactions('welcome_bonus') берут сумму отсюда.
 INITIAL_WALLET_BALANCE = 677
 
-# Debt tracking and auto-warn activation threshold
-# No auto-warns will be issued before this datetime.
-# All previous round deadlines will be counted starting from this datetime.
-DEBT_TRACKING_START_DATETIME = os.getenv("DEBT_TRACKING_START_DATETIME", "22.08.2026 00:00").strip()
-
 # Составы дивизионов сезона 2026/27, по 16 клубов в каждом. Ключ — divisions.code.
 # Это сид-состав: фактический участник появляется в users.team_name, когда тренер
 # регистрируется. Места, которым нужен реальный состав, обязаны спрашивать users;
@@ -139,16 +134,16 @@ DIVISION_PLAYER_SEEDS: dict[str, list[str]] = {
         "@Serghe1KO", "Марсель", "Кельн", "@ch1lyx",
     ],
     "DIV_2": [
-        "@Vladimir_5500", "@govorigde", "@Davtyan", "@sulassll",
+        "@Vladimir_5500", "@govorigde", "@Davtyan_55", "@sulassll",
         "@Artem53824", "@saymino1", "@mitixfc", "@lvckri",
         "@Turolen", "@Tonyloki57", "@umbra_mind", "@Forzainternationale",
         "@GeorgiyKostenko", "@virkilainen", "@Prizrakks", "@vtrrgyg",
     ],
     "DIV_3": [
-        "@XTrent20", "@TarEgiazaryan", "@AShotik_UA", "@perdun_1337",
+        "@XTrent20", "@TarEgiazaryan", "@Shotik_UA", "@perdun_1337",
         "@sergeynobody1", "@Artilawyer", "@kirillchuk_927", "@azs5652",
         "@Rodza20", "@Ghoust_tag", "@Daimond_Highlight", "@Acidonchik_95",
-        "@sayvvel", "@Dr_Wh11te", "@aidarreezz", "@LazyMaxxA",
+        "@sayvvel", "@Dr_Wh11te", "@aidarreezz", "@LazyMaxxAA",
     ],
     "DIV_4": [
         "@Nixan23", "@Flasin5", "@epl_l", "@k1nkyua",
@@ -161,7 +156,7 @@ DIVISION_PLAYER_SEEDS: dict[str, list[str]] = {
         "@Fede_15r", "@tornike07", "@Kurilril5", "@MAGMDV_77",
         "@Rusasf", "@joraknaz", "@ArsenalSte", "@Daot1",
         "@agosv", "@Diktator_new", "@ilia575", "@zazz_33117",
-        "@vitasmachiha", "@maksimmmn", "@mms_op", "@Kadyr_42",
+        "@vitasmachiha", "@lsmaksimmn", "@mms_op", "@Kadyr_42",
     ],
 }
 

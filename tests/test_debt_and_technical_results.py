@@ -52,12 +52,9 @@ class DebtTechnicalResultsBase(unittest.TestCase):
 
         self.orig_config_path = config.DB_PATH
         self.orig_database_path = database.DB_PATH
-        self.orig_start_dt = config.DEBT_TRACKING_START_DATETIME
 
         config.DB_PATH = self.temp_db_path
         database.DB_PATH = self.temp_db_path
-        # Отсчёт долгов давно запущен, иначе просрочка клампится в 0 часов.
-        config.DEBT_TRACKING_START_DATETIME = _fmt(datetime.datetime.now() - datetime.timedelta(days=30))
         database.init_db()
 
         self.division_id = database.create_division(name="Debt Div", code="DEBTDIV")
@@ -69,7 +66,6 @@ class DebtTechnicalResultsBase(unittest.TestCase):
     def tearDown(self):
         config.DB_PATH = self.orig_config_path
         database.DB_PATH = self.orig_database_path
-        config.DEBT_TRACKING_START_DATETIME = self.orig_start_dt
         try:
             os.remove(self.temp_db_path)
         except Exception:

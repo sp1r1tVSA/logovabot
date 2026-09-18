@@ -204,7 +204,6 @@ class TestClubCard(unittest.TestCase):
 
     def test_club_card_debts_excludes_future_and_open_rounds(self):
         """Test that get_club_card_data does not count future unopened rounds or open tours as debts."""
-        config.DEBT_TRACKING_START_DATETIME = "01.01.2026 00:00"
         database.register_user(2001, "racing_mgr", "manager", "Расинг")
         database.register_user(2002, "braga_mgr", "manager", "Брага")
         database.register_user(2003, "porto_mgr", "manager", "Порту")

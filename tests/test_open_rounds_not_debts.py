@@ -20,11 +20,9 @@ class TestOpenRoundsNotDebts(unittest.TestCase):
 
         self.orig_config_path = config.DB_PATH
         self.orig_database_path = database.DB_PATH
-        self.orig_start_dt = config.DEBT_TRACKING_START_DATETIME
 
         config.DB_PATH = self.temp_db_path
         database.DB_PATH = self.temp_db_path
-        config.DEBT_TRACKING_START_DATETIME = "01.01.2026 00:00"
         database.init_db()
 
         now = datetime.datetime.now()
@@ -58,7 +56,6 @@ class TestOpenRoundsNotDebts(unittest.TestCase):
     def tearDown(self):
         config.DB_PATH = self.orig_config_path
         database.DB_PATH = self.orig_database_path
-        config.DEBT_TRACKING_START_DATETIME = self.orig_start_dt
         try:
             os.remove(self.temp_db_path)
         except Exception:

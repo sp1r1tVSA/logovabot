@@ -3733,6 +3733,109 @@ def pre_register_player_to_division(username: str, division_id: int) -> int:
         )
         return temp_id
 
+def _repoint_user_owned_rows(cursor, old_id: int, new_id: int) -> None:
+    """
+    Move the Logovo.bet rows owned by a pre-registration placeholder onto the real id.
+
+    `matches`, `user_warns` and `pending_reports` are re-pointed by the caller. This
+    covers the economy side, where `user_wallets` and `user_progression` keep
+    `user_id` as their PRIMARY KEY: when the real user already owns a row, the two
+    have to be merged rather than moved, or the UPDATE hits a constraint and the
+    placeholder's coins and XP are lost with its `users` row.
+
+    `squad_players` deliberately has no user column — it is keyed by `team_name`,
+    which travels with the merged user record on its own, so nothing to do there.
+    """
+    # ── Wallet ───────────────────────────────────────────────────────────────
+    cursor.execute("SELECT * FROM user_wallets WHERE user_id = ?", (old_id,))
+    old_wallet = cursor.fetchone()
+    if old_wallet:
+        cursor.execute("SELECT 1 FROM user_wallets WHERE user_id = ?", (new_id,))
+        if cursor.fetchone():
+            # Both sides hold a wallet, so the welcome bonus was granted twice.
+            # Carry over only what the placeholder earned on top of it and drop the
+            # duplicate grant: balance must stay equal to the sum of the ledger.
+            cursor.execute(
+                "DELETE FROM coin_transactions WHERE id IN ("
+                "  SELECT id FROM coin_transactions"
+                "  WHERE user_id = ? AND transaction_type = 'welcome_bonus'"
+                "  ORDER BY id LIMIT 1)",
+                (old_id,)
+            )
+            duplicate_bonus = INITIAL_WALLET_BALANCE if cursor.rowcount else 0
+            cursor.execute(
+                """
+                UPDATE user_wallets SET
+                    balance = balance + ?,
+                    total_wagered = total_wagered + ?,
+                    total_won = total_won + ?,
+                    bets_count = bets_count + ?,
+                    bets_won = bets_won + ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE user_id = ?
+                """,
+                (
+                    old_wallet["balance"] - duplicate_bonus,
+                    old_wallet["total_wagered"],
+                    old_wallet["total_won"],
+                    old_wallet["bets_count"],
+                    old_wallet["bets_won"],
+                    new_id,
+                )
+            )
+            cursor.execute("DELETE FROM user_wallets WHERE user_id = ?", (old_id,))
+        else:
+            cursor.execute("UPDATE user_wallets SET user_id = ? WHERE user_id = ?", (new_id, old_id))
+
+    # ── Progression ──────────────────────────────────────────────────────────
+    cursor.execute("SELECT * FROM user_progression WHERE user_id = ?", (old_id,))
+    old_prog = cursor.fetchone()
+    if old_prog:
+        cursor.execute("SELECT total_xp_earned FROM user_progression WHERE user_id = ?", (new_id,))
+        new_prog = cursor.fetchone()
+        if new_prog:
+            # Keep whichever profile actually earned more: an untouched placeholder
+            # is a fresh level-1 row and must never overwrite real progress.
+            if old_prog["total_xp_earned"] > new_prog["total_xp_earned"]:
+                cursor.execute(
+                    """
+                    UPDATE user_progression SET
+                        level = ?, current_xp = ?, total_xp_earned = ?,
+                        current_streak = ?, best_streak = ?, last_active_date = ?,
+                        streak_shields = ?, equipped_frame = ?, equipped_title = ?,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE user_id = ?
+                    """,
+                    (
+                        old_prog["level"], old_prog["current_xp"], old_prog["total_xp_earned"],
+                        old_prog["current_streak"], old_prog["best_streak"], old_prog["last_active_date"],
+                        old_prog["streak_shields"], old_prog["equipped_frame"], old_prog["equipped_title"],
+                        new_id,
+                    )
+                )
+            cursor.execute("DELETE FROM user_progression WHERE user_id = ?", (old_id,))
+        else:
+            cursor.execute("UPDATE user_progression SET user_id = ? WHERE user_id = ?", (new_id, old_id))
+
+    # ── Bets ─────────────────────────────────────────────────────────────────
+    # user_bets carries UNIQUE(user_id, idempotency_key) for non-NULL keys: release
+    # any key the real user already holds so the placeholder's bet survives the move.
+    cursor.execute(
+        """
+        UPDATE user_bets SET idempotency_key = NULL
+        WHERE user_id = ? AND idempotency_key IS NOT NULL
+          AND idempotency_key IN (SELECT idempotency_key FROM user_bets WHERE user_id = ?)
+        """,
+        (old_id, new_id)
+    )
+    cursor.execute("UPDATE user_bets SET user_id = ? WHERE user_id = ?", (new_id, old_id))
+
+    # ── Coin ledger ──────────────────────────────────────────────────────────
+    # Plain column, no uniqueness — a straight move is always safe. Runs last so the
+    # duplicate welcome bonus above is removed while it still belongs to old_id.
+    cursor.execute("UPDATE coin_transactions SET user_id = ? WHERE user_id = ?", (new_id, old_id))
+
+
 def handle_user_startup(telegram_id: int, username: str | None, default_role: str = 'user') -> None:
     """
     Handle a user starting the bot.
@@ -3774,7 +3877,8 @@ def handle_user_startup(telegram_id: int, username: str | None, default_role: st
                 cursor.execute("UPDATE matches SET proposed_by = ? WHERE proposed_by = ?", (telegram_id, old_id))
                 cursor.execute("UPDATE user_warns SET user_id = ? WHERE user_id = ?", (telegram_id, old_id))
                 cursor.execute("UPDATE pending_reports SET reporter_id = ? WHERE reporter_id = ?", (telegram_id, old_id))
-                
+                _repoint_user_owned_rows(cursor, old_id, telegram_id)
+
                 # Delete old temporary record
                 cursor.execute("DELETE FROM users WHERE telegram_id = ?", (old_id,))
                 
@@ -3816,7 +3920,8 @@ def handle_user_startup(telegram_id: int, username: str | None, default_role: st
             cursor.execute("UPDATE matches SET proposed_by = ? WHERE proposed_by = ?", (telegram_id, old_id))
             cursor.execute("UPDATE user_warns SET user_id = ? WHERE user_id = ?", (telegram_id, old_id))
             cursor.execute("UPDATE pending_reports SET reporter_id = ? WHERE reporter_id = ?", (telegram_id, old_id))
-            
+            _repoint_user_owned_rows(cursor, old_id, telegram_id)
+
             # 4. Delete old temporary record
             cursor.execute("DELETE FROM users WHERE telegram_id = ?", (old_id,))
             
@@ -5880,7 +5985,6 @@ def get_club_card_data(team_name: str) -> dict:
         pending_matches = []
         debts_count = 0
         now_dt = datetime.datetime.now()
-        start_dt = get_debt_tracking_start_datetime()
 
         for pm in cursor.fetchall():
             p1_t = pm["player1_team"] or ""
@@ -5900,21 +6004,15 @@ def get_club_card_data(team_name: str) -> dict:
             overdue = False
             if not is_cup:
                 if dl_dt and dl_dt <= now_dt:
-                    if start_dt:
-                        overdue = bool(now_dt >= max(dl_dt, start_dt))
-                    else:
-                        overdue = True
+                    overdue = True
                 elif dl_dt and dl_dt > now_dt:
                     overdue = False
                 elif is_open and dl_dt is None:
-                    if start_dt and now_dt >= start_dt:
-                        overdue = True
+                    overdue = True
                 elif max_open_round > 0 and rn < max_open_round:
-                    if start_dt and now_dt >= start_dt:
-                        overdue = True
+                    overdue = True
                 elif not is_open and r_info and max_open_round > 0 and rn <= max_open_round:
-                    if start_dt and now_dt >= start_dt:
-                        overdue = True
+                    overdue = True
             else:
                 # Cup matches: overdue only if recorded in debt reminders
                 cursor.execute("SELECT 1 FROM debt_reminders WHERE match_id = ? LIMIT 1", (pm["id"],))
@@ -6488,7 +6586,6 @@ def get_all_unplayed_league_matches(division_id: int | None = None, season_id: i
     with transaction() as conn:
         cursor = conn.cursor()
         now = datetime.datetime.now()
-        start_dt = get_debt_tracking_start_datetime()
 
         target_season_id = season_id
         if target_season_id is None:
@@ -6576,20 +6673,18 @@ def get_all_unplayed_league_matches(division_id: int | None = None, season_id: i
 
             # Include ONLY if the match is actually overdue:
             # 1. Deadline is set and has passed
-            # 2. Round is open without deadline and debt tracking started
-            # 3. Round is a past round (before max open round, or closed) and tracking started
+            # 2. Round is open without a deadline
+            # 3. Round is a past round (before max open round, or closed)
             # Future unopened rounds and open rounds with future deadlines are ignored
             is_debt = False
             if dl_dt and dl_dt <= now:
                 is_debt = True
             elif is_open and dl_dt is None:
-                if start_dt and now >= start_dt:
-                    is_debt = True
+                is_debt = True
             elif r_info and max_open_round > 0 and rn <= max_open_round:
                 # Skip any round (open or closed) whose deadline is still in the future
                 if not (dl_dt and dl_dt > now):
-                    if start_dt and now >= start_dt:
-                        is_debt = True
+                    is_debt = True
 
             if not is_debt:
                 continue
@@ -6667,7 +6762,7 @@ def get_detailed_overdue_matches(division_id: int | None = None, season_id: int 
     """
     Retrieve all pending league matches that are legitimately overdue:
     - Round has an expired deadline (deadline_dt <= now).
-    - Or round is currently open (is_open = 1) without a deadline, and start_dt <= now.
+    - Or round is currently open (is_open = 1) without a deadline.
     - Or round is a past round (rn < max_open_round or is_open = 0 with unplayed matches).
     - Club participants are strictly resolved from current owners in users table.
     - Strictly filtered by division_id and season_id.
@@ -6675,7 +6770,6 @@ def get_detailed_overdue_matches(division_id: int | None = None, season_id: int 
     with transaction() as conn:
         cursor = conn.cursor()
         now = datetime.datetime.now()
-        start_dt = get_debt_tracking_start_datetime()
 
         target_season_id = season_id
         if target_season_id is None:
@@ -6771,25 +6865,22 @@ def get_detailed_overdue_matches(division_id: int | None = None, season_id: int 
 
             # CRITICAL: A pending league match is overdue if:
             # 1. dl_dt is set and dl_dt <= now
-            # 2. Or is_open == True and dl_dt is None and start_dt and now >= start_dt
+            # 2. Or is_open == True and dl_dt is None
             # 3. Or rn < max_open_round (past tour before current open tours)
             # 4. Or is_open == False and rn <= max_open_round (closed tour with pending matches)
             is_overdue = False
             if dl_dt and dl_dt <= now:
                 is_overdue = True
             elif is_open and dl_dt is None:
-                if start_dt and now >= start_dt:
-                    is_overdue = True
+                is_overdue = True
             elif max_open_round > 0 and rn < max_open_round:
                 # Skip any round whose own deadline is still in the future
                 if not (dl_dt and dl_dt > now):
-                    if start_dt and now >= start_dt:
-                        is_overdue = True
+                    is_overdue = True
             elif not is_open and r_info and max_open_round > 0 and rn <= max_open_round:
                 # Closed past round — but never overdue while its deadline is in the future
                 if not (dl_dt and dl_dt > now):
-                    if start_dt and now >= start_dt:
-                        is_overdue = True
+                    is_overdue = True
 
             if not is_overdue:
                 continue
@@ -6807,10 +6898,10 @@ def get_detailed_overdue_matches(division_id: int | None = None, season_id: int 
             m["p2_username"] = u2.get("username") if u2 else None
             m["p2_warns"] = u2.get("warn_count", 0) if u2 else 0
 
-            # Calculate overdue hours relative to effective deadline / start_dt
-            effective_dl = dl_dt if dl_dt else start_dt
-            if start_dt and (effective_dl is None or effective_dl < start_dt):
-                effective_dl = start_dt
+            # Calculate overdue hours relative to the round's own deadline. A round
+            # with no deadline has nothing to be late against, so its clock stays at
+            # zero: the match is still listed as a debt, it just never escalates.
+            effective_dl = dl_dt
 
             if effective_dl and now >= effective_dl:
                 hours_overdue = (now - effective_dl).total_seconds() / 3600.0
@@ -6827,21 +6918,13 @@ def get_detailed_overdue_matches(division_id: int | None = None, season_id: int 
                     frozen_total += (now - f_at).total_seconds()
             hours_overdue -= frozen_total / 3600.0
 
-            m["deadline_str"] = r_info.get("deadline_str") if r_info and r_info.get("deadline_str") else (start_dt.strftime("%d.%m.%Y %H:%M") if start_dt else "—")
+            m["deadline_str"] = r_info.get("deadline_str") if r_info and r_info.get("deadline_str") else "—"
             m["deadline_dt"] = effective_dl
             m["frozen_hours"] = max(0.0, frozen_total / 3600.0)
             m["hours_overdue"] = max(0.0, hours_overdue)
             overdue_list.append(m)
 
         return overdue_list
-
-
-def get_debt_tracking_start_datetime() -> datetime.datetime | None:
-    """Parse configured debt tracking activation start datetime."""
-    from config import DEBT_TRACKING_START_DATETIME
-    if not DEBT_TRACKING_START_DATETIME:
-        return None
-    return parse_flexible_datetime(DEBT_TRACKING_START_DATETIME)
 
 
 def is_match_overdue(match_id: int) -> bool:
@@ -6870,7 +6953,6 @@ def is_match_overdue(match_id: int) -> bool:
 
         dl_dt = parse_flexible_datetime(r_row["deadline"])
         is_open = bool(r_row["is_open"])
-        start_dt = get_debt_tracking_start_datetime()
         now = datetime.datetime.now()
 
         if m_div_id is not None:
@@ -6881,16 +6963,13 @@ def is_match_overdue(match_id: int) -> bool:
         max_open = max_row[0] if max_row and max_row[0] is not None else 0
 
         if dl_dt:
-            effective_dl = dl_dt
-            if start_dt and dl_dt < start_dt:
-                effective_dl = start_dt
-            return now >= effective_dl
+            return now >= dl_dt
 
-        if is_open and start_dt:
-            return now >= start_dt
+        if is_open:
+            return True
 
-        if max_open > 0 and rn < max_open and start_dt:
-            return now >= start_dt
+        if max_open > 0 and rn < max_open:
+            return True
 
         return False
 
