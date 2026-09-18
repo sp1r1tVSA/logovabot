@@ -29,6 +29,10 @@ from config import MAX_WARNS_LIMIT, GROUP_ID
 from handlers.squad_ai import offer_recognized_squad
 from services.graphics import player_photos
 from services.tournament_validator import RoundRobinValidator
+from services.schedule_generator import (
+    generate_asymmetric_round_robin_fixtures,
+    generate_round_robin_fixtures,
+)
 import logging
 
 logger = logging.getLogger(__name__)
@@ -41,45 +45,6 @@ WARN_REASONS = [
     "Нарушение регламента составов"
 ]
 _warn_action_locks: set[int] = set()
-
-def generate_round_robin_fixtures(player_ids: list[int]) -> list[tuple[int, int, int]]:
-    """
-    Generate double round-robin fixtures (each plays each other twice: Home & Away).
-    Returns a list of tuples: (round_number, player1_id, player2_id)
-    """
-    n = len(player_ids)
-    if n < 2:
-        return []
-    
-    players = list(player_ids)
-    if n % 2 != 0:
-        players.append(None)
-        n += 1
-        
-    single_fixtures = []
-    temp_players = list(players)
-    
-    # First round-robin half (n - 1 rounds)
-    for round_num in range(1, n):
-        for i in range(n // 2):
-            p1 = temp_players[i]
-            p2 = temp_players[n - 1 - i]
-            if p1 is not None and p2 is not None:
-                if round_num % 2 == 0:
-                    single_fixtures.append((round_num, p2, p1))
-                else:
-                    single_fixtures.append((round_num, p1, p2))
-        # Rotate players (keep the first player fixed)
-        temp_players = [temp_players[0]] + [temp_players[-1]] + temp_players[1:-1]
-        
-    # Second round-robin half (swap roles)
-    double_fixtures = list(single_fixtures)
-    rounds_in_half = n - 1
-    for round_num, p1, p2 in single_fixtures:
-        double_fixtures.append((round_num + rounds_in_half, p2, p1))
-        
-    double_fixtures.sort(key=lambda x: x[0])
-    return double_fixtures
 
 
 # 🎰 Предсезонная линия БК всегда встаёт на первую пару туров: дальше её
@@ -831,7 +796,10 @@ async def admin_gen_div_select(update: Update, context: ContextTypes.DEFAULT_TYP
         f"⚠️ <b>Подтверждение генерации расписания</b>\n\n"
         f"• Дивизион: <b>{html.escape(div_title)}</b>\n"
         f"• Готовых участников: <b>{len(with_team)}</b>\n\n"
-        f"⚠️ <i>Внимание: Существующие матчи <b>ТОЛЬКО</b> этого дивизиона будут сброшены и сгенерированы заново по системе Round Robin (2 круга / каждый с каждым дома и на выезде).\n"
+        f"⚠️ <i>Внимание: Существующие матчи <b>ТОЛЬКО</b> этого дивизиона будут сброшены и сгенерированы заново:\n"
+        f"• <b>30 туров</b> по системе Round Robin (2 круга по 8 матчей).\n"
+        f"• <b>Асимметричный 2-й круг</b> (Туры 16–30): справедливый календарь без прямого зеркала, с разрывом очных встреч ≥ 5 туров и контролем серий дом/выезд.\n"
+        f"• <b>Жеребьевка</b>: случайное распределение участников по календарной сетке.\n"
         f"Матчи и результаты других дивизионов затронуты НЕ будут!</i>"
     )
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
@@ -889,13 +857,19 @@ async def admin_generate_matches_execute(update: Update, context: ContextTypes.D
         )
         return
 
-    # Generate round robin
-    fixtures = generate_round_robin_fixtures(players)
+    # Generate asymmetric round robin with randomized draw
+    fixtures = generate_round_robin_fixtures(players, shuffle_teams=True)
 
     # Validate fixtures if standard 16 teams format
     if len(players) == 16:
         is_valid, validation_errors = RoundRobinValidator.validate_fixtures(
-            fixtures, expected_teams=16, expected_rounds=30, expected_matches=240, division_id=div_id, season_id=season_id
+            fixtures,
+            expected_teams=16,
+            expected_rounds=30,
+            expected_matches=240,
+            division_id=div_id,
+            season_id=season_id,
+            check_asymmetric=True
         )
         if not is_valid:
             keyboard = [[InlineKeyboardButton("« К турам", callback_data=f"admin_div_manage_matches:{div_id}")]]
@@ -921,7 +895,7 @@ async def admin_generate_matches_execute(update: Update, context: ContextTypes.D
         target_id=div_id,
         division_id=div_id,
         season_id=season_id,
-        metadata=f"Generated {len(fixtures)} matches across {total_rounds} rounds for {div_title}"
+        metadata=f"Generated {len(fixtures)} matches across {total_rounds} rounds for {div_title} (asymmetric 2nd leg)"
     )
 
     # 🎰 Автопилот линии «два через два»: расписание есть — значит предсезонная
@@ -946,7 +920,8 @@ async def admin_generate_matches_execute(update: Update, context: ContextTypes.D
         f"• Дивизион: <b>{html.escape(div_title)}</b>\n"
         f"• Участников: <b>{len(players)}</b>\n"
         f"• Всего туров: <b>{total_rounds}</b>\n"
-        f"• Всего матчей: <b>{len(fixtures)}</b>\n\n"
+        f"• Всего матчей: <b>{len(fixtures)}</b>\n"
+        f"• Формат: <b>Асимметричный календарь</b> (30 туров, разрыв очных встреч ≥ 5 туров, баланс дом/выезд)\n\n"
         f"Матчи и туры дивизиона занесены в базу данных.\n"
         f"{line_note}",
         reply_markup=InlineKeyboardMarkup(keyboard),

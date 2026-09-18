@@ -46,7 +46,10 @@ class RoundRobinValidator:
         expected_rounds: int = EXPECTED_ROUNDS,
         expected_matches: int = EXPECTED_MATCHES,
         division_id: int | None = None,
-        season_id: int | None = None
+        season_id: int | None = None,
+        check_asymmetric: bool = False,
+        min_rematch_gap: int = 5,
+        max_streak: int = 2
     ) -> Tuple[bool, List[str]]:
         """
         Validate double round-robin fixtures.
@@ -156,6 +159,26 @@ class RoundRobinValidator:
                         f"Пара {pair} не поменялась сторонами Home/Away: "
                         f"Тур {l1_r} ({l1_p1} vs {l1_p2}) и Тур {l2_r} ({l2_p1} vs {l2_p2})."
                     )
+                if check_asymmetric and (l2_r - l1_r < min_rematch_gap):
+                    errors.append(
+                        f"Недостаточный интервал между встречами пары {pair}: "
+                        f"Туры {l1_r} и {l2_r} (разрыв {l2_r - l1_r} < {min_rematch_gap})."
+                    )
+
+        # 7. Asymmetric calendar qualities (Home/Away streak <= max_streak)
+        if check_asymmetric and not errors:
+            team_rounds_ha = {t: {} for t in teams}
+            for r, p1, p2 in parsed_fixtures:
+                team_rounds_ha[p1][r] = 'H'
+                team_rounds_ha[p2][r] = 'A'
+
+            for t in teams:
+                seq = [team_rounds_ha[t].get(r, '-') for r in range(1, expected_rounds + 1)]
+                s_str = "".join(seq)
+                if "H" * (max_streak + 1) in s_str:
+                    errors.append(f"Команда #{t} имеет более {max_streak} домашних матчей подряд: {s_str}")
+                if "A" * (max_streak + 1) in s_str:
+                    errors.append(f"Команда #{t} имеет более {max_streak} гостевых матчей подряд: {s_str}")
 
         is_valid = len(errors) == 0
         if not is_valid:
