@@ -255,17 +255,19 @@ The Mini App keeps its **own** copy — `TEAM_LOGO_MAP`, `TEAM_LOGO_ALIASES` and
 `getTeamLogoUrl` in `web/js/ui.js:9` — because it serves `/assets/logos/…` directly without
 touching Pillow. Same 80 filenames, and `TEAM_LOGO_ALIASES` mirrors `club_registry`'s
 `TEAM_ALIASES` key for key (alias → canonical club, not → filename, so renaming a logo is
-still one edit). Latin keys are derived from the filenames at load. Lookup runs exact →
-alias → a substring pass that gives up unless exactly one club matches (`Милан` is a
-substring of `Интер Милан`). Aliases are deliberately kept **out** of that substring pass
-and match whole-string only, exactly like the backend's ALIAS tier — let `порт` in and it
-starts claiming `Спортинг`.
+still one edit). Latin keys are derived from the filenames at load, and `normalizeLogoKey`
+folds the same characters as `normalize_team_name`. Lookup mirrors the backend tiers EXACT →
+ALIAS → JOINED (noise tokens such as `ФК`/`CP` dropped, then tokens glued in both directions
+against a joined index whose ambiguous keys are discarded) and stops there. There is **no**
+substring pass, for the same reason the resolver has no substring tier: no safe version of it
+exists. `Юнайтед` sits inside both Манчестер and Ньюкасл Юнайтед, `порт` inside `Спортинг`,
+`paris` inside Paris FC and PSG — an empty badge is recoverable, another club's crest is not.
+The JS side has no PREFIX or FUZZY tier, so it is strictly more conservative than the
+backend, never bolder; names reaching the Mini App are already canonicalized server-side.
 
 `TestLogoMapCoversTheRoster` in `tests/test_club_card.py` keeps the Python map in step with
 `DIVISION_CLUBS`; the JS copy has no such guard, so a roster or alias change means editing
-both by hand. Known wart in the JS substring pass, inherited and not yet fixed: `Юнайтед`,
-`united` and `paris` each land on a single canonical key and so return a crest, where the
-backend resolver correctly returns nothing.
+both by hand.
 
 **Discipline:** unplayed matches accrue debts, tracked from `DEBT_TRACKING_START_DATETIME`.
 Three job-queue tasks drive it — deadline reminders and the debt lifecycle tracker every

@@ -107,10 +107,10 @@ for (const file of new Set(Object.values(TEAM_LOGO_MAP))) {
 // выше; имена файлов тут не повторяются, чтобы переименование логотипа правилось
 // в одном месте. Обе копии — эту и питоновскую — надо править вместе.
 //
-// Алиасы живут отдельно от TEAM_LOGO_MAP не для красоты: подстрочный проход в
-// getTeamLogoUrl ходит только по каноничным именам. Пусти туда «порт» — и он
-// начнёт ловить «Спортинг», а «мю» подойдёт половине ростера. Алиас матчится
-// только целиком, ровно как ALIAS-тир резолвера на бэке.
+// Алиасы живут отдельно от TEAM_LOGO_MAP не для красоты: карта канонов — это то,
+// что клуб есть, а алиас — то, как его называют. Ключ матчится только целиком,
+// ровно как ALIAS-тир резолвера на бэке: «порт» ведёт в «Порту», потому что так
+// записано, а не потому что он куда-то входит подстрокой.
 export const TEAM_LOGO_ALIASES = {
   // DIV_1
   'лидс юнайтед': 'Лидс', 'leeds': 'Лидс', 'leeds united': 'Лидс',
@@ -227,15 +227,17 @@ export const TEAM_LOGO_ALIASES = {
 function normalizeLogoKey(s) {
   return s.trim().toLowerCase()
     .replace(/[ёэë]/g, 'е')
+    .replace(/[øö]/g, 'o')
     .replace(/[-_./\\,]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
 
-// Оба индекса считаются один раз на загрузку модуля: getTeamLogoUrl зовётся на
+// Все три индекса считаются один раз на загрузку модуля: getTeamLogoUrl зовётся на
 // каждую строку каждой таблицы, а карта с алиасами разрослась до трёх сотен ключей.
-const LOGO_INDEX = Object.entries(TEAM_LOGO_MAP).map(([k, file]) => [normalizeLogoKey(k), file]);
-const LOGO_BY_KEY = new Map(LOGO_INDEX);
+const LOGO_BY_KEY = new Map(
+  Object.entries(TEAM_LOGO_MAP).map(([k, file]) => [normalizeLogoKey(k), file])
+);
 
 // Алиас, совпавший с каноничным именем, отбрасывается — точный тир и так его знает.
 const ALIAS_INDEX = new Map();
@@ -246,24 +248,71 @@ for (const [alias, club] of Object.entries(TEAM_LOGO_ALIASES)) {
   if (file) ALIAS_INDEX.set(key, file);
 }
 
+// Формы без пробелов — под OCR, который слепляет слова («РиверПлейт»). Ключ,
+// на который претендуют два клуба, выбрасывается: победить по случайности нельзя.
+const JOINED_INDEX = new Map();
+const joinedConflicts = new Set();
+for (const source of [LOGO_BY_KEY, ALIAS_INDEX]) {
+  for (const [key, file] of source) {
+    const glued = key.replace(/ /g, '');
+    if (!glued || glued === key) continue;
+    const existing = JOINED_INDEX.get(glued);
+    if (existing !== undefined && existing !== file) joinedConflicts.add(glued);
+    else JOINED_INDEX.set(glued, file);
+  }
+}
+for (const key of joinedConflicts) JOINED_INDEX.delete(key);
+
+// Юридические приставки: шум, а не часть имени — тот же список, что и
+// _NOISE_TOKENS в club_registry.py. Географических уточнений здесь нет и быть не
+// должно: именно они отличают «Расинг Сантандер» от «Расинг Ланс».
+const LOGO_NOISE_TOKENS = new Set([
+  'фк', 'фс', 'сп', 'сц', 'кф', 'клуб',
+  'fc', 'sc', 'sl', 'cf', 'ac', 'afc', 'cp', 'club', 'jrs',
+]);
+
+// Переписи входа, которые стоят второго захода в индексы, по убыванию доверия.
+function alternateLogoForms(norm) {
+  const forms = [];
+  const tokens = norm.split(' ');
+  const stripped = tokens.filter((t) => !LOGO_NOISE_TOKENS.has(t));
+
+  if (stripped.length && stripped.length !== tokens.length) forms.push(stripped.join(' '));
+  if (tokens.length > 1) forms.push(tokens.join(''));
+  if (stripped.length > 1 && stripped.length !== tokens.length) forms.push(stripped.join(''));
+
+  return forms.filter((f) => f && f !== norm);
+}
+
+// Повторяет тиры EXACT → ALIAS → JOINED из club_registry.py и на них
+// останавливается. Подстрочного тира тут нет — ровно как и на бэке, и по той же
+// причине: безопасной версии у него не существует. «Юнайтед» входит в «Манчестер
+// Юнайтед» и в «Ньюкасл Юнайтед», «порт» — в «Спортинг», «paris» — в «Paris FC»
+// и в ПСЖ. Пустой бейдж обратим, чужой герб — нет. Короткие формы, ради которых
+// проход когда-то завели, давно разобраны по TEAM_LOGO_ALIASES.
+function lookupLogoFile(t) {
+  const direct = LOGO_BY_KEY.get(t) || ALIAS_INDEX.get(t);
+  if (direct) return direct;
+
+  const forms = alternateLogoForms(t);
+  for (const form of forms) {
+    const hit = LOGO_BY_KEY.get(form) || ALIAS_INDEX.get(form);
+    if (hit) return hit;
+  }
+  for (const form of [t, ...forms]) {
+    const hit = JOINED_INDEX.get(form.replace(/ /g, ''));
+    if (hit) return hit;
+  }
+  return null;
+}
+
 export function getTeamLogoUrl(teamName) {
   if (!teamName) return null;
   const t = normalizeLogoKey(teamName);
   if (!t) return null;
 
-  const exact = LOGO_BY_KEY.get(t);
-  if (exact) return `/assets/logos/${exact}`;
-
-  const alias = ALIAS_INDEX.get(t);
-  if (alias) return `/assets/logos/${alias}`;
-
-  // Нестрогий проход — только по каноничным именам и только когда победитель
-  // единственный. «Милан» это подстрока «Интер Милан», и показать пустой бейдж
-  // честнее, чем чужой герб. Алиасы сюда не пускаем: «порт» подошёл бы «Спортингу».
-  const hits = [...new Set(
-    LOGO_INDEX.filter(([k]) => t.includes(k) || k.includes(t)).map(([, file]) => file)
-  )];
-  return hits.length === 1 ? `/assets/logos/${hits[0]}` : null;
+  const file = lookupLogoFile(t);
+  return file ? `/assets/logos/${file}` : null;
 }
 
 export function renderTeamLogoWrapperHtml(teamName, extraClass = '') {
