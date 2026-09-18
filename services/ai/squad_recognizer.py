@@ -49,7 +49,23 @@ Rules:
 """
 
 
+MAX_PLAYER_NAME_LEN = 50
+
+
 def _parse_players(payload: dict) -> list[dict]:
+    """Turn the model's raw `players` array into `[{player_name, position}]`.
+
+    The model is free-form, so every row is treated as untrusted: it may be a
+    bare string instead of an object, may key the name as `player_name`/`pos`,
+    and may hand back a wall of garbled pixels as a name. A row survives only
+    when it cleans up to a name that holds at least one letter and is no longer
+    than MAX_PLAYER_NAME_LEN — otherwise OCR noise lands in the roster as a
+    "player" nobody can delete by name.
+
+    The position is passed through verbatim (stripped): `normalize_position`
+    canonicalises it case-insensitively at write time in `add_squad`, so folding
+    case here would only hide what the screenshot actually said.
+    """
     raw_list = payload.get("players")
     if not isinstance(raw_list, list):
         return []
@@ -57,25 +73,28 @@ def _parse_players(payload: dict) -> list[dict]:
     result: list[dict] = []
     seen: set[str] = set()
     for item in raw_list:
-        if not isinstance(item, dict):
-            continue
-        raw_name = item.get("name") or ""
+        if isinstance(item, dict):
+            raw_name = item.get("name") or item.get("player_name") or ""
+            raw_pos = item.get("position") or item.get("pos")
+        else:
+            raw_name, raw_pos = str(item), None
+
         cleaned_name = clean_player_name(str(raw_name))
-        if not cleaned_name:
+        if not cleaned_name or len(cleaned_name) > MAX_PLAYER_NAME_LEN:
             continue
-        norm_key = cleaned_name.lower()
+        if not re.search(r"[^\W\d_]", cleaned_name):
+            continue
+
+        norm_key = cleaned_name.casefold()
         if norm_key in seen:
             continue
         seen.add(norm_key)
 
-        raw_pos = item.get("position")
-        pos_str = str(raw_pos).strip().upper() if raw_pos else None
-        if pos_str and len(pos_str) > 6:
-            pos_str = None
+        pos_str = str(raw_pos).strip() if raw_pos else None
 
         result.append({
             "player_name": cleaned_name,
-            "position": pos_str,
+            "position": pos_str or None,
         })
         if len(result) >= MAX_SQUAD_PLAYERS:
             break
