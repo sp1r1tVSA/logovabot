@@ -177,17 +177,6 @@ def max_active_rounds_message(active_rounds: list[dict]) -> str:
     )
 
 
-def max_active_rounds_short_message(active_rounds: list[dict]) -> str:
-    """Тот же отказ одной строкой — для текстовых команд «Темшик ...»."""
-    nums = [r["round_number"] for r in active_rounds]
-    return (
-        f"⚠️ <b>Лимит туров!</b> В этом дивизионе уже открыты туры "
-        f"{_format_round_list(nums)} с дедлайном до "
-        f"{html.escape(_active_rounds_deadline(active_rounds))}. "
-        "Следующие туры можно открыть только после завершения дедлайна."
-    )
-
-
 def is_logovo_access_allowed(user_id: int) -> bool:
     """
     Check if a user is permitted to access Logovo.bet.

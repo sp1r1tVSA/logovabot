@@ -14,6 +14,8 @@
 3. После истечения дедлайна пары следующие два тура открываются без ручного
    перевода `is_open = 0`.
 4. Кнопка «📦 Открыть туры» сразу спрашивает дедлайн: диапазон подбирается сам.
+5. Кнопка «Открыть тур» в карточке тура отказывает по лимиту до запроса дедлайна,
+   но уже открытому туру дедлайн продлить даёт.
 """
 import datetime
 import unittest
@@ -346,24 +348,31 @@ class TestAdminBatchButtonFlow(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Открытие туров 3 и 4", text)
 
 
-class TestTemshikCommandsReportTheLimit(unittest.IsolatedAsyncioTestCase):
+class TestRoundCardButtonReportsTheLimit(unittest.IsolatedAsyncioTestCase):
+    """Кнопка «Открыть тур» в карточке конкретного тура — отказ до ввода дедлайна.
+
+    Одиночное открытие живёт рядом с пакетным: пакет подбирает пару сам, а этой
+    кнопкой админ открывает именно тот тур, чью карточку он смотрит. Отказ по
+    лимиту обязан прилетать на шаге запроса дедлайна, а не после того, как админ
+    уже набрал дату. Уже открытому туру дедлайн при этом продлевать можно —
+    собственный слот он повторно не занимает.
+    """
+
     async def asyncSetUp(self):
         database.init_db()
         self.uid = uuid.uuid4().hex[:6].upper()
         self.season_id = _active_season_id()
         self.div_id = database.create_division(
-            name=f"Limit CMD {self.uid}", code=f"LCMD_{self.uid}"
+            name=f"Limit Card {self.uid}", code=f"LCRD_{self.uid}"
         )
         self.admin_id = 97834
-        database.register_user(self.admin_id, f"limit_adm_{self.uid}", team_name=f"Limit Adm {self.uid}")
-        database.assign_user_division(self.admin_id, self.div_id)
 
         for r_num in (1, 2, 3):
             with database.transaction() as conn:
                 conn.execute(
                     "INSERT INTO matches (round_number, player1_team, player2_team, status, division_id, season_id) "
                     "VALUES (?, ?, ?, 'pending', ?, ?)",
-                    (r_num, f"Cmd H {self.uid}", f"Cmd A {self.uid}", self.div_id, self.season_id),
+                    (r_num, f"Card H {self.uid}", f"Card A {self.uid}", self.div_id, self.season_id),
                 )
 
         self.deadline = _offset_deadline(days=3)
@@ -377,47 +386,56 @@ class TestTemshikCommandsReportTheLimit(unittest.IsolatedAsyncioTestCase):
             c = conn.cursor()
             c.execute("DELETE FROM matches WHERE division_id = ?", (self.div_id,))
             c.execute("DELETE FROM rounds WHERE division_id = ?", (self.div_id,))
-            c.execute("DELETE FROM users WHERE telegram_id = ?", (self.admin_id,))
             c.execute("DELETE FROM divisions WHERE id = ?", (self.div_id,))
 
-    async def _run(self, text: str) -> str:
-        from handlers.text_commands import handle_temshik_command
+    async def _press_open_round(self, round_number: int):
+        from handlers import admin as admin_handlers
+
+        query = MagicMock()
+        query.data = f"admin_div_round_open:{self.div_id}:{round_number}"
+        query.from_user.id = self.admin_id
+        query.answer = AsyncMock()
+        query.edit_message_text = AsyncMock()
 
         update = MagicMock()
-        update.message.text = text
-        update.message.message_thread_id = None
-        update.message.reply_text = AsyncMock()
-        update.effective_message = update.message
+        update.callback_query = query
         update.effective_user.id = self.admin_id
-        update.effective_user.username = "limit_adm"
-        update.effective_chat.id = self.admin_id
-        update.effective_chat.type = "private"
 
-        with patch("handlers.text_commands.is_admin", return_value=True):
-            handled = await handle_temshik_command(update, MagicMock())
+        context = MagicMock()
+        context.user_data = {}
 
-        self.assertTrue(handled)
-        return update.message.reply_text.call_args[0][0]
+        # `admin_only` резолвит права через handlers.base — патчим обе точки.
+        with patch("handlers.admin.is_admin", return_value=True), \
+             patch("handlers.base.is_admin", return_value=True), \
+             patch("handlers.admin._ensure_division_access", new=AsyncMock(return_value=True)):
+            state = await admin_handlers.admin_open_round_prompt(update, context)
 
-    async def test_open_round_command_reports_the_limit(self):
-        text = await self._run("Темшик открыть тур 3")
+        return state, context.user_data, query.edit_message_text.call_args[0][0]
 
-        self.assertIn("Лимит туров!", text)
+    async def test_third_round_is_refused_before_the_deadline_is_asked(self):
+        from telegram.ext import ConversationHandler
+
+        state, user_data, text = await self._press_open_round(3)
+
+        self.assertEqual(state, ConversationHandler.END)
         self.assertIn("уже открыты туры 1 и 2", text)
-        self.assertNotIn("успешно открыт", text)
+        self.assertIn(self.deadline, text)
+        # Дедлайн не спрашивается — разговор закончился на отказе.
+        self.assertNotIn("admin_round_to_open", user_data)
         # Строка тура уже есть — её завела ранняя линия; важно, что он закрыт.
         self.assertEqual(
             database.get_round_info(3, division_id=self.div_id, season_id=self.season_id)["is_open"], 0
         )
 
-    async def test_deadline_command_reports_the_limit(self):
-        text = await self._run(f"Темшик дедлайн 3 {_offset_deadline(days=4)}")
+    async def test_an_already_open_round_can_still_get_a_new_deadline(self):
+        from handlers.admin import ADMIN_WAITING_FOR_DEADLINE
 
-        self.assertIn("Лимит туров!", text)
-        # Строка тура уже есть — её завела ранняя линия; важно, что он закрыт.
-        self.assertEqual(
-            database.get_round_info(3, division_id=self.div_id, season_id=self.season_id)["is_open"], 0
-        )
+        state, user_data, text = await self._press_open_round(2)
+
+        self.assertEqual(state, ADMIN_WAITING_FOR_DEADLINE)
+        self.assertEqual(user_data["admin_round_to_open"], 2)
+        self.assertEqual(user_data["admin_round_open_div"], self.div_id)
+        self.assertIn("ДД.ММ.ГГГГ ЧЧ:ММ", text)
 
 
 if __name__ == "__main__":
