@@ -7,7 +7,7 @@ e-sports championships: divisions and rounds, match result intake via AI screens
 standings and Pillow-rendered infographics, a debt/warn discipline system, and a virtual
 prediction market ("Logovo.bet") exposed through a Telegram Mini App.
 
-The project is well past MVP — 245 Python files (116 application modules + 129 pytest
+The project is well past MVP — 249 Python files (118 application modules + 131 pytest
 files), 59 SQLite tables, and ten completed development phases documented in the
 `PHASE_*.md` reports under `reports/`. Post-phase work is logged in the numbered
 `FIX_*.md` notes and the `*_AUDIT.md` reports beside them.
@@ -110,7 +110,7 @@ never prevents the bot itself from starting. Preserve that isolation.
 | `api/` (18 modules) | `aiohttp` Mini App API — `server.py`, `auth.py`, `rate_limiter.py`, and 15 `routes_*.py` modules |
 | `web/` | Mini App frontend (static `index.html`, `css/`, `js/` — `api`, `app`, `effects`, `store`, `tg`, `ui`) |
 | `utils/` | `media_utils.py`, a thin re-export wrapper over `services/animation_sender.py` |
-| `scripts/` (10 scripts) | One-off operational scripts (DB audit, backfills, imports, cache refresh, season reset) |
+| `scripts/` (11 scripts) | One-off operational scripts (DB audit, backfills, imports, bulk club binding, cache refresh, season reset) |
 | `tests/` | 129 `test_*.py` files, one per feature area; no `__init__.py`, no local `conftest.py` |
 | `assets/` | **Not in git** — emptied on 2026-09-18 with the КПЛ season. Runtime recreates `avatars/` and `players/` on demand; `logos/` must be refilled by hand (see below) |
 | `reports/` | Historical `PHASE_*.md` plans/matrices/reports, `FIX_0*.md` notes and `*_AUDIT.md` audits, moved off the repo root |
@@ -193,6 +193,14 @@ every admin screen that offers *a club to pick* — «Составы коман�
 goes through it. Without the seed those pickers were circular: a club only appeared once
 somebody already owned it, so the first coach of a fresh season could never be bound to one.
 The КПЛ-era `config.CLUBS` / `config.KPL_TEAMS` lists are gone.
+
+The **start-of-season placement** is done in bulk by `scripts/bind_clubs_to_players.py`
+rather than club by club through the admin screen: its `BINDINGS` table holds
+`{division number: {club: username}}`, it validates the whole plan (clubs against the
+division's roster, no club or coach twice) before the first write, applies one division per
+`transaction()` so a failure rolls that division back whole, and is idempotent. It is
+dry-run by default — `--apply` writes. Remember that binding resets warns for both the new
+and the previous owner (`set_player_club`), which is right pre-season and wrong mid-season.
 
 Team-name resolution from OCR output goes through `resolve_team_name` and
 `detect_teams_from_players`, both backed by **`club_registry.py`** — a pure-CPU module at
