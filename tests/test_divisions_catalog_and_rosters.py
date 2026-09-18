@@ -10,6 +10,7 @@ from handlers.cabinet import (
     show_clubs_catalog_for_division,
 )
 from handlers.admin import (
+    admin_bind_club_card,
     admin_bind_division,
     admin_bind_execute,
     admin_bind_free_execute,
@@ -503,6 +504,14 @@ class TestClubBindingScreen(unittest.IsolatedAsyncioTestCase):
         buttons = [b.text for row in markup.inline_keyboard for b in row]
         return text, buttons
 
+    def _callbacks(self, query) -> list[str]:
+        markup = query.edit_message_text.call_args[1]["reply_markup"]
+        return [b.callback_data for row in markup.inline_keyboard for b in row]
+
+    def _back_cb(self, query) -> str:
+        markup = query.edit_message_text.call_args[1]["reply_markup"]
+        return markup.inline_keyboard[-1][0].callback_data
+
     async def test_division_screen_shows_every_club_with_its_status(self):
         query = await self._run(admin_bind_division, f"admin_bind_div:{self.div_five_id}")
 
@@ -572,6 +581,43 @@ class TestClubBindingScreen(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(database.get_user_warns(self.owner_id), [])
         _, buttons = self._screen(query)
         self.assertIn(f"🟢 {self.taken_club} (свободен)", buttons)
+
+    # --- «Назад» ведёт туда, откуда пришли ---
+
+    async def test_back_returns_to_the_hub_when_entered_from_it(self):
+        """Экран открывается из трёх мест; раньше «Назад» выбирал цель по роли
+        и супер-админа из хаба выбрасывало в карточку дивизиона."""
+        query = await self._run(admin_bind_division, f"admin_bind_div:{self.div_five_id}:h")
+
+        self.assertEqual(self._back_cb(query), "admin_bind_hub")
+
+    async def test_back_returns_to_the_division_card_when_entered_from_it(self):
+        query = await self._run(admin_bind_division, f"admin_bind_div:{self.div_five_id}")
+
+        self.assertEqual(self._back_cb(query), f"admin_div_view_{self.div_five_id}")
+
+    async def test_the_hub_origin_survives_a_trip_into_a_club_card(self):
+        """Метка обязана ехать через всю цепочку, иначе «Назад» теряет её на
+        первом же клике по клубу."""
+        idx = self.teams.index(self.free_club)
+
+        clubs = await self._run(admin_bind_division, f"admin_bind_div:{self.div_five_id}:h")
+        self.assertIn(f"admin_bind_club:{self.div_five_id}:{idx}:0:h", self._callbacks(clubs))
+
+        card = await self._run(admin_bind_club_card, f"admin_bind_club:{self.div_five_id}:{idx}:0:h")
+        callbacks = self._callbacks(card)
+        self.assertIn(f"admin_bind_div:{self.div_five_id}:h", callbacks)
+        self.assertIn(f"admin_bind_set:{self.div_five_id}:{idx}:{self.free_coach_id}:h", callbacks)
+
+    async def test_the_hub_origin_survives_the_binding_itself(self):
+        idx = self.teams.index(self.free_club)
+
+        query = await self._run(
+            admin_bind_execute, f"admin_bind_set:{self.div_five_id}:{idx}:{self.free_coach_id}:h"
+        )
+
+        self.assertEqual(database.get_user(self.free_coach_id)["team_name"], self.free_club)
+        self.assertEqual(self._back_cb(query), "admin_bind_hub")
 
     async def test_division_admin_cannot_open_a_foreign_division(self):
         """callback_data подделывается руками, поэтому права проверяются на каждом шаге."""
@@ -675,9 +721,9 @@ class TestDivisionCodeDrivesTheRoster(unittest.IsolatedAsyncioTestCase):
             b.callback_data: b.text for row in markup.inline_keyboard for b in row
         }
         # «(0/0)» читалось как «клубы ещё не разобрали», а не как поломка.
-        self.assertIn("⚠️ нет клубов", labels[f"admin_bind_div:{self.orphan_id}"])
+        self.assertIn("⚠️ нет клубов", labels[f"admin_bind_div:{self.orphan_id}:h"])
         div_one_id = database.get_division_by_code("DIV_1")["id"]
-        self.assertIn(f"/{len(config.DIVISION_CLUBS['DIV_1'])})", labels[f"admin_bind_div:{div_one_id}"])
+        self.assertIn(f"/{len(config.DIVISION_CLUBS['DIV_1'])})", labels[f"admin_bind_div:{div_one_id}:h"])
 
 
 if __name__ == "__main__":
