@@ -3,11 +3,11 @@
  * Comprehensive App Controller and Event Orchestrator for Logovo.bet (v2.0).
  */
 
-import { api } from './api.js?v=2.4.9';
-import { store } from './store.js?v=2.4.9';
-import { tgBridge } from './tg.js?v=2.4.9';
-import { UIRenderer } from './ui.js?v=2.4.9';
-import { ParticleEffects } from './effects.js?v=2.4.9';
+import { api } from './api.js';
+import { store } from './store.js';
+import { tgBridge } from './tg.js';
+import { UIRenderer } from './ui.js';
+import { ParticleEffects } from './effects.js';
 
 class AppController {
   constructor() {
@@ -42,6 +42,7 @@ class AppController {
         UIRenderer.renderMyClubSubTab(state.myClubSubTab);
       }
       UIRenderer.renderSlipDrawer(state.slip, state.stakeAmount);
+      if (state.slip.length === 0 && this.isCouponOpen()) this.toggleSlipDrawer(false);
 
       // Keep modal markets selection highlights in sync
       document.querySelectorAll('#modal-markets-list .odd-btn').forEach(b => {
@@ -63,8 +64,10 @@ class AppController {
     if (lockScreen) lockScreen.style.display = 'flex';
     const nav = document.querySelector('.bottom-nav');
     if (nav) nav.style.display = 'none';
-    const drawer = document.getElementById('slip-drawer');
-    if (drawer) drawer.style.display = 'none';
+    ['betbar', 'coupon-sheet', 'coupon-backdrop'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.style.display = 'none';
+    });
     const views = document.querySelector('.views-container');
     if (views) views.style.display = 'none';
     const header = document.querySelector('.app-header');
@@ -82,8 +85,10 @@ class AppController {
           if (lockScreen) lockScreen.style.display = 'flex';
           const nav = document.querySelector('.bottom-nav');
           if (nav) nav.style.display = 'none';
-          const drawer = document.getElementById('slip-drawer');
-          if (drawer) drawer.style.display = 'none';
+          ['betbar', 'coupon-sheet', 'coupon-backdrop'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.style.display = 'none';
+          });
           const views = document.querySelector('.views-container');
           if (views) views.style.display = 'none';
           return;
@@ -464,6 +469,7 @@ class AppController {
         const mktId = oddsBtn.dataset.marketId ? parseInt(oddsBtn.dataset.marketId) : null;
         const selId = oddsBtn.dataset.selectionId ? parseInt(oddsBtn.dataset.selectionId) : null;
         const selName = oddsBtn.dataset.selectionName || null;
+        const mktName = oddsBtn.dataset.marketName || null;
 
         // Find match object in tours or active match detail
         let targetMatch = null;
@@ -484,7 +490,8 @@ class AppController {
         store.toggleSelection(targetMatch, outcome, odd, {
           market_id: mktId,
           selection_id: selId,
-          selection_name: selName
+          selection_name: selName,
+          market_name: mktName
         });
 
         // Update selection highlight in open modal if any
@@ -681,13 +688,20 @@ class AppController {
     // 13b. LIVE-центр удалён из мини-приложения — обработчиков нет.
     // Лайв-данные конкретного матча по-прежнему доступны во вкладке Матч-Центра.
 
-    // 14. Bet Slip Drawer Controls
-    const slipBar = document.getElementById('slip-bar-collapsed');
-    if (slipBar) {
-      slipBar.addEventListener('click', () => {
-        this.toggleSlipDrawer();
+    // 14. Bet Coupon: floating bar + bottom sheet
+    const betbar = document.getElementById('betbar');
+    if (betbar) {
+      betbar.addEventListener('click', () => this.toggleSlipDrawer(true));
+      betbar.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          this.toggleSlipDrawer(true);
+        }
       });
     }
+    document.getElementById('btn-close-coupon')?.addEventListener('click', () => this.toggleSlipDrawer(false));
+    document.getElementById('coupon-backdrop')?.addEventListener('click', () => this.toggleSlipDrawer(false));
+    this.bindCouponSwipe();
 
     const clearSlipBtn = document.getElementById('btn-clear-slip');
     if (clearSlipBtn) {
@@ -696,10 +710,15 @@ class AppController {
       });
     }
 
-    // Slip mode toggle: Ординары / Экспресс
+    // Segmented control: Ординар / Экспресс
     document.addEventListener('click', (e) => {
       const modeBtn = e.target.closest('.slip-type-btn');
-      if (modeBtn && modeBtn.dataset.slipMode) {
+      if (!modeBtn || !modeBtn.dataset.slipMode) return;
+      if (modeBtn.dataset.slipMode === 'express' && store.state.slip.length < 2) {
+        tgBridge.hapticNotification('warning');
+        return;
+      }
+      if (store.getSlipMode() !== modeBtn.dataset.slipMode) {
         store.setSlipMode(modeBtn.dataset.slipMode);
         tgBridge.hapticImpact('light');
       }
@@ -712,22 +731,14 @@ class AppController {
       }
     });
 
-    // Stake quick chips
-    document.querySelectorAll('.stake-chip').forEach(chip => {
+    // Quick stake chips: +N adds to the stake, MAX fills the rules' maximum
+    document.querySelectorAll('.coupon-chips .stake-chip').forEach(chip => {
       chip.addEventListener('click', () => {
-        document.querySelectorAll('.stake-chip').forEach(c => c.classList.remove('active'));
-        chip.classList.add('active');
-        const val = chip.dataset.amount;
-        if (val === 'all' || val === 'max') {
-          const bal = store.state.user?.balance || 0;
-          const numBets = (store.state.slipMode === 'single' && store.state.slip.length > 1) ? store.state.slip.length : 1;
-          const maxBetPerEvent = Math.min(Math.floor(bal / Math.max(1, numBets)), 50000);
-          store.setStakeAmount(Math.max(0, maxBetPerEvent));
+        if (chip.dataset.amount === 'max') {
+          store.setStakeAmount(store.getMaxStake());
         } else {
-          store.setStakeAmount(parseInt(val));
+          store.setStakeAmount((store.state.stakeAmount || 0) + (parseInt(chip.dataset.add) || 0));
         }
-        const input = document.getElementById('stake-input');
-        if (input) input.value = store.state.stakeAmount;
         tgBridge.hapticImpact('light');
       });
     });
@@ -737,100 +748,118 @@ class AppController {
       stakeInput.addEventListener('input', (e) => {
         store.setStakeAmount(parseInt(e.target.value) || 0);
       });
+      // The render skips a focused input; normalise it once the user leaves it.
+      stakeInput.addEventListener('blur', () => store.notify());
     }
 
-    // Submit Prediction CTA
+    // Per-event stakes (batch singles)
+    document.addEventListener('input', (e) => {
+      const input = e.target.closest?.('.coupon-single-stake');
+      if (input && input.dataset.matchId) {
+        store.setSingleStake(parseInt(input.dataset.matchId), input.value);
+      }
+    });
+    document.addEventListener('focusout', (e) => {
+      if (e.target.closest?.('.coupon-single-stake')) store.notify();
+    });
+
+    // Submit CTA
     const submitBtn = document.getElementById('btn-submit-prediction');
     if (submitBtn) {
       submitBtn.addEventListener('click', async () => {
-        if (store.state.slip.length === 0) {
-          tgBridge.showAlert("Добавьте хотя бы одно событие в купон.");
+        const slip = store.state.slip;
+        if (slip.length === 0 || submitBtn.classList.contains('loading')) return;
+
+        const { min_bet } = store.getBetLimits();
+        const isSingleBatch = store.isBatchSingles();
+        const stakes = new Map(slip.map(s => [s.match_id, isSingleBatch ? store.getSingleStake(s.match_id) : store.state.stakeAmount]));
+        const totalAmt = store.getTotalStake();
+
+        if ([...stakes.values()].some(v => v < min_bet)) {
+          tgBridge.showAlert(`Минимальная сумма ставки — ${min_bet} 🪙.`);
           return;
         }
-
-        const amt = store.state.stakeAmount;
-        if (amt < 10) {
-          tgBridge.showAlert("Минимальная сумма ставки — 10 🪙.");
-          return;
-        }
-
-        const isSingleBatch = store.state.slipMode === 'single' && store.state.slip.length > 1;
-        const totalAmt = isSingleBatch ? amt * store.state.slip.length : amt;
-
         if ((store.state.user?.balance || 0) < totalAmt) {
           tgBridge.showAlert(`Недостаточно монет на балансе (необходимо ${totalAmt} 🪙).`);
           return;
         }
 
+        tgBridge.hapticImpact('heavy');
+        submitBtn.classList.add('loading');
         submitBtn.disabled = true;
-        submitBtn.textContent = '⏳ ОБРАБОТКА...';
+        const ctaMain = document.getElementById('coupon-cta-main');
+        const ctaSub = document.getElementById('coupon-cta-sub');
+        if (ctaMain) ctaMain.innerHTML = '<span class="coupon-spinner"></span>Принятие пари...';
+        if (ctaSub) ctaSub.textContent = '';
+
+        const refreshBets = async () => {
+          this.fetchUserExtras();
+          try {
+            const myBetsRes = await api.getPredictions();
+            if (myBetsRes.status === 'ok') store.setMyBets(myBetsRes.predictions);
+          } catch (e) {
+            console.warn("Could not refresh predictions:", e);
+          }
+        };
 
         try {
           if (isSingleBatch) {
-            let placedCount = 0;
+            const placed = [];
             const failedItems = [];
-            const itemsToProcess = [...store.state.slip];
 
-            for (const item of itemsToProcess) {
+            for (const item of [...slip]) {
+              const amt = stakes.get(item.match_id);
               const key = `slip-single-${Date.now()}-${item.match_id}-${Math.random().toString(36).substring(2, 6)}`;
               try {
                 const res = await api.placePrediction(amt, [item], key);
                 if (res.status === 'ok') {
-                  placedCount++;
+                  placed.push({ id: res.bet_id, amt, win: Math.floor(amt * item.odd) });
                   if (res.new_balance !== undefined) {
                     store.setUser({ ...store.state.user, balance: res.new_balance });
                   }
-                  // Immediately remove placed bet from slip
+                  // Placed bets leave the coupon right away; failures stay for a retry.
                   store.removeSelection(item.match_id);
                 } else {
                   failedItems.push({ item, error: res.message || 'Ошибка размещения ставки' });
                 }
               } catch (err) {
-                const msg = err.data?.message || err.message || 'Не удалось разместить ставку';
-                failedItems.push({ item, error: msg });
+                failedItems.push({ item, error: err.data?.message || err.message || 'Не удалось разместить ставку' });
               }
             }
 
-            if (placedCount > 0) {
-              ParticleEffects.confetti();
-              tgBridge.hapticNotification('success');
-              this.fetchUserExtras();
-              try {
-                const myBetsRes = await api.getPredictions();
-                if (myBetsRes.status === 'ok') store.setMyBets(myBetsRes.predictions);
-              } catch (e) {
-                console.warn("Could not refresh predictions:", e);
-              }
+            if (placed.length > 0) {
+              refreshBets();
+              this.showBetAccepted({
+                title: failedItems.length ? `Принято ${placed.length} из ${placed.length + failedItems.length}` : 'Пари принято!',
+                ids: placed.map(p => p.id),
+                stake: placed.reduce((s, p) => s + p.amt, 0),
+                oddLabel: 'Ординаров',
+                oddValue: String(placed.length),
+                win: placed.reduce((s, p) => s + p.win, 0)
+              });
             }
-
-            if (failedItems.length === 0) {
-              this.toggleSlipDrawer(false);
-              this.showSuccessModal('🎉 Ординары приняты!', `Успешно сделано ${placedCount} одиночных ставок по ${amt} 🪙 (Всего: ${placedCount * amt} 🪙).`);
-            } else if (placedCount > 0) {
-              const errDetails = failedItems.map(f => `• ${f.item.home_team || 'Матч'} vs ${f.item.away_team || ''}: ${f.error}`).join('\n');
-              tgBridge.showAlert(`Принято ставок: ${placedCount}. Не удалось принять (${failedItems.length}):\n${errDetails}`);
-            } else {
-              const errDetails = failedItems.map(f => `• ${f.item.home_team || 'Матч'} vs ${f.item.away_team || ''}: ${f.error}`).join('\n');
-              tgBridge.showAlert(`Не удалось разместить ставки:\n${errDetails}`);
+            if (failedItems.length > 0) {
+              const errDetails = failedItems.map(f => `• ${f.item.team1_name} — ${f.item.team2_name}: ${f.error}`).join('\n');
+              tgBridge.showAlert(`Не удалось принять (${failedItems.length}):\n${errDetails}`);
             }
           } else {
+            const amt = store.state.stakeAmount;
+            const totalOdd = store.getTotalOdd();
+            const isExp = slip.length > 1;
             const idempotencyKey = `slip-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
-            const res = await api.placePrediction(amt, store.state.slip, idempotencyKey);
+            const res = await api.placePrediction(amt, slip, idempotencyKey);
             if (res.status === 'ok') {
               store.setUser({ ...store.state.user, balance: res.new_balance });
-              const isExp = store.state.slip.length > 1;
               store.clearSlip();
-              this.toggleSlipDrawer(false);
-              ParticleEffects.confetti();
-              tgBridge.hapticNotification('success');
-              this.showSuccessModal(isExp ? '🎉 Экспресс принят!' : '🎉 Прогноз принят!', `Сумма: ${amt} 🪙. Удачи в туре!`);
-              this.fetchUserExtras();
-              try {
-                const myBetsRes = await api.getPredictions();
-                if (myBetsRes.status === 'ok') store.setMyBets(myBetsRes.predictions);
-              } catch (e) {
-                console.warn("Could not refresh predictions:", e);
-              }
+              refreshBets();
+              this.showBetAccepted({
+                title: isExp ? 'Экспресс принят!' : 'Пари принято!',
+                ids: [res.bet_id],
+                stake: amt,
+                oddLabel: isExp ? 'Общий кэф' : 'Коэффициент',
+                oddValue: totalOdd.toFixed(2),
+                win: Math.floor(amt * totalOdd)
+              });
             }
           }
         } catch (err) {
@@ -858,13 +887,26 @@ class AppController {
             );
             return;
           }
+          tgBridge.hapticNotification('error');
           tgBridge.showAlert(err.message);
         } finally {
+          submitBtn.classList.remove('loading');
           submitBtn.disabled = false;
-          submitBtn.textContent = 'Сделать прогноз';
+          // Force the CTA text back from the loader: the render only writes changed text.
+          if (ctaMain) ctaMain.textContent = '';
+          store.notify();
         }
       });
     }
+
+    document.getElementById('btn-bet-accepted-history')?.addEventListener('click', () => {
+      const modal = document.getElementById('bet-accepted-modal');
+      if (modal) {
+        modal.classList.remove('active', 'open');
+        modal.style.display = 'none';
+      }
+      this.switchView('history');
+    });
 
     // 15. Modals close triggers
     document.querySelectorAll('.modal-overlay').forEach(modal => {
@@ -1039,21 +1081,102 @@ class AppController {
     }
   }
 
+  isCouponOpen() {
+    return !!document.getElementById('coupon-sheet')?.classList.contains('open');
+  }
+
   toggleSlipDrawer(forceOpen = null) {
-    const drawer = document.getElementById('slip-drawer');
-    const label = document.getElementById('slip-toggle-label');
-    if (!drawer) return;
+    const sheet = document.getElementById('coupon-sheet');
+    const backdrop = document.getElementById('coupon-backdrop');
+    if (!sheet) return;
 
-    if (forceOpen !== null) {
-      if (forceOpen) drawer.classList.add('expanded');
-      else drawer.classList.remove('expanded');
+    const open = forceOpen === null ? !this.isCouponOpen() : !!forceOpen;
+    if (open && store.state.slip.length === 0) return;
+    if (open === this.isCouponOpen()) return;
+
+    sheet.classList.toggle('open', open);
+    sheet.setAttribute('aria-hidden', open ? 'false' : 'true');
+    backdrop?.classList.toggle('open', open);
+    document.body.classList.toggle('coupon-open', open);
+
+    if (open) {
+      tgBridge.hapticImpact('medium');
+      tgBridge.showBackButton(() => this.toggleSlipDrawer(false));
     } else {
-      drawer.classList.toggle('expanded');
+      tgBridge.hideBackButton();
+      document.activeElement?.blur?.();
+    }
+    // The bar hides while the sheet is open and comes back when it closes.
+    UIRenderer.renderSlipDrawer(store.state.slip, store.state.stakeAmount);
+  }
+
+  /** Swipe the sheet down by its handle or header to close it. */
+  bindCouponSwipe() {
+    const sheet = document.getElementById('coupon-sheet');
+    if (!sheet) return;
+    const zones = [document.getElementById('coupon-grab'), sheet.querySelector('.coupon-head')].filter(Boolean);
+    let startY = null;
+    let dy = 0;
+
+    const onMove = (e) => {
+      if (startY === null) return;
+      dy = Math.max(0, e.clientY - startY);
+      sheet.style.transform = `translateY(${dy}px)`;
+    };
+    const onEnd = () => {
+      if (startY === null) return;
+      startY = null;
+      sheet.classList.remove('dragging');
+      sheet.style.transform = '';
+      if (dy > 100) this.toggleSlipDrawer(false);
+      dy = 0;
+    };
+
+    zones.forEach(zone => {
+      zone.addEventListener('pointerdown', (e) => {
+        // Buttons in the header keep their clicks: capturing would retarget them.
+        if (e.target.closest('button')) return;
+        startY = e.clientY;
+        dy = 0;
+        sheet.classList.add('dragging');
+        zone.setPointerCapture?.(e.pointerId);
+      });
+      zone.addEventListener('pointermove', onMove);
+      zone.addEventListener('pointerup', onEnd);
+      zone.addEventListener('pointercancel', onEnd);
+    });
+  }
+
+  showBetAccepted({ title, ids, stake, oddLabel, oddValue, win }) {
+    this.toggleSlipDrawer(false);
+    const modal = document.getElementById('bet-accepted-modal');
+    if (!modal) return;
+
+    const fmt = (n) => (n || 0).toLocaleString('ru-RU');
+    const numbers = (ids || []).filter(Boolean).map(id => `#${id}`);
+    const titleEl = document.getElementById('bet-accepted-title');
+    const couponEl = document.getElementById('bet-accepted-coupon');
+    const detailsEl = document.getElementById('bet-accepted-details');
+    if (titleEl) titleEl.textContent = title;
+    if (couponEl) {
+      couponEl.textContent = numbers.length === 0 ? ''
+        : numbers.length === 1 ? `Номер купона ${numbers[0]}` : `Купоны ${numbers.join(', ')}`;
+    }
+    if (detailsEl) {
+      detailsEl.innerHTML = `
+        <div class="bet-accepted-stat"><span>Ставка</span><b>${fmt(stake)} 🪙</b></div>
+        <div class="bet-accepted-stat"><span>${oddLabel}</span><b>${oddValue}</b></div>
+        <div class="bet-accepted-stat win" style="grid-column: 1 / -1;"><span>Возможный выигрыш</span><b>${fmt(win)} 🪙</b></div>`;
     }
 
-    if (label) {
-      label.textContent = drawer.classList.contains('expanded') ? 'Свернуть' : 'Открыть';
-    }
+    // Restart the check-mark drawing animation on every show.
+    const svg = modal.querySelector('.bet-accepted-check svg');
+    if (svg) svg.replaceWith(svg.cloneNode(true));
+
+    modal.style.display = '';
+    modal.classList.add('active');
+    ParticleEffects.confetti();
+    tgBridge.hapticNotification('success');
   }
 
   switchView(viewName) {

@@ -53,8 +53,10 @@ class ApiClient {
             if (lockScreen) lockScreen.style.display = 'flex';
             const nav = document.querySelector('.bottom-nav');
             if (nav) nav.style.display = 'none';
-            const drawer = document.getElementById('slip-drawer');
-            if (drawer) drawer.style.display = 'none';
+            ['betbar', 'coupon-sheet', 'coupon-backdrop'].forEach(id => {
+              const el = document.getElementById(id);
+              if (el) el.style.display = 'none';
+            });
             const views = document.querySelector('.views-container');
             if (views) views.style.display = 'none';
             const header = document.querySelector('.app-header');

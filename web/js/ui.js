@@ -373,6 +373,21 @@ const OUTCOME_NAMES = {
   'it2_under_1.5': 'ИТМ2 (1.5)'
 };
 
+/** Market title for a slip item added without one (Line-tab tiles, old drafts). */
+export function marketNameForOutcome(key) {
+  const k = String(key || '').toLowerCase();
+  if (['p1', 'x', 'p2'].includes(k)) return 'Исход матча';
+  if (k.startsWith('dc_') || ['1x', '12', 'x2'].includes(k)) return 'Двойной шанс';
+  if (k.startsWith('btts')) return 'Обе забьют';
+  if (/^h[12]_/.test(k)) {
+    const m = k.match(/_(plus|minus)_([\d.]+)$/);
+    return m ? `Фора (${m[1] === 'plus' ? '+' : '-'}${m[2]})` : 'Фора';
+  }
+  if (k.startsWith('it1') || k.startsWith('it2')) return 'Инд. тотал';
+  if (/^(tb|tm|over|under)/.test(k)) return 'Тотал матча';
+  return 'Рынок';
+}
+
 /**
  * Имена игроков и ники соперников приходят из пользовательского ввода и OCR,
  * поэтому перед вставкой в innerHTML их обязательно экранировать.
@@ -703,7 +718,8 @@ export class UIRenderer {
                      data-odd="${odd}"
                      data-market-id="${mkt.id || ''}"
                      data-selection-id="${sel.id || ''}"
-                     data-selection-name="${sel.selection_name || labelFallback}">
+                     data-market-name="${escapeHtml(mkt.market_name || '')}"
+                     data-selection-name="${escapeHtml(sel.selection_name || labelFallback)}">
                   <span class="odd-label">${sel.selection_name || labelFallback}</span>
                   <span class="odd-val">${Number(odd).toFixed(2)}</span>
                 </div>`;
@@ -1553,97 +1569,174 @@ export class UIRenderer {
   }
 
   static renderSlipDrawer(slip, stakeAmount) {
-    const badgeEl = document.getElementById('slip-count-badge');
-    const oddEl = document.getElementById('slip-total-odd');
-    const itemsEl = document.getElementById('slip-items-container');
-    const forecastEl = document.getElementById('slip-forecast-val');
-    const modeToggleEl = document.getElementById('slip-type-toggle');
-    const btnExp = document.getElementById('btn-slip-mode-express');
-    const btnSgl = document.getElementById('btn-slip-mode-single');
-    const submitBtn = document.getElementById('btn-submit-prediction');
-
-    const mode = store.state.slipMode || 'express';
+    const count = slip.length;
+    const mode = store.getSlipMode();
+    const isExpress = mode === 'express';
+    const batchSingles = store.isBatchSingles();
     const totalOdd = store.getTotalOdd();
+    const totalStake = store.getTotalStake();
     const potentialWin = store.getPotentialWin();
-    const isExpress = mode === 'express' && slip.length > 1;
+    const { min_bet } = store.getBetLimits();
+    const balance = Math.floor(store.state.user?.balance || 0);
+    const fmt = (n) => this.formatNumber(n);
+    const setText = (id, text) => {
+      const el = document.getElementById(id);
+      if (el && el.textContent !== text) el.textContent = text;
+    };
 
-    if (badgeEl) {
-      if (slip.length > 1) {
-        badgeEl.textContent = mode === 'express' ? `Экспресс (${slip.length})` : `Ординары (${slip.length})`;
-      } else {
-        badgeEl.textContent = `Купон (${slip.length})`;
+    document.body.classList.toggle('has-coupon', count > 0);
+
+    // ─── Floating bar ───
+    const bar = document.getElementById('betbar');
+    if (bar) {
+      const prevCount = parseInt(bar.dataset.count || '0', 10);
+      bar.dataset.count = String(count);
+      const sheetOpen = document.getElementById('coupon-sheet')?.classList.contains('open');
+      const visible = count > 0 && !sheetOpen;
+      bar.classList.toggle('visible', visible);
+      bar.setAttribute('aria-hidden', visible ? 'false' : 'true');
+      if (count > 0 && prevCount > 0 && count !== prevCount) {
+        bar.classList.remove('bump');
+        void bar.offsetWidth; // restart the animation
+        bar.classList.add('bump');
       }
+      setText('betbar-count', String(count));
+      setText('betbar-mode', batchSingles ? 'Ординары' : (isExpress ? 'Экспресс' : 'Ординар'));
+      setText('betbar-odd', batchSingles ? `×${count}` : totalOdd.toFixed(2));
     }
 
-    if (modeToggleEl) {
-      modeToggleEl.style.display = slip.length > 1 ? 'flex' : 'none';
-      if (btnExp) {
-        btnExp.classList.toggle('active', mode === 'express');
-        btnExp.style.background = mode === 'express' ? 'var(--accent-gold)' : 'transparent';
-        btnExp.style.color = mode === 'express' ? '#000' : 'var(--text-muted)';
-      }
-      if (btnSgl) {
-        btnSgl.classList.toggle('active', mode === 'single');
-        btnSgl.style.background = mode === 'single' ? 'var(--accent-gold)' : 'transparent';
-        btnSgl.style.color = mode === 'single' ? '#000' : 'var(--text-muted)';
-      }
+    // ─── Segmented control ───
+    const seg = document.getElementById('coupon-seg');
+    if (seg) {
+      seg.dataset.mode = mode;
+      seg.querySelectorAll('.coupon-seg-btn').forEach(btn => {
+        const active = btn.dataset.slipMode === mode;
+        btn.classList.toggle('active', active);
+        btn.setAttribute('aria-selected', active ? 'true' : 'false');
+        if (btn.dataset.slipMode === 'express') btn.disabled = count < 2;
+      });
     }
+    setText('coupon-seg-hint', count === 1 ? 'Добавьте ещё 1 событие для экспресса' : '');
 
-    if (oddEl) {
-      if (mode === 'single' && slip.length > 1) {
-        oddEl.innerHTML = `<span>${slip.length} ординар(а)</span>`;
-      } else {
-        oddEl.innerHTML = `Кэф: <b>${totalOdd.toFixed(2)}</b>`;
-      }
-    }
-
-    if (forecastEl) {
-      forecastEl.textContent = `${this.formatNumber(potentialWin)} 🪙`;
-    }
-
-    if (submitBtn) {
-      if (slip.length === 0) {
-        submitBtn.textContent = 'Сделать прогноз';
-      } else if (mode === 'single' && slip.length > 1) {
-        const totalStake = stakeAmount * slip.length;
-        submitBtn.textContent = `Поставить ${slip.length} ординара (Всего: ${totalStake} 🪙)`;
-      } else if (mode === 'express' && slip.length > 1) {
-        submitBtn.textContent = `Сделать экспресс (Кэф: ${totalOdd.toFixed(2)})`;
-      } else {
-        submitBtn.textContent = `Сделать ординар (${stakeAmount} 🪙)`;
-      }
-    }
-
+    // ─── Event cards: rebuilt only when the structure changes ───
+    const itemsEl = document.getElementById('slip-items-container');
     if (itemsEl) {
-      if (slip.length === 0) {
-        itemsEl.innerHTML = '<div style="text-align: center; padding: 20px; color: var(--text-muted); font-size: 0.85rem;">Выберите исходы матчей для добавления в купон</div>';
-      } else {
-        itemsEl.innerHTML = slip.map(s => {
-          const singlePayout = Math.floor(stakeAmount * s.odd);
-          const singleInfo = mode === 'single' && slip.length > 1
-            ? `<span style="color: var(--text-muted); font-size: 0.7rem; margin-left: 6px;">(Ставка: ${stakeAmount} 🪙 → Выигрыш: ${singlePayout} 🪙)</span>`
-            : '';
-          return `
-          <div style="display: flex; justify-content: space-between; align-items: center; background: var(--bg-tertiary); padding: 8px 10px; border-radius: var(--radius-sm); margin-bottom: 6px;">
-            <div>
-              <div style="font-weight: 700; font-size: 0.82rem; color: #fff; display: flex; align-items: center; gap: 6px;">
-                ${renderTeamLogoHtml(s.team1_name, 16)}
-                <span>${s.team1_name}</span>
-                <span style="color: var(--text-muted); font-size: 0.7rem;">—</span>
-                ${renderTeamLogoHtml(s.team2_name, 16)}
-                <span>${s.team2_name}</span>
-              </div>
-              <div style="font-size: 0.75rem; color: var(--accent-gold); font-weight: 800; margin-top: 2px;">
-                ${s.selection_name || OUTCOME_NAMES[s.outcome] || s.outcome} @ ${s.odd.toFixed(2)}
-                ${singleInfo}
-              </div>
-            </div>
-            <button class="btn-remove-slip-item" data-match-id="${s.match_id}" style="background: transparent; border: none; color: var(--text-muted); font-size: 1.1rem; cursor: pointer;">✕</button>
-          </div>
-        `;
-        }).join('');
+      const structKey = `${mode}|${batchSingles}|` + slip.map(s => `${s.match_id}:${s.outcome}:${s.odd}`).join(',');
+      if (itemsEl.dataset.key !== structKey) {
+        itemsEl.dataset.key = structKey;
+        itemsEl.classList.toggle('express', isExpress);
+        itemsEl.innerHTML = count === 0
+          ? '<div style="text-align: center; padding: 24px 10px; color: var(--text-muted); font-size: 0.85rem;">Выберите исходы матчей для добавления в купон</div>'
+          : slip.map((s, i) => {
+              const card = this._renderSlipCard(s, batchSingles);
+              const link = isExpress && i < count - 1
+                ? '<div class="coupon-chain-link"><span class="coupon-chain-node">×</span></div>'
+                : '';
+              return card + link;
+            }).join('') + (isExpress
+              ? `<div class="coupon-chain-total"><span>Экспресс из ${count} событий</span><b>${totalOdd.toFixed(2)}</b></div>`
+              : '');
+      }
+
+      // Live values that change on every keystroke
+      if (batchSingles) {
+        slip.forEach(s => {
+          const stake = store.getSingleStake(s.match_id);
+          const input = itemsEl.querySelector(`.coupon-single-stake[data-match-id="${s.match_id}"]`);
+          if (input && document.activeElement !== input && input.value !== String(stake)) {
+            input.value = String(stake);
+          }
+          const payoutEl = itemsEl.querySelector(`[data-payout-for="${s.match_id}"]`);
+          if (payoutEl) payoutEl.textContent = `${fmt(Math.floor(stake * s.odd))} 🪙`;
+        });
       }
     }
+
+    // ─── Stake field ───
+    setText('coupon-stake-label', batchSingles ? 'Ставка на каждое событие' : 'Сумма ставки');
+    const stakeInput = document.getElementById('stake-input');
+    if (stakeInput && document.activeElement !== stakeInput && stakeInput.value !== String(stakeAmount)) {
+      stakeInput.value = String(stakeAmount);
+    }
+    setText('coupon-stake-balance', `Баланс ${fmt(balance)}`);
+
+    // ─── Summary ───
+    setText('coupon-summary-odd-label', batchSingles ? 'Ординаров' : (isExpress ? 'Общий кэф' : 'Коэффициент'));
+    setText('coupon-summary-odd', batchSingles ? String(count) : totalOdd.toFixed(2));
+    setText('coupon-summary-stake', `${fmt(totalStake)} 🪙`);
+    setText('slip-forecast-val', `${fmt(potentialWin)} 🪙`);
+
+    // ─── Validation ───
+    let warning = '';
+    if (count > 0) {
+      const stakes = batchSingles ? slip.map(s => store.getSingleStake(s.match_id)) : [stakeAmount];
+      if (stakes.some(v => v < min_bet)) warning = `Минимальная ставка — ${fmt(min_bet)} 🪙`;
+      else if (totalStake > balance) warning = `Недостаточно средств: нужно ${fmt(totalStake)} 🪙, на балансе ${fmt(balance)} 🪙`;
+    }
+    setText('coupon-warning', warning);
+
+    // ─── CTA ───
+    const submitBtn = document.getElementById('btn-submit-prediction');
+    if (submitBtn && !submitBtn.classList.contains('loading')) {
+      let main = 'Выберите событие';
+      let sub = '';
+      if (batchSingles) {
+        main = `Поставить ${count} ${this._pluralOrdinar(count)}`;
+        sub = `Всего: ${fmt(totalStake)} 🪙 → Выигрыш до ${fmt(potentialWin)} 🪙`;
+      } else if (isExpress) {
+        main = `Поставить экспресс ${fmt(stakeAmount)} 🪙`;
+        sub = `→ Выигрыш ${fmt(potentialWin)} 🪙`;
+      } else if (count === 1) {
+        main = `Поставить ${fmt(stakeAmount)} 🪙`;
+        sub = `→ Выигрыш ${fmt(potentialWin)} 🪙`;
+      }
+      setText('coupon-cta-main', main);
+      setText('coupon-cta-sub', sub);
+      submitBtn.disabled = count === 0 || !!warning;
+    }
+  }
+
+  static _pluralOrdinar(n) {
+    const mod10 = n % 10;
+    const mod100 = n % 100;
+    if (mod10 === 1 && mod100 !== 11) return 'ординар';
+    if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return 'ординара';
+    return 'ординаров';
+  }
+
+  static _renderSlipCard(s, withStake) {
+    // Line tiles carry no name, so the store falls back to the upper-cased key ("P1").
+    const hasOwnName = s.selection_name && s.selection_name !== String(s.outcome).toUpperCase();
+    const outcome = hasOwnName ? s.selection_name : (OUTCOME_NAMES[s.outcome] || s.selection_name || s.outcome);
+    const market = s.market_name || marketNameForOutcome(s.outcome);
+    const stakeRow = withStake ? `
+      <div class="slip-card-stake">
+        <label class="coupon-mini-field">
+          <span>🪙</span>
+          <input type="number" inputmode="numeric" min="0" class="coupon-single-stake"
+                 data-match-id="${s.match_id}" value="${store.getSingleStake(s.match_id)}" aria-label="Ставка на событие">
+        </label>
+        <div class="slip-card-win">Выигрыш<b data-payout-for="${s.match_id}">0 🪙</b></div>
+      </div>` : '';
+    return `
+      <div class="slip-card" data-match-id="${s.match_id}">
+        <div class="slip-card-top">
+          <div class="slip-card-logos">
+            ${renderTeamLogoHtml(s.team1_name, 22)}
+            ${renderTeamLogoHtml(s.team2_name, 22)}
+          </div>
+          <div class="slip-card-match">
+            <div class="slip-card-teams">${escapeHtml(s.team1_name)} — ${escapeHtml(s.team2_name)}</div>
+            <div class="slip-card-meta">Тур ${escapeHtml(s.tour || 1)} · ${escapeHtml(market)}</div>
+          </div>
+          <button class="slip-card-remove btn-remove-slip-item" data-match-id="${s.match_id}" aria-label="Убрать событие">✕</button>
+        </div>
+        <div class="slip-card-pick">
+          <span class="slip-card-outcome">${escapeHtml(outcome)}</span>
+          <span class="coupon-odd-pill">${Number(s.odd).toFixed(2)}</span>
+        </div>
+        ${stakeRow}
+      </div>`;
   }
 
   static renderMatchMarketsModal(matchId, markets, matchTitle) {
@@ -1690,6 +1783,7 @@ export class UIRenderer {
                    data-odd="${sOdd}"
                    data-market-id="${m.id}"
                    data-selection-id="${sel.id}"
+                   data-market-name="${escapeHtml(m.market_name || m.name || '')}"
                    data-selection-name="${escapeHtml(sName)}">
                 <span class="odd-label">${escapeHtml(sName)}</span>
                 <span class="odd-val">${Number(sOdd).toFixed(2)}</span>

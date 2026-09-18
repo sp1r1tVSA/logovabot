@@ -12,9 +12,13 @@ class StateStore {
       tours: [],
       marketCategoryFilter: 'all',
       searchQuery: '',
-      slip: [], // [ { match_id, outcome, odd, market_id, selection_id, selection_name, team1_name, team2_name, tour }, ... ]
-      slipMode: 'express', // 'express' | 'single'
+      slip: [], // [ { match_id, outcome, odd, market_id, selection_id, selection_name, market_name, team1_name, team2_name, tour }, ... ]
+      slipMode: 'express', // preferred mode for 2+ events: 'express' | 'single'
       stakeAmount: 100,
+      // Per-event stakes for batch singles, keyed by match_id. A missing key
+      // falls back to stakeAmount; kept off the slip items so they never leak
+      // into the API payload or saved drafts.
+      singleStakes: {},
       activeView: 'lobby', // 'lobby' | 'match_center' | 'tournaments' | 'history' | 'my_club' | 'profile'
       selectedMatchId: null,
       matchCenterSubTab: 'markets', // 'markets' | 'stats' | 'insights'
@@ -227,6 +231,21 @@ class StateStore {
   }
 
   // --- Smart Bet Slip Operations ---
+  _buildSlipItem(match, outcome, odd, extra) {
+    return {
+      match_id: match.match_id || match.id,
+      outcome,
+      odd: parseFloat(odd),
+      market_id: extra.market_id || null,
+      selection_id: extra.selection_id || null,
+      selection_name: extra.selection_name || outcome.toUpperCase(),
+      market_name: extra.market_name || null,
+      team1_name: match.team1_name || match.player1_team || 'Хозяева',
+      team2_name: match.team2_name || match.player2_team || 'Гости',
+      tour: match.tour || match.round_number || 1
+    };
+  }
+
   toggleSelection(match, outcome, odd, extra = {}) {
     const mId = match.match_id || match.id;
     const existingIndex = this.state.slip.findIndex(s => s.match_id === mId);
@@ -236,35 +255,15 @@ class StateStore {
       if (current.outcome === outcome) {
         // Deselect
         this.state.slip.splice(existingIndex, 1);
+        delete this.state.singleStakes[mId];
         tgBridge.hapticImpact('light');
       } else {
         // Switch pick in same match
-        this.state.slip[existingIndex] = {
-          match_id: mId,
-          outcome,
-          odd: parseFloat(odd),
-          market_id: extra.market_id || null,
-          selection_id: extra.selection_id || null,
-          selection_name: extra.selection_name || outcome.toUpperCase(),
-          team1_name: match.team1_name || match.player1_team || 'Хозяева',
-          team2_name: match.team2_name || match.player2_team || 'Гости',
-          tour: match.tour || match.round_number || 1
-        };
+        this.state.slip[existingIndex] = this._buildSlipItem(match, outcome, odd, extra);
         tgBridge.hapticImpact('medium');
       }
     } else {
-      // Add new selection
-      this.state.slip.push({
-        match_id: mId,
-        outcome,
-        odd: parseFloat(odd),
-        market_id: extra.market_id || null,
-        selection_id: extra.selection_id || null,
-        selection_name: extra.selection_name || outcome.toUpperCase(),
-        team1_name: match.team1_name || match.player1_team || 'Хозяева',
-        team2_name: match.team2_name || match.player2_team || 'Гости',
-        tour: match.tour || match.round_number || 1
-      });
+      this.state.slip.push(this._buildSlipItem(match, outcome, odd, extra));
       tgBridge.hapticImpact('medium');
     }
     this.notify();
@@ -272,18 +271,21 @@ class StateStore {
 
   loadCouponSelections(selections) {
     this.state.slip = selections || [];
+    this.state.singleStakes = {};
     tgBridge.hapticNotification('success');
     this.notify();
   }
 
   removeSelection(matchId) {
     this.state.slip = this.state.slip.filter(s => s.match_id !== matchId);
+    delete this.state.singleStakes[matchId];
     tgBridge.hapticImpact('light');
     this.notify();
   }
 
   clearSlip() {
     this.state.slip = [];
+    this.state.singleStakes = {};
     tgBridge.hapticImpact('light');
     this.notify();
   }
@@ -293,25 +295,81 @@ class StateStore {
     this.notify();
   }
 
+  /**
+   * The main stake. In batch-singles mode it is the "per event" amount, so
+   * changing it resets every individual override back to it.
+   */
   setStakeAmount(amount) {
-    this.state.stakeAmount = Math.max(10, parseInt(amount) || 0);
+    this.state.stakeAmount = Math.max(0, parseInt(amount) || 0);
+    this.state.singleStakes = {};
+    this.notify();
+  }
+
+  setSingleStake(matchId, amount) {
+    this.state.singleStakes[matchId] = Math.max(0, parseInt(amount) || 0);
     this.notify();
   }
 
   // --- Derived Calculations ---
+
+  /** One event is always a single; 2+ follow the user's preferred mode. */
+  getSlipMode() {
+    return this.state.slip.length < 2 ? 'single' : this.state.slipMode;
+  }
+
+  isBatchSingles() {
+    return this.state.slip.length > 1 && this.state.slipMode === 'single';
+  }
+
+  getSingleStake(matchId) {
+    const own = this.state.singleStakes[matchId];
+    return own === undefined ? this.state.stakeAmount : own;
+  }
+
   getTotalOdd() {
     if (this.state.slip.length === 0) return 1.0;
     const rawOdd = this.state.slip.reduce((acc, item) => acc * item.odd, 1.0);
     return Math.round(rawOdd * 100) / 100;
   }
 
+  getTotalStake() {
+    if (this.isBatchSingles()) {
+      return this.state.slip.reduce((sum, item) => sum + this.getSingleStake(item.match_id), 0);
+    }
+    return this.state.stakeAmount;
+  }
+
   getPotentialWin() {
     if (this.state.slip.length === 0) return 0;
-    if (this.state.slipMode === 'single') {
-      return this.state.slip.reduce((sum, item) => sum + Math.floor(this.state.stakeAmount * item.odd), 0);
+    if (this.isBatchSingles()) {
+      return this.state.slip.reduce(
+        (sum, item) => sum + Math.floor(this.getSingleStake(item.match_id) * item.odd), 0);
     }
-    const totalOdd = this.getTotalOdd();
-    return Math.floor(this.state.stakeAmount * totalOdd);
+    return Math.floor(this.state.stakeAmount * this.getTotalOdd());
+  }
+
+  getBetLimits() {
+    const l = this.state.user?.bet_limits || {};
+    return {
+      min_bet: l.min_bet || 10,
+      max_bet: l.max_bet || 50000,
+      max_payout: l.max_payout || 500000
+    };
+  }
+
+  /**
+   * Largest per-bet stake the rules allow right now: capped by the balance
+   * (split across the batch for singles), the max bet, and the max payout
+   * at the coupon's odds. The server re-checks all of it on placement.
+   */
+  getMaxStake() {
+    const slip = this.state.slip;
+    const { max_bet, max_payout } = this.getBetLimits();
+    const balance = Math.max(0, Math.floor(this.state.user?.balance || 0));
+    const bets = this.isBatchSingles() ? slip.length : 1;
+    const odds = this.isBatchSingles() ? slip.map(s => s.odd) : [this.getTotalOdd()];
+    const byPayout = Math.min(...odds.map(o => Math.floor(max_payout / Math.max(1, o || 1))));
+    return Math.max(0, Math.min(Math.floor(balance / bets), max_bet, byPayout));
   }
 
   isSelectionActive(matchId, outcome) {

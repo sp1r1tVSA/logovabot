@@ -10,8 +10,9 @@
   <!-- Telegram WebApp SDK -->
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <!-- Styles with cache-busting -->
-  <link rel="stylesheet" href="/css/main.css?v=3.0.0">
-  <link rel="stylesheet" href="/css/components.css?v=3.0.0">
+  <link rel="stylesheet" href="/css/main.css?v=3.1.0">
+  <link rel="stylesheet" href="/css/components.css?v=3.1.0">
+  <link rel="stylesheet" href="/css/coupon.css?v=3.1.0">
 
   <!-- Critical Coupons & Team Logos Styles -->
   <style id="coupons-critical-css">
@@ -290,69 +291,100 @@
 
   </main>
 
-  <!-- Floating Smart Bet Slip Drawer -->
-  <div class="slip-drawer" id="slip-drawer">
-    <!-- Collapsed Header Bar -->
-    <div class="slip-bar-collapsed" id="slip-bar-collapsed">
-      <div class="slip-bar-info">
-        <span class="slip-bar-badge" id="slip-count-badge">Купон (0)</span>
-        <span class="slip-bar-odd" id="slip-total-odd">Кэф: 1.00</span>
-      </div>
-      <div style="display: flex; align-items: center; gap: 6px;">
-        <span id="slip-toggle-label" style="font-size: 0.85rem; font-weight: 700; color: var(--accent-gold);">Открыть</span>
-        <span class="slip-bar-arrow">▲</span>
-      </div>
+  <!-- Floating Bet Bar: appears as soon as the coupon has an event -->
+  <div class="betbar" id="betbar" role="button" tabindex="0" aria-label="Открыть купон" aria-hidden="true">
+    <div class="betbar-left">
+      <span class="betbar-count" id="betbar-count">0</span>
+      <span class="betbar-mode" id="betbar-mode">Ординар</span>
+    </div>
+    <div class="betbar-odd">
+      <span class="betbar-odd-label">Кэф</span>
+      <span class="betbar-odd-val" id="betbar-odd">1.00</span>
+    </div>
+    <span class="betbar-cta">Купон <span class="betbar-cta-arrow">▲</span></span>
+  </div>
+
+  <!-- Coupon Bottom Sheet -->
+  <div class="coupon-backdrop" id="coupon-backdrop"></div>
+  <section class="coupon-sheet" id="coupon-sheet" role="dialog" aria-modal="true" aria-label="Купон" aria-hidden="true">
+    <div class="coupon-grab" id="coupon-grab">
+      <div class="coupon-handle"></div>
     </div>
 
-    <!-- Expanded Slip Content -->
-    <div class="slip-body">
-      <!-- Mode Toggle: Экспресс / Ординары (отображается при 2+ событиях) -->
-      <div class="slip-type-toggle" id="slip-type-toggle" style="display: none; gap: 8px; margin-bottom: 12px; background: var(--bg-tertiary); padding: 4px; border-radius: var(--radius-sm);">
-        <button class="slip-type-btn active" data-slip-mode="express" id="btn-slip-mode-express" style="flex: 1; padding: 7px 10px; border-radius: 6px; border: none; font-size: 0.82rem; font-weight: 800; cursor: pointer; background: var(--accent-gold); color: #000; transition: all 0.2s;">
-          ⚡ Экспресс
-        </button>
-        <button class="slip-type-btn" data-slip-mode="single" id="btn-slip-mode-single" style="flex: 1; padding: 7px 10px; border-radius: 6px; border: none; font-size: 0.82rem; font-weight: 800; cursor: pointer; background: transparent; color: var(--text-muted); transition: all 0.2s;">
-          🎯 Ординары
-        </button>
+    <header class="coupon-head">
+      <div class="coupon-seg" id="coupon-seg" data-mode="single" role="tablist">
+        <span class="coupon-seg-thumb"></span>
+        <button class="coupon-seg-btn slip-type-btn" data-slip-mode="single" role="tab">🎯 Ординар</button>
+        <button class="coupon-seg-btn slip-type-btn" data-slip-mode="express" role="tab">⚡ Экспресс</button>
       </div>
+      <div class="coupon-head-actions">
+        <button class="coupon-icon-btn" id="btn-save-draft-slip" title="Сохранить черновик" aria-label="Сохранить черновик">💾</button>
+        <button class="coupon-icon-btn danger" id="btn-clear-slip" title="Очистить купон" aria-label="Очистить купон">🗑</button>
+        <button class="coupon-icon-btn" id="btn-close-coupon" title="Свернуть" aria-label="Свернуть купон">✕</button>
+      </div>
+    </header>
+    <div class="coupon-seg-hint" id="coupon-seg-hint">Добавьте ещё 1 событие для экспресса</div>
 
-      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-        <span style="font-size: 0.88rem; font-weight: 700; color: var(--text-secondary);">Выбранные исходы:</span>
-        <div style="display: flex; gap: 10px;">
-          <button id="btn-save-draft-slip" style="background: transparent; border: none; color: var(--accent-gold); font-size: 0.78rem; font-weight: 700; cursor: pointer;">💾 Сохранить</button>
-          <button id="btn-clear-slip" style="background: transparent; border: none; color: var(--color-danger); font-size: 0.78rem; font-weight: 600; cursor: pointer;">Очистить</button>
+    <div class="coupon-scroll" id="coupon-scroll">
+      <div class="coupon-items" id="slip-items-container"></div>
+
+      <div class="coupon-stake">
+        <label class="coupon-stake-label" for="stake-input" id="coupon-stake-label">Сумма ставки</label>
+        <div class="coupon-stake-field">
+          <span class="coupon-coin">🪙</span>
+          <input type="number" id="stake-input" inputmode="numeric" value="100" min="0" step="10" autocomplete="off">
+          <span class="coupon-stake-balance" id="coupon-stake-balance"></span>
+        </div>
+        <div class="stake-chips coupon-chips">
+          <button class="stake-chip" data-add="100">+100</button>
+          <button class="stake-chip" data-add="250">+250</button>
+          <button class="stake-chip" data-add="500">+500</button>
+          <button class="stake-chip" data-add="1000">+1000</button>
+          <button class="stake-chip max" data-amount="max">MAX</button>
         </div>
       </div>
 
-      <!-- Items List -->
-      <div id="slip-items-container"></div>
-
-      <!-- Quick Stake Chips -->
-      <div style="font-size: 0.8rem; font-weight: 600; color: var(--text-muted); margin-top: 10px;">
-        Сумма прогноза (🪙):
+      <div class="coupon-totals">
+        <div class="coupon-totals-row">
+          <span id="coupon-summary-odd-label">Коэффициент</span>
+          <b id="coupon-summary-odd">1.00</b>
+        </div>
+        <div class="coupon-totals-row">
+          <span>Сумма</span>
+          <b id="coupon-summary-stake">0 🪙</b>
+        </div>
+        <div class="coupon-totals-row win">
+          <span>Возможный выигрыш</span>
+          <b id="slip-forecast-val">0 🪙</b>
+        </div>
       </div>
-      <div class="stake-chips">
-        <div class="stake-chip active" data-amount="100">100</div>
-        <div class="stake-chip" data-amount="250">250</div>
-        <div class="stake-chip" data-amount="500">500</div>
-        <div class="stake-chip" data-amount="1000">1000</div>
-        <div class="stake-chip" data-amount="max">MAX</div>
-      </div>
+      <div class="coupon-warning" id="coupon-warning"></div>
+    </div>
 
-      <!-- Custom Input -->
-      <input type="number" id="stake-input" value="100" min="10" step="10" 
-             style="width: 100%; background: var(--bg-tertiary); border: 1px solid var(--border-subtle); color: #fff; padding: 10px 14px; border-radius: var(--radius-sm); font-size: 1rem; font-weight: 700; outline: none; margin-bottom: 8px;">
-
-      <!-- Forecast Calculation -->
-      <div class="slip-forecast">
-        <span style="color: var(--text-secondary);">Потенциальный выигрыш:</span>
-        <span class="forecast-val" id="slip-forecast-val">0 🪙</span>
-      </div>
-
-      <!-- Submit CTA Button -->
-      <button class="btn-submit-bet" id="btn-submit-prediction">
-        Сделать прогноз
+    <footer class="coupon-foot">
+      <button class="coupon-cta" id="btn-submit-prediction">
+        <span class="coupon-cta-main" id="coupon-cta-main">Поставить</span>
+        <span class="coupon-cta-sub" id="coupon-cta-sub"></span>
       </button>
+    </footer>
+  </section>
+
+  <!-- Bet Accepted Modal -->
+  <div class="modal-overlay bet-accepted-overlay" id="bet-accepted-modal">
+    <div class="modal-content bet-accepted">
+      <div class="bet-accepted-check">
+        <svg viewBox="0 0 52 52" aria-hidden="true">
+          <circle class="bet-accepted-ring" cx="26" cy="26" r="24"></circle>
+          <path class="bet-accepted-tick" d="M15 27 l7 7 l15 -16"></path>
+        </svg>
+      </div>
+      <div class="modal-title" id="bet-accepted-title">Пари принято!</div>
+      <div class="bet-accepted-coupon" id="bet-accepted-coupon"></div>
+      <div class="bet-accepted-details" id="bet-accepted-details"></div>
+      <div class="bet-accepted-actions">
+        <button class="bet-accepted-btn secondary" id="btn-bet-accepted-history">В историю ставок</button>
+        <button class="bet-accepted-btn primary btn-modal-close">Продолжить</button>
+      </div>
     </div>
   </div>
 
@@ -504,6 +536,6 @@
 
 
   <!-- Main JavaScript App with cache-busting -->
-  <script type="module" src="/js/app.js?v=3.0.0"></script>
+  <script type="module" src="/js/app.js?v=3.1.0"></script>
 </body>
 </html>

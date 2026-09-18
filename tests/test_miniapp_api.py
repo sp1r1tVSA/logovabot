@@ -74,6 +74,10 @@ class TestMiniAppApi(AioHTTPTestCase):
         self.assertEqual(data["status"], "ok")
         self.assertEqual(data["user"]["user_id"], 11223344)
         self.assertIn("balance", data["user"])
+        # Купон Mini App считает кнопку MAX по этим лимитам.
+        limits = data["user"]["bet_limits"]
+        self.assertEqual(set(limits), {"min_bet", "max_bet", "max_payout"})
+        self.assertTrue(0 < limits["min_bet"] <= limits["max_bet"] <= limits["max_payout"])
 
     @unittest_run_loop
     async def test_leaderboard_endpoint_unauthorized(self):

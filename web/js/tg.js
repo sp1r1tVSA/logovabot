@@ -47,13 +47,20 @@ class TelegramBridge {
 
   showBackButton(onClick) {
     if (this.tg?.BackButton) {
-      this.tg.BackButton.show();
+      // Telegram keeps every onClick handler, so drop the previous one first.
+      this.hideBackButton();
+      this._backHandler = onClick;
       this.tg.BackButton.onClick(onClick);
+      this.tg.BackButton.show();
     }
   }
 
   hideBackButton() {
     if (this.tg?.BackButton) {
+      if (this._backHandler) {
+        this.tg.BackButton.offClick(this._backHandler);
+        this._backHandler = null;
+      }
       this.tg.BackButton.hide();
     }
   }

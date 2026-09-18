@@ -16,6 +16,33 @@ from handlers.base import is_admin
 logger = logging.getLogger(__name__)
 
 
+def _resolve_user_bet_limits(user_id: int) -> dict:
+    """
+    Stake limits the Mini App coupon needs for its MAX chip.
+
+    Advisory only — the risk engine re-checks every bet server-side, so a
+    lookup failure falls back to the service defaults instead of failing
+    the bootstrap.
+    """
+    from services.betting_limits import (
+        BettingLimitsService, DEFAULT_MIN_BET, DEFAULT_MAX_BET, DEFAULT_MAX_PAYOUT,
+    )
+    try:
+        limits = BettingLimitsService.get_user_effective_limits(user_id)
+        return {
+            "min_bet": int(limits["min_bet"]),
+            "max_bet": int(limits["max_bet"]),
+            "max_payout": int(limits["max_payout"]),
+        }
+    except Exception as e:
+        logger.warning(f"Could not resolve bet limits for user #{user_id}: {e}")
+        return {
+            "min_bet": DEFAULT_MIN_BET,
+            "max_bet": DEFAULT_MAX_BET,
+            "max_payout": DEFAULT_MAX_PAYOUT,
+        }
+
+
 async def handle_bootstrap(request: web.Request) -> web.Response:
     """
     GET /api/bootstrap
@@ -58,6 +85,8 @@ async def handle_bootstrap(request: web.Request) -> web.Response:
     # Fetch open tours summary
     open_tours = await asyncio.to_thread(database.get_open_betting_tours)
 
+    bet_limits = await asyncio.to_thread(_resolve_user_bet_limits, user_id)
+
     return web.json_response({
         "status": "ok",
         "user": {
@@ -71,7 +100,8 @@ async def handle_bootstrap(request: web.Request) -> web.Response:
             "bets_count": wallet.get("bets_count", 0),
             "bets_won": wallet.get("bets_won", 0),
             "is_admin": is_adm,
-            "has_access": has_access
+            "has_access": has_access,
+            "bet_limits": bet_limits
         },
         "bonus": {
             "can_claim": can_claim,
