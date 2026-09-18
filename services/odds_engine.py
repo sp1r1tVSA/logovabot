@@ -13,10 +13,12 @@ import math
 import logging
 from typing import Optional
 import database
+from services.poisson_odds import TARGET_MARGIN
 
 logger = logging.getLogger(__name__)
 
-BOOKMAKER_MARGIN = 1.055  # 5.5% built-in vigorish
+# Shared with services.betting_engine: the line tiles and market_selections must agree.
+BOOKMAKER_MARGIN = TARGET_MARGIN
 
 
 def get_or_create_market(

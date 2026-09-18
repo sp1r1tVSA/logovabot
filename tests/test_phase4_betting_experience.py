@@ -596,16 +596,15 @@ class TestPhase4BettingExperience(unittest.TestCase):
     # -------------------------------------------------------------
     def test_25_protection_against_client_odds_manipulation(self):
         # Client maliciously sends odd = 999.0
-        success, bet_id = database.place_user_bet(
+        success, result = database.place_user_bet(
             user_id=self.user1_id,
             amount=100,
             selections=[{"match_id": 99501, "outcome": "p1", "odd": 999.0}]
         )
-        self.assertTrue(success)
-        bet = database.get_user_bet_by_id(bet_id, self.user1_id)
-        # Server must override with true odd from market selections, NOT client's 999.0
-        self.assertNotEqual(bet["total_odd"], 999.0)
-        self.assertLess(bet["total_odd"], 10.0)
+        # Server-authoritative: a forged odd is rejected and the real one is reported back
+        self.assertFalse(success)
+        self.assertEqual(result["error"], "ODDS_CHANGED")
+        self.assertLess(result["new_odd"], 10.0)
 
 
 class TestPhase4ApiEndpoints(AioHTTPTestCase):

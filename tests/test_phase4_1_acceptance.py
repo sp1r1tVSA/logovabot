@@ -231,16 +231,17 @@ class TestPhase41ProductionAcceptance(unittest.TestCase):
     # 4. ODDS MANIPULATION
     # ==============================================================
     def test_05_odds_manipulation_prevented(self):
-        """Client-sent odds=999999 must be completely ignored by the server."""
-        ok, bet_id = database.place_user_bet(
+        """Client-sent odds=999999 never price the bet: the server rejects it with ODDS_CHANGED."""
+        balance_before = database.get_user_balance(self.user_a_id)
+        ok, result = database.place_user_bet(
             user_id=self.user_a_id,
             amount=100,
             selections=[{"match_id": 99701, "outcome": "p1", "odd": 999999.0}]
         )
-        self.assertTrue(ok)
-        bet = database.get_user_bet_by_id(bet_id, self.user_a_id)
-        self.assertNotEqual(bet["total_odd"], 999999.0)
-        self.assertLess(bet["total_odd"], 10.0)
+        self.assertFalse(ok)
+        self.assertEqual(result["error"], "ODDS_CHANGED")
+        self.assertLess(result["new_odd"], 10.0)
+        self.assertEqual(database.get_user_balance(self.user_a_id), balance_before)
 
     # ==============================================================
     # 5. DOUBLE SUBMIT (IDEMPOTENCY)
@@ -575,8 +576,9 @@ class TestPhase41ProductionAcceptance(unittest.TestCase):
         self.assertIn('renderMatchCenter', ui_content)
         self.assertIn('loadMatchCenter', app_content)
 
-        # 4. BET SLIP Drawer
-        self.assertIn('id="slip-drawer"', html_content)
+        # 4. COUPON: floating bar + bottom sheet
+        self.assertIn('id="betbar"', html_content)
+        self.assertIn('id="coupon-sheet"', html_content)
         self.assertIn('renderSlipDrawer', ui_content)
         self.assertIn('btn-submit-prediction', app_content)
         self.assertIn('placePrediction', app_content)

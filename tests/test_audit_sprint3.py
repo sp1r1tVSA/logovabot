@@ -180,6 +180,30 @@ class TestAuditSprint3(unittest.TestCase):
             self.assertIsNotNone(mov)
             self.assertEqual(mov["direction"], "up")
 
+    def test_line_odds_match_the_odds_placement_validates_against(self):
+        """The line tiles (bet_markets) and market_selections share one margin.
+
+        Placement prices a pick without market/selection ids from market_selections,
+        so any gap between the two tables rejected every line bet with ODDS_CHANGED.
+        """
+        betting_engine.regenerate_all_active_markets()
+        line = database.get_active_bet_markets()
+        line = next(m for m in line if m["match_id"] == self.match_id)
+
+        keys = {"p1": "p1", "x": "x", "p2": "p2", "tb25": "over_2.5", "tm25": "under_2.5",
+                "btts_yes": "btts_yes", "btts_no": "btts_no"}
+        markets = odds_engine.generate_match_markets(self.match_id, "Спортинг", "Бенфика")
+        relational = {s["selection_key"]: s["odds_value"] for m in markets for s in m["selections"]}
+        for line_key, sel_key in keys.items():
+            self.assertAlmostEqual(line[f"odd_{line_key}"], relational[sel_key], places=2, msg=line_key)
+
+        ok, result = database.place_user_bet(
+            user_id=self.user_id,
+            amount=100,
+            selections=[{"match_id": self.match_id, "outcome": "p1", "odd": line["odd_p1"]}]
+        )
+        self.assertTrue(ok, f"Line pick rejected: {result}")
+
     # ──────────────────────────────────────────────────────────────────────────
     # LB-14: Resettle Routine for Disputed Matches
     # ──────────────────────────────────────────────────────────────────────────

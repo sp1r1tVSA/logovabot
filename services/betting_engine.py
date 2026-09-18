@@ -17,10 +17,11 @@ from services.preseason_seeds import NEUTRAL_STRENGTH
 
 logger = logging.getLogger(__name__)
 
-# Standard Bookmaker Margin (7.5% normalized vigorish)
-BOOKMAKER_MARGIN = 1.075
+from services.poisson_odds import TARGET_MARGIN, calculate_poisson_market_odds
 
-from services.poisson_odds import calculate_poisson_market_odds
+# The line (bet_markets) and the relational markets placement validates against
+# must price with the same margin, or every line pick fails with ODDS_CHANGED.
+BOOKMAKER_MARGIN = TARGET_MARGIN
 
 # Ровно столько центральных матчей тура попадает в линию БК.
 CENTRAL_MATCHES_PER_ROUND = 4
