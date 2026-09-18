@@ -63,12 +63,39 @@ def get_or_create_selection(
         )
         row = cursor.fetchone()
         if row:
-            if update_odds and (row["odds_value"] != initial_odds or row["selection_name"] != selection_name):
+            if update_odds and (abs(float(row["odds_value"]) - initial_odds) > 0.001 or row["selection_name"] != selection_name):
+                old_val = float(row["odds_value"])
+                new_version = row["odds_version"] + 1
                 cursor.execute("""
                     UPDATE market_selections
-                    SET odds_value = ?, selection_name = ?
+                    SET previous_odds = odds_value,
+                        odds_value = ?,
+                        odds_version = ?,
+                        selection_name = ?,
+                        updated_at = CURRENT_TIMESTAMP
                     WHERE id = ?
-                """, (initial_odds, selection_name, row["id"]))
+                """, (initial_odds, new_version, selection_name, row["id"]))
+
+                # Audit movement and history if odds value shifted
+                if abs(old_val - initial_odds) > 0.001:
+                    cursor.execute("""
+                        INSERT INTO odds_history (selection_id, old_value, new_value, changed_by, reason)
+                        VALUES (?, ?, ?, NULL, 'repricing_sync')
+                    """, (row["id"], old_val, initial_odds))
+                    try:
+                        cursor.execute("SELECT match_id FROM markets WHERE id = ?", (market_id,))
+                        mkt_row = cursor.fetchone()
+                        if mkt_row:
+                            match_id = mkt_row["match_id"]
+                            pct_change = round(((initial_odds - old_val) / max(0.01, old_val)) * 100, 2)
+                            direction = "up" if initial_odds > old_val else "down"
+                            cursor.execute("""
+                                INSERT INTO odds_movement (selection_id, market_id, match_id, old_odds, new_odds, pct_change, direction, velocity, reason, source)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, 0.0, 'repricing_sync', 'system')
+                            """, (row["id"], market_id, match_id, old_val, initial_odds, pct_change, direction))
+                    except Exception as e:
+                        logger.warning(f"Failed to record odds_movement: {e}")
+
                 cursor.execute("SELECT * FROM market_selections WHERE id = ?", (row["id"],))
                 return dict(cursor.fetchone())
             return dict(row)
@@ -361,118 +388,80 @@ def generate_match_markets(
             standings = []
 
     from services.betting_engine import _get_team_strength_score
+    from services.poisson_odds import calculate_poisson_market_odds
 
     s1 = _get_team_strength_score(standings, team1_name, nickname=p1_nick)
     s2 = _get_team_strength_score(standings, team2_name, nickname=p2_nick)
 
-    # 1. Base win probabilities
-    s1_adj = s1 * 1.05
-    prob_p1_raw = s1_adj / (s1_adj + s2)
-    prob_p2_raw = s2 / (s1_adj + s2)
-    closeness = 1.0 - abs(prob_p1_raw - prob_p2_raw)
-    prob_x_raw = 0.26 * closeness
+    # Calculate all markets from unified bivariate Poisson distribution with 7.5% margin
+    odds = calculate_poisson_market_odds(s1, s2, margin=BOOKMAKER_MARGIN)
 
-    tot_p = prob_p1_raw + prob_x_raw + prob_p2_raw
-    p1 = prob_p1_raw / tot_p
-    px = prob_x_raw / tot_p
-    p2 = prob_p2_raw / tot_p
+    odd_p1 = odds["odd_p1"]
+    odd_x = odds["odd_x"]
+    odd_p2 = odds["odd_p2"]
 
-    odd_p1 = round(max(1.10, min(12.0, 1.0 / (p1 * BOOKMAKER_MARGIN))), 2)
-    odd_x = round(max(2.10, min(8.0, 1.0 / (px * BOOKMAKER_MARGIN))), 2)
-    odd_p2 = round(max(1.10, min(12.0, 1.0 / (p2 * BOOKMAKER_MARGIN))), 2)
+    odd_1x = odds["odd_1x"]
+    odd_12 = odds["odd_12"]
+    odd_x2 = odds["odd_x2"]
 
-    # 2. Double chance probabilities
-    p_1x = p1 + px
-    p_12 = p1 + p2
-    p_x2 = px + p2
-    odd_1x = round(max(1.05, min(5.0, 1.0 / (p_1x * BOOKMAKER_MARGIN))), 2)
-    odd_12 = round(max(1.05, min(5.0, 1.0 / (p_12 * BOOKMAKER_MARGIN))), 2)
-    odd_x2 = round(max(1.05, min(5.0, 1.0 / (p_x2 * BOOKMAKER_MARGIN))), 2)
+    odd_tb15, odd_tm15 = odds["odd_tb15"], odds["odd_tm15"]
+    odd_tb25, odd_tm25 = odds["odd_tb25"], odds["odd_tm25"]
+    odd_tb35, odd_tm35 = odds["odd_tb35"], odds["odd_tm35"]
 
-    # 3. Totals calculation
-    total_strength = (s1 + s2) / 2.0
-    if total_strength > 12.0:
-        odd_tb25, odd_tm25 = 1.55, 2.30
-        odd_tb15, odd_tm15 = 1.20, 4.10
-        odd_tb35, odd_tm35 = 2.45, 1.50
-        odd_btts_yes, odd_btts_no = 1.60, 2.20
-    elif total_strength < 8.0:
-        odd_tb25, odd_tm25 = 2.05, 1.70
-        odd_tb15, odd_tm15 = 1.35, 3.00
-        odd_tb35, odd_tm35 = 3.20, 1.30
-        odd_btts_yes, odd_btts_no = 1.85, 1.85
-    else:
-        odd_tb25, odd_tm25 = 1.75, 1.95
-        odd_tb15, odd_tm15 = 1.25, 3.60
-        odd_tb35, odd_tm35 = 2.85, 1.38
-        odd_btts_yes, odd_btts_no = 1.68, 2.05
+    odd_btts_yes = odds["odd_btts_yes"]
+    odd_btts_no = odds["odd_btts_no"]
 
-    # 4. Individual totals
-    ind1_over = round(max(1.20, min(4.50, 1.85 / (p1 / max(0.1, p2)))), 2)
-    ind1_under = round(max(1.20, min(4.50, 1.85 * (p1 / max(0.1, p2)))), 2)
-    ind2_over = round(max(1.20, min(4.50, 1.85 / (p2 / max(0.1, p1)))), 2)
-    ind2_under = round(max(1.20, min(4.50, 1.85 * (p2 / max(0.1, p1)))), 2)
+    ind1_over, ind1_under = odds["odd_itb1"], odds["odd_itm1"]
+    ind2_over, ind2_under = odds["odd_itb2"], odds["odd_itm2"]
 
-    # 5. Handicap (±1.5)
-    # Complementary probabilities with built-in vigorish:
-    # Pair A: h1_minus_1.5 (T1 wins by 2+) <-> h2_plus_1.5 (T2 doesn't lose by 2+)
-    frac1 = 0.25 + 0.35 * (p1 / max(0.01, p1 + p2))
-    p_h1_minus = max(0.04, min(0.85, p1 * frac1))
-    p_h2_plus = 1.0 - p_h1_minus
+    odd_h1_minus = odds["odd_h1_minus_1.5"]
+    odd_h2_plus = odds["odd_h2_plus_1.5"]
+    odd_h1_plus = odds["odd_h1_plus_1.5"]
+    odd_h2_minus = odds["odd_h2_minus_1.5"]
 
-    # Pair B: h2_minus_1.5 (T2 wins by 2+) <-> h1_plus_1.5 (T1 doesn't lose by 2+)
-    frac2 = 0.25 + 0.35 * (p2 / max(0.01, p1 + p2))
-    p_h2_minus = max(0.04, min(0.85, p2 * frac2))
-    p_h1_plus = 1.0 - p_h2_minus
-
-    odd_h1_minus = round(max(1.10, min(12.0, 1.0 / (p_h1_minus * BOOKMAKER_MARGIN))), 2)
-    odd_h2_plus = round(max(1.05, min(12.0, 1.0 / (p_h2_plus * BOOKMAKER_MARGIN))), 2)
-    odd_h2_minus = round(max(1.10, min(12.0, 1.0 / (p_h2_minus * BOOKMAKER_MARGIN))), 2)
-    odd_h1_plus = round(max(1.05, min(12.0, 1.0 / (p_h1_plus * BOOKMAKER_MARGIN))), 2)
-
-    # Create / Update Markets
+    # Create / Update Markets (with update_odds=True for dynamic repricing)
     created_markets = []
 
     # Market 1: 1X2
     m_1x2 = get_or_create_market(match_id, "1x2", "Исход матча", category="main", sort_order=1)
-    get_or_create_selection(m_1x2["id"], "p1", f"П1 ({team1_name})", odd_p1)
-    get_or_create_selection(m_1x2["id"], "x", "Ничья (X)", odd_x)
-    get_or_create_selection(m_1x2["id"], "p2", f"П2 ({team2_name})", odd_p2)
+    get_or_create_selection(m_1x2["id"], "p1", f"П1 ({team1_name})", odd_p1, update_odds=True)
+    get_or_create_selection(m_1x2["id"], "x", "Ничья (X)", odd_x, update_odds=True)
+    get_or_create_selection(m_1x2["id"], "p2", f"П2 ({team2_name})", odd_p2, update_odds=True)
     created_markets.append(m_1x2)
 
     # Market 2: Double Chance
     m_dc = get_or_create_market(match_id, "double_chance", "Двойной шанс", category="main", sort_order=2)
-    get_or_create_selection(m_dc["id"], "1x", "1X (П1 или Х)", odd_1x)
-    get_or_create_selection(m_dc["id"], "12", "12 (П1 или П2)", odd_12)
-    get_or_create_selection(m_dc["id"], "x2", "X2 (Х или П2)", odd_x2)
+    get_or_create_selection(m_dc["id"], "1x", "1X (П1 или Х)", odd_1x, update_odds=True)
+    get_or_create_selection(m_dc["id"], "12", "12 (П1 или П2)", odd_12, update_odds=True)
+    get_or_create_selection(m_dc["id"], "x2", "X2 (Х или П2)", odd_x2, update_odds=True)
     created_markets.append(m_dc)
 
     # Market 3: Total Goals
     m_tot = get_or_create_market(match_id, "total_goals", "Тотал голов", category="goals", sort_order=3)
-    get_or_create_selection(m_tot["id"], "over_1.5", "Тотал больше (1.5)", odd_tb15)
-    get_or_create_selection(m_tot["id"], "under_1.5", "Тотал меньше (1.5)", odd_tm15)
-    get_or_create_selection(m_tot["id"], "over_2.5", "Тотал больше (2.5)", odd_tb25)
-    get_or_create_selection(m_tot["id"], "under_2.5", "Тотал меньше (2.5)", odd_tm25)
-    get_or_create_selection(m_tot["id"], "over_3.5", "Тотал больше (3.5)", odd_tb35)
-    get_or_create_selection(m_tot["id"], "under_3.5", "Тотал меньше (3.5)", odd_tm35)
+    get_or_create_selection(m_tot["id"], "over_1.5", "Тотал больше (1.5)", odd_tb15, update_odds=True)
+    get_or_create_selection(m_tot["id"], "under_1.5", "Тотал меньше (1.5)", odd_tm15, update_odds=True)
+    get_or_create_selection(m_tot["id"], "over_2.5", "Тотал больше (2.5)", odd_tb25, update_odds=True)
+    get_or_create_selection(m_tot["id"], "under_2.5", "Тотал меньше (2.5)", odd_tm25, update_odds=True)
+    get_or_create_selection(m_tot["id"], "over_3.5", "Тотал больше (3.5)", odd_tb35, update_odds=True)
+    get_or_create_selection(m_tot["id"], "under_3.5", "Тотал меньше (3.5)", odd_tm35, update_odds=True)
     created_markets.append(m_tot)
 
     # Market 4: BTTS
     m_btts = get_or_create_market(match_id, "btts", "Обе забьют", category="goals", sort_order=4)
-    get_or_create_selection(m_btts["id"], "btts_yes", "Обе забьют: Да", odd_btts_yes)
-    get_or_create_selection(m_btts["id"], "btts_no", "Обе забьют: Нет", odd_btts_no)
+    get_or_create_selection(m_btts["id"], "btts_yes", "Обе забьют: Да", odd_btts_yes, update_odds=True)
+    get_or_create_selection(m_btts["id"], "btts_no", "Обе забьют: Нет", odd_btts_no, update_odds=True)
     created_markets.append(m_btts)
 
     # Market 5: Individual Total 1
     m_it1 = get_or_create_market(match_id, "individual_total_1", f"Инд. тотал: {team1_name}", category="goals", sort_order=5)
-    get_or_create_selection(m_it1["id"], "it1_over_1.5", "ИТБ1 (1.5)", ind1_over)
-    get_or_create_selection(m_it1["id"], "it1_under_1.5", "ИТМ1 (1.5)", ind1_under)
+    get_or_create_selection(m_it1["id"], "it1_over_1.5", "ИТБ1 (1.5)", ind1_over, update_odds=True)
+    get_or_create_selection(m_it1["id"], "it1_under_1.5", "ИТМ1 (1.5)", ind1_under, update_odds=True)
     created_markets.append(m_it1)
 
     # Market 6: Individual Total 2
     m_it2 = get_or_create_market(match_id, "individual_total_2", f"Инд. тотал: {team2_name}", category="goals", sort_order=6)
-    get_or_create_selection(m_it2["id"], "it2_over_1.5", "ИТБ2 (1.5)", ind2_over)
-    get_or_create_selection(m_it2["id"], "it2_under_1.5", "ИТМ2 (1.5)", ind2_under)
+    get_or_create_selection(m_it2["id"], "it2_over_1.5", "ИТБ2 (1.5)", ind2_over, update_odds=True)
+    get_or_create_selection(m_it2["id"], "it2_under_1.5", "ИТМ2 (1.5)", ind2_under, update_odds=True)
     created_markets.append(m_it2)
 
     # Market 7: Handicap

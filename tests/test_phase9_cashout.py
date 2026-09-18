@@ -115,7 +115,7 @@ class TestPhase9Cashout(unittest.TestCase):
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM user_bets WHERE id = ?", (bet_id,))
             bet = cursor.fetchone()
-            self.assertEqual(bet["status"], "won")
+            self.assertEqual(bet["status"], "cashed_out")
             self.assertIsNotNone(bet["cashout_at"])
             self.assertIsNotNone(bet["settled_at"])
             self.assertEqual(bet["actual_payout"], offer_val)

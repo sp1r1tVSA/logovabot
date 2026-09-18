@@ -231,6 +231,13 @@ async def handle_get_prediction_detail(request: web.Request) -> web.Response:
         return web.json_response({"status": "error", "error": "unauthorized"}, status=401)
 
     user_id = user_info["id"]
+    if not check_user_access(user_id):
+        return web.json_response({
+            "status": "error",
+            "error": "access_restricted",
+            "message": "Logovo.bet временно недоступен."
+        }, status=403)
+
     try:
         bet_id = int(request.match_info["id"])
     except (KeyError, ValueError):
@@ -246,6 +253,27 @@ async def handle_get_prediction_detail(request: web.Request) -> web.Response:
     })
 
 
+def _filter_repeat_selections(items: list[dict]) -> list[dict]:
+    """Helper executed in threadpool to check upcoming match statuses."""
+    cloned = []
+    with database.transaction() as conn:
+        cursor = conn.cursor()
+        for item in items:
+            m_id = item["match_id"]
+            out_type = item["outcome_type"]
+            cursor.execute("SELECT status FROM matches WHERE id = ?", (m_id,))
+            m_row = cursor.fetchone()
+            if m_row and m_row["status"] in ("scheduled", "live"):
+                cloned.append({
+                    "match_id": m_id,
+                    "outcome": out_type,
+                    "odd": item["odd"],
+                    "team1_name": item.get("team1_name"),
+                    "team2_name": item.get("team2_name")
+                })
+    return cloned
+
+
 async def handle_repeat_prediction(request: web.Request) -> web.Response:
     """
     POST /api/predictions/{id}/repeat
@@ -258,6 +286,13 @@ async def handle_repeat_prediction(request: web.Request) -> web.Response:
         return web.json_response({"status": "error", "error": "unauthorized"}, status=401)
 
     user_id = user_info["id"]
+    if not check_user_access(user_id):
+        return web.json_response({
+            "status": "error",
+            "error": "access_restricted",
+            "message": "Logovo.bet временно недоступен."
+        }, status=403)
+
     try:
         bet_id = int(request.match_info["id"])
     except (KeyError, ValueError):
@@ -267,23 +302,7 @@ async def handle_repeat_prediction(request: web.Request) -> web.Response:
     if not matching:
         return web.json_response({"status": "error", "message": "Исходный прогноз не найден."}, status=404)
 
-    cloned_selections = []
-    for item in matching.get("items", []):
-        m_id = item["match_id"]
-        out_type = item["outcome_type"]
-        # Check if match is upcoming
-        with database.transaction() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT status FROM matches WHERE id = ?", (m_id,))
-            m_row = cursor.fetchone()
-            if m_row and m_row["status"] in ("scheduled", "live"):
-                cloned_selections.append({
-                    "match_id": m_id,
-                    "outcome": out_type,
-                    "odd": item["odd"],
-                    "team1_name": item.get("team1_name"),
-                    "team2_name": item.get("team2_name")
-                })
+    cloned_selections = await asyncio.to_thread(_filter_repeat_selections, matching.get("items", []))
 
     if not cloned_selections:
         return web.json_response({
@@ -310,13 +329,20 @@ async def handle_get_cashout_quote(request: web.Request) -> web.Response:
         return web.json_response({"status": "error", "error": "unauthorized"}, status=401)
 
     user_id = user_info["id"]
+    if not check_user_access(user_id):
+        return web.json_response({
+            "status": "error",
+            "error": "access_restricted",
+            "message": "Logovo.bet временно недоступен."
+        }, status=403)
+
     try:
         bet_id = int(request.match_info["id"])
     except (KeyError, ValueError):
         return web.json_response({"status": "error", "message": "Некорректный ID."}, status=400)
 
     from services.cashout_engine import quote_cashout
-    quote = quote_cashout(user_id=user_id, bet_id=bet_id)
+    quote = await asyncio.to_thread(quote_cashout, user_id=user_id, bet_id=bet_id)
     # Движок называет поля available/offer, клиент читает cashout_available/amount.
     # Алиасы кладём и внутрь quote, и на верхний уровень: вложенный объект нужен
     # текущему клиенту, плоский — уже задеплоенным старым версиям Mini App.
@@ -339,6 +365,13 @@ async def handle_execute_cashout(request: web.Request) -> web.Response:
         return web.json_response({"status": "error", "error": "unauthorized"}, status=401)
 
     user_id = user_info["id"]
+    if not check_user_access(user_id):
+        return web.json_response({
+            "status": "error",
+            "error": "access_restricted",
+            "message": "Logovo.bet временно недоступен."
+        }, status=403)
+
     try:
         bet_id = int(request.match_info["id"])
     except (KeyError, ValueError):
@@ -352,7 +385,9 @@ async def handle_execute_cashout(request: web.Request) -> web.Response:
         pass
 
     from services.cashout_engine import execute_cashout
-    success, result = execute_cashout(user_id=user_id, bet_id=bet_id, idempotency_key=idempotency_key)
+    success, result = await asyncio.to_thread(
+        execute_cashout, user_id=user_id, bet_id=bet_id, idempotency_key=idempotency_key
+    )
     if not success:
         return web.json_response({
             "status": "error",

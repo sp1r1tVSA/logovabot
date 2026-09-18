@@ -17,8 +17,10 @@ from services.preseason_seeds import NEUTRAL_STRENGTH
 
 logger = logging.getLogger(__name__)
 
-# Standard Bookmaker Margin (5.5%)
-BOOKMAKER_MARGIN = 1.055
+# Standard Bookmaker Margin (7.5% normalized vigorish)
+BOOKMAKER_MARGIN = 1.075
+
+from services.poisson_odds import calculate_poisson_market_odds
 
 # Ровно столько центральных матчей тура попадает в линию БК.
 CENTRAL_MATCHES_PER_ROUND = 4
@@ -232,57 +234,17 @@ def calculate_match_odds(
     s1 = _get_team_strength_score(standings, team1, nickname=p1_nick)
     s2 = _get_team_strength_score(standings, team2, nickname=p2_nick)
 
-    # 1. Base win probabilities using logistic scale
-    # Home advantage slight boost (1.05x)
-    s1_adjusted = s1 * 1.05
-    prob_p1_raw = s1_adjusted / (s1_adjusted + s2)
-    prob_p2_raw = s2 / (s1_adjusted + s2)
-
-    # Calculate draw probability based on closeness of teams
-    closeness = 1.0 - abs(prob_p1_raw - prob_p2_raw)
-    prob_x_raw = 0.26 * closeness
-
-    # Normalize probabilities to sum to 1.0
-    total_raw = prob_p1_raw + prob_x_raw + prob_p2_raw
-    p1 = prob_p1_raw / total_raw
-    px = prob_x_raw / total_raw
-    p2 = prob_p2_raw / total_raw
-
-    # 2. Apply Bookmaker Margin (5.5%)
-    odd_p1 = round(max(1.10, min(12.0, (1.0 / (p1 * BOOKMAKER_MARGIN)))), 2)
-    odd_x = round(max(2.10, min(8.0, (1.0 / (px * BOOKMAKER_MARGIN)))), 2)
-    odd_p2 = round(max(1.10, min(12.0, (1.0 / (p2 * BOOKMAKER_MARGIN)))), 2)
-
-    # 3. Totals & BTTS Calculation
-    # FIFA esports typically has high goal average (3.2 - 4.5 goals per match)
-    total_strength = (s1 + s2) / 2.0
-    if total_strength > 12.0:
-        # High scoring teams
-        odd_tb25 = 1.55
-        odd_tm25 = 2.30
-        odd_btts_yes = 1.60
-        odd_btts_no = 2.20
-    elif total_strength < 8.0:
-        # Lower scoring teams
-        odd_tb25 = 2.05
-        odd_tm25 = 1.70
-        odd_btts_yes = 1.85
-        odd_btts_no = 1.85
-    else:
-        # Balanced
-        odd_tb25 = 1.75
-        odd_tm25 = 1.95
-        odd_btts_yes = 1.68
-        odd_btts_no = 2.05
+    # Compute realistic odds using unified Poisson model (7.5% margin, realistic draw odds, dynamic totals)
+    odds = calculate_poisson_market_odds(s1, s2, margin=BOOKMAKER_MARGIN)
 
     return {
-        "odd_p1": odd_p1,
-        "odd_x": odd_x,
-        "odd_p2": odd_p2,
-        "odd_tb25": odd_tb25,
-        "odd_tm25": odd_tm25,
-        "odd_btts_yes": odd_btts_yes,
-        "odd_btts_no": odd_btts_no
+        "odd_p1": odds["odd_p1"],
+        "odd_x": odds["odd_x"],
+        "odd_p2": odds["odd_p2"],
+        "odd_tb25": odds["odd_tb25"],
+        "odd_tm25": odds["odd_tm25"],
+        "odd_btts_yes": odds["odd_btts_yes"],
+        "odd_btts_no": odds["odd_btts_no"]
     }
 
 

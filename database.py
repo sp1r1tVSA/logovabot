@@ -499,6 +499,50 @@ def init_db() -> None:
             cursor.execute("ALTER TABLE user_wallets ADD COLUMN daily_limit INTEGER")
         except sqlite3.OperationalError:
             pass
+
+        # Safely migrate user_bets CHECK constraint to include 'cashed_out' (LB-18)
+        try:
+            cursor.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='user_bets'")
+            ub_row = cursor.fetchone()
+            if ub_row and ub_row[0] and "cashed_out" not in ub_row[0]:
+                cursor.execute("PRAGMA foreign_keys=OFF")
+                cursor.execute("""
+                    CREATE TABLE user_bets_migrate_cashed_out (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        user_id INTEGER NOT NULL,
+                        bet_type TEXT NOT NULL DEFAULT 'single' CHECK(bet_type IN ('single', 'express')),
+                        amount INTEGER NOT NULL,
+                        total_odd REAL NOT NULL,
+                        potential_win INTEGER NOT NULL,
+                        status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'won', 'lost', 'refunded', 'cancelled', 'cashed_out')),
+                        system_config TEXT,
+                        actual_payout INTEGER DEFAULT 0,
+                        idempotency_key TEXT,
+                        idempotency_payload_hash TEXT,
+                        cashout_at TIMESTAMP,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        settled_at TIMESTAMP
+                    )
+                """)
+                cursor.execute("""
+                    INSERT INTO user_bets_migrate_cashed_out (
+                        id, user_id, bet_type, amount, total_odd, potential_win, status,
+                        system_config, actual_payout, idempotency_key, idempotency_payload_hash,
+                        cashout_at, created_at, settled_at
+                    )
+                    SELECT id, user_id, bet_type, amount, total_odd, potential_win, status,
+                           system_config, actual_payout, idempotency_key, idempotency_payload_hash,
+                           cashout_at, created_at, settled_at
+                    FROM user_bets
+                """)
+                cursor.execute("DROP TABLE user_bets")
+                cursor.execute("ALTER TABLE user_bets_migrate_cashed_out RENAME TO user_bets")
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_bets_user ON user_bets(user_id, status)")
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_bets_status ON user_bets(status)")
+                cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_user_bets_idempotency ON user_bets(user_id, idempotency_key) WHERE idempotency_key IS NOT NULL")
+                cursor.execute("PRAGMA foreign_keys=ON")
+        except Exception as e:
+            logger.warning(f"Could not migrate user_bets check constraint: {e}")
             
         # Performance indexes for matches and match_events
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_matches_p1 ON matches(player1_id)")
@@ -602,7 +646,7 @@ def init_db() -> None:
                 amount INTEGER NOT NULL,
                 total_odd REAL NOT NULL,
                 potential_win INTEGER NOT NULL,
-                status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'won', 'lost', 'refunded', 'cancelled')),
+                status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'won', 'lost', 'refunded', 'cancelled', 'cashed_out')),
                 system_config TEXT,
                 actual_payout INTEGER DEFAULT 0,
                 idempotency_key TEXT,
@@ -8265,7 +8309,7 @@ def execute_cashout(
         # 4. Atomically settle bet as cashout
         cursor.execute("""
             UPDATE user_bets
-            SET status = 'won',
+            SET status = 'cashed_out',
                 actual_payout = ?,
                 cashout_at = CURRENT_TIMESTAMP,
                 settled_at = CURRENT_TIMESTAMP
@@ -9255,16 +9299,18 @@ def get_player_career_stats(user_id: int) -> dict:
                 COUNT(id) as total_bets,
                 SUM(CASE WHEN status = 'won' THEN 1 ELSE 0 END) as career_wins,
                 SUM(CASE WHEN status = 'lost' THEN 1 ELSE 0 END) as career_losses,
+                SUM(CASE WHEN status = 'cashed_out' THEN 1 ELSE 0 END) as career_cashouts,
                 SUM(amount) as career_stake,
-                SUM(CASE WHEN status = 'won' THEN actual_payout ELSE 0 END) as career_payout
+                SUM(CASE WHEN status IN ('won', 'cashed_out') THEN actual_payout ELSE 0 END) as career_payout
             FROM user_bets
-            WHERE user_id = ? AND status IN ('won', 'lost')
+            WHERE user_id = ? AND status IN ('won', 'lost', 'cashed_out')
         """, (user_id,))
         b_row = cursor.fetchone()
 
         total_bets = b_row["total_bets"] or 0
         career_wins = b_row["career_wins"] or 0
         career_losses = b_row["career_losses"] or 0
+        career_cashouts = b_row["career_cashouts"] or 0
         career_stake = b_row["career_stake"] or 0
         career_payout = b_row["career_payout"] or 0
 
@@ -9296,6 +9342,9 @@ def get_player_career_stats(user_id: int) -> dict:
             "career_bets": total_bets,
             "career_wins": career_wins,
             "career_losses": career_losses,
+            "career_cashouts": career_cashouts,
+            "career_stake": career_stake,
+            "career_payout": career_payout,
             "career_roi": career_roi,
             "career_accuracy": career_acc,
             "seasons_played": max(1, s_played),

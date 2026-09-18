@@ -165,13 +165,13 @@ class RiskEngine:
                     details={"max_daily_stake": limits["max_daily_stake"], "today_staked": today_staked, "remaining": remaining_daily}
                 )
 
-            # 6b. User Daily Loss Limit Check (LB-03)
+            # 6b. User Daily Loss Limit Check (LB-03 & LB-18)
             cursor.execute("""
                 SELECT 
-                    COALESCE(SUM(CASE WHEN status = 'lost' THEN amount ELSE 0 END), 0) -
-                    COALESCE(SUM(CASE WHEN status = 'won' THEN (actual_payout - amount) ELSE 0 END), 0) as today_net_loss
+                    COALESCE(SUM(CASE WHEN status = 'lost' THEN amount WHEN status = 'cashed_out' AND actual_payout < amount THEN (amount - actual_payout) ELSE 0 END), 0) -
+                    COALESCE(SUM(CASE WHEN status = 'won' THEN (actual_payout - amount) WHEN status = 'cashed_out' AND actual_payout >= amount THEN (actual_payout - amount) ELSE 0 END), 0) as today_net_loss
                 FROM user_bets
-                WHERE user_id = ? AND date(created_at) = date('now') AND status IN ('won', 'lost')
+                WHERE user_id = ? AND date(created_at) = date('now') AND status IN ('won', 'lost', 'cashed_out')
             """, (user_id,))
             loss_row = cursor.fetchone()
             today_net_loss = max(0, int(loss_row["today_net_loss"] if loss_row else 0))

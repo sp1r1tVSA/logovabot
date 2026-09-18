@@ -226,7 +226,8 @@ def settle_match_predictions(
                 if i["status"] == "won":
                     effective_odd *= float(i["odd"])
 
-            payout = int(stake * effective_odd)
+            effective_odd_rounded = round(effective_odd, 2)
+            payout = int(round(stake * effective_odd_rounded))
 
             cursor.execute("""
                 UPDATE user_bets
@@ -354,3 +355,242 @@ def refund_match_bets(match_id: int) -> list[dict]:
 
 
 settle_match_result = settle_match_predictions
+
+
+def resettle_match_predictions(
+    match_id: int,
+    score1: int,
+    score2: int,
+    match_status: str = "finished",
+    ht_score1: Optional[int] = None,
+    ht_score2: Optional[int] = None
+) -> list[dict]:
+    """
+    Idempotent resettle routine for disputed or corrected match results (LB-14).
+    1. Reverts previous payouts/refunds for affected bets (except cashed_out bets).
+    2. Re-evaluates market selections and bet items with the corrected score.
+    3. Settles user bets to their new state (won, lost, refunded, or pending).
+    4. Audits all financial balance adjustments with 'resettle_reversal' and 'resettle_payout'.
+    """
+    notifications = []
+
+    with database.transaction() as conn:
+        cursor = conn.cursor()
+
+        # 1. Update match scores and status
+        cursor.execute("SELECT * FROM matches WHERE id = ?", (match_id,))
+        match_row = cursor.fetchone()
+        if not match_row:
+            logger.warning(f"Cannot resettle match #{match_id}: match not found.")
+            return []
+
+        target_status = "confirmed" if match_row["status"] in ("confirmed", "completed") else match_status
+        cursor.execute("""
+            UPDATE matches
+            SET player1_score = ?, player2_score = ?, ht_score1 = ?, ht_score2 = ?,
+                status = ?, played_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        """, (score1, score2, ht_score1, ht_score2, target_status, match_id))
+
+        # 2. Re-evaluate relational markets and market selections
+        cursor.execute("SELECT * FROM markets WHERE match_id = ?", (match_id,))
+        markets = cursor.fetchall()
+        for m in markets:
+            cursor.execute("SELECT * FROM market_selections WHERE market_id = ?", (m["id"],))
+            selections = cursor.fetchall()
+            for s in selections:
+                sel_result = evaluate_market_selection(
+                    market_key=m["market_key"],
+                    selection_key=s["selection_key"],
+                    score1=score1,
+                    score2=score2,
+                    match_status=match_status,
+                    ht_score1=ht_score1,
+                    ht_score2=ht_score2
+                )
+                new_sel_status = "voided" if sel_result == "voided" else "locked"
+                cursor.execute("""
+                    UPDATE market_selections
+                    SET status = ?
+                    WHERE id = ?
+                """, (new_sel_status, s["id"]))
+
+        # 3. Re-evaluate bet_items for this match
+        cursor.execute("""
+            SELECT bi.*, m.market_key
+            FROM bet_items bi
+            LEFT JOIN markets m ON bi.market_id = m.id
+            WHERE bi.match_id = ?
+        """, (match_id,))
+        match_items = cursor.fetchall()
+
+        for item in match_items:
+            m_key = item["market_key"] or "1x2"
+            outcome_type = item["outcome_type"]
+            if outcome_type in ("p1", "x", "p2"):
+                m_key = "1x2"
+            elif outcome_type in ("tb25", "tm25", "over_2.5", "under_2.5"):
+                m_key = "total_goals"
+            elif outcome_type in ("btts_yes", "btts_no"):
+                m_key = "btts"
+
+            item_result = evaluate_market_selection(
+                market_key=m_key,
+                selection_key=outcome_type,
+                score1=score1,
+                score2=score2,
+                match_status=match_status,
+                ht_score1=ht_score1,
+                ht_score2=ht_score2
+            )
+            db_item_status = "refunded" if item_result == "voided" else item_result
+            cursor.execute("""
+                UPDATE bet_items
+                SET status = ?
+                WHERE id = ?
+            """, (db_item_status, item["id"]))
+
+        # 4. Find all affected user_bets (exclude early cashout bets)
+        cursor.execute("""
+            SELECT DISTINCT b.*
+            FROM user_bets b
+            JOIN bet_items bi ON b.id = bi.bet_id
+            WHERE bi.match_id = ? AND b.status != 'cashed_out' AND b.cashout_at IS NULL
+        """, (match_id,))
+        affected_bets = cursor.fetchall()
+
+        for bet in affected_bets:
+            b_id = bet["id"]
+            u_id = bet["user_id"]
+            stake = bet["amount"]
+            prev_status = bet["status"]
+            prev_payout = bet["actual_payout"] or 0
+
+            # 4a. Revert previous settlement if bet was already settled
+            if bet["settled_at"] is not None and prev_payout > 0:
+                database.get_or_create_wallet(u_id)
+                cursor.execute("""
+                    UPDATE user_wallets
+                    SET balance = balance - ?,
+                        total_won = CASE WHEN ? = 'won' THEN max(0, total_won - ?) ELSE total_won END,
+                        bets_won = CASE WHEN ? = 'won' THEN max(0, bets_won - 1) ELSE bets_won END,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE user_id = ?
+                """, (prev_payout, prev_status, prev_payout, prev_status, u_id))
+
+                cursor.execute("SELECT balance FROM user_wallets WHERE user_id = ?", (u_id,))
+                bal_rev = cursor.fetchone()["balance"]
+                cursor.execute("""
+                    INSERT INTO coin_transactions (user_id, amount, transaction_type, reference_id, reference_type, balance_after)
+                    VALUES (?, ?, 'resettle_reversal', ?, 'bet', ?)
+                """, (u_id, -prev_payout, b_id, bal_rev))
+
+            # 4b. Re-evaluate bet legs
+            cursor.execute("SELECT * FROM bet_items WHERE bet_id = ?", (b_id,))
+            all_items = cursor.fetchall()
+
+            has_lost = any(i["status"] == "lost" for i in all_items)
+            has_pending = any(i["status"] == "pending" for i in all_items)
+            all_voided = all(i["status"] in ("voided", "refunded") for i in all_items)
+
+            if has_lost:
+                cursor.execute("""
+                    UPDATE user_bets
+                    SET status = 'lost', actual_payout = 0, settled_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                """, (b_id,))
+                notifications.append({
+                    "user_id": u_id,
+                    "bet_id": b_id,
+                    "status": "lost",
+                    "payout": 0,
+                    "message": f"⚖️ Прогноз #{b_id} пересчитан: Проигрыш"
+                })
+                continue
+
+            if has_pending:
+                cursor.execute("""
+                    UPDATE user_bets
+                    SET status = 'pending', actual_payout = 0, settled_at = NULL
+                    WHERE id = ?
+                """, (b_id,))
+                notifications.append({
+                    "user_id": u_id,
+                    "bet_id": b_id,
+                    "status": "pending",
+                    "payout": 0,
+                    "message": f"⚖️ Прогноз #{b_id} пересчитан: В игре"
+                })
+                continue
+
+            if all_voided:
+                cursor.execute("""
+                    UPDATE user_bets
+                    SET status = 'refunded', actual_payout = ?, settled_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                """, (stake, b_id))
+
+                database.get_or_create_wallet(u_id)
+                cursor.execute("""
+                    UPDATE user_wallets
+                    SET balance = balance + ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE user_id = ?
+                """, (stake, u_id))
+
+                cursor.execute("SELECT balance FROM user_wallets WHERE user_id = ?", (u_id,))
+                bal_after = cursor.fetchone()["balance"]
+                cursor.execute("""
+                    INSERT INTO coin_transactions (user_id, amount, transaction_type, reference_id, reference_type, balance_after)
+                    VALUES (?, ?, 'resettle_refund', ?, 'bet', ?)
+                """, (u_id, stake, b_id, bal_after))
+
+                notifications.append({
+                    "user_id": u_id,
+                    "bet_id": b_id,
+                    "status": "refunded",
+                    "payout": stake,
+                    "message": f"🔄 Прогноз #{b_id} пересчитан: Возврат (+{stake} 🪙)"
+                })
+                continue
+
+            # Won
+            effective_odd = 1.0
+            for i in all_items:
+                if i["status"] == "won":
+                    effective_odd *= float(i["odd"])
+            effective_odd_rounded = round(effective_odd, 2)
+            payout = int(round(stake * effective_odd_rounded))
+
+            cursor.execute("""
+                UPDATE user_bets
+                SET status = 'won', actual_payout = ?, settled_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+            """, (payout, b_id))
+
+            database.get_or_create_wallet(u_id)
+            cursor.execute("""
+                UPDATE user_wallets
+                SET balance = balance + ?,
+                    total_won = total_won + ?,
+                    bets_won = bets_won + 1,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE user_id = ?
+            """, (payout, payout, u_id))
+
+            cursor.execute("SELECT balance FROM user_wallets WHERE user_id = ?", (u_id,))
+            bal_after = cursor.fetchone()["balance"]
+            cursor.execute("""
+                INSERT INTO coin_transactions (user_id, amount, transaction_type, reference_id, reference_type, balance_after)
+                VALUES (?, ?, 'resettle_payout', ?, 'bet', ?)
+            """, (u_id, payout, b_id, bal_after))
+
+            notifications.append({
+                "user_id": u_id,
+                "bet_id": b_id,
+                "status": "won",
+                "payout": payout,
+                "message": f"🎉 Прогноз #{b_id} пересчитан: Победа (+{payout} 🪙)"
+            })
+
+    return notifications
+
