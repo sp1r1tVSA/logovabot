@@ -227,11 +227,17 @@ threshold; it is read-only (the connection is closed by a SQLite authorizer) and
 **Club logos** are a second, independent step. `assets/logos/` was emptied with the КПЛ
 season and is not in git, so every club currently renders with the blank-badge fallback.
 Restoring one takes two edits: drop the PNG into `assets/logos/`, then map the Russian club
-name to that filename in `TEAM_LOGO_MAP` (`services/graphics/table_generator.py:16`) — the
-single source of truth, which the other renderers consume via `get_team_logo_filename`.
-The map still holds the 16 КПЛ names pointing at deleted files; replace them rather than
-adding beside them. Every load site is guarded by `os.path.exists`, so a missing or
-unmapped logo degrades to an empty badge and never raises.
+name to that filename in `TEAM_LOGO_MAP` (`services/graphics/table_generator.py:16`), which
+the other Pillow renderers consume via `get_team_logo_filename`. That function falls back to
+a short substring chain for forms `resolve_team_name` misses; the chain is order-sensitive
+(`Спортинг` contains `порт`, so it is tested before `Порту`). Every load site is guarded by
+`os.path.exists`, so a missing or unmapped logo degrades to an empty badge and never raises.
+
+The map now covers only the seven clubs that carried over from КПЛ; the other 73 are
+unmapped and render blank. The Mini App keeps its **own** copy — `TEAM_LOGO_MAP` /
+`getTeamLogoUrl` in `web/js/ui.js:9`, which serves `/assets/logos/…` directly without
+touching Pillow, and matches by two-way substring rather than through the resolver. Adding a
+logo means editing both maps.
 
 **Discipline:** unplayed matches accrue debts, tracked from `DEBT_TRACKING_START_DATETIME`.
 Three job-queue tasks drive it — deadline reminders and the debt lifecycle tracker every

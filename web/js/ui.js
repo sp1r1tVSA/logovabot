@@ -6,52 +6,29 @@
 import { store } from './store.js';
 import { tgBridge } from './tg.js';
 
+// Только клубы текущего сезона — те семь, что перешли из КПЛ и остались в
+// config.DIVISION_CLUBS. Это независимая копия TEAM_LOGO_MAP из
+// services/graphics/table_generator.py: Mini App отдаёт логотипы сам, мимо Pillow.
+// Обе карты надо править вместе.
 export const TEAM_LOGO_MAP = {
+  'порту': 'porto.png',
+  'porto': 'porto.png',
+  'бенфика': 'benfica.png',
+  'benfica': 'benfica.png',
   'спортинг': 'sporting.png',
   'sporting': 'sporting.png',
-  'копенгаген': 'copenhagen.png',
-  'copenhagen': 'copenhagen.png',
+  'аякс': 'ajax.png',
+  'ajax': 'ajax.png',
+  'псв': 'psv.png',
+  'psv': 'psv.png',
   'ривер плейт': 'river_plate.png',
   'river plate': 'river_plate.png',
   'ривер': 'river_plate.png',
-  'бока хуниорс': 'boca_juniors.png',
-  'boca juniors': 'boca_juniors.png',
-  'бока': 'boca_juniors.png',
-  'boca': 'boca_juniors.png',
-  'бока хун': 'boca_juniors.png',
-  'бока хун.': 'boca_juniors.png',
-  'бенфика': 'benfica.png',
-  'benfica': 'benfica.png',
-  'псв': 'psv.png',
-  'psv': 'psv.png',
-  'порту': 'porto.png',
-  'porto': 'porto.png',
   'будё глимт': 'bodo_glimt.png',
   'будë глимт': 'bodo_glimt.png',
   'буде глимт': 'bodo_glimt.png',
-  'будё-глимт': 'bodo_glimt.png',
-  'буде-глимт': 'bodo_glimt.png',
-  'будё': 'bodo_glimt.png',
-  'буде': 'bodo_glimt.png',
   'bodo glimt': 'bodo_glimt.png',
-  'bodo_glimt': 'bodo_glimt.png',
-  'фейеноорд': 'feyenoord.png',
-  'feyenoord': 'feyenoord.png',
-  'селтик': 'celtic.png',
-  'celtic': 'celtic.png',
-  'расинг': 'racing.png',
-  'racing': 'racing.png',
-  'аякс': 'ajax.png',
-  'ajax': 'ajax.png',
-  'брага': 'braga.png',
-  'braga': 'braga.png',
-  'рейнджерс': 'rangers.png',
-  'rangers': 'rangers.png',
-  'брюгге': 'brugge.png',
-  'club brugge': 'brugge.png',
-  'brugge': 'brugge.png',
-  'аек': 'aek.png',
-  'aek': 'aek.png'
+  'bodo_glimt': 'bodo_glimt.png'
 };
 
 export function getTeamLogoUrl(teamName) {

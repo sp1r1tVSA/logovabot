@@ -170,18 +170,20 @@ class TestClubCard(unittest.TestCase):
         self.assertGreater(len(buf_bytes), 1000)
         self.assertTrue(buf_bytes.startswith(b'\x89PNG\r\n\x1a\n'))
 
-    def test_racing_logo_lookup(self):
-        """Test that get_team_logo_filename finds racing.png for 'Расинг' case-insensitively."""
+    def test_logo_lookup(self):
+        """Test that get_team_logo_filename finds benfica.png for 'Бенфика' case-insensitively."""
         from services.graphics.table_generator import get_team_logo_filename
         from services.graphics import club_card_generator
-        logo = get_team_logo_filename("Расинг")
-        self.assertEqual(logo, "racing.png")
-        logo_lower = get_team_logo_filename("расинг")
-        self.assertEqual(logo_lower, "racing.png")
+        logo = get_team_logo_filename("Бенфика")
+        self.assertEqual(logo, "benfica.png")
+        logo_lower = get_team_logo_filename("бенфика")
+        self.assertEqual(logo_lower, "benfica.png")
 
-        # Test generating card for Racing
+        # Клуб не из карты логотипов рисуется пустым бейджем, а не падает.
+        self.assertIsNone(get_team_logo_filename("Ювентус"))
+
         card_data = {
-            "team_name": "Расинг",
+            "team_name": "Бенфика",
             "manager": {"username": "ch1lyx", "warn_count": 1, "telegram_id": 99999},
             "league_stats": {
                 "rank": 1, "played": 23, "wins": 18, "draws": 1, "losses": 4,
