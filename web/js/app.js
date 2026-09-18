@@ -737,7 +737,7 @@ class AppController {
         if (chip.dataset.amount === 'max') {
           store.setStakeAmount(store.getMaxStake());
         } else {
-          store.setStakeAmount((store.state.stakeAmount || 0) + (parseInt(chip.dataset.add) || 0));
+          store.addToStake(parseInt(chip.dataset.add) || 0);
         }
         tgBridge.hapticImpact('light');
       });

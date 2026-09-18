@@ -34,11 +34,11 @@ body.coupon-open {
   grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 8px;
-  height: 58px;
-  padding: 0 8px 0 10px;
+  height: 50px;
+  padding: 0 6px 0 8px;
   background: var(--coupon-obsidian);
   border: 1px solid rgba(245, 176, 39, 0.45);
-  border-radius: 18px;
+  border-radius: 16px;
   box-shadow:
     0 0 0 1px rgba(255, 159, 26, 0.08),
     0 0 22px rgba(245, 176, 39, 0.28),
@@ -79,20 +79,20 @@ body.coupon-open {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 30px;
-  height: 30px;
+  min-width: 26px;
+  height: 26px;
   padding: 0 6px;
   border-radius: 50%;
   background: var(--coupon-gold-grad);
   color: #1a1000;
   font-family: 'Outfit', sans-serif;
-  font-size: 0.95rem;
+  font-size: 0.85rem;
   font-weight: 900;
   box-shadow: 0 0 14px rgba(255, 159, 26, 0.55);
 }
 .betbar-mode {
   font-family: 'Outfit', sans-serif;
-  font-size: 0.86rem;
+  font-size: 0.8rem;
   font-weight: 800;
   color: #fff;
   white-space: nowrap;
@@ -106,7 +106,7 @@ body.coupon-open {
   justify-self: center;
 }
 .betbar-odd-label {
-  font-size: 0.72rem;
+  font-size: 0.66rem;
   font-weight: 700;
   color: var(--text-secondary);
   text-transform: uppercase;
@@ -114,7 +114,7 @@ body.coupon-open {
 }
 .betbar-odd-val {
   font-family: 'Outfit', sans-serif;
-  font-size: 1.35rem;
+  font-size: 1.15rem;
   font-weight: 900;
   color: var(--accent-gold);
   text-shadow: 0 0 12px rgba(245, 176, 39, 0.45);
@@ -125,12 +125,12 @@ body.coupon-open {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 10px 14px;
-  border-radius: 12px;
+  padding: 7px 12px;
+  border-radius: 10px;
   background: var(--coupon-gold-grad);
   color: #1a1000;
   font-family: 'Outfit', sans-serif;
-  font-size: 0.86rem;
+  font-size: 0.8rem;
   font-weight: 900;
   box-shadow: 0 4px 16px rgba(255, 138, 0, 0.4);
   white-space: nowrap;
@@ -216,13 +216,13 @@ body.coupon-open {
   flex-shrink: 0;
 }
 .coupon-icon-btn {
-  width: 36px;
-  height: 36px;
-  border-radius: 11px;
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
   border: 1px solid var(--border-subtle);
   background: rgba(255, 255, 255, 0.04);
   color: var(--text-secondary);
-  font-size: 0.95rem;
+  font-size: 0.85rem;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -545,9 +545,9 @@ body.coupon-open {
   display: flex;
   align-items: center;
   gap: 10px;
-  height: 58px;
+  height: 50px;
   padding: 0 16px;
-  border-radius: 16px;
+  border-radius: 14px;
   background: rgba(0, 0, 0, 0.4);
   border: 1.5px solid rgba(245, 176, 39, 0.35);
   box-shadow: inset 0 0 18px rgba(245, 176, 39, 0.06);
@@ -558,7 +558,7 @@ body.coupon-open {
   box-shadow: inset 0 0 18px rgba(245, 176, 39, 0.1), 0 0 18px rgba(245, 176, 39, 0.22);
 }
 .coupon-coin {
-  font-size: 1.4rem;
+  font-size: 1.2rem;
   filter: drop-shadow(0 0 8px rgba(245, 176, 39, 0.55));
 }
 .coupon-stake-field input {
@@ -569,12 +569,17 @@ body.coupon-open {
   outline: none;
   color: #fff;
   font-family: 'Outfit', sans-serif;
-  font-size: 1.6rem;
+  font-size: 1.4rem;
   font-weight: 900;
   text-align: center;
   font-variant-numeric: tabular-nums;
   user-select: text;
   -moz-appearance: textfield;
+}
+.coupon-stake-field input::placeholder {
+  color: var(--text-muted);
+  font-size: 1rem;
+  font-weight: 700;
 }
 .coupon-stake-field input::-webkit-outer-spin-button,
 .coupon-stake-field input::-webkit-inner-spin-button,
@@ -599,7 +604,7 @@ body.coupon-open {
   margin: 10px 0 0;
 }
 .coupon-chips .stake-chip {
-  padding: 10px 2px;
+  padding: 8px 2px;
   border-radius: 11px;
   border: 1px solid var(--border-subtle);
   background: rgba(255, 255, 255, 0.05);
@@ -672,15 +677,15 @@ body.coupon-open {
 .coupon-cta {
   position: relative;
   width: 100%;
-  min-height: 58px;
+  min-height: 50px;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 1px;
-  padding: 10px 14px;
+  padding: 8px 14px;
   border: none;
-  border-radius: 16px;
+  border-radius: 14px;
   background: var(--coupon-gold-grad);
   color: #1a1000;
   cursor: pointer;
@@ -718,7 +723,7 @@ body.coupon-open {
 }
 .coupon-cta-main {
   font-family: 'Outfit', sans-serif;
-  font-size: 1.05rem;
+  font-size: 0.98rem;
   font-weight: 900;
   letter-spacing: 0.01em;
   display: inline-flex;
@@ -845,11 +850,11 @@ body.coupon-open {
 }
 .bet-accepted-btn {
   min-width: 0;
-  padding: 13px 10px;
+  padding: 11px 10px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  border-radius: 14px;
+  border-radius: 12px;
   font-family: 'Outfit', sans-serif;
   /* Scales with the viewport so both labels fit on one line down to 320px. */
   font-size: clamp(0.72rem, 3.6vw, 0.88rem);
@@ -874,7 +879,7 @@ body.coupon-open {
   .coupon-seg-btn { font-size: 0.8rem; }
   .coupon-chips .stake-chip { font-size: 0.74rem; }
   .bet-accepted-actions { gap: 6px; }
-  .bet-accepted-btn { padding: 12px 6px; }
+  .bet-accepted-btn { padding: 10px 6px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

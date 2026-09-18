@@ -1653,10 +1653,15 @@ export class UIRenderer {
     }
 
     // ─── Stake field ───
-    setText('coupon-stake-label', batchSingles ? 'Ставка на каждое событие' : 'Сумма ставки');
+    // With differing per-event stakes the field stays empty: typing sets them all.
+    const commonStake = store.getCommonStake();
+    setText('coupon-stake-label', !batchSingles ? 'Сумма ставки'
+      : (commonStake === null ? 'Ставка на все события' : 'Ставка на каждое событие'));
     const stakeInput = document.getElementById('stake-input');
-    if (stakeInput && document.activeElement !== stakeInput && stakeInput.value !== String(stakeAmount)) {
-      stakeInput.value = String(stakeAmount);
+    if (stakeInput) {
+      stakeInput.placeholder = commonStake === null ? 'разные' : '';
+      const want = commonStake === null ? '' : String(commonStake);
+      if (document.activeElement !== stakeInput && stakeInput.value !== want) stakeInput.value = want;
     }
     setText('coupon-stake-balance', `Баланс ${fmt(balance)}`);
 
@@ -1947,7 +1952,7 @@ export class UIRenderer {
           <span style="font-size: 0.95rem; font-weight: 800; color: #fff; display: flex; align-items: center; gap: 6px;">
             💡 Рекомендации для вас
           </span>
-          <span style="font-size: 0.75rem; color: var(--accent-gold); font-weight: 700;">Personalized</span>
+          <span style="font-size: 0.75rem; color: var(--accent-gold); font-weight: 700;">Персонально</span>
         </div>
         <div style="display: flex; flex-direction: column; gap: 6px;">
           ${list.slice(0, 3).map(rec => `

@@ -577,6 +577,28 @@
   box-shadow: var(--shadow-gold);
 }
 
+/* The header ✕ of a modal: a compact icon, not the full-width button above. */
+.btn-modal-close.btn-modal-x {
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  margin-left: 12px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  box-shadow: none;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+.btn-modal-close.btn-modal-x:active {
+  transform: scale(0.9);
+}
+
 /* ─── 7. Level & XP Pill (Header) ─── */
 .level-pill {
   display: flex;

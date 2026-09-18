@@ -326,6 +326,29 @@ class StateStore {
     return own === undefined ? this.state.stakeAmount : own;
   }
 
+  /**
+   * The amount the main stake field stands for: the express/single stake, or in
+   * batch singles the one stake every event shares — null once they differ.
+   */
+  getCommonStake() {
+    if (!this.isBatchSingles()) return this.state.stakeAmount;
+    const stakes = new Set(this.state.slip.map(s => this.getSingleStake(s.match_id)));
+    return stakes.size === 1 ? [...stakes][0] : null;
+  }
+
+  /** "+N" chips: with differing single stakes each event's own stake grows. */
+  addToStake(delta) {
+    const common = this.getCommonStake();
+    if (common !== null) {
+      this.setStakeAmount(common + delta);
+      return;
+    }
+    this.state.slip.forEach(s => {
+      this.state.singleStakes[s.match_id] = this.getSingleStake(s.match_id) + delta;
+    });
+    this.notify();
+  }
+
   getTotalOdd() {
     if (this.state.slip.length === 0) return 1.0;
     const rawOdd = this.state.slip.reduce((acc, item) => acc * item.odd, 1.0);
