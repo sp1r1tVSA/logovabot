@@ -16,6 +16,7 @@ import logging
 from aiohttp import web
 import database
 from api.auth import get_authenticated_user
+from api.params import query_int
 import config
 
 logger = logging.getLogger(__name__)
@@ -107,15 +108,15 @@ async def handle_admin_list_markets(request: web.Request) -> web.Response:
     if not (_is_global_admin(actor_id) or _get_division_admin_divisions(actor_id)):
         return web.json_response({"status": "error", "error": "forbidden"}, status=403)
 
-    division_id = request.query.get("division_id")
+    division_id = query_int(request, "division_id", None)
     status_filter = request.query.get("status")
-    limit = min(100, int(request.query.get("limit", 50)))
-    offset = int(request.query.get("offset", 0))
+    limit = min(100, query_int(request, "limit", 50, minimum=1))
+    offset = query_int(request, "offset", 0, minimum=0)
 
     # Division admins are scoped to their divisions
     if not _is_global_admin(actor_id):
         allowed = _get_division_admin_divisions(actor_id)
-        if division_id and int(division_id) not in allowed:
+        if division_id is not None and division_id not in allowed:
             return web.json_response({"status": "error", "error": "forbidden", "message": "Access restricted to your division."}, status=403)
 
     try:
@@ -130,9 +131,9 @@ async def handle_admin_list_markets(request: web.Request) -> web.Response:
                 WHERE 1=1
             """
             params: list = []
-            if division_id:
+            if division_id is not None:
                 query += " AND m.division_id = ?"
-                params.append(int(division_id))
+                params.append(division_id)
             elif not _is_global_admin(actor_id):
                 allowed = _get_division_admin_divisions(actor_id)
                 placeholders = ",".join("?" * len(allowed))
@@ -237,11 +238,16 @@ async def handle_admin_list_bets(request: web.Request) -> web.Response:
     if not (_is_global_admin(actor_id) or _get_division_admin_divisions(actor_id)):
         return web.json_response({"status": "error", "error": "forbidden"}, status=403)
 
-    user_id_filter = request.query.get("user_id")
+    user_id_filter = query_int(request, "user_id", None)
     status_filter = request.query.get("status")
-    division_id = request.query.get("division_id")
-    limit = min(100, int(request.query.get("limit", 50)))
-    offset = int(request.query.get("offset", 0))
+    division_id = query_int(request, "division_id", None)
+    limit = min(100, query_int(request, "limit", 50, minimum=1))
+    offset = query_int(request, "offset", 0, minimum=0)
+
+    # Division admins are scoped to their divisions
+    if not _is_global_admin(actor_id):
+        if division_id is not None and division_id not in _get_division_admin_divisions(actor_id):
+            return web.json_response({"status": "error", "error": "forbidden", "message": "Access restricted to your division."}, status=403)
 
     try:
         with database.transaction() as conn:
@@ -254,15 +260,15 @@ async def handle_admin_list_bets(request: web.Request) -> web.Response:
                 WHERE 1=1
             """
             params: list = []
-            if user_id_filter:
+            if user_id_filter is not None:
                 query += " AND ub.user_id = ?"
-                params.append(int(user_id_filter))
+                params.append(user_id_filter)
             if status_filter:
                 query += " AND ub.status = ?"
                 params.append(status_filter)
-            if division_id:
+            if division_id is not None:
                 query += " AND m.division_id = ?"
-                params.append(int(division_id))
+                params.append(division_id)
             elif not _is_global_admin(actor_id):
                 allowed = _get_division_admin_divisions(actor_id)
                 placeholders = ",".join("?" * len(allowed))
@@ -318,21 +324,24 @@ async def handle_admin_audit_log(request: web.Request) -> web.Response:
         return web.json_response({"status": "error", "error": "forbidden"}, status=403)
 
     entity_type = request.query.get("entity_type")
-    division_id = request.query.get("division_id")
-    limit = min(100, int(request.query.get("limit", 50)))
-    offset = int(request.query.get("offset", 0))
+    division_id = query_int(request, "division_id", None)
+    limit = min(100, query_int(request, "limit", 50, minimum=1))
+    offset = query_int(request, "offset", 0, minimum=0)
 
     # Division admins can only see their division's audit log
-    if not _is_global_admin(actor_id) and not division_id:
+    if not _is_global_admin(actor_id):
         allowed = _get_division_admin_divisions(actor_id)
-        division_id = str(allowed[0]) if allowed else None
+        if division_id is None:
+            division_id = allowed[0] if allowed else None
+        elif division_id not in allowed:
+            return web.json_response({"status": "error", "error": "forbidden", "message": "Access restricted to your division."}, status=403)
 
     try:
         logs = await asyncio.to_thread(database.get_betting_audit_log, 
             limit=limit,
             offset=offset,
             entity_type=entity_type,
-            division_id=int(division_id) if division_id else None,
+            division_id=division_id,
         )
         return web.json_response({"status": "ok", "audit_log": logs, "count": len(logs)})
     except Exception as e:

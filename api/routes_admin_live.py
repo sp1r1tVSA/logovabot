@@ -22,6 +22,7 @@ from aiohttp import web
 
 import database
 from api.auth import get_authenticated_user
+from api.params import body_int
 import config
 from services.sports_provider import get_sports_data_provider
 
@@ -439,8 +440,8 @@ async def handle_admin_match_correction(request: web.Request) -> web.Response:
     if "home_score" not in body or "away_score" not in body:
         return web.json_response({"status": "error", "message": "home_score and away_score are required."}, status=400)
 
-    new_home = int(body["home_score"])
-    new_away = int(body["away_score"])
+    new_home = body_int(body, "home_score", minimum=0)
+    new_away = body_int(body, "away_score", minimum=0)
     new_status = body.get("status")
 
     with database.transaction() as conn:

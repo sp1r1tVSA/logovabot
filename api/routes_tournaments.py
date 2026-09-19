@@ -13,6 +13,7 @@ import logging
 from aiohttp import web
 import database
 from api.auth import get_authenticated_user
+from api.params import query_int
 
 logger = logging.getLogger(__name__)
 
@@ -151,7 +152,7 @@ async def handle_get_results(request: web.Request) -> web.Response:
     if not user_info or "id" not in user_info:
         return web.json_response({"status": "error", "error": "unauthorized"}, status=401)
 
-    limit = min(50, int(request.query.get("limit", 30)))
+    limit = min(50, query_int(request, "limit", 30, minimum=1))
     div_param = request.query.get("division_id")
     season_param = request.query.get("season_id")
 

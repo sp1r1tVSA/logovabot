@@ -18,6 +18,7 @@ import logging
 from aiohttp import web
 from .auth import get_authenticated_user, check_user_access
 import database
+from api.params import query_int
 from services.leaderboard_service import LeaderboardService
 from services.season_progression import SeasonProgressionEngine
 
@@ -163,7 +164,7 @@ async def handle_get_leaderboard(request: web.Request) -> web.Response:
 
     metric = request.query.get("metric", "RATING").strip().upper()
     period = request.query.get("period", "ALL_TIME").strip().upper()
-    s_id = int(request.query["season_id"]) if "season_id" in request.query else None
+    s_id = query_int(request, "season_id", None)
 
     result = LeaderboardService.get_leaderboard(
         season_id=s_id,
@@ -218,7 +219,7 @@ async def handle_get_leaderboard_division(request: web.Request) -> web.Response:
 
     metric = request.query.get("metric", "RATING").strip().upper()
     period = request.query.get("period", "ALL_TIME").strip().upper()
-    s_id = int(request.query["season_id"]) if "season_id" in request.query else None
+    s_id = query_int(request, "season_id", None)
 
     result = LeaderboardService.get_leaderboard(
         season_id=s_id,
@@ -251,7 +252,7 @@ async def handle_get_leaderboard_season(request: web.Request) -> web.Response:
     except ValueError:
         return web.json_response({"status": "error", "message": "page and limit must be integers."}, status=400)
 
-    s_id = int(request.query["season_id"]) if "season_id" in request.query else None
+    s_id = query_int(request, "season_id", None)
     metric = request.query.get("metric", "RATING").strip().upper()
 
     result = LeaderboardService.get_leaderboard(

@@ -23,6 +23,7 @@ import logging
 from aiohttp import web
 import database
 from api.auth import get_authenticated_user
+from api.params import body_int, path_int, query_int
 import config
 from services.betting_limits import BettingLimitsService
 from services.exposure_service import get_market_exposure, get_division_exposure, get_global_exposure
@@ -128,8 +129,8 @@ async def handle_admin_get_risk_alerts(request: web.Request) -> web.Response:
     division_id_str = request.query.get("division_id")
     status = request.query.get("status")
     severity = request.query.get("severity")
-    limit = min(100, max(1, int(request.query.get("limit", 50))))
-    offset = max(0, int(request.query.get("offset", 0)))
+    limit = min(100, max(1, query_int(request, "limit", 50)))
+    offset = max(0, query_int(request, "offset", 0))
 
     division_id = None
     if division_id_str and division_id_str.isdigit():
@@ -163,7 +164,7 @@ async def handle_admin_ack_alert(request: web.Request) -> web.Response:
     if not is_global and not allowed_divs:
         return web.json_response({"status": "error", "error": "forbidden"}, status=403)
 
-    alert_id = int(request.match_info["id"])
+    alert_id = path_int(request)
     success = risk_alerts.acknowledge_risk_alert(alert_id, admin_id=actor_id)
     return web.json_response({"status": "ok" if success else "error", "alert_id": alert_id})
 
@@ -181,7 +182,7 @@ async def handle_admin_resolve_alert(request: web.Request) -> web.Response:
     if not is_global and not allowed_divs:
         return web.json_response({"status": "error", "error": "forbidden"}, status=403)
 
-    alert_id = int(request.match_info["id"])
+    alert_id = path_int(request)
     success = risk_alerts.resolve_risk_alert(alert_id, admin_id=actor_id)
     return web.json_response({"status": "ok" if success else "error", "alert_id": alert_id})
 
@@ -235,9 +236,9 @@ async def handle_admin_set_limits(request: web.Request) -> web.Response:
         return web.json_response({"status": "error", "message": "Invalid JSON body"}, status=400)
 
     scope_type = str(data.get("scope_type", "global")).lower()
-    scope_id = int(data.get("scope_id", 0))
+    scope_id = body_int(data, "scope_id", 0)
     limit_key = str(data.get("limit_key", "")).strip()
-    limit_value = int(data.get("limit_value", 0))
+    limit_value = body_int(data, "limit_value", 0)
 
     if not limit_key or limit_value <= 0:
         return web.json_response({"status": "error", "message": "Invalid limit_key or limit_value"}, status=400)
@@ -273,7 +274,7 @@ async def handle_admin_emergency_suspend(request: web.Request) -> web.Response:
     except Exception:
         return web.json_response({"status": "error", "message": "Invalid JSON body"}, status=400)
 
-    market_id = int(data.get("market_id", 0))
+    market_id = body_int(data, "market_id", 0)
     reason = str(data.get("reason", "Emergency risk suspension"))
 
     # Verify market access for division admins

@@ -18,6 +18,7 @@ from aiohttp import web
 import config
 from .auth import get_authenticated_user
 import database
+from api.params import body_int
 from services.season_progression import SeasonProgressionEngine
 
 logger = logging.getLogger("api.admin_season")
@@ -126,16 +127,16 @@ async def handle_admin_create_season(request: web.Request) -> web.Response:
         })
 
     elif action == "configure_rules":
-        s_id = int(data.get("season_id", 1))
-        d_id = int(data.get("division_id", 1))
+        s_id = body_int(data, "season_id", 1)
+        d_id = body_int(data, "division_id", 1)
 
         if not is_global and d_id not in assigned_divs:
             return web.json_response({"status": "error", "error": "forbidden", "message": "Cannot configure division outside your assignment."}, status=403)
 
-        prom_slots = int(data.get("promotion_slots", 3))
-        rel_slots = int(data.get("relegation_slots", 3))
-        min_b = int(data.get("min_bets_qualification", 5))
-        min_m = int(data.get("min_matches_qualification", 3))
+        prom_slots = body_int(data, "promotion_slots", 3, minimum=0)
+        rel_slots = body_int(data, "relegation_slots", 3, minimum=0)
+        min_b = body_int(data, "min_bets_qualification", 5, minimum=0)
+        min_m = body_int(data, "min_matches_qualification", 3, minimum=0)
 
         await asyncio.to_thread(database.set_season_rules, 
             season_id=s_id,
