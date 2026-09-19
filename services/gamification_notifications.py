@@ -48,7 +48,7 @@ class GamificationNotifications:
             with database.transaction() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
-                    INSERT INTO notifications (user_id, type, title, message, is_read, created_at)
+                    INSERT INTO notifications (user_id, type, title, body, is_read, created_at)
                     VALUES (?, ?, ?, ?, 0, CURRENT_TIMESTAMP)
                 """, (user_id, event_type.lower(), title, message))
             return True

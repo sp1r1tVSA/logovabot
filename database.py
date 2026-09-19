@@ -9035,7 +9035,7 @@ def update_selection_odds(selection_id: int, new_odd: float, actor_id: int) -> d
         try:
             cursor.execute(
                 """
-                INSERT INTO odds_history (selection_id, old_odds, new_odds, changed_by)
+                INSERT INTO odds_history (selection_id, old_value, new_value, changed_by)
                 VALUES (?, ?, ?, ?)
                 """,
                 (selection_id, old_odd, new_odd, actor_id),
