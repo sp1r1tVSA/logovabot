@@ -177,3 +177,20 @@ class TestAnimationPipeline(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestCachedSendFailure(unittest.TestCase):
+    def test_missing_chat_is_raised_without_re_encoding(self):
+        from unittest.mock import patch
+        from telegram.error import BadRequest
+        import services.animation_sender as sender
+
+        frames = [Image.new("RGB", (16, 16), (i, 0, 0)) for i in range(3)]
+        database.save_cached_telegram_media(compute_media_hash(frames), "CACHED_FILE_ID_FOR_CHAT_TEST", media_type="animation")
+        bot = AsyncMock()
+        bot.send_animation.side_effect = BadRequest("Chat not found")
+        with patch.object(sender, "convert_to_high_quality_mp4") as convert:
+            with self.assertRaises(BadRequest):
+                asyncio.run(send_high_quality_animation(bot, -100, frames))
+        convert.assert_not_called()
+        self.assertEqual(bot.send_animation.call_count, 1)

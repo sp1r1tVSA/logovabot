@@ -15,6 +15,7 @@ Features:
 
 import os
 import io
+import asyncio
 import json
 import math
 import shutil
@@ -26,6 +27,7 @@ from dataclasses import dataclass
 from typing import Any, List, Union
 
 from PIL import Image
+from telegram.error import BadRequest
 
 try:
     import numpy as np
@@ -450,7 +452,8 @@ async def send_high_quality_animation(
         )
 
     # 1. Compute deterministic SHA-256 hash
-    file_hash = compute_media_hash(animation_input)
+    # Hashing and FFmpeg encoding are CPU/subprocess bound — keep them off the event loop.
+    file_hash = await asyncio.to_thread(compute_media_hash, animation_input)
 
     # 2. Check Database Cache
     cached_file_id = database.get_cached_telegram_media(file_hash, media_type="animation")
@@ -465,11 +468,16 @@ async def send_high_quality_animation(
                 reply_markup=reply_markup,
                 **kwargs
             )
-        except Exception as e:
+        except BadRequest as e:
+            # Only a rejected file_id is worth a re-encode; a missing chat or
+            # thread would fail the upload just the same.
+            if "file" not in str(e).lower():
+                raise
             logger.warning(f"Failed to send with cached file_id {cached_file_id}: {e}. Regenerating and re-uploading media.")
 
     # 3. Convert input to pristine H.264 MP4
-    mp4_path, meta, is_temp = convert_to_high_quality_mp4(
+    mp4_path, meta, is_temp = await asyncio.to_thread(
+        convert_to_high_quality_mp4,
         input_source=animation_input,
         max_size_bytes=max_size_bytes,
         initial_crf=initial_crf

@@ -14,7 +14,7 @@ import asyncio
 import logging
 from typing import Any
 
-from telegram.error import TelegramError
+from telegram.error import BadRequest, NetworkError, RetryAfter, TelegramError
 
 import config
 import database
@@ -106,6 +106,10 @@ async def process_notification_queue_job(context: Any) -> None:
             ev_id = item["id"]
             uid = item["user_id"]
             text = f"<b>{item['title']}</b>\n{item.get('body') or ''}"
+            if not uid or uid <= 0:
+                # Pre-registered coaches hold placeholder negative ids — no chat to reach.
+                database.mark_notification_event_failed(ev_id)
+                continue
             try:
                 await context.bot.send_message(
                     chat_id=uid,
@@ -113,12 +117,26 @@ async def process_notification_queue_job(context: Any) -> None:
                     parse_mode="HTML"
                 )
                 mark_notification_sent(ev_id)
+            except RetryAfter as ra:
+                # Flood control: leave the rest pending for the next tick.
+                logger.warning("Notification queue throttled for %ss; pausing", ra.retry_after)
+                break
+            except BadRequest as br:
+                # Permanent (chat not found, bad markup) — BadRequest subclasses
+                # NetworkError in PTB, so it must be caught first.
+                logger.warning("Failed to send notification %s to user %s: %s", ev_id, uid, br)
+                database.mark_notification_event_failed(ev_id)
+            except NetworkError as ne:
+                # Transient (timeout, connection reset) — keep it pending and retry.
+                logger.warning("Network error sending notification %s: %s", ev_id, ne)
+                break
             except TelegramError as te:
                 logger.warning("Failed to send notification %s to user %s: %s", ev_id, uid, te)
                 # Mark failed or leave pending with attempt limit
                 database.mark_notification_event_failed(ev_id)
             except Exception as e:
                 logger.warning("Unexpected error sending notification %s: %s", ev_id, e)
+                database.mark_notification_event_failed(ev_id)
     except Exception as e:
         logger.error("Error in process_notification_queue_job: %s", e)
 
