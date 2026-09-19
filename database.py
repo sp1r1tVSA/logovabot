@@ -3741,11 +3741,17 @@ def get_matches_by_round(round_number: int, division_id: int | None = None, seas
                 SELECT
                     m.id, m.round_number, m.division_id, m.season_id, u1.telegram_id AS player1_id, u2.telegram_id AS player2_id,
                     m.player1_score, m.player2_score, m.status,
-                    u1.username AS player1_nickname, COALESCE(m.player1_team, u1.team_name, 'Команда 1') AS player1_team,
-                    u2.username AS player2_nickname, COALESCE(m.player2_team, u2.team_name, 'Команда 2') AS player2_team
+                    COALESCE(u1.username, u1_id.username) AS player1_nickname,
+                    COALESCE(u1.username, u1_id.username) AS player1_username,
+                    COALESCE(m.player1_team, u1.team_name, u1_id.team_name, 'Команда 1') AS player1_team,
+                    COALESCE(u2.username, u2_id.username) AS player2_nickname,
+                    COALESCE(u2.username, u2_id.username) AS player2_username,
+                    COALESCE(m.player2_team, u2.team_name, u2_id.team_name, 'Команда 2') AS player2_team
                 FROM matches m
                 LEFT JOIN users u1 ON LOWER(m.player1_team) = LOWER(u1.team_name)
+                LEFT JOIN users u1_id ON m.player1_id = u1_id.telegram_id
                 LEFT JOIN users u2 ON LOWER(m.player2_team) = LOWER(u2.team_name)
+                LEFT JOIN users u2_id ON m.player2_id = u2_id.telegram_id
                 WHERE m.round_number = ? AND COALESCE(m.division_id, 1) = ?
                   AND (m.season_id = ? OR m.season_id IS NULL)
                 ORDER BY m.id ASC
@@ -3757,17 +3763,35 @@ def get_matches_by_round(round_number: int, division_id: int | None = None, seas
                 SELECT
                     m.id, m.round_number, m.division_id, m.season_id, u1.telegram_id AS player1_id, u2.telegram_id AS player2_id,
                     m.player1_score, m.player2_score, m.status,
-                    u1.username AS player1_nickname, COALESCE(m.player1_team, u1.team_name, 'Команда 1') AS player1_team,
-                    u2.username AS player2_nickname, COALESCE(m.player2_team, u2.team_name, 'Команда 2') AS player2_team
+                    COALESCE(u1.username, u1_id.username) AS player1_nickname,
+                    COALESCE(u1.username, u1_id.username) AS player1_username,
+                    COALESCE(m.player1_team, u1.team_name, u1_id.team_name, 'Команда 1') AS player1_team,
+                    COALESCE(u2.username, u2_id.username) AS player2_nickname,
+                    COALESCE(u2.username, u2_id.username) AS player2_username,
+                    COALESCE(m.player2_team, u2.team_name, u2_id.team_name, 'Команда 2') AS player2_team
                 FROM matches m
                 LEFT JOIN users u1 ON LOWER(m.player1_team) = LOWER(u1.team_name)
+                LEFT JOIN users u1_id ON m.player1_id = u1_id.telegram_id
                 LEFT JOIN users u2 ON LOWER(m.player2_team) = LOWER(u2.team_name)
+                LEFT JOIN users u2_id ON m.player2_id = u2_id.telegram_id
                 WHERE m.round_number = ?
                   AND (m.season_id = ? OR m.season_id IS NULL)
                   AND (m.division_id = 1 OR m.division_id IS NULL)
                 ORDER BY m.id ASC
             """, (round_number, s_id))
-        return [dict(row) for row in cursor.fetchall()]
+        rows = [dict(row) for row in cursor.fetchall()]
+        for d in rows:
+            if not d.get("player1_username") and d.get("player1_team"):
+                u = find_user_by_team(d["player1_team"])
+                if u:
+                    d["player1_username"] = u.get("username")
+                    d["player1_nickname"] = u.get("username")
+            if not d.get("player2_username") and d.get("player2_team"):
+                u = find_user_by_team(d["player2_team"])
+                if u:
+                    d["player2_username"] = u.get("username")
+                    d["player2_nickname"] = u.get("username")
+        return rows
 
 def get_admins() -> list[dict]:
     """Retrieve all users with admin role."""
@@ -7852,13 +7876,19 @@ def get_active_bet_markets(
             season_id = act["id"] if act else 1
         query = """
             SELECT bm.*, m.status as match_status, m.round_number, m.division_id, r.deadline, r.is_open,
-                   COALESCE(r.bets_open, 0) AS bets_open
+                   COALESCE(r.bets_open, 0) AS bets_open,
+                   COALESCE(u1_id.username, u1_team.username) AS player1_username,
+                   COALESCE(u2_id.username, u2_team.username) AS player2_username
             FROM bet_markets bm
             JOIN matches m ON bm.match_id = m.id
             JOIN rounds r
               ON r.round_number = m.round_number
              AND r.division_id = COALESCE(m.division_id, 1)
              AND r.season_id = COALESCE(m.season_id, 1)
+            LEFT JOIN users u1_id ON m.player1_id = u1_id.telegram_id
+            LEFT JOIN users u1_team ON LOWER(m.player1_team) = LOWER(u1_team.team_name)
+            LEFT JOIN users u2_id ON m.player2_id = u2_id.telegram_id
+            LEFT JOIN users u2_team ON LOWER(m.player2_team) = LOWER(u2_team.team_name)
             WHERE bm.is_active = 1 AND m.status NOT IN ('confirmed', 'completed')
               AND (r.is_open = 1 OR COALESCE(r.bets_open, 0) = 1)
               AND COALESCE(m.season_id, 1) = ?
@@ -7880,7 +7910,16 @@ def get_active_bet_markets(
             if dl_dt and now > dl_dt:
                 cursor.execute("UPDATE bet_markets SET is_active = 0 WHERE match_id = ?", (r["match_id"],))
                 continue
-            valid_markets.append(dict(r))
+            item = dict(r)
+            if not item.get("player1_username") and item.get("team1_name"):
+                u = find_user_by_team(item["team1_name"])
+                if u:
+                    item["player1_username"] = u.get("username")
+            if not item.get("player2_username") and item.get("team2_name"):
+                u = find_user_by_team(item["team2_name"])
+                if u:
+                    item["player2_username"] = u.get("username")
+            valid_markets.append(item)
         return valid_markets
 
 
@@ -7894,19 +7933,36 @@ def get_bet_market_by_match_id(match_id: int) -> dict | None:
     with transaction() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT bm.*, r.is_open, COALESCE(r.bets_open, 0) AS bets_open, r.deadline
+            SELECT bm.*, r.is_open, COALESCE(r.bets_open, 0) AS bets_open, r.deadline,
+                   COALESCE(u1_id.username, u1_team.username) AS player1_username,
+                   COALESCE(u2_id.username, u2_team.username) AS player2_username
             FROM bet_markets bm
             JOIN matches m ON bm.match_id = m.id
             JOIN rounds r
               ON r.round_number = m.round_number
              AND r.division_id = COALESCE(m.division_id, 1)
              AND r.season_id = COALESCE(m.season_id, 1)
+            LEFT JOIN users u1_id ON m.player1_id = u1_id.telegram_id
+            LEFT JOIN users u1_team ON LOWER(m.player1_team) = LOWER(u1_team.team_name)
+            LEFT JOIN users u2_id ON m.player2_id = u2_id.telegram_id
+            LEFT JOIN users u2_team ON LOWER(m.player2_team) = LOWER(u2_team.team_name)
             WHERE bm.match_id = ?
               AND (r.is_open = 1 OR COALESCE(r.bets_open, 0) = 1)
               AND m.status NOT IN ('confirmed', 'completed')
         """, (match_id,))
         row = cursor.fetchone()
-        return dict(row) if row else None
+        if not row:
+            return None
+        item = dict(row)
+        if not item.get("player1_username") and item.get("team1_name"):
+            u = find_user_by_team(item["team1_name"])
+            if u:
+                item["player1_username"] = u.get("username")
+        if not item.get("player2_username") and item.get("team2_name"):
+            u = find_user_by_team(item["team2_name"])
+            if u:
+                item["player2_username"] = u.get("username")
+        return item
 
 
 # Phase 5: Bet limits (server-side, cannot be bypassed by client)
@@ -8648,6 +8704,233 @@ def get_user_bets(user_id: int, status: str | None = None, limit: int = 20, offs
             b["items"] = [dict(item) for item in cursor.fetchall()]
 
         return bets
+
+
+def get_all_bets(
+    status: str | None = None,
+    division_id: int | None = None,
+    user_id: int | None = None,
+    limit: int = 10,
+    offset: int = 0
+) -> tuple[list[dict], int]:
+    """Fetch prediction slips across all users (super-admin view) with user details, nested legs and pagination.
+    Returns (list_of_bets, total_matching_count).
+    """
+    with transaction() as conn:
+        cursor = conn.cursor()
+        where_clauses = ["1=1"]
+        params: list = []
+
+        if status and status != "all":
+            if status == "refunded":
+                where_clauses.append("ub.status IN ('refunded', 'cancelled')")
+            else:
+                where_clauses.append("ub.status = ?")
+                params.append(status)
+
+        if user_id is not None:
+            where_clauses.append("ub.user_id = ?")
+            params.append(user_id)
+
+        if division_id is not None:
+            where_clauses.append("""
+                EXISTS (
+                    SELECT 1 FROM bet_items bi_d
+                    JOIN matches m_d ON bi_d.match_id = m_d.id
+                    WHERE bi_d.bet_id = ub.id AND m_d.division_id = ?
+                )
+            """)
+            params.append(division_id)
+
+        where_sql = " AND ".join(where_clauses)
+
+        cursor.execute(f"SELECT COUNT(*) as cnt FROM user_bets ub WHERE {where_sql}", params)
+        total_count = cursor.fetchone()["cnt"]
+
+        query = f"""
+            SELECT ub.*,
+                   u.username,
+                   u.team_name as user_team,
+                   u.league_name as user_league
+            FROM user_bets ub
+            LEFT JOIN users u ON ub.user_id = u.telegram_id
+            WHERE {where_sql}
+            ORDER BY ub.id DESC
+            LIMIT ? OFFSET ?
+        """
+        query_params = list(params) + [limit, offset]
+        cursor.execute(query, query_params)
+        bets = [dict(r) for r in cursor.fetchall()]
+
+        for b in bets:
+            cursor.execute(
+                """
+                SELECT bi.*, 
+                       COALESCE(m.player1_team, bm.team1_name, 'Хозяева') as team1_name,
+                       COALESCE(m.player2_team, bm.team2_name, 'Гости') as team2_name,
+                       COALESCE(m.round_number, bm.tour, 1) as tour,
+                       m.division_id,
+                       d.name as division_name,
+                       m.status as match_status,
+                       m.player1_score,
+                       m.player2_score,
+                       m.ht_score1,
+                       m.ht_score2,
+                       m.live_minute,
+                       mkt.market_name,
+                       ms.selection_name
+                FROM bet_items bi
+                LEFT JOIN matches m ON bi.match_id = m.id
+                LEFT JOIN divisions d ON m.division_id = d.id
+                LEFT JOIN bet_markets bm ON bi.match_id = bm.match_id
+                LEFT JOIN markets mkt ON bi.market_id = mkt.id
+                LEFT JOIN market_selections ms ON bi.selection_id = ms.id
+                WHERE bi.bet_id = ?
+                """,
+                (b["id"],)
+            )
+            b["items"] = [dict(item) for item in cursor.fetchall()]
+
+        return bets, total_count
+
+
+def get_bets_summary_stats(division_id: int | None = None) -> dict:
+    """Get high-level summary KPIs and bookmaker metrics across all bets."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        where_sql = ""
+        params = []
+        if division_id is not None:
+            where_sql = """
+                WHERE EXISTS (
+                    SELECT 1 FROM bet_items bi_d
+                    JOIN matches m_d ON bi_d.match_id = m_d.id
+                    WHERE bi_d.bet_id = ub.id AND m_d.division_id = ?
+                )
+            """
+            params.append(division_id)
+
+        query = f"""
+            SELECT
+                COUNT(ub.id) as total_bets,
+                SUM(CASE WHEN ub.status = 'pending' THEN 1 ELSE 0 END) as count_pending,
+                SUM(CASE WHEN ub.status = 'won' THEN 1 ELSE 0 END) as count_won,
+                SUM(CASE WHEN ub.status = 'lost' THEN 1 ELSE 0 END) as count_lost,
+                SUM(CASE WHEN ub.status IN ('refunded', 'cancelled') THEN 1 ELSE 0 END) as count_refunded,
+                SUM(CASE WHEN ub.status = 'cashed_out' THEN 1 ELSE 0 END) as count_cashed_out,
+                COALESCE(SUM(ub.amount), 0) as total_wagered,
+                COALESCE(SUM(CASE WHEN ub.status = 'pending' THEN ub.amount ELSE 0 END), 0) as pending_exposure,
+                COALESCE(SUM(CASE WHEN ub.status = 'pending' THEN ub.potential_win ELSE 0 END), 0) as pending_potential_liability,
+                COALESCE(SUM(CASE WHEN ub.status IN ('won', 'cashed_out') THEN ub.actual_payout ELSE 0 END), 0) as total_paid_out
+            FROM user_bets ub
+            {where_sql}
+        """
+        cursor.execute(query, params)
+        row = cursor.fetchone()
+        if not row:
+            return {
+                "total_bets": 0,
+                "count_pending": 0,
+                "count_won": 0,
+                "count_lost": 0,
+                "count_refunded": 0,
+                "count_cashed_out": 0,
+                "total_wagered": 0,
+                "pending_exposure": 0,
+                "pending_potential_liability": 0,
+                "total_paid_out": 0,
+                "bookmaker_profit": 0,
+            }
+
+        res = dict(row)
+        for k in ("total_bets", "count_pending", "count_won", "count_lost", "count_refunded", "count_cashed_out",
+                  "total_wagered", "pending_exposure", "pending_potential_liability", "total_paid_out"):
+            res[k] = res.get(k) or 0
+
+        res["bookmaker_profit"] = res["total_wagered"] - res["total_paid_out"]
+        return res
+
+
+def get_bet_by_id(bet_id: int) -> dict | None:
+    """Fetch any bet by ID (admin view) with user info, wallet balance, and nested legs."""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT ub.*,
+                   u.username,
+                   u.team_name as user_team,
+                   u.league_name as user_league,
+                   w.balance as user_wallet_balance
+            FROM user_bets ub
+            LEFT JOIN users u ON ub.user_id = u.telegram_id
+            LEFT JOIN user_wallets w ON ub.user_id = w.user_id
+            WHERE ub.id = ?
+        """, (bet_id,))
+        row = cursor.fetchone()
+        if not row:
+            return None
+        bet = dict(row)
+        cursor.execute(
+            """
+            SELECT bi.*, 
+                   COALESCE(m.player1_team, bm.team1_name, 'Хозяева') as team1_name,
+                   COALESCE(m.player2_team, bm.team2_name, 'Гости') as team2_name,
+                       COALESCE(m.round_number, bm.tour, 1) as tour,
+                       m.division_id,
+                       d.name as division_name,
+                       m.status as match_status,
+                       m.player1_score,
+                       m.player2_score,
+                       m.ht_score1,
+                       m.ht_score2,
+                       m.live_minute,
+                       mkt.market_name,
+                       ms.selection_name
+                FROM bet_items bi
+                LEFT JOIN matches m ON bi.match_id = m.id
+                LEFT JOIN divisions d ON m.division_id = d.id
+                LEFT JOIN bet_markets bm ON bi.match_id = bm.match_id
+                LEFT JOIN markets mkt ON bi.market_id = mkt.id
+                LEFT JOIN market_selections ms ON bi.selection_id = ms.id
+                WHERE bi.bet_id = ?
+                """,
+            (bet_id,)
+        )
+        bet["items"] = [dict(item) for item in cursor.fetchall()]
+        return bet
+
+
+LIVE_BET_ALERTS_KEY = "live_bet_alert_subscribers"
+
+
+def is_live_bet_alerts_enabled(admin_id: int) -> bool:
+    """Check if admin is subscribed to live bet alerts in PM."""
+    subs = get_live_bet_alert_subscribers()
+    return admin_id in subs
+
+
+def set_live_bet_alerts_enabled(admin_id: int, enabled: bool) -> None:
+    """Subscribe or unsubscribe admin from live bet alerts in PM."""
+    subs = set(get_live_bet_alert_subscribers())
+    if enabled:
+        subs.add(admin_id)
+    else:
+        subs.discard(admin_id)
+    raw = ",".join(str(i) for i in sorted(subs))
+    set_config(LIVE_BET_ALERTS_KEY, raw)
+
+
+def get_live_bet_alert_subscribers() -> list[int]:
+    """Return list of admin IDs subscribed to live bet alerts."""
+    val = get_config(LIVE_BET_ALERTS_KEY)
+    if not val:
+        return []
+    result = []
+    for item in val.split(","):
+        item = item.strip()
+        if item.isdigit():
+            result.append(int(item))
+    return result
 
 
 # ─── Phase 5: Betting Audit Log ──────────────────────────────────────────────

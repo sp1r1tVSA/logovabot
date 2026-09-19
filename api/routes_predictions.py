@@ -166,6 +166,13 @@ async def handle_place_prediction(request: web.Request) -> web.Response:
     except Exception as e:
         logger.warning(f"Error in gamification hook on bet placement: {e}")
 
+    # Notify subscribed super-admins about new bet (Live alerts in PM)
+    try:
+        from handlers.admin_bets import notify_super_admins_new_bet
+        asyncio.create_task(notify_super_admins_new_bet(bet_id=bet_id))
+    except Exception as e:
+        logger.debug(f"Failed to schedule super admin bet notification: {e}")
+
     return web.json_response({
         "status": "ok",
         "bet_id": bet_id,

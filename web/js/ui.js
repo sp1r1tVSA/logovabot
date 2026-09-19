@@ -553,6 +553,11 @@ export class UIRenderer {
       const isLive = m.status === 'live';
       const tourLabel = m.tour;
       const divLabel = m.division_id || selectedDivisionId || 1;
+      const u1 = (m.player1_username || m.player1_nickname || '').trim();
+      const tag1 = u1 ? (u1.startsWith('@') ? u1 : `@${u1}`) : '';
+      const u2 = (m.player2_username || m.player2_nickname || '').trim();
+      const tag2 = u2 ? (u2.startsWith('@') ? u2 : `@${u2}`) : '';
+
       return `
         <div class="match-card" data-match-id="${m.match_id}">
           <!-- Match Card Header -->
@@ -574,13 +579,19 @@ export class UIRenderer {
           <!-- Teams Row with Crest Logos (Horizontal Centered Layout) -->
           <div class="match-teams-row">
             <div class="team-block-side left">
-              <span class="team-name">${m.team1_name}</span>
+              <div class="team-meta-wrap left">
+                <span class="team-name" title="${escapeHtml(m.team1_name)}">${escapeHtml(m.team1_name)}</span>
+                ${tag1 ? `<span class="team-player-tag" title="${escapeHtml(tag1)}">${escapeHtml(tag1)}</span>` : ''}
+              </div>
               ${renderTeamLogoHtml(m.team1_name, 28)}
             </div>
             <div class="match-vs-divider">VS</div>
             <div class="team-block-side right">
               ${renderTeamLogoHtml(m.team2_name, 28)}
-              <span class="team-name">${m.team2_name}</span>
+              <div class="team-meta-wrap right">
+                <span class="team-name" title="${escapeHtml(m.team2_name)}">${escapeHtml(m.team2_name)}</span>
+                ${tag2 ? `<span class="team-player-tag" title="${escapeHtml(tag2)}">${escapeHtml(tag2)}</span>` : ''}
+              </div>
             </div>
           </div>
 
@@ -677,6 +688,10 @@ export class UIRenderer {
 
     const t1Form = stats?.team1?.stats?.form || ['W', 'D', 'W'];
     const t2Form = stats?.team2?.stats?.form || ['D', 'L', 'W'];
+    const u1 = (matchDetail.player1_username || matchDetail.player1_nickname || '').trim();
+    const tag1 = u1 ? (u1.startsWith('@') ? u1 : `@${u1}`) : '';
+    const u2 = (matchDetail.player2_username || matchDetail.player2_nickname || '').trim();
+    const tag2 = u2 ? (u2.startsWith('@') ? u2 : `@${u2}`) : '';
 
     container.innerHTML = `
       <!-- Header Hero Card with Clean Logos -->
@@ -686,7 +701,8 @@ export class UIRenderer {
             <div class="team-crest-container">
               ${renderTeamLogoHtml(t1, 48, 'team-crest-img')}
             </div>
-            <div class="team-name-lg" style="margin-top: 6px;">${t1}</div>
+            <div class="team-name-lg" style="margin-top: 6px;">${escapeHtml(t1)}</div>
+            ${tag1 ? `<div style="font-size: 0.72rem; color: var(--text-muted); font-weight: 600; margin-top: 2px;">${escapeHtml(tag1)}</div>` : ''}
             <div class="form-badges-row">
               ${t1Form.map(f => `<span class="form-dot ${f.toLowerCase()}">${f}</span>`).join('')}
             </div>
@@ -701,7 +717,8 @@ export class UIRenderer {
             <div class="team-crest-container">
               ${renderTeamLogoHtml(t2, 48, 'team-crest-img')}
             </div>
-            <div class="team-name-lg" style="margin-top: 6px;">${t2}</div>
+            <div class="team-name-lg" style="margin-top: 6px;">${escapeHtml(t2)}</div>
+            ${tag2 ? `<div style="font-size: 0.72rem; color: var(--text-muted); font-weight: 600; margin-top: 2px;">${escapeHtml(tag2)}</div>` : ''}
             <div class="form-badges-row">
               ${t2Form.map(f => `<span class="form-dot ${f.toLowerCase()}">${f}</span>`).join('')}
             </div>

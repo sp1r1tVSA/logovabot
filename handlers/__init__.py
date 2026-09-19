@@ -258,6 +258,14 @@ from handlers.topic_management import (
     cmd_bind_group,
     cb_bind_group,
 )
+from handlers.admin_bets import (
+    cmd_admin_bets,
+    cb_admin_bets_navigate,
+    cb_admin_bets_toggle_alerts,
+    cb_admin_bet_detail,
+    cb_admin_bet_void_ask,
+    cb_admin_bet_void_execute,
+)
 from services.topic_cache import topic_cache
 
 
@@ -797,6 +805,15 @@ def _register_admin_handlers(app: Application) -> None:
     app.add_handler(CallbackQueryHandler(admin_squads_view_cb, pattern=r"^admin_squads_view:\d+$"))
     app.add_handler(CallbackQueryHandler(admin_squads_all_cb, pattern=r"^admin_squads_all$"))
     app.add_handler(CallbackQueryHandler(admin_squads_remind_cb, pattern=r"^admin_squads_remind:\d+$"))
+
+    # 🎰 Super-Admin Bets Monitoring & Tracking (Private Chat Only)
+    app.add_handler(CommandHandler(["admin_bets", "all_bets", "track_bets", "ставки_админ"], cmd_admin_bets))
+    app.add_handler(CallbackQueryHandler(cmd_admin_bets, pattern="^admin_bets_hub$"))
+    app.add_handler(CallbackQueryHandler(cb_admin_bets_navigate, pattern=r"^admin_bets_(page|flt|refresh):"))
+    app.add_handler(CallbackQueryHandler(cb_admin_bets_toggle_alerts, pattern=r"^admin_bets_alerts_toggle:"))
+    app.add_handler(CallbackQueryHandler(cb_admin_bet_detail, pattern=r"^admin_bet_view:\d+$"))
+    app.add_handler(CallbackQueryHandler(cb_admin_bet_void_ask, pattern=r"^admin_bet_void_ask:\d+$"))
+    app.add_handler(CallbackQueryHandler(cb_admin_bet_void_execute, pattern=r"^admin_bet_void_do:\d+$"))
 
 def register_all_handlers(application: Application) -> None:
     """Register all command, message, and callback handlers to the application."""

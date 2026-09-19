@@ -58,9 +58,15 @@ async def handle_get_matches(request: web.Request) -> web.Response:
             SELECT m.*, 
                    COALESCE(m.player1_team, 'Хозяева') as team1_name,
                    COALESCE(m.player2_team, 'Гости') as team2_name,
+                   COALESCE(u1_id.username, u1_team.username) AS player1_username,
+                   COALESCE(u2_id.username, u2_team.username) AS player2_username,
                    bm.odd_p1, bm.odd_x, bm.odd_p2,
                    bm.odd_tb25, bm.odd_tm25, bm.odd_btts_yes, bm.odd_btts_no
             FROM matches m
+            LEFT JOIN users u1_id ON m.player1_id = u1_id.telegram_id
+            LEFT JOIN users u1_team ON LOWER(m.player1_team) = LOWER(u1_team.team_name)
+            LEFT JOIN users u2_id ON m.player2_id = u2_id.telegram_id
+            LEFT JOIN users u2_team ON LOWER(m.player2_team) = LOWER(u2_team.team_name)
             LEFT JOIN bet_markets bm ON m.id = bm.match_id AND bm.is_active = 1
             WHERE 1=1
         """
@@ -84,6 +90,14 @@ async def handle_get_matches(request: web.Request) -> web.Response:
         matches = []
         for r in raw_rows:
             m_dict = dict(r)
+            if not m_dict.get("player1_username") and m_dict.get("player1_team"):
+                u = database.find_user_by_team(m_dict["player1_team"])
+                if u:
+                    m_dict["player1_username"] = u.get("username")
+            if not m_dict.get("player2_username") and m_dict.get("player2_team"):
+                u = database.find_user_by_team(m_dict["player2_team"])
+                if u:
+                    m_dict["player2_username"] = u.get("username")
             m_id = m_dict["id"]
             # Check canonical market_selections for the match first
             cursor.execute("""

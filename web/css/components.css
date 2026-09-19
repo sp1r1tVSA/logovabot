@@ -243,15 +243,20 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: 8px;
   margin-bottom: 14px;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 .team-block-side {
   display: flex;
   align-items: center;
   gap: 8px;
-  flex: 1;
+  flex: 1 1 0;
+  min-width: 0; /* CRITICAL: allows flex child to shrink properly */
+  overflow: hidden;
 }
 
 .team-block-side.left {
@@ -264,15 +269,59 @@
   text-align: left;
 }
 
+.team-meta-wrap {
+  display: flex;
+  flex-direction: column;
+  min-width: 0; /* CRITICAL: enables children text truncation */
+  flex: 1 1 0;
+  overflow: hidden;
+  justify-content: center;
+}
+
+.team-meta-wrap.left {
+  align-items: flex-end;
+  text-align: right;
+}
+
+.team-meta-wrap.right {
+  align-items: flex-start;
+  text-align: left;
+}
+
 .team-name {
   font-family: 'Outfit', sans-serif;
-  font-size: 0.95rem;
+  font-size: clamp(0.80rem, 2.7vw, 0.90rem);
   font-weight: 800;
   color: #fff;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  width: 100%;
+  max-width: 100%;
   letter-spacing: -0.01em;
+  line-height: 1.25;
+  display: block;
+}
+
+.team-player-tag {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 0.70rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  width: 100%;
+  max-width: 100%;
+  line-height: 1.2;
+  margin-top: 2px;
+  display: block;
+  opacity: 0.85;
+}
+
+.team-player-tag:hover {
+  color: var(--accent-gold);
+  opacity: 1;
 }
 
 .match-vs-divider {
@@ -285,6 +334,25 @@
   padding: 3px 8px;
   border-radius: var(--radius-xs);
   flex-shrink: 0;
+}
+
+@media (max-width: 380px) {
+  .match-teams-row {
+    gap: 6px;
+  }
+  .team-block-side {
+    gap: 6px;
+  }
+  .team-name {
+    font-size: 0.80rem;
+  }
+  .team-player-tag {
+    font-size: 0.66rem;
+  }
+  .match-vs-divider {
+    padding: 2px 6px;
+    font-size: 0.70rem;
+  }
 }
 
 /* Odds Grid & Buttons */
