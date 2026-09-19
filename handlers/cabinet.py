@@ -3273,14 +3273,14 @@ async def handle_debt_played_rewards(
                     f"📊 Ваш текущий баланс варнов: <b>{new_warns}/{MAX_WARNS_LIMIT}</b>\n\n"
                     f"<i>Спасибо за оперативность!</i>"
                 )
-                await context.bot.send_message(chat_id=p_id, text=reward_text, parse_mode="HTML")
+                await safe_send_notification(context.bot, p_id, reward_text)
             else:
                 zero_warn_text = (
                     f"✅ <b>Матч-долг успешно закрыт!</b>\n\n"
                     f"Результат матча <b>{round_number}-го тура</b> внесён в базу лиги.\n"
                     f"📊 Ваш баланс варнов чист: <b>0/{MAX_WARNS_LIMIT}</b>"
                 )
-                await context.bot.send_message(chat_id=p_id, text=zero_warn_text, parse_mode="HTML")
+                await safe_send_notification(context.bot, p_id, zero_warn_text)
 
             # Check if all debts are cleared
             remaining_debts = await asyncio.to_thread(database.count_user_remaining_debts, p_id)
@@ -3290,7 +3290,7 @@ async def handle_debt_played_rewards(
                     f"У вас больше нет просроченных матчей в лиге.\n"
                     f"Автоматические напоминания и штрафные таймеры отключены. Удачи в следующих турах! ⚽"
                 )
-                await context.bot.send_message(chat_id=p_id, text=all_clear_text, parse_mode="HTML")
+                await safe_send_notification(context.bot, p_id, all_clear_text)
         except Exception as e:
             logger.warning(f"Failed to process debt played reward for user {p_id}: {e}")
 
@@ -3360,10 +3360,7 @@ async def notify_match_confirmed(context: ContextTypes.DEFAULT_TYPE, match_id: i
 
     for p_id in (match['player1_id'], match['player2_id']):
         if p_id:
-            try:
-                await context.bot.send_message(chat_id=p_id, text=pm_text, parse_mode="HTML")
-            except Exception as e:
-                logger.exception(f"Failed to send confirmation to player {p_id}")
+            await safe_send_notification(context.bot, p_id, pm_text)
 
     # Process debt reward (-1 warn) and all-debts-cleared notification
     await handle_debt_played_rewards(

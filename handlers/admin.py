@@ -3831,10 +3831,7 @@ async def admin_set_score_text(update: Update, context: ContextTypes.DEFAULT_TYP
         f"Результат подтвержден и обновлен в таблице."
     ) + debt_note.replace("<b>", "**").replace("</b>", "**")
     for p_id in (match["player1_id"], match["player2_id"]):
-        try:
-            await context.bot.send_message(chat_id=p_id, text=player_text, parse_mode="Markdown")
-        except Exception as e:
-            logger.exception(f"Не удалось отправить уведомление игроку {p_id}")
+        await safe_send_notification(context.bot, p_id, player_text, parse_mode="Markdown")
 
     # Notify Telegram Group (scoped to division topic)
     group_id, target_topic = await resolve_division_target(
@@ -6731,8 +6728,8 @@ async def _run_debt_lifecycle_tracker(context: ContextTypes.DEFAULT_TYPE) -> Non
                 f"ℹ️ <b>Варн за эти 24 часа НЕ начислен.</b>"
             )
             soft_delivered = False
-            for pid in (p1_id, p2_id):
-                if not pid:
+            for pid, is_v in ((p1_id, p1_valid), (p2_id, p2_valid)):
+                if not (pid and is_v):
                     continue
                 try:
                     await context.bot.send_message(chat_id=pid, text=soft_text, parse_mode="HTML")
