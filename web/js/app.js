@@ -35,6 +35,7 @@ class AppController {
       UIRenderer.renderSavedCoupons(state.savedCoupons);
       UIRenderer.renderProfile(state.user, state.progression, state.myStats, state.achievements);
       UIRenderer.renderMyClubView(state.myClub.overview);
+      UIRenderer.updateNavClubIcon(state.myClub.overview);
       if (!state.myClub.overview || state.myClub.overview.registered) {
         UIRenderer.renderMyClubMatches(state.myClub.matches, state.myClubLoading);
         UIRenderer.renderMyClubHistory(state.myClubRecent, state.myClubLoading);
@@ -226,14 +227,16 @@ class AppController {
 
   async fetchUserExtras() {
     try {
-      const [statsRes, savedRes, tourStatsRes] = await Promise.all([
+      const [statsRes, savedRes, tourStatsRes, overviewRes] = await Promise.all([
         api.getMyStats(),
         api.getSavedCoupons(),
-        api.getTournamentStats().catch(() => null)
+        api.getTournamentStats().catch(() => null),
+        api.getMyClubOverview().catch(() => null)
       ]);
       if (statsRes.status === 'ok') store.setMyStats(statsRes.stats);
       if (savedRes.status === 'ok') store.setSavedCoupons(savedRes.saved_coupons);
       if (tourStatsRes && tourStatsRes.status === 'ok') store.setTournamentStats(tourStatsRes.tournament_stats);
+      if (overviewRes && overviewRes.status === 'ok') store.setMyClubOverview(overviewRes);
     } catch (e) {
       console.warn("Could not load user extras:", e);
     }

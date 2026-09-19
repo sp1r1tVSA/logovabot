@@ -1595,6 +1595,11 @@
   color: var(--text-muted);
 }
 
+.team-logo-wrapper img + .team-logo-fallback,
+img.team-logo-img + .team-logo-fallback {
+  display: none;
+}
+
 /* ─── Coupon Card (Root Container) ─── */
 .coupon-card {
   background: rgba(14, 18, 27, 0.92);
@@ -2942,6 +2947,12 @@
   }
   .nav-item .nav-icon {
     font-size: 1.15rem;
+    width: 20px;
+    height: 20px;
+  }
+  .nav-club-logo {
+    width: 20px;
+    height: 20px;
   }
   .nav-badge {
     right: 2px;
@@ -2983,6 +2994,12 @@
   }
   .nav-item .nav-icon {
     font-size: 1.05rem;
+    width: 18px;
+    height: 18px;
+  }
+  .nav-club-logo {
+    width: 18px;
+    height: 18px;
   }
 
   .club-hero-crest {

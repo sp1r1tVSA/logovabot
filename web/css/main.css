@@ -239,7 +239,23 @@ body {
 
 .nav-item .nav-icon {
   font-size: 1.3rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
   transition: var(--transition-bounce);
+}
+
+.nav-club-logo {
+  width: 22px;
+  height: 22px;
+  max-width: 22px;
+  max-height: 22px;
+  object-fit: contain;
+  display: block;
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.45));
+  transition: inherit;
 }
 
 .nav-item.active {

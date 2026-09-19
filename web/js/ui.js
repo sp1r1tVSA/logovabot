@@ -319,12 +319,12 @@ export function renderTeamLogoWrapperHtml(teamName, extraClass = '') {
   const url = getTeamLogoUrl(teamName);
   const wrapStyle = "width:44px; height:44px; min-width:44px; min-height:44px; max-width:44px; max-height:44px; display:flex; align-items:center; justify-content:center; flex-shrink:0; border-radius:10px; background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.05); padding:4px; box-sizing:border-box;";
   const imgStyle = "width:100%; height:100%; max-width:100%; max-height:100%; object-fit:contain; display:block; filter:drop-shadow(0 2px 5px rgba(0,0,0,0.45));";
-  const fbStyle = "font-size:20px; line-height:1; display:flex; align-items:center; justify-content:center; color:var(--text-muted);";
+  const fbBaseStyle = "font-size:20px; line-height:1; align-items:center; justify-content:center; color:var(--text-muted);";
 
   if (url) {
-    return `<div class="team-logo-wrapper ${extraClass}" style="${wrapStyle}"><img src="${url}" alt="${teamName || 'Club'}" loading="lazy" style="${imgStyle}" onerror="this.style.display='none'; if(this.nextElementSibling) this.nextElementSibling.style.display='flex';" /><span class="team-logo-fallback" style="display:none; ${fbStyle}">🛡️</span></div>`;
+    return `<div class="team-logo-wrapper ${extraClass}" style="${wrapStyle}"><img src="${url}" alt="${teamName || 'Club'}" loading="lazy" style="${imgStyle}" onerror="this.style.display='none'; if(this.nextElementSibling) this.nextElementSibling.style.display='flex';" /><span class="team-logo-fallback" style="display:none; ${fbBaseStyle}">🛡️</span></div>`;
   }
-  return `<div class="team-logo-wrapper ${extraClass}" style="${wrapStyle}"><span class="team-logo-fallback" style="${fbStyle}">🛡️</span></div>`;
+  return `<div class="team-logo-wrapper ${extraClass}" style="${wrapStyle}"><span class="team-logo-fallback" style="display:flex; ${fbBaseStyle}">🛡️</span></div>`;
 }
 
 export function renderTeamLogoHtml(teamName, size = 28, extraClass = '') {
@@ -421,6 +421,34 @@ export class UIRenderer {
     // Награды за достижения отключены — счётчик «неполученных» больше не нужен.
     const aBadge = document.getElementById('achievements-badge');
     if (aBadge) aBadge.style.display = 'none';
+  }
+
+  static updateNavClubIcon(overview) {
+    const navIcon = document.getElementById('nav-my-club-icon') || document.querySelector('.nav-item[data-view="my_club"] .nav-icon');
+    if (!navIcon) return;
+
+    const teamName = overview?.registered && overview?.club?.team_name;
+    if (!teamName) {
+      if (navIcon.dataset.currentTeam) {
+        delete navIcon.dataset.currentTeam;
+        navIcon.textContent = '🛡';
+      }
+      return;
+    }
+
+    const logoUrl = getTeamLogoUrl(teamName);
+    if (!logoUrl) {
+      if (navIcon.dataset.currentTeam) {
+        delete navIcon.dataset.currentTeam;
+        navIcon.textContent = '🛡';
+      }
+      return;
+    }
+
+    if (navIcon.dataset.currentTeam !== teamName) {
+      navIcon.dataset.currentTeam = teamName;
+      navIcon.innerHTML = `<img src="${logoUrl}" alt="${escapeHtml(teamName)}" class="nav-club-logo" onerror="this.parentElement.textContent='🛡'; delete this.parentElement.dataset.currentTeam;" />`;
+    }
   }
 
   static renderBonusBanner(_bonus) {
@@ -2013,6 +2041,7 @@ export class UIRenderer {
 
   /** Баннер клуба + дисциплина. */
   static renderMyClubView(overview) {
+    this.updateNavClubIcon(overview);
     const heroEl = document.getElementById('my-club-hero-container');
     if (!heroEl) return;
 

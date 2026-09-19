@@ -26,6 +26,7 @@
     .team-logo-wrapper { width: 44px !important; height: 44px !important; min-width: 44px !important; min-height: 44px !important; max-width: 44px !important; max-height: 44px !important; display: flex !important; align-items: center !important; justify-content: center !important; flex-shrink: 0 !important; border-radius: 10px; background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.05); padding: 4px; box-sizing: border-box; }
     .team-logo-wrapper img { width: 100% !important; height: 100% !important; max-width: 100% !important; max-height: 100% !important; object-fit: contain !important; display: block !important; filter: drop-shadow(0 2px 5px rgba(0, 0, 0, 0.45)); }
     .team-logo-wrapper .team-logo-fallback { font-size: 20px; line-height: 1; display: flex; align-items: center; justify-content: center; color: var(--text-muted, #64748b); }
+    .team-logo-wrapper img + .team-logo-fallback, img.team-logo-img + .team-logo-fallback { display: none !important; }
     .coupon-card { background: rgba(14, 18, 27, 0.92); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 16px; padding: 14px 16px; margin-bottom: 14px; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4); position: relative; overflow: hidden; box-sizing: border-box; }
     .coupon-header { display: flex; justify-content: space-between; align-items: center; padding-bottom: 10px; border-bottom: 1px solid rgba(255, 255, 255, 0.05); margin-bottom: 10px; }
     .coupon-header-left { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
@@ -407,7 +408,7 @@
       <span>Купоны</span>
     </button>
     <button class="nav-item" data-view="my_club">
-      <span class="nav-icon">🛡</span>
+      <span class="nav-icon" id="nav-my-club-icon">🛡</span>
       <span>Мой Клуб</span>
     </button>
     <button class="nav-item" data-view="profile">
