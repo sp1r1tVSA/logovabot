@@ -275,6 +275,10 @@ def generate_round_markets(tour: int, division_id: int | None = None, season_id:
 
     for m in selected:
         m_id = m.get("id")
+        # Линию начавшегося тура не воскрешаем: её закрыл старт тура, а
+        # показ линии (Mini App, Telegram) вызывает генерацию и для него.
+        if not database.match_line_is_open(m_id):
+            continue
         t1, t2 = _match_team_names(m)
         p1_nick = m.get("player1_nickname") or m.get("player1_username")
         p2_nick = m.get("player2_nickname") or m.get("player2_username")

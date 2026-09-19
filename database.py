@@ -3173,7 +3173,7 @@ def admin_set_match_score(match_id: int, player1_score: int, player2_score: int,
         raise ValueError("Scores must be non-negative integers")
     with transaction() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT player1_score, player2_score, status, division_id, season_id FROM matches WHERE id = ?", (match_id,))
+        cursor.execute("SELECT player1_score, player2_score, status, division_id, season_id, COALESCE(is_technical, 0) AS is_technical FROM matches WHERE id = ?", (match_id,))
         old_m = cursor.fetchone()
 
         is_correction = bool(old_m and old_m["status"] == "confirmed" and old_m["player1_score"] is not None and old_m["player2_score"] is not None)
@@ -3203,8 +3203,17 @@ def admin_set_match_score(match_id: int, player1_score: int, player2_score: int,
             except Exception as e:
                 logger.warning(f"Could not log admin score correction for match {match_id}: {e}")
 
+        score_changed = is_correction and (old_m["player1_score"], old_m["player2_score"]) != (player1_score, player2_score)
+        match_status = "voided" if old_m and old_m["is_technical"] else "finished"
         try:
-            settle_match_bets(match_id, player1_score, player2_score)
+            if score_changed:
+                # Ставки по матчу уже рассчитаны по старому счёту: settle_match_bets
+                # трогает только pending и оставил бы старые выигрыши. Пересчёт
+                # отзывает прежние выплаты и начисляет по исправленному счёту.
+                from services.settlement_engine import resettle_match_predictions
+                resettle_match_predictions(match_id, player1_score, player2_score, match_status=match_status)
+            else:
+                settle_match_bets(match_id, player1_score, player2_score, match_status=match_status)
         except Exception as e:
             logger.warning(f"Error settling bets in admin_set_match_score for match {match_id}: {e}")
 
@@ -5025,6 +5034,36 @@ def prune_round_markets(
         return pruned
 
 
+def _match_line_is_open(cursor, match_id: int) -> bool:
+    """Принимает ли тур матча ставки прямо сейчас — по `evaluate_round_betting_gate`.
+
+    Линию начавшегося тура (is_open = 1 или bets_open = 0), тура с истёкшим
+    дедлайном и сыгранного матча трогать нельзя: её закрыли намеренно, и
+    переоткрытый рынок снова дал бы кэшаут по ставкам уже идущего тура.
+    """
+    cursor.execute(
+        "SELECT round_number, division_id, season_id FROM matches WHERE id = ?",
+        (match_id,)
+    )
+    row = cursor.fetchone()
+    if row is None:
+        return False
+    allowed, _reason, _message = evaluate_round_betting_gate(
+        cursor,
+        row["round_number"],
+        row["division_id"] if row["division_id"] is not None else 1,
+        row["season_id"],
+        match_id=match_id,
+    )
+    return bool(allowed)
+
+
+def match_line_is_open(match_id: int) -> bool:
+    """Публичная обёртка `_match_line_is_open` для сервисного слоя."""
+    with transaction() as conn:
+        return _match_line_is_open(conn.cursor(), match_id)
+
+
 def reopen_match_markets(match_id: int) -> int:
     """Вернуть в продажу рынки матча, снова попавшего в линию тура.
 
@@ -5032,18 +5071,14 @@ def reopen_match_markets(match_id: int) -> int:
     `save_bet_market` при его возвращении включает только legacy-строку линии:
     реляционные рынки так и остаются `closed`, и ставку на видимый в линии
     коэффициент отклоняет `place_user_bet`. Открываем их обратно — но только
-    пока матч не сыгран, чтобы не воскресить рынок, закрытый расчётом.
+    пока тур матча принимает ставки: иначе воскрес бы рынок, закрытый стартом
+    тура или расчётом.
 
     Возвращает число переоткрытых рынков.
     """
     with transaction() as conn:
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT 1 FROM matches WHERE id = ? "
-            "AND COALESCE(status, '') NOT IN ('completed', 'confirmed')",
-            (match_id,)
-        )
-        if cursor.fetchone() is None:
+        if not _match_line_is_open(cursor, match_id):
             return 0
         cursor.execute(
             "UPDATE markets SET status = 'open' WHERE match_id = ? AND status = 'closed'",

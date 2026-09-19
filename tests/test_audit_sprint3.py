@@ -238,6 +238,48 @@ class TestAuditSprint3(unittest.TestCase):
 
         self.assertEqual(database.reopen_match_markets(self.match_id), 0)
 
+    def test_showing_the_line_does_not_revive_a_started_round(self):
+        """The line view regenerates every open round, including one already in play.
+
+        Reopening its markets would let players cash out bets on matches whose
+        result they already know.
+        """
+        betting_engine.generate_round_markets(1)
+        with database.transaction() as conn:
+            conn.execute("UPDATE rounds SET is_open = 1, bets_open = 0 WHERE round_number = 1")
+            conn.execute("UPDATE bet_markets SET is_active = 0 WHERE match_id = ?", (self.match_id,))
+            conn.execute("UPDATE markets SET status = 'closed' WHERE match_id = ?", (self.match_id,))
+
+        betting_engine.generate_round_markets(1)
+
+        self.assertNotIn(self.match_id, [m["match_id"] for m in database.get_active_bet_markets()])
+        with database.transaction() as conn:
+            statuses = {r["status"] for r in conn.execute(
+                "SELECT status FROM markets WHERE match_id = ?", (self.match_id,)
+            ).fetchall()}
+        self.assertEqual(statuses, {"closed"})
+
+    def test_admin_score_correction_resettles_already_settled_bets(self):
+        """A corrected score must take back the old payout, not leave the bet won."""
+        markets = odds_engine.generate_match_markets(self.match_id, "Спортинг", "Бенфика")
+        m_1x2 = next(m for m in markets if m["market_key"] == "1x2")
+        odd_p1 = next(s["odds_value"] for s in m_1x2["selections"] if s["selection_key"] == "p1")
+        ok, bet_id = database.place_user_bet(
+            user_id=self.user_id,
+            amount=100,
+            selections=[{"match_id": self.match_id, "outcome": "p1", "odd": odd_p1}]
+        )
+        self.assertTrue(ok, bet_id)
+        balance_before = database.get_wallet_balance(self.user_id)
+
+        database.admin_set_match_score(self.match_id, 2, 1)
+        self.assertEqual(database.get_user_bet_by_id(self.user_id, bet_id)["status"], "won")
+
+        database.admin_set_match_score(self.match_id, 1, 2)
+        bet = database.get_user_bet_by_id(self.user_id, bet_id)
+        self.assertEqual((bet["status"], bet["actual_payout"]), ("lost", 0))
+        self.assertEqual(database.get_wallet_balance(self.user_id), balance_before)
+
     def test_wallet_ledger_records_balance_after_for_every_credit(self):
         """Welcome, daily and level-up credits carry the balance they left, like bets do."""
         database.claim_daily_bonus(self.user_id, bonus_amount=250)
