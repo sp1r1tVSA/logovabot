@@ -121,7 +121,9 @@ async def handle_admin_live_overview(request: web.Request) -> web.Response:
                    (SELECT COUNT(*) FROM markets WHERE match_id = m.id AND status = 'suspended') as suspended_markets
             FROM matches m
             LEFT JOIN live_match_states lms ON m.id = lms.match_id
-            WHERE m.status IN ('live', 'open') OR lms.status IN ('live', 'halftime')
+            -- live_match_states stores the state machine's upper-case statuses.
+            -- Parenthesised so the division filter below scopes both branches.
+            WHERE (m.status IN ('live', 'open') OR lms.status IN ('LIVE', 'HALFTIME'))
         """
         params: list[Any] = []
         if allowed_divisions is not None:
