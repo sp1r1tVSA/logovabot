@@ -6243,24 +6243,13 @@ def get_club_card_data(team_name: str) -> dict:
         squad_names = [r["player_name"] for r in cursor.fetchall() if teams_match(r["team_name"], canon)]
 
         # 7. Unplayed Matches & Debts
-        cursor.execute("SELECT round_number, is_open, deadline FROM rounds")
-        rounds_rows = cursor.fetchall()
-        round_info_map: dict[int, dict] = {}
-        max_open_round = 0
-        for r_num, is_open, dl_str in rounds_rows:
-            parsed_dl = parse_flexible_datetime(dl_str)
-            if is_open and r_num > max_open_round:
-                max_open_round = r_num
-            round_info_map[r_num] = {
-                "is_open": bool(is_open),
-                "deadline_str": dl_str,
-                "deadline_dt": parsed_dl
-            }
+        cursor.execute("SELECT round_number, is_open, deadline, division_id FROM rounds")
+        round_info_map, max_open_by_div = _load_round_states(cursor.fetchall())
 
         cursor.execute("""
             SELECT 
                 m.id, m.round_number, m.tournament_type, m.cup_stage, m.game_num_in_series,
-                m.player1_team, m.player2_team
+                m.player1_team, m.player2_team, m.division_id
             FROM matches m
             WHERE m.status = 'pending'
             ORDER BY 
@@ -6282,22 +6271,12 @@ def get_club_card_data(team_name: str) -> dict:
             is_cup = bool(pm["tournament_type"] == "cup" or pm["round_number"] == -1)
             
             rn = pm["round_number"]
-            r_info = round_info_map.get(rn)
-            dl_dt = r_info.get("deadline_dt") if r_info else None
-            is_open = r_info.get("is_open", False) if r_info else False
+            m_div = pm["division_id"] or 1
+            r_info = round_info_map.get((m_div, rn))
 
             overdue = False
             if not is_cup:
-                if dl_dt and dl_dt <= now_dt:
-                    overdue = True
-                elif dl_dt and dl_dt > now_dt:
-                    overdue = False
-                elif is_open and dl_dt is None:
-                    overdue = True
-                elif max_open_round > 0 and rn < max_open_round:
-                    overdue = True
-                elif not is_open and r_info and max_open_round > 0 and rn <= max_open_round:
-                    overdue = True
+                overdue = _league_round_is_overdue(r_info, rn, max_open_by_div.get(m_div, 0), now_dt)
             else:
                 # Cup matches: overdue only if recorded in debt reminders
                 cursor.execute("SELECT 1 FROM debt_reminders WHERE match_id = ? LIMIT 1", (pm["id"],))
@@ -7020,21 +6999,9 @@ def get_all_unplayed_league_matches(division_id: int | None = None, season_id: i
                 "SELECT round_number, is_open, deadline, division_id, season_id FROM rounds WHERE (season_id = ? OR season_id IS NULL)",
                 (target_season_id,)
             )
-        rounds_rows = cursor.fetchall()
-
-        round_info_map: dict[int, dict] = {}
-        max_open_round = 0
-        for row in rounds_rows:
-            r_num = row["round_number"]
-            is_open = row["is_open"]
-            dl_str = row["deadline"]
-            parsed_dl = parse_flexible_datetime(dl_str)
-            if is_open and r_num > max_open_round:
-                max_open_round = r_num
-            round_info_map[r_num] = {
-                "is_open": bool(is_open),
-                "deadline_dt": parsed_dl
-            }
+        # Туры у каждого дивизиона свои — ключ (дивизион, тур), иначе открытие
+        # тура в одном дивизионе делает долгами неоткрытые туры остальных.
+        round_info_map, max_open_by_div = _load_round_states(cursor.fetchall())
 
         if division_id is not None:
             cursor.execute("""
@@ -7082,29 +7049,12 @@ def get_all_unplayed_league_matches(division_id: int | None = None, season_id: i
         unplayed = []
         for m in matches:
             rn = m["round_number"]
-            r_info = round_info_map.get(rn)
+            m_div = m.get("division_id") or 1
+            r_info = round_info_map.get((m_div, rn))
             if not r_info:
                 continue
 
-            dl_dt = r_info.get("deadline_dt")
-            is_open = r_info.get("is_open", False)
-
-            # Include ONLY if the match is actually overdue:
-            # 1. Deadline is set and has passed
-            # 2. Round is open without a deadline
-            # 3. Round is a past round (before max open round, or closed)
-            # Future unopened rounds and open rounds with future deadlines are ignored
-            is_debt = False
-            if dl_dt and dl_dt <= now:
-                is_debt = True
-            elif is_open and dl_dt is None:
-                is_debt = True
-            elif r_info and max_open_round > 0 and rn <= max_open_round:
-                # Skip any round (open or closed) whose deadline is still in the future
-                if not (dl_dt and dl_dt > now):
-                    is_debt = True
-
-            if not is_debt:
+            if not _league_round_is_overdue(r_info, rn, max_open_by_div.get(m_div, 0), now):
                 continue
 
             t1 = m.get("player1_team")
@@ -7176,6 +7126,55 @@ def get_last_debt_12h_reminder(match_id: int) -> datetime.datetime | None:
         return parse_flexible_datetime(row["sent_at"])
 
 
+def _load_round_states(rounds_rows) -> tuple[dict[tuple[int, int], dict], dict[int, int]]:
+    """Состояние туров по ключу (дивизион, номер тура) и максимальный открытый тур дивизиона.
+
+    Номер тура сам по себе не идентифицирует тур: 1-й тур есть в каждом дивизионе.
+    Карта по голому номеру смешивала дивизионы — открытие 1–2 туров в одном из них
+    поднимало «максимальный открытый тур» всей лиги, и несыгранные матчи тех же
+    туров во всех остальных дивизионах уходили в ДОЛГ. `division_id = NULL`
+    означает дивизион 1 — то же соглашение, что в `place_user_bet`.
+    """
+    round_map: dict[tuple[int, int], dict] = {}
+    max_open: dict[int, int] = {}
+    for row in rounds_rows:
+        div = row["division_id"] or 1
+        r_num = row["round_number"]
+        is_open = bool(row["is_open"])
+        if is_open and r_num > max_open.get(div, 0):
+            max_open[div] = r_num
+        round_map[(div, r_num)] = {
+            "is_open": is_open,
+            "deadline_str": row["deadline"],
+            "deadline_dt": parse_flexible_datetime(row["deadline"]),
+        }
+    return round_map, max_open
+
+
+def _league_round_is_overdue(r_info: dict | None, rn: int, max_open_round: int, now: datetime.datetime) -> bool:
+    """Просрочен ли несыгранный матч тура `rn` — строго в пределах его дивизиона.
+
+    1. Дедлайн тура истёк.
+    2. Тур открыт, но без дедлайна.
+    3. Тур раньше максимального открытого тура дивизиона.
+    4. Закрытый тур не позже максимального открытого.
+    В пунктах 3–4 тур с дедлайном в будущем долгом не считается никогда.
+    """
+    dl_dt = r_info.get("deadline_dt") if r_info else None
+    is_open = r_info.get("is_open", False) if r_info else False
+    if dl_dt and dl_dt <= now:
+        return True
+    if is_open and dl_dt is None:
+        return True
+    if dl_dt and dl_dt > now:
+        return False
+    if max_open_round > 0 and rn < max_open_round:
+        return True
+    if not is_open and r_info and max_open_round > 0 and rn <= max_open_round:
+        return True
+    return False
+
+
 def get_detailed_overdue_matches(division_id: int | None = None, season_id: int | None = None) -> list[dict]:
     """
     Retrieve all pending league matches that are legitimately overdue:
@@ -7205,22 +7204,7 @@ def get_detailed_overdue_matches(division_id: int | None = None, season_id: int 
                 "SELECT round_number, is_open, deadline, division_id, season_id FROM rounds WHERE (season_id = ? OR season_id IS NULL)",
                 (target_season_id,)
             )
-        rounds_rows = cursor.fetchall()
-
-        round_info_map: dict[int, dict] = {}
-        max_open_round = 0
-        for row in rounds_rows:
-            r_num = row["round_number"]
-            is_open = row["is_open"]
-            dl_str = row["deadline"]
-            parsed_dl = parse_flexible_datetime(dl_str)
-            if is_open and r_num > max_open_round:
-                max_open_round = r_num
-            round_info_map[r_num] = {
-                "is_open": bool(is_open),
-                "deadline_str": dl_str,
-                "deadline_dt": parsed_dl
-            }
+        round_info_map, max_open_by_div = _load_round_states(cursor.fetchall())
 
         # 2. Fetch pending league matches
         if division_id is not None:
@@ -7276,31 +7260,11 @@ def get_detailed_overdue_matches(division_id: int | None = None, season_id: int 
         overdue_list = []
         for m in matches:
             rn = m["round_number"]
-            r_info = round_info_map.get(rn)
-
+            m_div = m.get("division_id") or 1
+            r_info = round_info_map.get((m_div, rn))
             dl_dt = r_info.get("deadline_dt") if r_info else None
-            is_open = r_info.get("is_open", False) if r_info else False
 
-            # CRITICAL: A pending league match is overdue if:
-            # 1. dl_dt is set and dl_dt <= now
-            # 2. Or is_open == True and dl_dt is None
-            # 3. Or rn < max_open_round (past tour before current open tours)
-            # 4. Or is_open == False and rn <= max_open_round (closed tour with pending matches)
-            is_overdue = False
-            if dl_dt and dl_dt <= now:
-                is_overdue = True
-            elif is_open and dl_dt is None:
-                is_overdue = True
-            elif max_open_round > 0 and rn < max_open_round:
-                # Skip any round whose own deadline is still in the future
-                if not (dl_dt and dl_dt > now):
-                    is_overdue = True
-            elif not is_open and r_info and max_open_round > 0 and rn <= max_open_round:
-                # Closed past round — but never overdue while its deadline is in the future
-                if not (dl_dt and dl_dt > now):
-                    is_overdue = True
-
-            if not is_overdue:
+            if not _league_round_is_overdue(r_info, rn, max_open_by_div.get(m_div, 0), now):
                 continue
 
             t1 = m.get("player1_team")
