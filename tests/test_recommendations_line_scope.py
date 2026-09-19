@@ -118,7 +118,6 @@ class TestRecommendationsLineScope(unittest.TestCase):
             cursor.execute("DELETE FROM user_wallets WHERE user_id >= 779100")
             cursor.execute("DELETE FROM user_progression WHERE user_id >= 779100")
             cursor.execute("DELETE FROM user_achievements WHERE user_id >= 779100")
-            cursor.execute("DELETE FROM user_quests WHERE user_id >= 779100")
             cursor.execute("DELETE FROM favorites WHERE user_id >= 779100")
             cursor.execute("DELETE FROM division_admins WHERE user_id >= 779100")
             cursor.execute("DELETE FROM admin_audit_log WHERE admin_id >= 779100")
