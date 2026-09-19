@@ -53,6 +53,20 @@ def calculate_match_hot_score(
     return round(score, 1)
 
 
+def _club_matches(club: str, target: str) -> bool:
+    """Check if club name matches target using database.teams_match with fallback."""
+    if not club or not target:
+        return False
+    try:
+        if database.teams_match(club, target):
+            return True
+    except Exception:
+        pass
+    c_norm = club.strip().lower()
+    t_norm = target.strip().lower()
+    return c_norm in t_norm or t_norm in c_norm
+
+
 def get_hot_matches(
     division_id: Optional[int] = None,
     season_id: Optional[int] = None,
@@ -60,21 +74,77 @@ def get_hot_matches(
 ) -> list[dict[str, Any]]:
     """
     Retrieve top hot matches across the league or scoped to a division/season.
-    Ranked by calculated composite hot score.
+    Matches are constrained to currently open line rounds (if configured) and ranked
+    by calculated composite hot score.
     """
     with database.transaction() as conn:
         cursor = conn.cursor()
 
-        base_filter = "WHERE m.status IN ('open', 'scheduled', 'pending', 'live')"
+        if season_id is not None:
+            target_season_id = season_id
+        else:
+            act = database.get_active_season()
+            target_season_id = act if isinstance(act, int) else (act.get("id") if isinstance(act, dict) else 1)
+
+        # Check for open line rounds in the season (and division if provided)
+        round_sql = """
+            SELECT round_number FROM rounds
+            WHERE (is_open = 1 OR COALESCE(bets_open, 0) = 1)
+        """
+        round_params: list[Any] = []
+        if target_season_id is not None:
+            round_sql += " AND (season_id = ? OR season_id IS NULL)"
+            round_params.append(target_season_id)
+        if division_id is not None:
+            round_sql += " AND division_id = ?"
+            round_params.append(division_id)
+        round_sql += " ORDER BY round_number ASC"
+        cursor.execute(round_sql, round_params)
+        open_round_numbers = [r[0] for r in cursor.fetchall()]
+
+        # If season_id was not explicitly specified and no open rounds found for target_season_id,
+        # fallback to any open rounds for this division
+        if not open_round_numbers and season_id is None:
+            fallback_sql = "SELECT round_number FROM rounds WHERE (is_open = 1 OR COALESCE(bets_open, 0) = 1)"
+            fallback_params: list[Any] = []
+            if division_id is not None:
+                fallback_sql += " AND division_id = ?"
+                fallback_params.append(division_id)
+            fallback_sql += " ORDER BY round_number ASC"
+            cursor.execute(fallback_sql, fallback_params)
+            fallback_rounds = [r[0] for r in cursor.fetchall()]
+            if fallback_rounds:
+                open_round_numbers = fallback_rounds
+                target_season_id = None
+
+        count_sql = "SELECT COUNT(*) FROM rounds WHERE 1=1"
+        count_params: list[Any] = []
+        if target_season_id is not None:
+            count_sql += " AND (season_id = ? OR season_id IS NULL)"
+            count_params.append(target_season_id)
+        if division_id is not None:
+            count_sql += " AND division_id = ?"
+            count_params.append(division_id)
+        cursor.execute(count_sql, count_params)
+        total_rounds = cursor.fetchone()[0]
+
+        base_filter = "WHERE m.status IN ('open', 'scheduled', 'pending', 'live') AND m.status NOT IN ('confirmed', 'completed', 'finished', 'cancelled')"
         params: list[Any] = []
         if division_id is not None:
-            base_filter += " AND m.division_id = ?"
+            base_filter += " AND COALESCE(m.division_id, 1) = ?"
             params.append(division_id)
-        if season_id is not None:
-            base_filter += " AND m.season_id = ?"
-            params.append(season_id)
+        if target_season_id is not None:
+            base_filter += " AND (m.season_id = ? OR m.season_id IS NULL)"
+            params.append(target_season_id)
 
-        # Query candidates
+        if total_rounds > 0:
+            if not open_round_numbers:
+                return []
+            placeholders = ",".join("?" for _ in open_round_numbers)
+            base_filter += f" AND m.round_number IN ({placeholders})"
+            params.extend(open_round_numbers)
+
+        # Query candidates in chronological round order
         cursor.execute(f"""
             SELECT m.id, m.player1_team, m.player2_team, m.round_number, m.division_id, m.season_id,
                    m.status, m.player1_score, m.player2_score, m.live_minute,
@@ -84,7 +154,7 @@ def get_hot_matches(
             FROM matches m
             LEFT JOIN live_match_states lms ON m.id = lms.match_id
             {base_filter}
-            ORDER BY m.id DESC
+            ORDER BY m.round_number ASC, m.id ASC
             LIMIT 50
         """, params)
         candidates = [dict(r) for r in cursor.fetchall()]
@@ -127,13 +197,17 @@ def get_hot_matches(
 def get_user_recommendations(
     user_id: int,
     limit: int = 5,
-    risk_profile: str = "balanced"
+    risk_profile: str = "balanced",
+    division_id: Optional[int] = None,
+    season_id: Optional[int] = None
 ) -> list[dict[str, Any]]:
     """
     Generate explainable personalized match/market recommendations for a bettor.
+    Matches are strictly selected from the currently open betting line / active rounds
+    (is_open = 1 OR bets_open = 1), preventing matches from future unopened tours from showing up.
     Based on:
-    - User's division from users profile
-    - User's favorite teams
+    - User's division (or passed division_id)
+    - User's favorite teams and personal club
     - User's most frequently chosen market types
     - User risk profile: 'conservative' (higher confidence, lower odds), 'balanced', 'aggressive' (higher potential returns).
     Strict Invariant: Strictly read-only analytical presentation.
@@ -150,12 +224,27 @@ def get_user_recommendations(
         user_row = cursor.fetchone()
         user_div_id = user_row["division_id"] if user_row and user_row["division_id"] else 1
         user_team = user_row["team_name"] if user_row and user_row["team_name"] else ""
+        target_div_id = division_id if division_id is not None else user_div_id
+
+        if season_id is not None:
+            target_season_id = season_id
+        else:
+            act = database.get_active_season()
+            target_season_id = act if isinstance(act, int) else (act.get("id") if isinstance(act, dict) else 1)
 
         # 2. Fetch user favorite clubs
         cursor.execute("SELECT target_id FROM favorites WHERE user_id = ? AND target_type = 'club'", (user_id,))
-        fav_clubs = [str(r[0]).lower() for r in cursor.fetchall()]
+        fav_clubs = [str(r[0]).strip() for r in cursor.fetchall()]
         if user_team:
-            fav_clubs.append(user_team.lower())
+            fav_clubs.append(user_team.strip())
+        # Deduplicate while preserving order
+        seen_favs = set()
+        dedup_favs = []
+        for fc in fav_clubs:
+            if fc and fc.lower() not in seen_favs:
+                seen_favs.add(fc.lower())
+                dedup_favs.append(fc)
+        fav_clubs = dedup_favs
 
         # 3. Fetch user preferred outcome / market
         cursor.execute("""
@@ -170,35 +259,91 @@ def get_user_recommendations(
         fav_market_row = cursor.fetchone()
         fav_market = fav_market_row["outcome_type"] if fav_market_row else "p1"
 
-        # 4. Find open or live matches in user's division
+        # 4. Check open rounds for line in this division and season
         cursor.execute("""
-            SELECT m.id, m.player1_team, m.player2_team, m.round_number, m.division_id, m.status,
-                   lms.status as live_status, lms.home_score, lms.away_score, lms.minute
-            FROM matches m
-            LEFT JOIN live_match_states lms ON m.id = lms.match_id
-            WHERE m.division_id = ? AND m.status IN ('open', 'scheduled', 'pending', 'live')
-            ORDER BY m.id DESC
-            LIMIT 20
-        """, (user_div_id,))
+            SELECT round_number FROM rounds
+            WHERE division_id = ? AND (season_id = ? OR season_id IS NULL)
+              AND (is_open = 1 OR COALESCE(bets_open, 0) = 1)
+            ORDER BY round_number ASC
+        """, (target_div_id, target_season_id))
+        open_round_numbers = [r[0] for r in cursor.fetchall()]
+
+        # Fallback if season_id was not specified and no open rounds found for target_season_id
+        if not open_round_numbers and season_id is None:
+            cursor.execute("""
+                SELECT round_number FROM rounds
+                WHERE division_id = ?
+                  AND (is_open = 1 OR COALESCE(bets_open, 0) = 1)
+                ORDER BY round_number ASC
+            """, (target_div_id,))
+            fallback_rounds = [r[0] for r in cursor.fetchall()]
+            if fallback_rounds:
+                open_round_numbers = fallback_rounds
+                target_season_id = None
+
+        count_sql = "SELECT COUNT(*) FROM rounds WHERE division_id = ?"
+        count_params: list[Any] = [target_div_id]
+        if target_season_id is not None:
+            count_sql += " AND (season_id = ? OR season_id IS NULL)"
+            count_params.append(target_season_id)
+        cursor.execute(count_sql, count_params)
+        total_rounds = cursor.fetchone()[0]
+
+        # 5. Query candidate matches strictly within open line
+        where_season = "AND (m.season_id = ? OR m.season_id IS NULL)" if target_season_id is not None else ""
+        season_params = [target_season_id] if target_season_id is not None else []
+        if total_rounds > 0:
+            if not open_round_numbers:
+                return []
+            placeholders = ",".join("?" for _ in open_round_numbers)
+            cursor.execute(f"""
+                SELECT m.id, m.player1_team, m.player2_team, m.round_number, m.division_id, m.status,
+                       lms.status as live_status, lms.home_score, lms.away_score, lms.minute
+                FROM matches m
+                LEFT JOIN live_match_states lms ON m.id = lms.match_id
+                WHERE COALESCE(m.division_id, 1) = ?
+                  {where_season}
+                  AND m.round_number IN ({placeholders})
+                  AND m.status IN ('open', 'scheduled', 'pending', 'live')
+                  AND m.status NOT IN ('confirmed', 'completed', 'finished', 'cancelled')
+                ORDER BY m.round_number ASC, m.id ASC
+            """, [target_div_id] + season_params + open_round_numbers)
+        else:
+            # Fallback for test fixtures where rounds table is not seeded
+            cursor.execute(f"""
+                SELECT m.id, m.player1_team, m.player2_team, m.round_number, m.division_id, m.status,
+                       lms.status as live_status, lms.home_score, lms.away_score, lms.minute
+                FROM matches m
+                LEFT JOIN live_match_states lms ON m.id = lms.match_id
+                WHERE COALESCE(m.division_id, 1) = ?
+                  {where_season}
+                  AND m.status IN ('open', 'scheduled', 'pending', 'live')
+                  AND m.status NOT IN ('confirmed', 'completed', 'finished', 'cancelled')
+                ORDER BY m.round_number ASC, m.id ASC
+                LIMIT 20
+            """, [target_div_id] + season_params)
+
         available_matches = [dict(r) for r in cursor.fetchall()]
 
         recommendations = []
         for m in available_matches:
-            t1 = (m["player1_team"] or "").lower()
-            t2 = (m["player2_team"] or "").lower()
+            t1 = m["player1_team"] or ""
+            t2 = m["player2_team"] or ""
 
             reason = ""
             priority = 1
 
-            if any(fc in t1 or fc in t2 for fc in fav_clubs if fc):
-                matched_fav = next(fc for fc in fav_clubs if fc and (fc in t1 or fc in t2))
+            matched_fav = next((fc for fc in fav_clubs if _club_matches(fc, t1) or _club_matches(fc, t2)), None)
+            is_live = (m.get("live_status") in ("LIVE", "HALFTIME")) or (m.get("status") == "live")
+
+            if matched_fav:
                 reason = f"⭐ Матч с участием вашего любимого клуба ({matched_fav.capitalize()})."
                 priority = 3
-            elif m.get("live_status") in ("LIVE", "HALFTIME"):
+            elif is_live:
                 reason = "🔥 Матч прямо сейчас в прямом эфире с динамическими коэффициентами."
                 priority = 2
             else:
-                reason = f"🏆 Центральная игра Тура #{m['round_number']} в вашем Дивизионе {user_div_id}."
+                reason = f"🏆 Центральная игра Тура #{m['round_number']} в вашем Дивизионе {target_div_id}."
                 priority = 1
 
             # Fetch a sample market for quick action
@@ -220,7 +365,7 @@ def get_user_recommendations(
 
             recommendations.append({
                 "match_id": m["id"],
-                "division_id": m["division_id"],
+                "division_id": m["division_id"] or target_div_id,
                 "round_number": m["round_number"],
                 "player1_team": m["player1_team"],
                 "player2_team": m["player2_team"],
@@ -231,7 +376,21 @@ def get_user_recommendations(
                 "suggested_odds": quick_odds
             })
 
-        # Sort recommendations by priority descending
-        recommendations.sort(key=lambda x: x["priority"], reverse=True)
-        return recommendations[:limit]
+        # Separate into categories:
+        # 1. Favorite club matches (priority 3)
+        # 2. Live matches (priority 2)
+        # 3. Other central matches (priority 1)
+        fav_recs = [r for r in recommendations if r["priority"] == 3]
+        live_recs = [r for r in recommendations if r["priority"] == 2]
+        other_recs = [r for r in recommendations if r["priority"] == 1]
+
+        # If user has matches of their favorite / own club in the open tours,
+        # recommendations exclusively showcase those matches (plus live matches if any),
+        # so the user sees ONLY their matches of the currently open tours.
+        if fav_recs:
+            result = fav_recs + live_recs
+        else:
+            result = live_recs + other_recs
+
+        return result[:limit]
 

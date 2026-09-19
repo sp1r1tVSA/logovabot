@@ -158,12 +158,13 @@ class AppController {
     }
   }
 
-  async fetchIntelligenceHub() {
+  async fetchIntelligenceHub(divId = null) {
     try {
+      const dId = divId || store.state.selectedDivisionId;
       const [hotRes, moversRes, recsRes] = await Promise.all([
-        api.getHotMatches(),
+        api.getHotMatches(dId),
         api.getOddsMovers(),
-        api.getRecommendations()
+        api.getRecommendations(dId)
       ]);
       if (hotRes.status === 'ok') store.setHotMatches(hotRes.hot_matches);
       if (moversRes.status === 'ok') store.setOddsMovers(moversRes.movers);
@@ -426,7 +427,8 @@ class AppController {
           try {
             const [toursData] = await Promise.all([
               api.getTours(divId),
-              this.fetchTournamentData(divId)
+              this.fetchTournamentData(divId),
+              this.fetchIntelligenceHub(divId)
             ]);
             if (toursData.status === 'ok') {
               store.setTours(toursData.tours);

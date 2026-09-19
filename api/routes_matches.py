@@ -624,9 +624,11 @@ async def handle_get_recommendations(request: web.Request) -> web.Response:
     limit = int(limit_str) if limit_str and limit_str.isdigit() else 5
     limit = max(1, min(limit, 50))
     risk_profile = request.query.get("risk_profile", "balanced")
+    division_id_param = request.query.get("division_id")
+    div_id = int(division_id_param) if division_id_param and division_id_param.isdigit() else None
 
     from services.recommendation_engine import get_user_recommendations
-    recs = get_user_recommendations(user_id=user_id, limit=limit, risk_profile=risk_profile)
+    recs = get_user_recommendations(user_id=user_id, limit=limit, risk_profile=risk_profile, division_id=div_id)
     return web.json_response({
         "status": "ok",
         "user_id": user_id,

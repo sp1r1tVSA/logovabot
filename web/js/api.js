@@ -271,12 +271,14 @@ class ApiClient {
     return this.request('/api/odds/movers');
   }
 
-  getHotMatches() {
-    return this.request('/api/matches/hot');
+  getHotMatches(divisionId = null) {
+    const q = divisionId ? `?division_id=${divisionId}` : '';
+    return this.request(`/api/matches/hot${q}`);
   }
 
-  getRecommendations() {
-    return this.request('/api/recommendations');
+  getRecommendations(divisionId = null) {
+    const q = divisionId ? `?division_id=${divisionId}` : '';
+    return this.request(`/api/recommendations${q}`);
   }
 
   getProfileAnalytics() {

@@ -31,30 +31,42 @@ class TestPhase6Analytics(unittest.TestCase):
             cursor.execute("DELETE FROM bet_items WHERE bet_id IN (SELECT id FROM user_bets WHERE user_id >= 778000)")
             cursor.execute("DELETE FROM user_bets WHERE user_id >= 778000")
             cursor.execute("DELETE FROM user_wallets WHERE user_id >= 778000")
+            cursor.execute("DELETE FROM user_progression WHERE user_id >= 778000")
+            cursor.execute("DELETE FROM user_achievements WHERE user_id >= 778000")
+            cursor.execute("DELETE FROM user_quests WHERE user_id >= 778000")
             cursor.execute("DELETE FROM favorites WHERE user_id >= 778000")
+            cursor.execute("DELETE FROM division_admins WHERE user_id >= 778000")
+            cursor.execute("DELETE FROM admin_audit_log WHERE admin_id >= 778000")
+            cursor.execute("DELETE FROM bet_items WHERE match_id >= 99400 OR match_id IN (SELECT id FROM matches WHERE player1_id >= 778000 OR player2_id >= 778000)")
+            cursor.execute("DELETE FROM odds_movement WHERE match_id >= 99400 OR match_id IN (SELECT id FROM matches WHERE player1_id >= 778000 OR player2_id >= 778000)")
+            cursor.execute("DELETE FROM live_match_states WHERE match_id >= 99400 OR match_id IN (SELECT id FROM matches WHERE player1_id >= 778000 OR player2_id >= 778000)")
+            cursor.execute("DELETE FROM match_events WHERE match_id >= 99400 OR match_id IN (SELECT id FROM matches WHERE player1_id >= 778000 OR player2_id >= 778000)")
+            cursor.execute("DELETE FROM market_selections WHERE market_id IN (SELECT id FROM markets WHERE match_id >= 99400 OR match_id IN (SELECT id FROM matches WHERE player1_id >= 778000 OR player2_id >= 778000))")
+            cursor.execute("DELETE FROM markets WHERE match_id >= 99400 OR match_id IN (SELECT id FROM matches WHERE player1_id >= 778000 OR player2_id >= 778000)")
+            cursor.execute("DELETE FROM bet_markets WHERE match_id >= 99400 OR match_id IN (SELECT id FROM matches WHERE player1_id >= 778000 OR player2_id >= 778000)")
+            cursor.execute("DELETE FROM matches WHERE id >= 99400 OR player1_id >= 778000 OR player2_id >= 778000")
+            cursor.execute("DELETE FROM rounds WHERE round_number = 8 AND division_id IN (1, 2)")
             cursor.execute("DELETE FROM users WHERE telegram_id >= 778000")
-            cursor.execute("DELETE FROM markets WHERE match_id >= 99400")
-            cursor.execute("DELETE FROM matches WHERE id >= 99400")
 
             # Seed test users in different divisions
             # User 1: Division 1 (Active bettor)
             cursor.execute("""
                 INSERT INTO users (telegram_id, username, division_id, team_name)
-                VALUES (778001, 'capper_one', 1, 'Порту')
+                VALUES (778001, 'capper_one', 1, 'ТестПорту')
             """)
             cursor.execute("INSERT INTO user_wallets (user_id, balance, total_wagered, total_won) VALUES (778001, 5000, 0, 0)")
 
             # User 2: Division 1 (1-bet fluke with 100% ROI)
             cursor.execute("""
                 INSERT INTO users (telegram_id, username, division_id, team_name)
-                VALUES (778002, 'fluke_bettor', 1, 'Бенфика')
+                VALUES (778002, 'fluke_bettor', 1, 'ТестБенфика')
             """)
             cursor.execute("INSERT INTO user_wallets (user_id, balance, total_wagered, total_won) VALUES (778002, 1000, 0, 0)")
 
             # User 3: Division 2 (Division isolation test)
             cursor.execute("""
                 INSERT INTO users (telegram_id, username, division_id, team_name)
-                VALUES (778003, 'div2_bettor', 2, 'Аякс')
+                VALUES (778003, 'div2_bettor', 2, 'ТестАякс')
             """)
             cursor.execute("INSERT INTO user_wallets (user_id, balance, total_wagered, total_won) VALUES (778003, 2000, 0, 0)")
 
@@ -66,14 +78,17 @@ class TestPhase6Analytics(unittest.TestCase):
             cursor.execute("INSERT INTO user_wallets (user_id, balance, total_wagered, total_won) VALUES (778004, 500, 0, 0)")
 
             # Seed test matches
+            cursor.execute("INSERT OR REPLACE INTO rounds (round_number, division_id, season_id, is_open, bets_open) VALUES (8, 1, 1, 0, 1)")
+            cursor.execute("INSERT OR REPLACE INTO rounds (round_number, division_id, season_id, is_open, bets_open) VALUES (8, 2, 1, 0, 1)")
+
             cursor.execute("""
                 INSERT INTO matches (
                     id, season_id, division_id, round_number,
                     player1_team, player2_team, status, player1_score, player2_score
                 ) VALUES
-                (99401, 1, 1, 8, 'Порту', 'Спортинг', 'open', 0, 0),
-                (99402, 1, 1, 8, 'Бенфика', 'Брага', 'live', 1, 0),
-                (99403, 1, 2, 8, 'Аякс', 'Фейеноорд', 'open', 0, 0)
+                (99401, 1, 1, 8, 'ТестПорту', 'Спортинг', 'open', 0, 0),
+                (99402, 1, 1, 8, 'ТестБенфика', 'Брага', 'live', 1, 0),
+                (99403, 1, 2, 8, 'ТестАякс', 'Фейеноорд', 'open', 0, 0)
             """)
 
             # Seed user 1 bets (6 settled bets: 4 won, 1 lost, 1 voided)
@@ -210,10 +225,10 @@ class TestPhase6Analytics(unittest.TestCase):
         """Recommendations provide clear reasoning matching user's favorite club / division."""
         recs = get_user_recommendations(778001, limit=5)
         self.assertGreaterEqual(len(recs), 1)
-        # Top recommendation should match user's team 'Порту'
+        # Top recommendation should match user's team 'ТестПорту'
         top_rec = recs[0]
         self.assertEqual(top_rec["match_id"], 99401)
-        self.assertIn("Порту", top_rec["reason"])
+        self.assertIn("тестпорту", top_rec["reason"].lower())
 
 
 if __name__ == "__main__":
