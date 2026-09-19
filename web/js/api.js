@@ -42,9 +42,20 @@ class ApiClient {
           ...options,
           headers
         });
-        const data = await res.json();
-        if (!res.ok) {
-          const err = new Error(data.message || data.error || 'Ошибка запроса к серверу');
+        // Прокси (502/504) и необработанные ошибки aiohttp отдают HTML или текст,
+        // а не JSON — без этого пользователь видел «Unexpected token <».
+        let data;
+        try {
+          data = await res.json();
+        } catch (_) {
+          data = null;
+        }
+        if (!res.ok || !data || typeof data !== 'object') {
+          data = data && typeof data === 'object' ? data : {};
+          const fallback = res.ok
+            ? 'Сервер вернул некорректный ответ'
+            : `Ошибка сервера (${res.status})`;
+          const err = new Error(data.message || data.error || fallback);
           err.status = res.status;
           err.data = data;
           err.code = data.error;
@@ -66,6 +77,10 @@ class ApiClient {
         }
         if (isGet) {
           this.cache.set(cacheKey, { data, timestamp: Date.now() });
+        } else {
+          // Ставка, кэшаут, отчёт о матче меняют баланс и списки — иначе
+          // следующий GET в течение 5 с вернул бы состояние до изменения.
+          this.cache.clear();
         }
         return data;
       } catch (err) {

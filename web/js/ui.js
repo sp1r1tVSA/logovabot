@@ -1320,7 +1320,7 @@ export class UIRenderer {
               const outcomeRaw = it.outcome_type || '';
               const outcomeName = OUTCOME_NAMES[outcomeRaw] || it.selection_name || outcomeRaw.toUpperCase();
 
-              const hasFinishedScore = it.match_status === 'finished' || (it.player1_score !== null && it.player1_score !== undefined && !isPending);
+              const hasFinishedScore = ['confirmed', 'completed', 'finished'].includes(it.match_status) || (it.player1_score !== null && it.player1_score !== undefined && !isPending);
               const isMatchLive = it.match_status === 'live';
               const isLast = idx === items.length - 1;
 
@@ -1463,7 +1463,7 @@ export class UIRenderer {
       ${savedCoupons.map(sc => `
         <div class="saved-coupon-card">
           <div>
-            <div style="font-weight: 800; color: #fff; font-size: 0.88rem;">${sc.name || 'Купон'}</div>
+            <div style="font-weight: 800; color: #fff; font-size: 0.88rem;">${escapeHtml(sc.name || 'Купон')}</div>
             <div style="font-size: 0.75rem; color: var(--text-muted);">
               ${sc.selections?.length || 0} событий | Кэф: ${(sc.total_odd || 1.0).toFixed(2)}
             </div>
@@ -1483,7 +1483,10 @@ export class UIRenderer {
       const uName = user.username ? `@${user.username}` : (user.first_name || 'Каппер');
       const tgUser = tgBridge.getUser();
       const photoUrl = user.photo_url || tgUser?.photo_url || null;
-      const initial = (user.username || user.first_name || 'K').replace('@', '').charAt(0).toUpperCase();
+      // Первая буква имени из Telegram вставляется и в onerror-атрибут: кавычка
+      // или «<» в ней ломали разметку, поэтому только буквы и цифры.
+      const rawInitial = (user.username || user.first_name || 'K').replace('@', '').charAt(0).toUpperCase();
+      const initial = /^[\p{L}\p{N}]$/u.test(rawInitial) ? rawInitial : 'K';
 
       const avatarHtml = photoUrl 
         ? `<img src="${photoUrl}" alt="Avatar" class="user-profile-avatar-img" onerror="this.outerHTML='<div class=\\'user-profile-avatar-fallback\\'>${initial}</div>'" />`
@@ -1496,7 +1499,7 @@ export class UIRenderer {
           </div>
           <div>
             <div style="font-family: 'Outfit', sans-serif; font-size: 1.25rem; font-weight: 900; color: #fff;">
-              ${uName}
+              ${escapeHtml(uName)}
             </div>
             <div style="font-size: 0.82rem; color: var(--accent-gold); font-weight: 700; margin-top: 2px;">
               ${progression?.equipped_title || 'Каппер Лиги'} • Уровень ${progression?.level || 1}
@@ -1885,7 +1888,7 @@ export class UIRenderer {
       podiumEl.innerHTML = top3.map((p, idx) => `
         <div class="podium-col rank-${idx + 1}" style="text-align: center; flex: 1;">
           <div style="font-size: 1.8rem; margin-bottom: 4px;">${idx === 0 ? '🥇' : idx === 1 ? '🥈' : '🥉'}</div>
-          <div style="font-weight: 800; font-size: 0.85rem; color: #fff;">${p.username || 'Игрок'}</div>
+          <div style="font-weight: 800; font-size: 0.85rem; color: #fff;">${escapeHtml(p.username || 'Игрок')}</div>
           <div style="font-size: 0.78rem; color: var(--accent-gold); font-weight: 800;">${this.formatNumber(p.balance)} 🪙</div>
         </div>
       `).join('');
@@ -1896,7 +1899,7 @@ export class UIRenderer {
         <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 4px; border-bottom: 1px solid rgba(255,255,255,0.05); font-size: 0.85rem;">
           <div style="display: flex; align-items: center; gap: 8px;">
             <span style="font-weight: 800; color: var(--text-muted); width: 22px;">#${idx + 4}</span>
-            <span style="font-weight: 700; color: #fff;">${p.username || 'Игрок'}</span>
+            <span style="font-weight: 700; color: #fff;">${escapeHtml(p.username || 'Игрок')}</span>
           </div>
           <div style="font-weight: 800; color: var(--accent-gold);">${this.formatNumber(p.balance)} 🪙</div>
         </div>

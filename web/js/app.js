@@ -6,7 +6,7 @@
 import { api } from './api.js';
 import { store } from './store.js';
 import { tgBridge } from './tg.js';
-import { UIRenderer } from './ui.js';
+import { UIRenderer, escapeHtml } from './ui.js';
 import { ParticleEffects } from './effects.js';
 
 class AppController {
@@ -376,7 +376,7 @@ class AppController {
     } catch (err) {
       const content = document.getElementById('match-protocol-content');
       if (content) {
-        content.innerHTML = `<div style="text-align: center; padding: 24px; color: var(--color-danger);">${err.message || 'Ошибка сети при загрузке протокола'}</div>`;
+        content.innerHTML = `<div style="text-align: center; padding: 24px; color: var(--color-danger);">${escapeHtml(err.message || 'Ошибка сети при загрузке протокола')}</div>`;
       }
     }
   }
@@ -554,7 +554,7 @@ class AppController {
             if (data.status === 'ok') {
               UIRenderer.renderMatchMarketsModal(mId, data.markets, `${data.team1_name} — ${data.team2_name}`);
             } else {
-              if (listEl) listEl.innerHTML = `<div style="text-align: center; padding: 24px; color: var(--accent-red);">${data.message || 'Рынки временно недоступны'}</div>`;
+              if (listEl) listEl.innerHTML = `<div style="text-align: center; padding: 24px; color: var(--accent-red);">${escapeHtml(data.message || 'Рынки временно недоступны')}</div>`;
             }
           } catch (err) {
             console.error("Could not load markets:", err);
