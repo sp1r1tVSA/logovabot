@@ -410,12 +410,8 @@ class RiskEngine:
                 )
 
             # 8b. User Open Exposure Limit Check (LB-03)
-            cursor.execute("""
-                SELECT COALESCE(SUM(potential_win), 0) as user_open_exposure
-                FROM user_bets
-                WHERE user_id = ? AND status = 'pending'
-            """, (user_id,))
-            user_open_expo = int(cursor.fetchone()["user_open_exposure"])
+            # Ставки, принятые до потолка 10 000 (legacy_limits = 1), лимит не занимают.
+            user_open_expo = database.get_user_open_exposure(user_id, cursor=cursor)
             if user_open_expo + potential_win > limits["max_open_exposure"]:
                 remaining_expo = max(0, limits["max_open_exposure"] - user_open_expo)
                 max_allowed_stake = int(remaining_expo / max(1.01, total_odd))

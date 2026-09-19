@@ -653,6 +653,11 @@ body.coupon-open {
   color: var(--color-success);
   text-shadow: 0 0 12px rgba(16, 185, 129, 0.35);
 }
+.coupon-totals-row.limit span,
+.coupon-totals-row.limit b {
+  font-size: 0.78rem;
+  color: var(--text-secondary, #9ca3af);
+}
 .coupon-warning {
   margin-top: 10px;
   padding: 9px 12px;

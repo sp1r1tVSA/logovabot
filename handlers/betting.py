@@ -14,6 +14,7 @@ from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler
 
 from handlers.base import is_admin
 import database
+from services.betting_limits import DEFAULT_MAX_PAYOUT
 from services.betting_engine import generate_round_markets
 
 logger = logging.getLogger(__name__)
@@ -467,7 +468,9 @@ async def cb_bet_place_amount(update: Update, context: ContextTypes.DEFAULT_TYPE
                 elif err_code == "MAX_BET_EXCEEDED":
                     err_msg = f"Превышена максимальная сумма ставки ({res.get('max_bet', 50000):,} 🪙)!"
                 elif err_code == "MAX_PAYOUT_EXCEEDED":
-                    err_msg = f"Превышена максимальная выплата ({res.get('max_payout', 500000):,} 🪙)!"
+                    err_msg = f"Максимальный выигрыш с купона — {res.get('max_payout', DEFAULT_MAX_PAYOUT):,} 🪙."
+                    if res.get("max_allowed_stake"):
+                        err_msg += f" Макс. ставка при этом кэфе: {res['max_allowed_stake']:,} 🪙."
                 else:
                     err_msg = res.get("message", err_code)
             await query.answer(f"❌ {err_msg}", show_alert=True)

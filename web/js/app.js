@@ -819,6 +819,7 @@ class AppController {
                 const res = await api.placePrediction(amt, [item], key);
                 if (res.status === 'ok') {
                   placed.push({ id: res.bet_id, amt, win: Math.round(amt * item.odd) });
+                  store.addOpenExposure(Math.round(amt * item.odd));
                   if (res.new_balance !== undefined) {
                     store.setUser({ ...store.state.user, balance: res.new_balance });
                   }
@@ -855,6 +856,7 @@ class AppController {
             const res = await api.placePrediction(amt, slip, idempotencyKey);
             if (res.status === 'ok') {
               store.setUser({ ...store.state.user, balance: res.new_balance });
+              store.addOpenExposure(Math.round(amt * totalOdd));
               store.clearSlip();
               refreshBets();
               this.showBetAccepted({

@@ -1607,7 +1607,7 @@ export class UIRenderer {
     const totalOdd = store.getTotalOdd();
     const totalStake = store.getTotalStake();
     const potentialWin = store.getPotentialWin();
-    const { min_bet } = store.getBetLimits();
+    const { min_bet, max_payout, max_open_exposure } = store.getBetLimits();
     const balance = Math.floor(store.state.user?.balance || 0);
     const fmt = (n) => this.formatNumber(n);
     const setText = (id, text) => {
@@ -1701,13 +1701,24 @@ export class UIRenderer {
     setText('coupon-summary-odd', batchSingles ? String(count) : totalOdd.toFixed(2));
     setText('coupon-summary-stake', `${fmt(totalStake)} 🪙`);
     setText('slip-forecast-val', `${fmt(potentialWin)} 🪙`);
+    setText('coupon-summary-max-label', `Макс. ставка (выигрыш до ${fmt(max_payout)})`);
+    setText('coupon-summary-max', `${fmt(store.getMaxStakeByPayout())} 🪙`);
 
     // ─── Validation ───
     let warning = '';
     if (count > 0) {
       const stakes = batchSingles ? slip.map(s => store.getSingleStake(s.match_id)) : [stakeAmount];
+      const odds = batchSingles ? slip.map(s => s.odd) : [totalOdd];
+      const remaining = store.getRemainingExposure();
       if (stakes.some(v => v < min_bet)) warning = `Минимальная ставка — ${fmt(min_bet)} 🪙`;
       else if (totalStake > balance) warning = `Недостаточно средств: нужно ${fmt(totalStake)} 🪙, на балансе ${fmt(balance)} 🪙`;
+      else if (stakes.some((v, i) => Math.round(v * odds[i]) > max_payout)) {
+        warning = `Выигрыш с одной ставки — не больше ${fmt(max_payout)} 🪙. Макс. ставка при этом кэфе: ${fmt(store.getMaxStakeByPayout())} 🪙`;
+      } else if (potentialWin > remaining) {
+        warning = remaining < Math.round(min_bet * Math.min(...odds))
+          ? `Лимит открытых ставок (${fmt(max_open_exposure)} 🪙 выигрыша) исчерпан — дождитесь расчёта`
+          : `Лимит открытых ставок: осталось ${fmt(remaining)} 🪙 выигрыша. Макс. ставка: ${fmt(store.getMaxStake())} 🪙`;
+      }
     }
     setText('coupon-warning', warning);
 

@@ -377,23 +377,55 @@ class StateStore {
     return {
       min_bet: l.min_bet || 10,
       max_bet: l.max_bet || 50000,
-      max_payout: l.max_payout || 500000
+      max_payout: l.max_payout || 10000,
+      max_open_exposure: l.max_open_exposure || 20000,
+      open_exposure: l.open_exposure || 0
     };
+  }
+
+  /** Potential win still available under the open-bets limit. */
+  getRemainingExposure() {
+    const { max_open_exposure, open_exposure } = this.getBetLimits();
+    return Math.max(0, max_open_exposure - open_exposure);
+  }
+
+  /**
+   * A freshly placed bet takes its potential win out of the open-bets limit.
+   * Bootstrap refreshes the exact figure; this keeps the coupon honest until then.
+   */
+  addOpenExposure(win) {
+    const user = this.state.user;
+    if (!user) return;
+    const l = user.bet_limits || {};
+    this.setUser({ ...user, bet_limits: { ...l, open_exposure: (l.open_exposure || 0) + Math.max(0, win || 0) } });
+  }
+
+  /**
+   * Largest stake the payout cap alone allows at the coupon's odds
+   * (the tightest single for a batch of singles).
+   */
+  getMaxStakeByPayout() {
+    const slip = this.state.slip;
+    const { max_payout } = this.getBetLimits();
+    const odds = this.isBatchSingles() ? slip.map(s => s.odd) : [this.getTotalOdd()];
+    return Math.min(...odds.map(o => Math.floor(max_payout / Math.max(1, o || 1))));
   }
 
   /**
    * Largest per-bet stake the rules allow right now: capped by the balance
-   * (split across the batch for singles), the max bet, and the max payout
-   * at the coupon's odds. The server re-checks all of it on placement.
+   * (split across the batch for singles), the max bet, the max payout
+   * at the coupon's odds and what is left of the open-bets limit.
+   * The server re-checks all of it on placement.
    */
   getMaxStake() {
     const slip = this.state.slip;
-    const { max_bet, max_payout } = this.getBetLimits();
+    const { max_bet } = this.getBetLimits();
     const balance = Math.max(0, Math.floor(this.state.user?.balance || 0));
     const bets = this.isBatchSingles() ? slip.length : 1;
     const odds = this.isBatchSingles() ? slip.map(s => s.odd) : [this.getTotalOdd()];
-    const byPayout = Math.min(...odds.map(o => Math.floor(max_payout / Math.max(1, o || 1))));
-    return Math.max(0, Math.min(Math.floor(balance / bets), max_bet, byPayout));
+    const remaining = this.getRemainingExposure();
+    const byExposure = Math.min(...odds.map(o => Math.floor(remaining / bets / Math.max(1, o || 1))));
+    return Math.max(0, Math.min(Math.floor(balance / bets), max_bet, this.getMaxStakeByPayout(), byExposure));
   }
 
   isSelectionActive(matchId, outcome) {

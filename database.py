@@ -992,6 +992,22 @@ def init_db() -> None:
         except sqlite3.OperationalError:
             pass  # Column already exists
 
+        # Потолок выигрыша 10 000 / открытых ставок 20 000 действует только для
+        # новых купонов. Всё, что уже лежит в user_bets на момент выкатки, помечается
+        # legacy_limits = 1: такие ставки рассчитываются как раньше и не занимают
+        # лимит открытой ответственности игрока. Новые купоны получают DEFAULT 0.
+        try:
+            cursor.execute("ALTER TABLE user_bets ADD COLUMN legacy_limits INTEGER NOT NULL DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+        cursor.execute("SELECT 1 FROM schema_migrations WHERE version = '014_payout_cap_legacy_bets'")
+        if not cursor.fetchone():
+            cursor.execute("UPDATE user_bets SET legacy_limits = 1")
+            cursor.execute("""
+                INSERT OR IGNORE INTO schema_migrations (version, description)
+                VALUES ('014_payout_cap_legacy_bets', 'Bets placed before the 10k payout cap keep the old limits')
+            """)
+
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS saved_coupons (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -7506,6 +7522,25 @@ def get_active_round_number() -> int:
     return 1
 
 
+def get_user_open_exposure(user_id: int, cursor=None) -> int:
+    """
+    Sum of potential_win over the user's pending bets that count toward the
+    open-exposure limit. Bets placed before the 10k payout cap
+    (legacy_limits = 1) keep the old rules and are left out.
+    """
+    sql = """
+        SELECT COALESCE(SUM(potential_win), 0) AS open_exposure
+        FROM user_bets
+        WHERE user_id = ? AND status = 'pending' AND COALESCE(legacy_limits, 0) = 0
+    """
+    if cursor is not None:
+        cursor.execute(sql, (user_id,))
+        return int(cursor.fetchone()["open_exposure"])
+    with transaction() as conn:
+        row = conn.execute(sql, (user_id,)).fetchone()
+        return int(row["open_exposure"])
+
+
 def get_or_create_wallet(user_id: int) -> dict:
     """Get user's betting wallet or initialize a new one with INITIAL_WALLET_BALANCE coins."""
     with transaction() as conn:
@@ -7876,7 +7911,7 @@ def get_bet_market_by_match_id(match_id: int) -> dict | None:
 
 # Phase 5: Bet limits (server-side, cannot be bypassed by client)
 _MAX_BET: int = 50_000
-_MAX_PAYOUT: int = 500_000
+_MAX_PAYOUT: int = 10_000
 # Длина экспресса: от 2 до 5 событий. Один исход — это ординар.
 MIN_EXPRESS_EVENTS: int = 2
 MAX_EXPRESS_EVENTS: int = 5
@@ -8145,8 +8180,14 @@ def place_user_bet(
                 return False, {"error": "MAX_BET_EXCEEDED", "max_bet": _MAX_BET,
                                "message": f"Максимальная сумма ставки — {_MAX_BET:,} 🪙."}
             if risk_decision.reason == "MAX_PAYOUT":
-                return False, {"error": "MAX_PAYOUT_EXCEEDED", "max_payout": _MAX_PAYOUT,
-                               "message": f"Потенциальный выигрыш превышает максимум {_MAX_PAYOUT:,} 🪙."}
+                details = risk_decision.details or {}
+                err = {"error": "MAX_PAYOUT_EXCEEDED",
+                       "max_payout": details.get("max_payout", _MAX_PAYOUT),
+                       "message": risk_decision.message
+                       or f"Потенциальный выигрыш превышает максимум {_MAX_PAYOUT:,} 🪙."}
+                if risk_decision.max_allowed_stake is not None:
+                    err["max_allowed_stake"] = risk_decision.max_allowed_stake
+                return False, err
             if risk_decision.reason == "INSUFFICIENT_BALANCE":
                 wallet = get_or_create_wallet(user_id)
                 return False, f"Недостаточно монет на балансе (Баланс: {wallet['balance']} 🪙)."
@@ -8295,8 +8336,11 @@ def place_user_bet(
 
         # Phase 5: MAX_PAYOUT check
         if potential_win > _MAX_PAYOUT:
+            max_allowed = int(_MAX_PAYOUT / max(1.01, total_odd))
             return False, {"error": "MAX_PAYOUT_EXCEEDED", "max_payout": _MAX_PAYOUT,
-                           "message": f"Потенциальный выигрыш {potential_win:,} превышает максимум {_MAX_PAYOUT:,} 🪙."}
+                           "max_allowed_stake": max_allowed,
+                           "message": f"Потенциальный выигрыш {potential_win:,} превышает максимум {_MAX_PAYOUT:,} 🪙. "
+                                      f"Максимальная ставка при этом кэфе: {max_allowed:,} 🪙."}
 
         # 1. Deduct coins with strict balance check
         # 1. Insert user_bet with idempotency check (Phase 5: includes idempotency_payload_hash)

@@ -134,7 +134,7 @@ class TestAuditSprint2(unittest.TestCase):
     # ─── LB-03: Open Exposure Limits ───────────────────────────────────────────
     def test_03_max_user_open_exposure_enforced(self):
         """LB-03: User whose pending bets reach MAX_OPEN_EXPOSURE is rejected."""
-        # Default user open exposure is 200,000. Set custom 50,000 for test.
+        # Default user open exposure is 20,000. Set custom 50,000 for test.
         BettingLimitsService.set_limit("user", self.user_id, "max_open_exposure", 50_000)
 
         # Pending bet with potential win 45,000
@@ -155,20 +155,21 @@ class TestAuditSprint2(unittest.TestCase):
     # ─── LB-05: Server-Authoritative Market Exposure Without Market ID ─────────
     def test_04_market_net_exposure_enforced_even_if_client_omits_market_id(self):
         """LB-05: Market net exposure check triggers even if client omits market_id from selection payload."""
-        # Set market exposure limit to 10,000
+        # Set market exposure limit to 5,000 (below the 10,000 payout cap,
+        # so the market limit is what trips)
         BettingLimitsService.set_division_limits(
             division_id=self.division_id,
-            limits={"market_exposure_limit": 10_000},
+            limits={"market_exposure_limit": 5_000},
             updated_by=999
         )
 
         # Client submits payload WITHOUT market_id or selection_id
         # Server resolves market_id from database and checks server odds (2.00)
-        # Stake 6,000 * 2.00 = 12,000 > 10,000 market exposure limit
+        # Stake 3,000 * 2.00 = 6,000 > 5,000 market exposure limit
         slip = [{"match_id": self.match_id, "outcome": "p1"}]
         decision = RiskEngine.evaluate_bet(
             user_id=self.user_id,
-            amount=6000,
+            amount=3000,
             selections=slip,
             division_id=self.division_id
         )

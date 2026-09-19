@@ -237,7 +237,7 @@ class TestBetLimits(Phase5TestBase):
         self.assertEqual(result.get("error"), "MAX_BET_EXCEEDED")
 
     def test_11_max_payout_rejected(self):
-        """MAX_PAYOUT rejection (potential_win > 500000)."""
+        """MAX_PAYOUT rejection (potential_win > 10000)."""
         with database.transaction() as conn:
             conn.cursor().execute(
                 "UPDATE user_wallets SET balance = 1000000 WHERE user_id = ?",
