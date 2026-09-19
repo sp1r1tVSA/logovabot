@@ -807,7 +807,9 @@ def _register_admin_handlers(app: Application) -> None:
     app.add_handler(CallbackQueryHandler(admin_squads_remind_cb, pattern=r"^admin_squads_remind:\d+$"))
 
     # 🎰 Super-Admin Bets Monitoring & Tracking (Private Chat Only)
-    app.add_handler(CommandHandler(["admin_bets", "all_bets", "track_bets", "ставки_админ"], cmd_admin_bets))
+    app.add_handler(CommandHandler(["admin_bets", "all_bets", "track_bets"], cmd_admin_bets))
+    # CommandHandler принимает только [a-z0-9_] — кириллический алиас ловим regex-ом, как /составы
+    app.add_handler(MessageHandler(filters.Regex(r"^/ставки_админ(?:@\w+)?(?:\s+.*)?$"), cmd_admin_bets))
     app.add_handler(CallbackQueryHandler(cmd_admin_bets, pattern="^admin_bets_hub$"))
     app.add_handler(CallbackQueryHandler(cb_admin_bets_navigate, pattern=r"^admin_bets_(page|flt|refresh):"))
     app.add_handler(CallbackQueryHandler(cb_admin_bets_toggle_alerts, pattern=r"^admin_bets_alerts_toggle:"))
