@@ -187,7 +187,14 @@ async def safe_query_answer(query, text: str | None = None, show_alert: bool = F
 async def safe_send_notification(bot, chat_id: int, text: str, reply_markup=None, parse_mode: str = "HTML") -> bool:
     """
     Safely send messages with Telegram rate limit (RetryAfter), Forbidden, and UserDeactivated handling.
+
+    Personal messages only: a non-positive chat_id is a pre-registered coach's
+    temporary id (see database.pre_register_player) with no private chat yet, so
+    it is skipped instead of failing with "Chat not found".
     """
+    if chat_id is None or chat_id <= 0:
+        logger.info(f"Skipping personal notification to pre-registered user {chat_id}")
+        return False
     try:
         await bot.send_message(
             chat_id=chat_id,

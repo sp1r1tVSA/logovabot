@@ -5904,10 +5904,7 @@ async def notify_players_rounds_opened(
                 [InlineKeyboardButton("👤 Личный кабинет", callback_data="menu_cabinet")]
             ]
 
-            try:
-                await context.bot.send_message(chat_id=pid, text="\n".join(lines), parse_mode="HTML", reply_markup=InlineKeyboardMarkup(kb))
-            except Exception as e:
-                logger.exception(f"Failed to send multi-match card to player {pid}")
+            await safe_send_notification(context.bot, pid, "\n".join(lines), InlineKeyboardMarkup(kb))
 
 async def send_round_reminders(
     context: ContextTypes.DEFAULT_TYPE, 
