@@ -15,6 +15,11 @@ from telegram.ext import ContextTypes
 import database
 from handlers.base import is_global_admin
 from handlers.cabinet import safe_send_notification
+from services.bet_outcome_text import (
+    FINISHED_MATCH_STATUSES,
+    describe_selection,
+    explain_result,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -35,21 +40,10 @@ ITEM_STATUS_EMOJI = {
     "refunded": "🔄",
 }
 
-OUTCOME_TITLES = {
-    "p1": "П1",
-    "draw": "Ничья",
-    "p2": "П2",
-    "1x": "1X",
-    "12": "12",
-    "x2": "X2",
-    "tb_1_5": "ТБ 1.5",
-    "tm_1_5": "ТМ 1.5",
-    "tb_2_5": "ТБ 2.5",
-    "tm_2_5": "ТМ 2.5",
-    "tb_3_5": "ТБ 3.5",
-    "tm_3_5": "ТМ 3.5",
-    "both_yes": "ОЗ (Да)",
-    "both_no": "ОЗ (Нет)",
+ITEM_RESULT_TITLES = {
+    "won": "✅ зашло",
+    "lost": "❌ не зашло",
+    "refunded": "🔄 возврат",
 }
 
 PAGE_SIZE = 5
@@ -105,45 +99,142 @@ def _build_overview_header(stats: dict, filter_status: str | None = None, filter
     )
 
 
+def _fmt_dt(value) -> str:
+    """'2026-09-19 08:42:11' → '19.09 08:42'. Непонятный формат отдаём как есть."""
+    raw = str(value or "").strip()
+    if len(raw) >= 16 and raw[4] == "-" and raw[7] == "-":
+        return f"{raw[8:10]}.{raw[5:7]} {raw[11:16]}"
+    return raw or "—"
+
+
+def _fmt_coins(n: int) -> str:
+    return f"{int(n):,} 🪙"
+
+
+def _fmt_net(n: int) -> str:
+    if n > 0:
+        return f"🟢 <b>+{n:,} 🪙</b>"
+    if n < 0:
+        return f"🔴 <b>−{abs(n):,} 🪙</b>"
+    return "⚪ <b>0 🪙</b>"
+
+
+def _bet_payout(bet: dict) -> int:
+    """Фактическая выплата; у старых выигрышей actual_payout мог остаться 0."""
+    payout = int(bet.get("actual_payout") or 0)
+    if bet.get("status") == "won" and payout == 0:
+        payout = int(bet.get("potential_win") or 0)
+    return payout
+
+
+def _player_net(bet: dict) -> int | None:
+    """Чистый итог ставки для игрока; None — ставка ещё не рассчитана."""
+    status = bet.get("status")
+    amount = int(bet.get("amount") or 0)
+    if status in ("won", "cashed_out"):
+        return _bet_payout(bet) - amount
+    if status == "lost":
+        return -amount
+    if status in ("refunded", "cancelled"):
+        return 0
+    return None
+
+
+def _money_line(bet: dict) -> str:
+    """Строка «сколько поставил → что получил» в зависимости от статуса."""
+    status = bet.get("status")
+    amount = int(bet.get("amount") or 0)
+    odd = float(bet.get("total_odd") or 1.0)
+    potential = int(bet.get("potential_win") or 0)
+    stake = f"Ставка <code>{_fmt_coins(amount)}</code> × {odd:.2f}"
+
+    if status == "won":
+        return f"{stake} → выплачено <b>{_fmt_coins(_bet_payout(bet))}</b>"
+    if status == "lost":
+        return f"{stake} → не сыграла (могла дать {_fmt_coins(potential)})"
+    if status == "cashed_out":
+        return (f"Ставка <code>{_fmt_coins(amount)}</code> → кэшаут <b>{_fmt_coins(_bet_payout(bet))}</b> "
+                f"(полная выплата была бы {_fmt_coins(potential)})")
+    if status in ("refunded", "cancelled"):
+        return f"Ставка <code>{_fmt_coins(amount)}</code> → возвращена игроку"
+    return f"{stake} → возможный выигрыш <b>{_fmt_coins(potential)}</b>"
+
+
+def _settled_time(bet: dict):
+    if bet.get("status") == "cashed_out":
+        return bet.get("cashout_at") or bet.get("settled_at")
+    return bet.get("settled_at")
+
+
+def _time_line(bet: dict) -> str:
+    line = f"Поставлена {_fmt_dt(bet.get('created_at'))}"
+    settled = _settled_time(bet)
+    if settled:
+        verb = "кэшаут" if bet.get("status") == "cashed_out" else "рассчитана"
+        line += f" · {verb} {_fmt_dt(settled)}"
+    return line
+
+
+def _leg_teams(item: dict) -> tuple[str, str]:
+    return item.get("team1_name") or "Хозяева", item.get("team2_name") or "Гости"
+
+
+def _match_line(item: dict) -> str:
+    """«Кельн 1:3 Айнтрахт», «Кельн — Айнтрахт · не сыгран», «🔴 67' Кельн 1:0 Айнтрахт»."""
+    t1, t2 = (html.escape(t) for t in _leg_teams(item))
+    s1, s2 = item.get("player1_score"), item.get("player2_score")
+    match_status = item.get("match_status")
+    minute = item.get("live_minute")
+
+    if s1 is not None and s2 is not None:
+        score_line = f"<b>{t1} {s1}:{s2} {t2}</b>"
+        if match_status in FINISHED_MATCH_STATUSES:
+            return score_line
+        if minute:
+            return f"🔴 {minute}' {score_line}"
+        return f"{score_line} <i>(счёт на проверке)</i>"
+    if minute:
+        return f"🔴 {minute}' <b>{t1} — {t2}</b>"
+    return f"<b>{t1} — {t2}</b> <i>· не сыгран</i>"
+
+
+def _selection_text(item: dict) -> str:
+    t1, t2 = _leg_teams(item)
+    return html.escape(describe_selection(
+        item.get("outcome_type"), t1, t2,
+        market_key=item.get("market_key"),
+        selection_name=item.get("selection_name"),
+    ))
+
+
 def _format_bet_snippet(bet: dict) -> str:
     """Форматирование одной ставки для ленты."""
-    b_id = bet["id"]
     status = bet["status"]
     status_title = BET_STATUS_TITLES.get(status, status)
-    b_type = "Ординар" if bet.get("bet_type") == "single" else "Экспресс"
-    amount = bet.get("amount", 0)
-    odd = float(bet.get("total_odd") or 1.0)
-    potential_win = bet.get("potential_win", 0)
-    actual_payout = bet.get("actual_payout", 0)
+    items = bet.get("items", [])
+    b_type = "Ординар" if bet.get("bet_type") == "single" else f"Экспресс из {len(items)}"
 
-    # Информация об игроке
     user_name = f"@{bet['username']}" if bet.get("username") else f"ID {bet['user_id']}"
     team_name = bet.get("user_team")
     team_info = f" ({html.escape(team_name)})" if team_name else ""
 
-    created_at = str(bet.get("created_at") or "")[:16]
-
-    win_info = f"Выплата: <b>{actual_payout:,} 🪙</b>" if status in ("won", "cashed_out") else f"Потенц. выигрыш: <b>{potential_win:,} 🪙</b>"
-
     lines = [
-        f"• <b>Ставка #{b_id}</b> ({b_type}) — <b>{status_title}</b>",
+        f"• <b>#{bet['id']}</b> · {b_type} · <b>{status_title}</b>",
         f"  👤 <b>{html.escape(user_name)}</b>{team_info}",
-        f"  💵 <code>{amount:,} 🪙</code> | Кэф: <b>{odd:.2f}</b> | {win_info}",
-        f"  🕒 <i>{created_at}</i>"
     ]
 
-    items = bet.get("items", [])
     for item in items[:3]:
-        t1 = html.escape(item.get("team1_name") or "Команда 1")
-        t2 = html.escape(item.get("team2_name") or "Команда 2")
-        out_code = item.get("outcome_type") or ""
-        out_name = OUTCOME_TITLES.get(out_code, out_code)
-        item_odd = float(item.get("odd") or 1.0)
         item_emoji = ITEM_STATUS_EMOJI.get(item.get("status"), "•")
-        lines.append(f"    {item_emoji} {t1} vs {t2} (<code>{out_name}</code> @{item_odd:.2f})")
-
+        item_odd = float(item.get("odd") or 1.0)
+        lines.append(f"  ⚽ {_match_line(item)}")
+        lines.append(f"     {item_emoji} {_selection_text(item)} · <b>@{item_odd:.2f}</b>")
     if len(items) > 3:
-        lines.append(f"    <i>...и ещё {len(items) - 3} событ.</i>")
+        lines.append(f"     <i>…и ещё {len(items) - 3} событ. — в карточке 🔍</i>")
+
+    lines.append(f"  💵 {_money_line(bet)}")
+    net = _player_net(bet)
+    lines.append(f"  📈 Итог игрока: {_fmt_net(net)}" if net is not None else "  📈 Итог игрока: <i>ждёт расчёта</i>")
+    lines.append(f"  🕒 <i>{_time_line(bet)}</i>")
 
     return "\n".join(lines)
 
@@ -368,6 +459,111 @@ async def cb_admin_bets_toggle_alerts(update: Update, context: ContextTypes.DEFA
     await _render_bets_monitor(update, context, status=status, page=page, user_id_filter=user_id_filter, edit=True)
 
 
+def _format_player_stats(stats: dict) -> list[str]:
+    """Блок «как этот игрок ставит вообще» для карточки ставки."""
+    win_rate = stats.get("win_rate")
+    win_rate_str = f"{win_rate:.1f}%" if win_rate is not None else "—"
+    return [
+        "📊 <b>Игрок в ставках (за всё время):</b>",
+        f"• Ставок: <b>{stats['total_bets']:,}</b> (⏳ в игре: {stats['count_pending']:,} на {_fmt_coins(stats['pending_amount'])})",
+        f"• ✅ {stats['count_won']:,} · ❌ {stats['count_lost']:,} · 💵 кэшаутов {stats['count_cashed_out']:,} · 🔄 возвратов {stats['count_refunded']:,}",
+        f"• Процент побед: <b>{win_rate_str}</b>",
+        f"• Поставлено: {_fmt_coins(stats['total_wagered'])} · получено: {_fmt_coins(stats['total_paid_out'])}",
+        f"• Итог по рассчитанным ставкам: {_fmt_net(int(stats['net_profit']))}",
+    ]
+
+
+def _format_cashout_block(bet: dict) -> list[str]:
+    """Сколько игрок забрал кэшаутом и чем в итоге обернулся бы купон."""
+    payout = _bet_payout(bet)
+    potential = int(bet.get("potential_win") or 0)
+    lines = [
+        "💵 <b>Кэшаут:</b>",
+        f"• Забрал: <b>{_fmt_coins(payout)}</b> из {_fmt_coins(potential)} возможных",
+    ]
+    leg_statuses = [it.get("status") for it in bet.get("items", [])]
+    if leg_statuses and "lost" in leg_statuses:
+        lines.append(f"• Купон в итоге <b>не сыграл</b> — кэшаут спас игроку {_fmt_coins(payout)}")
+    elif leg_statuses and all(s in ("won", "refunded") for s in leg_statuses):
+        lines.append(f"• Купон в итоге <b>сыграл</b> — игрок недополучил {_fmt_coins(max(potential - payout, 0))}")
+    else:
+        lines.append(f"• Если купон сыграет, недополучит {_fmt_coins(max(potential - payout, 0))}")
+    return lines
+
+
+def _format_bet_card(bet: dict, player_stats: dict) -> str:
+    """Подробная карточка одной ставки."""
+    bet_id = bet["id"]
+    status = bet["status"]
+    items = bet.get("items", [])
+    b_type = "Ординар" if bet.get("bet_type") == "single" else f"Экспресс из {len(items)} событий"
+    amount = int(bet.get("amount") or 0)
+    odd = float(bet.get("total_odd") or 1.0)
+    potential_win = int(bet.get("potential_win") or 0)
+
+    u_name = f"@{bet['username']}" if bet.get("username") else f"ID {bet['user_id']}"
+    club = html.escape(bet.get("user_team") or "—")
+    league = bet.get("user_league")
+    league_part = f" · Лига: {html.escape(league)}" if league else ""
+    wallet_bal = int(bet.get("user_wallet_balance") or 0)
+
+    lines = [
+        f"🔍 <b>КАРТОЧКА СТАВКИ #{bet_id}</b>",
+        "──────────────────────────────",
+        f"👤 <b>Игрок:</b> {html.escape(u_name)} (ID: <code>{bet['user_id']}</code>)",
+        f"🛡 <b>Клуб:</b> {club}{league_part}",
+        f"🪙 <b>Баланс сейчас:</b> <code>{_fmt_coins(wallet_bal)}</code>",
+        "",
+        *_format_player_stats(player_stats),
+        "──────────────────────────────",
+        f"📋 <b>Тип:</b> {b_type}",
+        f"📌 <b>Статус:</b> <b>{BET_STATUS_TITLES.get(status, status)}</b>",
+        f"💵 <b>Сумма ставки:</b> <code>{_fmt_coins(amount)}</code>",
+        f"📊 <b>Коэффициент:</b> <b>{odd:.2f}</b>",
+        f"🎯 <b>Возможный выигрыш:</b> <code>{_fmt_coins(potential_win)}</code>",
+    ]
+    if status in ("won", "cashed_out"):
+        lines.append(f"💰 <b>Выплачено:</b> <code>{_fmt_coins(_bet_payout(bet))}</code>")
+    net = _player_net(bet)
+    lines.append(f"📈 <b>Итог для игрока:</b> {_fmt_net(net)}" if net is not None else "📈 <b>Итог для игрока:</b> <i>ждёт расчёта</i>")
+    lines.append(f"🕒 <b>Поставлена:</b> {_fmt_dt(bet.get('created_at'))}")
+    settled = _settled_time(bet)
+    if settled:
+        label = "Кэшаут сделан" if status == "cashed_out" else "Рассчитана"
+        lines.append(f"🏁 <b>{label}:</b> {_fmt_dt(settled)}")
+
+    if status == "cashed_out":
+        lines.append("")
+        lines.extend(_format_cashout_block(bet))
+
+    lines.append("\n⚽ <b>События в купоне:</b>")
+    for idx, it in enumerate(items, 1):
+        t1, t2 = _leg_teams(it)
+        it_status = it.get("status", "pending")
+        it_emoji = ITEM_STATUS_EMOJI.get(it_status, "•")
+        it_odd = float(it.get("odd") or 1.0)
+        div_name = it.get("division_name") or "Дивизион не указан"
+
+        leg = [
+            f"{idx}. {it_emoji} {_match_line(it)}",
+            f"   🏆 {html.escape(div_name)} · Тур {it.get('tour', 1)}",
+            f"   🎯 Выбор: <b>{_selection_text(it)}</b> · @<b>{it_odd:.2f}</b>",
+        ]
+        reason = explain_result(
+            it.get("outcome_type"), t1, t2,
+            it.get("player1_score"), it.get("player2_score"),
+            market_key=it.get("market_key"),
+            ht_score1=it.get("ht_score1"), ht_score2=it.get("ht_score2"),
+        )
+        if reason:
+            verdict = ITEM_RESULT_TITLES.get(it_status)
+            suffix = f" → {verdict}" if verdict else ""
+            leg.append(f"   🧾 <i>{html.escape(reason)}</i>{suffix}")
+        lines.append("\n".join(leg))
+
+    return "\n".join(lines)
+
+
 async def cb_admin_bet_detail(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Отображение подробной карточки конкретной ставки."""
     query = update.callback_query
@@ -392,69 +588,12 @@ async def cb_admin_bet_detail(update: Update, context: ContextTypes.DEFAULT_TYPE
         await query.answer("Ставка не найдена.", show_alert=True)
         return
 
-    status = bet["status"]
-    status_title = BET_STATUS_TITLES.get(status, status)
-    b_type = "Ординар" if bet.get("bet_type") == "single" else "Экспресс"
-    amount = bet.get("amount", 0)
-    odd = float(bet.get("total_odd") or 1.0)
-    potential_win = bet.get("potential_win", 0)
-    actual_payout = bet.get("actual_payout", 0)
-    created_at = bet.get("created_at")
-    settled_at = bet.get("settled_at")
-
-    u_name = f"@{bet['username']}" if bet.get("username") else f"ID {bet['user_id']}"
-    team_name = bet.get("user_team") or "—"
-    league_name = bet.get("user_league") or "—"
-    wallet_bal = bet.get("user_wallet_balance", 0)
-
-    lines = [
-        f"🔍 <b>КАРТОЧКА СТАВКИ #{bet_id}</b>",
-        f"──────────────────────────────",
-        f"👤 <b>Игрок:</b> {html.escape(u_name)} (ID: <code>{bet['user_id']}</code>)",
-        f"🛡 <b>Клуб:</b> {html.escape(team_name)} | Лиforeground/Лига: {html.escape(league_name)}",
-        f"🪙 <b>Текущий баланс игрока:</b> <code>{wallet_bal:,} 🪙</code>",
-        f"──────────────────────────────",
-        f"📋 <b>Тип:</b> {b_type}",
-        f"💵 <b>Сумма ставки:</b> <code>{amount:,} 🪙</code>",
-        f"📊 <b>Общий коэффициент:</b> <b>{odd:.2f}</b>",
-        f"🎯 <b>Потенциальный выигрыш:</b> <code>{potential_win:,} 🪙</code>",
-        f"💰 <b>Фактическая выплата:</b> <code>{actual_payout:,} 🪙</code>",
-        f"📌 <b>Статус:</b> <b>{status_title}</b>",
-        f"🕒 <b>Создана:</b> {created_at}",
-    ]
-    if settled_at:
-        lines.append(f"🏁 <b>Рассчитана:</b> {settled_at}")
-
-    lines.append("\n⚽ <b>События в купоне:</b>")
-    items = bet.get("items", [])
-    for idx, it in enumerate(items, 1):
-        t1 = html.escape(it.get("team1_name") or "Хозяева")
-        t2 = html.escape(it.get("team2_name") or "Гости")
-        m_tour = it.get("tour", 1)
-        div_name = it.get("division_name") or f"Дивизион #{it.get('division_id', 1)}"
-        out_code = it.get("outcome_type") or ""
-        out_name = OUTCOME_TITLES.get(out_code, out_code)
-        m_name = it.get("market_name") or "1X2"
-        it_odd = float(it.get("odd") or 1.0)
-        it_status = it.get("status", "pending")
-        it_emoji = ITEM_STATUS_EMOJI.get(it_status, "•")
-
-        score_info = ""
-        s1, s2 = it.get("player1_score"), it.get("player2_score")
-        if s1 is not None and s2 is not None:
-            score_info = f" [Счёт: {s1}:{s2}]"
-
-        lines.append(
-            f"{idx}. {it_emoji} <b>{t1} vs {t2}</b>{score_info}\n"
-            f"   🏆 {html.escape(div_name)} | Тур {m_tour}\n"
-            f"   Рынок: <i>{html.escape(m_name)}</i> -> Выбор: <b>{out_name}</b> (@<b>{it_odd:.2f}</b>)"
-        )
-
-    text = "\n".join(lines)
+    player_stats = await asyncio.to_thread(database.get_user_bet_summary, bet["user_id"])
+    text = _format_bet_card(bet, player_stats)
 
     kb = []
     # Если ставка в игре, суперадмин может ее аннулировать (Void)
-    if status == "pending":
+    if bet["status"] == "pending":
         kb.append([InlineKeyboardButton("⚠️ Аннулировать ставку (Void / Возврат)", callback_data=f"admin_bet_void_ask:{bet_id}")])
 
     kb.append([
@@ -575,12 +714,9 @@ async def notify_super_admins_new_bet(bot=None, bet_id: int = 0) -> None:
             "⚽ <b>События:</b>"
         ]
         for it in bet.get("items", [])[:3]:
-            t1 = html.escape(it.get("team1_name") or "Хозяева")
-            t2 = html.escape(it.get("team2_name") or "Гости")
-            out_code = it.get("outcome_type") or ""
-            out_name = OUTCOME_TITLES.get(out_code, out_code)
+            t1, t2 = (html.escape(t) for t in _leg_teams(it))
             it_odd = float(it.get("odd") or 1.0)
-            lines.append(f"• {t1} vs {t2} (<code>{out_name}</code> @{it_odd:.2f})")
+            lines.append(f"• <b>{t1} — {t2}</b>\n   {_selection_text(it)} · @{it_odd:.2f}")
 
         text = "\n".join(lines)
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔍 Открыть карточку", callback_data=f"admin_bet_view:{bet_id}")]])

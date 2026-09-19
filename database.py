@@ -8744,6 +8744,7 @@ def get_all_bets(
                        m.ht_score2,
                        m.live_minute,
                        mkt.market_name,
+                       mkt.market_key,
                        ms.selection_name
                 FROM bet_items bi
                 LEFT JOIN matches m ON bi.match_id = m.id
@@ -8851,6 +8852,7 @@ def get_bet_by_id(bet_id: int) -> dict | None:
                        m.ht_score2,
                        m.live_minute,
                        mkt.market_name,
+                       mkt.market_key,
                        ms.selection_name
                 FROM bet_items bi
                 LEFT JOIN matches m ON bi.match_id = m.id
@@ -8864,6 +8866,38 @@ def get_bet_by_id(bet_id: int) -> dict | None:
         )
         bet["items"] = [dict(item) for item in cursor.fetchall()]
         return bet
+
+
+def get_user_bet_summary(user_id: int) -> dict:
+    """Betting track record of one user for the admin bet card.
+
+    net_profit counts only settled slips: payouts of won/cashed-out slips minus
+    their stakes and the stakes of lost ones. Refunds net to zero, pending
+    slips are reported separately as pending_amount.
+    """
+    with transaction() as conn:
+        row = conn.execute("""
+            SELECT
+                COUNT(*) AS total_bets,
+                SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS count_pending,
+                SUM(CASE WHEN status = 'won' THEN 1 ELSE 0 END) AS count_won,
+                SUM(CASE WHEN status = 'lost' THEN 1 ELSE 0 END) AS count_lost,
+                SUM(CASE WHEN status IN ('refunded', 'cancelled') THEN 1 ELSE 0 END) AS count_refunded,
+                SUM(CASE WHEN status = 'cashed_out' THEN 1 ELSE 0 END) AS count_cashed_out,
+                COALESCE(SUM(amount), 0) AS total_wagered,
+                COALESCE(SUM(CASE WHEN status = 'pending' THEN amount ELSE 0 END), 0) AS pending_amount,
+                COALESCE(SUM(CASE WHEN status IN ('won', 'cashed_out') THEN actual_payout ELSE 0 END), 0) AS total_paid_out,
+                COALESCE(SUM(CASE WHEN status IN ('won', 'lost', 'cashed_out') THEN amount ELSE 0 END), 0) AS settled_wagered,
+                MAX(CASE WHEN status = 'won' THEN actual_payout END) AS best_payout
+            FROM user_bets
+            WHERE user_id = ?
+        """, (user_id,)).fetchone()
+
+    res = {k: (row[k] or 0) for k in row.keys()}
+    res["net_profit"] = res["total_paid_out"] - res["settled_wagered"]
+    decided = res["count_won"] + res["count_lost"]
+    res["win_rate"] = round(res["count_won"] * 100.0 / decided, 1) if decided else None
+    return res
 
 
 LIVE_BET_ALERTS_KEY = "live_bet_alert_subscribers"
