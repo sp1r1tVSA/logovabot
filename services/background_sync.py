@@ -18,7 +18,7 @@ from telegram.error import TelegramError
 
 import config
 import database
-from services.intelligence_engine import get_match_intelligence
+from services.intelligence_engine import IntelligenceEngine
 from services.notification_service import mark_notification_sent
 from services.sports_provider import get_sports_data_provider
 
@@ -76,7 +76,7 @@ async def sync_intelligence_cache_job(context: Any) -> None:
         for mid in match_ids:
             try:
                 # Precompute intelligence
-                get_match_intelligence(mid)
+                IntelligenceEngine.get_match_intelligence(mid)
             except Exception as e:
                 logger.debug("Failed precomputing intelligence for match %s: %s", mid, e)
     except Exception as e:
@@ -87,24 +87,20 @@ async def process_notification_queue_job(context: Any) -> None:
     """
     Dispatches pending notifications to users via Telegram bot.
     Runs every 10-15 seconds.
-    """
-    if not getattr(config, "SMART_NOTIFICATIONS_ENABLED", False):
-        return
 
+    Bet settlement notices (BET_SETTLED) are always delivered: they are the
+    only way a user learns a bet won or was refunded. The rest of the smart
+    notifications stay behind SMART_NOTIFICATIONS_ENABLED.
+    """
     if not hasattr(context, "bot") or context.bot is None:
         return
 
+    event_types = None
+    if not getattr(config, "SMART_NOTIFICATIONS_ENABLED", False):
+        event_types = (database.BET_SETTLED_EVENT,)
+
     try:
-        with database.transaction() as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT id, user_id, event_type, title, body, link
-                FROM notification_events
-                WHERE status = 'pending'
-                ORDER BY CASE priority WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'normal' THEN 3 ELSE 4 END, id ASC
-                LIMIT 25
-            """)
-            pending = [dict(r) for r in cursor.fetchall()]
+        pending = await asyncio.to_thread(database.get_pending_notification_events, 25, event_types)
 
         for item in pending:
             ev_id = item["id"]
@@ -120,8 +116,7 @@ async def process_notification_queue_job(context: Any) -> None:
             except TelegramError as te:
                 logger.warning("Failed to send notification %s to user %s: %s", ev_id, uid, te)
                 # Mark failed or leave pending with attempt limit
-                with database.transaction() as conn:
-                    conn.cursor().execute("UPDATE notification_events SET status = 'failed' WHERE id = ?", (ev_id,))
+                database.mark_notification_event_failed(ev_id)
             except Exception as e:
                 logger.warning("Unexpected error sending notification %s: %s", ev_id, e)
     except Exception as e:

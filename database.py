@@ -5064,6 +5064,80 @@ def match_line_is_open(match_id: int) -> bool:
         return _match_line_is_open(conn.cursor(), match_id)
 
 
+BET_SETTLED_EVENT = "BET_SETTLED"
+
+
+def enqueue_bet_settled_notice(
+    cursor, user_id: int, bet_id: int, title: str, body: str, resettle: bool = False
+) -> bool:
+    """Поставить личное уведомление о расчёте ставки в очередь `notification_events`.
+
+    Вызывается на курсоре транзакции расчёта, поэтому уведомление появляется
+    ровно тогда, когда фиксируется выплата, — какой бы путь её ни провёл
+    (подтверждение матча, техническое поражение, правка счёта админом,
+    фоновый досчёт). Первый расчёт ставки дедуплицируется ключом
+    `bet_<id>`; каждый пересчёт получает свой порядковый ключ.
+
+    Не бросает: вставка отсекается, если пользователя нет в `users` (FK) или
+    он отключил BET_SETTLED, а любая ошибка только логируется — уведомление
+    не должно откатывать расчёт.
+    """
+    try:
+        if resettle:
+            cursor.execute(
+                "SELECT COUNT(*) FROM notification_events "
+                "WHERE user_id = ? AND event_type = ? AND source_event_id LIKE ?",
+                (user_id, BET_SETTLED_EVENT, f"bet_{bet_id}_rs%"),
+            )
+            source_event_id = f"bet_{bet_id}_rs{cursor.fetchone()[0] + 1}"
+        else:
+            source_event_id = f"bet_{bet_id}"
+        cursor.execute(
+            """
+            INSERT OR IGNORE INTO notification_events
+                (user_id, event_type, source_event_id, title, body, priority, status)
+            SELECT ?, ?, ?, ?, ?, 'high', 'pending'
+            WHERE EXISTS (SELECT 1 FROM users WHERE telegram_id = ?)
+              AND NOT EXISTS (
+                  SELECT 1 FROM user_notification_settings
+                  WHERE user_id = ? AND notification_type = ? AND is_enabled = 0
+              )
+            """,
+            (user_id, BET_SETTLED_EVENT, source_event_id, title, body,
+             user_id, user_id, BET_SETTLED_EVENT),
+        )
+        return cursor.rowcount > 0
+    except Exception as e:
+        logger.warning("Could not enqueue bet notice for bet #%s: %s", bet_id, e)
+        return False
+
+
+def get_pending_notification_events(limit: int = 25, event_types: tuple | None = None) -> list[dict]:
+    """Ожидающие отправки уведомления, важные первыми.
+
+    `event_types` сужает выборку — так очередь доставляет расчёты ставок,
+    пока остальные «умные» уведомления выключены флагом.
+    """
+    query = "SELECT id, user_id, event_type, title, body, link FROM notification_events WHERE status = 'pending'"
+    params: list = []
+    if event_types:
+        query += " AND event_type IN (" + ",".join("?" for _ in event_types) + ")"
+        params.extend(event_types)
+    query += (" ORDER BY CASE priority WHEN 'critical' THEN 1 WHEN 'high' THEN 2"
+              " WHEN 'normal' THEN 3 ELSE 4 END, id ASC LIMIT ?")
+    params.append(limit)
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute(query, params)
+        return [dict(r) for r in cursor.fetchall()]
+
+
+def mark_notification_event_failed(event_id: int) -> None:
+    """Пометить уведомление неотправляемым (бот заблокирован, чат не найден)."""
+    with transaction() as conn:
+        conn.cursor().execute("UPDATE notification_events SET status = 'failed' WHERE id = ?", (event_id,))
+
+
 def reopen_match_markets(match_id: int) -> int:
     """Вернуть в продажу рынки матча, снова попавшего в линию тура.
 

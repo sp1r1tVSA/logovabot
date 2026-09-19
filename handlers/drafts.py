@@ -527,31 +527,9 @@ async def cb_draft_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             except Exception as e:
                 logger.warning(f"Failed to handle debt rewards in draft confirm: {e}")
 
-            # 🎰 Settle Logovo.bet predictions and bets
-            try:
-                payouts = await asyncio.to_thread(
-                    database.settle_match_bets, m_id, g.get('h_score', 0), g.get('a_score', 0)
-                )
-                for pay in payouts:
-                    try:
-                        p_user_id = pay["user_id"]
-                        p_won = pay["payout"]
-                        p_odd = pay["total_odd"]
-                        p_type = "Ординар" if pay["bet_type"] == "single" else "Экспресс"
-                        await context.bot.send_message(
-                            chat_id=p_user_id,
-                            text=(
-                                f"🎉 <b>Ваша ставка #{pay['bet_id']} ({p_type}) сыграла!</b>\n\n"
-                                f"🔥 Итоговый Кэф: <b>{p_odd:.2f}</b>\n"
-                                f"💸 Выигрыш: <b>+{p_won:,} 🪙</b> зачислен на баланс!\n\n"
-                                f"<i>Темшик поздравляет с победным прогнозом! 🎰</i>"
-                            ),
-                            parse_mode="HTML"
-                        )
-                    except Exception:
-                        pass
-            except Exception as e:
-                logger.warning(f"Failed to settle bets for match {m_id}: {e}")
+            # Ставки Logovo.bet уже рассчитаны внутри confirm_and_finalize_match,
+            # а уведомления о выигрыше/возврате поставлены в очередь той же
+            # транзакцией — их доставляет process_notification_queue_job.
         except Exception as e:
             # Матч уже сохранён — побочные эффекты не повод отменять публикацию.
             logger.warning(f"Post-confirm side effects failed for match {m_id}: {e}")
