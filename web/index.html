@@ -10,12 +10,23 @@
   <!-- Telegram WebApp SDK -->
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <!-- Styles with cache-busting -->
-  <link rel="stylesheet" href="/css/main.css?v=3.1.0">
-  <link rel="stylesheet" href="/css/components.css?v=3.1.0">
-  <link rel="stylesheet" href="/css/coupon.css?v=3.1.0">
+  <link rel="stylesheet" href="/css/main.css?v=3.2.0">
+  <link rel="stylesheet" href="/css/components.css?v=3.2.0">
+  <link rel="stylesheet" href="/css/coupon.css?v=3.2.0">
 
   <!-- Critical Coupons & Team Logos Styles -->
   <style id="coupons-critical-css">
+    .nav-item { overflow: hidden; }
+    .nav-item .nav-icon { width: 24px !important; height: 24px !important; max-width: 24px !important; max-height: 24px !important; display: inline-flex !important; align-items: center !important; justify-content: center !important; overflow: hidden !important; }
+    .nav-club-logo, .nav-item .nav-club-logo { width: 22px !important; height: 22px !important; min-width: 22px !important; min-height: 22px !important; max-width: 22px !important; max-height: 22px !important; object-fit: contain !important; display: block !important; margin: 0 auto !important; }
+    @media (max-width: 380px) {
+      .nav-club-logo, .nav-item .nav-club-logo { width: 20px !important; height: 20px !important; min-width: 20px !important; min-height: 20px !important; max-width: 20px !important; max-height: 20px !important; }
+      .nav-item .nav-icon { width: 20px !important; height: 20px !important; max-width: 20px !important; max-height: 20px !important; }
+    }
+    @media (max-width: 345px) {
+      .nav-club-logo, .nav-item .nav-club-logo { width: 18px !important; height: 18px !important; min-width: 18px !important; min-height: 18px !important; max-width: 18px !important; max-height: 18px !important; }
+      .nav-item .nav-icon { width: 18px !important; height: 18px !important; max-width: 18px !important; max-height: 18px !important; }
+    }
     .coupons-page-header { margin-bottom: 12px; }
     .coupons-page-title { font-family: 'Outfit', sans-serif; font-size: 1.15rem; font-weight: 800; color: #fff; letter-spacing: -0.01em; display: flex; align-items: center; gap: 6px; line-height: 1.2; }
     .coupons-page-subtitle { font-size: 0.78rem; color: var(--text-muted, #64748b); margin-top: 3px; font-weight: 500; }
@@ -537,6 +548,6 @@
 
 
   <!-- Main JavaScript App with cache-busting -->
-  <script type="module" src="/js/app.js?v=3.1.0"></script>
+  <script type="module" src="/js/app.js?v=3.2.0"></script>
 </body>
 </html>
